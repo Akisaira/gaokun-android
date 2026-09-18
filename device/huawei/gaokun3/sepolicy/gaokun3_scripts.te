@@ -142,8 +142,12 @@ allow gaokun3_audioroute system_file:file execute_no_trans;
 #   `gaokun3_devmem_device:chr_file {map open read write}`。
 #   那条 sys_rawio 的 neverallow 带 userdebug_or_eng 豁免
 #   （lineage-23.0 的 domain.te:2012-2024；⚠️ 行号每次同步都会漂，
-#    判据是那条 neverallow 的正文里有没有 `userdebug_or_eng(\`-domain')`），
-#   所以 userdebug 上写得进去 —— 但那意味着 enforcing 与否取决于构建变体。
+#    判据是那条 neverallow 的正文里有没有 `userdebug_or_eng(\`-domain')`）。
+#   ⚠️★ 2026-09-18 更正：**本仓发的是 `user` 变体**（实机 `ro.build.flavor=gaokun3-user`、
+#   `ro.debuggable=0`，构建机 out/ 的 build.prop 同样），所以那条豁免
+#   【在我们的镜像上根本不生效】—— 不是"userdebug 上写得进去"，是**写不进去**。
+#   此前这里和 TODO B1 都写着"取决于构建变体"，那句话默认了我们会发 userdebug，
+#   而我们不会。
 #   ★ 正解是把 [TODO B6] 做掉（DT 中断映射修对），这个轮询脚本整个消失。
 #   在那之前，宁可让它在 enforcing 下明确失效，也不要写一条只在
 #   userdebug 上成立的规则。

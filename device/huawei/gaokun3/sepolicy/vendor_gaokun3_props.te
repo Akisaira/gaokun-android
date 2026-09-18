@@ -13,12 +13,31 @@
 #    ★ 我第一版把类型写成 gaokun3_prop，正会撞这条 —— 属性名合规不等于上下文名合规。
 vendor_public_prop(vendor_gaokun3_prop)
 
-# 排查用：adb shell setprop persist.vendor.gaokun3.allow_suspend 0
-# ⚠️ set_prop 连读也一起给了（te_macros:393-397 里 set_prop 自带 get_prop），
-#    所以不用再写 get_prop(shell, ...)。
-# ⚠️ shell 是 coredomain，这条之所以写得进去，全靠上面选了 public 类型 ——
-#    换成 vendor_internal_prop 或 vendor_restricted_prop，这一行就会撞 neverallow。
-set_prop(shell, vendor_gaokun3_prop)
+# ⚠️★★★ 这里【曾经】有一条 `set_prop(shell, vendor_gaokun3_prop)`，想让
+#    `adb shell setprop` 还能改这个开关。**它编不过去**，2026-09-18 构建机实测：
+#
+#      libsepol.report_failure: neverallow on line 488 of system/sepolicy/private/property.te
+#        violated by allow shell vendor_gaokun3_prop:property_service { set };
+#
+#    规则本体（private/property.te:492-502，在 compatible_property_only 里）：
+#      neverallow { coredomain -init -system_writes_vendor_properties_violators }
+#                 { property_type -system_property_type -extended_core_property_type }
+#                 :property_service set;
+#    —— `shell` 是 coredomain，所以它【不能设任何 vendor 属性】，
+#    与属性是不是 vendor_public_property_type 无关：public 那两条豁免管的是
+#    property.te:192-203 的读/写，管不到这一条。
+#    ★ 我上一轮"选 public 就能给 shell 开写权限"的推理是错的，**而且只有编译器
+#      能证伪它** —— 读 neverallow 读漏了一条，实机在 permissive 下也永远不会报。
+#
+# ⚠️ 想留 shell 的写权限只有一条路：把 shell 挂上
+#    `system_writes_vendor_properties_violators`（public/attributes:284）。
+#    **没有这么做**：那是给整个 shell 域开的后门，为一个排查开关不值得。
+#
+# ★ 那排查时怎么改？用 root —— 本机 adb shell 实测就是 uid 0 且域是
+#   `u:r:ksu:s0`（ReSukiSU 自己的域，不是 AOSP 的 su），也就是说
+#   `adb shell setprop persist.vendor.gaokun3.allow_suspend 1` 本来走的就不是
+#   shell 域。⬜ 未验证：enforcing 之后 ksu 域能不能设这个属性（那是 root
+#   实现在运行期打的策略补丁，本仓管不到）。真不行就只剩"改 device.mk 重新构建"。
 
 # OTA 钩子读 persist.vendor.gaokun3.recovery_entry 决定要不要写 recovery 启动项。
 # （见 bin/gaokun3-ota-postinstall.sh 与 sepolicy/postinstall.te）

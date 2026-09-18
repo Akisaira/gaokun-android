@@ -9035,3 +9035,77 @@ wakeup22 -> .../0006:01:00.0/mhi0/wakeup/wakeup22                               
 但当前没有任何主体去碰它"**。修它的收益是语义正确，不是修 bug；
 而第 6 条已经证明"放行 system_suspend 读 sysfs_batteryinfo"那条路被 neverallow 堵死。
 ★ 留着不修是可以的，**但要按这个描述留**，别让下一个人以为有条功能在等他。
+
+### 11. 上构建机编了一次：**第一次就被打回**，而且是推理推不出来的那种
+
+`az vm start` → `sync-device-tree.sh`（130 个受版本控制的文件逐字节一致）→
+`lunch` → `m selinux_policy`（这个目标会连带跑 `sepolicy_neverallows`、
+`sepolicy_test`、各 `*_contexts_test`）。
+
+**第一次：退出码 1**，一条 neverallow 失败：
+
+```
+libsepol.report_failure: neverallow on line 488 of system/sepolicy/private/property.te
+  violated by allow shell vendor_gaokun3_prop:property_service { set };
+```
+
+规则本体（`private/property.te:492-502`，在 `compatible_property_only` 里）：
+
+```
+neverallow { coredomain -init -system_writes_vendor_properties_violators }
+           { property_type -system_property_type -extended_core_property_type }
+           :property_service set;
+```
+
+⚠️★★ **第 5 条里"选 `vendor_public_prop` 就能给 shell 开写权限"的推理是错的。**
+public 的那两条豁免（`property.te:192-203`）管的是**另一组** neverallow；
+这一条不认 public，只认 `system_writes_vendor_properties_violators`。
+**我读 neverallow 读漏了一条 —— 而这种错只有编译器能证伪：**
+permissive 的实机永远不会报，读源码时那两处相隔三百行、措辞几乎一样。
+★ 这正是"写得进去"必须靠构建、不能靠推理的现场证据。
+
+**处置**：删掉那条 `set_prop(shell, …)`，**不给** shell 挂 violators 属性
+（为一个排查开关给整个 shell 域开后门，不值）。排查照旧用 root ——
+本机 `adb shell` 实测就是 uid 0、域是 `u:r:ksu:s0`（ReSukiSU 自己的域），
+本来就不走 shell 域。⬜ 未验证：enforcing 后 ksu 域能不能设这个属性
+（那是 root 实现运行期打的策略补丁，本仓管不到）。
+
+### 12. ⚠️★★ 顺带查实：**我们发的是 `user` 变体，不是 userdebug**
+
+查 `ro.build.type` 时撞上的（实机与构建机 out/ 的 build.prop 一致）：
+
+```
+ro.build.type=user      ro.build.tags=release-keys      ro.debuggable=0
+ro.build.flavor=gaokun3-user
+```
+
+**后果不小**：策略里所有 `userdebug_or_eng(...)` 的豁免在我们的镜像上**一概不生效**。
+具体到 [TODO B1] 的第二个结构性阻塞：此前案卷与 TODO 都写着
+"`gaokun3_smmustall` 的 `sys_rawio` 那条 neverallow 有 userdebug 豁免，
+所以写得进去，只是让 enforcing 与否取决于构建变体" ——
+**那句话默认了我们会发 userdebug，而我们不会**。正确说法是：**写不进去，没有"取决于"。**
+两处已更正。
+
+★ 泛化：**"这条 neverallow 有 userdebug 豁免"这类判断，必须连着"我们发哪个变体"
+一起说**，否则就是把一句正确的源码事实用在不成立的前提上。
+
+### 13. 第二次编译（换成 `user` 变体，与发版一致）：通过
+
+`m selinux_policy` **退出码 0**，`build completed successfully (05:21)`。
+⚠️ 按本仓第 ① 条运维坑（不看管道尾巴看产物），逐样核对了构建产物：
+
+```
+vendor_sepolicy.cil / vendor_file_contexts / vendor_property_contexts  时间戳都是本次构建
+vendor_gaokun3_prop        7 条    gaokun3_touchmode     18 条
+gaokun3_esp_block_device   5 条    vendor_executes_system_violators  1 条
+vendor_property_contexts:  persist.vendor.gaokun3.  u:object_r:vendor_gaokun3_prop:s0   （前缀检查也过了）
+vendor_file_contexts:      /dev/dri · /dev/block/nvme0n1p1 · gaokun3-touch-mode.sh  三条都在
+vendor_sepolicy.cil:       genfscon /devices/virtual/thermal 在
+```
+
+构建机用完 `az vm deallocate`，**并另起一次查询确认真实电源状态 = `VM deallocated`**。
+
+**所以现在的把握是**：这套策略**写得进去**（neverallow / 类型可见性 / 属性前缀
+三类检查全过，且是按 `user` 变体查的）。
+⚠️ **仍然没有证明它够用** —— 新策略一次都没装到机器上跑过。
+够不够用要等"构建整个 ROM + 装机 + 再普查一次 denial"，而那一步该和下一次发版合并做。
