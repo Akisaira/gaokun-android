@@ -9109,3 +9109,45 @@ vendor_sepolicy.cil:       genfscon /devices/virtual/thermal 在
 三类检查全过，且是按 `user` 变体查的）。
 ⚠️ **仍然没有证明它够用** —— 新策略一次都没装到机器上跑过。
 够不够用要等"构建整个 ROM + 装机 + 再普查一次 denial"，而那一步该和下一次发版合并做。
+
+### 14. 整包构建路上的两个坑（都与本轮改动无关，但都会再咬）
+
+**① ⚠️★★ `external/libcamera` 丢了 `.git` 符号链接 ⇒ OTA zip 根本打不出来**
+
+整包构建跑到 49% 死在这里：
+
+```
+FAILED: out/target/product/gaokun3/product/etc/build-manifest.xml
+  repo manifest -o - -r → GitCommandError: 'rev-parse HEAD^0' on platform/external/libcamera failed
+```
+
+repo 管理的每个项目，`.git` 都是一个指回 `.repo/projects/…` 的**符号链接**
+（参照：`external/tinyalsa/.git -> ../../.repo/projects/external/tinyalsa.git`）。
+`external/libcamera` 的那个链接**没了**（目录 mtime 是 2026-09-13 05:12 ——
+正是相机那一轮把这棵树换掉的时间）。`repo manifest -r` 要给每个项目记下
+revision，于是整条构建在**最后打包前**才炸。
+
+修法（`.repo/projects/external/libcamera.git` 还在，所以只是补链接）：
+
+```
+ln -s ../../.repo/projects/external/libcamera.git ~/crdroid/external/libcamera/.git
+```
+
+补完 `rev-parse HEAD^0` = `cd4b2eff…`，`repo manifest -r` 一次通过。
+⚠️★★ **补完之后【绝对不要】在那棵树上跑任何会动工作区的 git 命令**：
+`git status --porcelain` 显示工作区与那个 HEAD 差 **1512 个文件**
+（我们换进去的是另一个版本的 libcamera）。一条 `git checkout -- .` 就能把相机
+那一整轮工作清空 —— 与本仓内核树那次（`git restore` 一次清掉九个补丁）同一类事故，
+只是这次连"补丁链重放脚本"都没有。
+★ 这条也是 [TODO B0]（让构建机的树就是本仓 checkout）的第 7 个证据：
+**构建机上还有一整棵不入库、也没有恢复脚本的 libcamera。**
+
+**② 我自己制造的 36 分钟：变体切换会让 `out/` 大面积失效**
+
+上一轮验策略时我用 `lineage_gaokun3-bp4a-userdebug` 编了一次（图"userdebug 更严"），
+而本仓发的是 `user`。等到这次真要整包构建，`out/` 里大量模块因为变体不同要重编 ——
+56815 个目标、第一次跑了 36 分钟才走到打包那一步。
+
+★ 教训：**在共享的构建树上做任何验证，都要用"我们实际会发的那个变体"**，
+不要为了"更严"随手换一个 —— 更严的那次结论还是对的（第 12 条），
+但代价是让后面的人重编一次整包。要试别的变体，该另开 `OUT_DIR`。
