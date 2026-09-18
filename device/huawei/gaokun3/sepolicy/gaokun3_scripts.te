@@ -143,11 +143,14 @@ allow gaokun3_audioroute system_file:file execute_no_trans;
 #   那条 sys_rawio 的 neverallow 带 userdebug_or_eng 豁免
 #   （lineage-23.0 的 domain.te:2012-2024；⚠️ 行号每次同步都会漂，
 #    判据是那条 neverallow 的正文里有没有 `userdebug_or_eng(\`-domain')`）。
-#   ⚠️★ 2026-09-18 更正：**本仓发的是 `user` 变体**（实机 `ro.build.flavor=gaokun3-user`、
-#   `ro.debuggable=0`，构建机 out/ 的 build.prop 同样），所以那条豁免
-#   【在我们的镜像上根本不生效】—— 不是"userdebug 上写得进去"，是**写不进去**。
-#   此前这里和 TODO B1 都写着"取决于构建变体"，那句话默认了我们会发 userdebug，
-#   而我们不会。
+#   ⚠️★★ 2026-09-18 我在这里写过一条"更正"，说本仓发的是 user 变体所以豁免不生效
+#   —— **那条更正本身是错的，当晚就被实机推翻了**（见案卷 #117 第 15 条）。
+#   `ro.build.type=user` / `ro.debuggable=0` 是 build.prop 被硬写成那样的
+#   （`build/soong/scripts/gen_build_prop.py:28` 的 get_build_variant() 没有
+#    userdebug 这一档，非 eng 一律按 user 写），**与真实构建变体无关**。
+#   本仓一直编的是 `lineage_gaokun3-bp4a-userdebug`（`AndroidProducts.mk:8`），
+#   所以 userdebug 豁免【是生效的】—— 原话"写得进去，但那意味着 enforcing 与否
+#   取决于构建变体"仍然成立。
 #   ★ 正解是把 [TODO B6] 做掉（DT 中断映射修对），这个轮询脚本整个消失。
 #   在那之前，宁可让它在 enforcing 下明确失效，也不要写一条只在
 #   userdebug 上成立的规则。

@@ -763,11 +763,11 @@ checkout），让 `git status` 直接说话。⚠️ 换之前先做一次清单
    **没有 userdebug 豁免**；而它还要读所有域的 `/proc`。
    它本质上是 `dumpstate` 那一类工具。
    **出路**：binder-debugfs 换成 `dumpsys`，或做成只在 userdebug 启用的诊断件。
-2. **`gaokun3_smmustall`** —— 要 `sys_rawio` + `/dev/mem`。
-   ⚠️★ **2026-09-18 更正**：此前这里写"那条 neverallow 有 userdebug 豁免，所以
-   写得进去，只是让 enforcing 取决于构建变体"。**我们发的是 `user` 变体**
-   （实机 `ro.build.flavor=gaokun3-user`、`ro.debuggable=0`），豁免根本不生效 ⇒
-   **写不进去，没有"取决于"可言**。
+2. **`gaokun3_smmustall`** —— 要 `sys_rawio` + `/dev/mem`。写得进去
+   （那条 neverallow 有 userdebug 豁免），但会让 enforcing 与否取决于构建变体。
+   ⚠️★ 2026-09-18 我一度"更正"成"我们发 user 变体所以写不进去"，**那是错的**：
+   `ro.build.type=user` 只是 build.prop 被硬写的样子，本仓一直编 userdebug
+   （[#117](stage4-findings.md) 第 15 条，当晚用一次失败的装机换来的）。
    ★ **正解是先做 B6**，脚本整个消失，这道坎一起没了。
 
 ⬜ 另有一处**语义不对、但当前无后果**：genfscon 是前缀匹配，给 UCSI 的

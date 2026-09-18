@@ -9151,3 +9151,78 @@ ln -s ../../.repo/projects/external/libcamera.git ~/crdroid/external/libcamera/.
 ★ 教训：**在共享的构建树上做任何验证，都要用"我们实际会发的那个变体"**，
 不要为了"更严"随手换一个 —— 更严的那次结论还是对的（第 12 条），
 但代价是让后面的人重编一次整包。要试别的变体，该另开 `OUT_DIR`。
+
+### 15. ⚠️★★★★ 装机失败的根因：我把变体编成了 `user`，而 **user 构建会强制 enforcing**
+
+这一条是今晚最贵也最值钱的东西，完整因果链如下。
+
+**表象**：新构建装进 `_a`、引导 → 起不来。内核与 dtb 与 `_b` 完全相同，cmdline 只差
+`slot_suffix`，ramdisk 里除 `init`/`libc.so` 两个重编的二进制外一字不差。
+
+**取证**（案卷 §5.2 那套包装 ramdisk，改了两版）：日志每次都**停在同一个位置** ——
+内核 10.24 秒，`init: Loading SELinux policy` 刚完成那一刻。加 `setsid` 让长驻
+`cat` 脱出进程组也没用；pstore 没有新记录（所以不是 panic）；设备有时自己回到 `_b`
+（所以不是挂死，是有人在重启它）。
+
+**转折点**是全量文件清单对比：新 system 比正在跑的 v0.6.2 **少 71 个文件**，
+少掉的是 `adevice_fingerprint`、`arping` 这类只在 **userdebug** 上安装的东西。
+
+**根因**（`refs/lineage-system-core`，lineage-23.0）：
+
+```cpp
+// system/core/init/selinux.cpp:112-116
+bool IsEnforcing() {
+    if (ALLOW_PERMISSIVE_SELINUX) {          // 只有 debuggable 构建才是 1
+        return StatusFromProperty() == SELINUX_ENFORCING;
+    }
+    return true;                              // 否则【无条件 enforcing】
+}
+```
+`init/Android.bp:126-135`：`-DALLOW_PERMISSIVE_SELINUX=1` 只出现在
+`product_variables: { debuggable: { … } }` 下。
+
+⇒ **`user` 构建里 init 完全忽略 `androidboot.selinux=permissive`，强制 enforcing。**
+我这次编的正是 `-user`（上一轮为了"更严"验策略换过去的，见第 12 条），
+于是新系统一启动就是 enforcing，撞上我们**还不完整**的策略 → 服务级失败 → init 重启。
+
+★★ **日志为什么每次都停在那一行，现在也有答案了**：那一行之后 init 就把
+enforcing 打开了，我们那个跑在 `u:r:kernel:s0` 的 busybox `cat /dev/kmsg` 当场被拦死
+（日志里最后一条正是它的 denial，`permissive=1` 是 setenforce 之前的最后一瞬）。
+**取证工具被它要观测的那个机制杀掉了** —— 这类"观测者被观测对象消灭"的形态值得记住。
+
+### 16. ⚠️★★ 连带推翻第 12 条：`ro.build.type=user` **不代表构建变体是 user**
+
+第 12 条我看到实机与构建机 out/ 的 `ro.build.type=user`、`ro.build.flavor=gaokun3-user`、
+`ro.debuggable=0`，就断定"本仓发的是 user 变体"，还据此"更正"了案卷 #75 与 TODO B1
+里关于 `sys_rawio` 的 userdebug 豁免那段。**那个推断是错的，而且本仓早就记过为什么**
+（`device/huawei/gaokun3/lineage_gaokun3.mk:69-76`）：
+
+> `build/soong/scripts/gen_build_prop.py:28` 的 `get_build_variant()`
+> **没有 userdebug 这一档** —— 非 eng 一律按 user 处理，所以 `/system/build.prop`
+> 被硬写成 `ro.debuggable=0` + `ro.adb.secure=1`，**与 TARGET_BUILD_VARIANT=userdebug 无关**。
+
+本仓一直编的是 `lineage_gaokun3-bp4a-userdebug`（`AndroidProducts.mk:8`，
+注释里明写 `brunch gaokun3 == lunch lineage_gaokun3-bp4a-userdebug`），
+运行期 `ro.debuggable=1` 由 system_ext 那份 build.prop 覆盖回来。
+两处"更正"已撤回。
+
+★ 教训有两层：
+1. **build.prop 里的 `ro.build.type` 是"给外界看的身份"，不是"构建时的变体"**。
+   要判断变体，看 `AndroidProducts.mk` / lunch 目标，或看 userdebug-only 文件在不在。
+2. ⚠️ 更值钱的一层：**我上一轮那条"更正"是在没有反例的情况下改写既有结论的**。
+   原文（"写得进去，但取决于构建变体"）是对的，我用一个更"确凿"的表象把它推翻了。
+   本仓的规矩是"实测 > 案卷 > CLAUDE.md"，但这次实测的是**一个被故意伪装过的属性**。
+   下次要改写既有结论前，先问一句：**当初写它的人是不是已经知道我现在看到的这个现象？**
+   —— 这次答案是"知道，而且写在隔壁文件里"。
+
+### 17. 结论与下一步
+
+* **SELinux 那套新规则本身没有被证伪**：整个失败与规则内容无关，是变体选错导致
+  "在不完整的策略上强制 enforcing"。规则的编译验证（第 11、13 条）仍然有效。
+* **要验"够不够用"，得用 `-userdebug` 重编一版**（约 30–40 分钟），
+  那一版会是 permissive，denial 普查才能做。
+* ⚠️ **副产品**：这次意外做了一次真正的 enforcing 试跑，结果是**起不来** ——
+  与 [TODO B1] 的判断一致（hangdump / smmustall 两个结构性阻塞还在，
+  另有未知缺口）。所以"转 enforcing"离可用还有距离，**不能靠换个变体蒙混过去**。
+* ⚠️ Virtual A/B 的坑（第 10、14 条同类）：**每次回落到 `_b` 都会取消待生效的快照**，
+  所以每重试一次都要先重装一次 OTA（payload 留在设备上，2 分钟）。
