@@ -15,3 +15,20 @@ allow hal_bootctl_default tmpfs:dir { create write add_name mounton };
 allow hal_bootctl_default vfat:filesystem { mount unmount };
 allow hal_bootctl_default vfat:dir { search write add_name remove_name };
 allow hal_bootctl_default vfat:file { create open read write getattr rename unlink };
+
+# ── 2026-09-18 补：块设备那一半此前【整个缺着】────────────────────────────
+#
+# ⚠️★ 上面那组 vfat 规则只管"挂上之后能读写"，没管"能不能打开那个块设备"。
+#    实机 permissive 下 mount 照样成功，所以这个缺口两个多月没露头 ——
+#    ★ 又一次证明：permissive 下"功能正常"不能拿来判断 enforcing 下能否工作。
+#
+# AOSP 给这个域的块设备权限只有 misc（vendor/hal_bootctl_default.te:15-16）：
+#     allow hal_bootctl_default block_device:dir search;
+#     allow hal_bootctl_default misc_block_device:blk_file rw_file_perms;
+# —— 因为正常设备的 boot_control 只碰 misc。本机还要挂 ESP。
+#
+# /dev/block/by-name/esp 是【符号链接】，读它要 lnk_file（打开的是它指向的
+# 真实节点，那是 gaokun3_esp_block_device）。ESP 必须先有专用类型才谈得上
+# 开权限，理由见 device.te 里 domain.te:705 那条 neverallow。
+allow hal_bootctl_default block_device:lnk_file r_file_perms;
+allow hal_bootctl_default gaokun3_esp_block_device:blk_file rw_file_perms;

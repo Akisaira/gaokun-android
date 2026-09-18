@@ -29,10 +29,25 @@
 /dev/dri/card[0-9]*          u:object_r:gpu_device:s0
 /dev/dri/renderD[0-9]*       u:object_r:gpu_device:s0
 
-# ⬜ 还没解决：/dev/dri【目录本身】被拒的是 { read open }（不是 search）——
-#    那是 mesa/libdrm 在 opendir+readdir 枚举显卡节点。给目录换类型解决不了，
-#    需要真的写 allow 规则；而规则该落在核心策略还是 vendor 策略，
-#    要先对着 Treble 的 neverallow 确认。留到真正切 enforcing 时一起做。
+# ── /dev/dri【目录本身】：同一招再用一次，仍然一条 allow 都不用写 ──────────
+#
+# 症状是 mesa/libdrm 用 opendir+readdir 枚举显卡节点被拒 { read open }
+# （不是 search —— `allow domain device:dir search` 是全局的，domain.te:69）。
+# 上面那条注释当初判断"给目录换类型解决不了、需要真的写 allow"，
+# ★ 那个判断是错的：核心策略对 gpu_device【这个类型的 dir】早写好了
+# r_dir_perms，而且覆盖的正是那批被拒的主体（逐条核对 lineage-23.0 的
+# system/sepolicy）：
+#     surfaceflinger.te:41   bootanim.te:36   system_server.te:494
+#     hal_graphics_allocator.te:11   hal_graphics_composer.te:14
+#     mediaswcodec.te:26   mediaserver.te:67   vendor/mediacodec.te:20
+#     app.te:394 → allow { appdomain -isolated_app_all } gpu_device:dir r_dir_perms;
+#                  （system_app / platform_app(launcher3) 都在 appdomain 里）
+# 所以把目录也标成 gpu_device 就够了，和上面标 card1/renderD128 是同一类胜利。
+# ★ /dev 下的【目录】确实吃 file_contexts —— AOSP 自己就这么干：
+#   system/sepolicy/private/file_contexts:157 `/dev/socket(/.*)?  u:object_r:socket_device:s0`
+#   （那条的 `(/.*)?` 覆盖的就包括目录本身）。
+# ⬜ 上机后记得核一眼：`ls -Zd /dev/dri` 应当是 u:object_r:gpu_device:s0。
+/dev/dri                     u:object_r:gpu_device:s0
 
 # ─────────────────────────────────────────────────────────────────────────
 # 转 enforcing 第 1 步：给我们自己的可执行文件打标签
@@ -70,6 +85,12 @@
 /vendor/bin/gaokun3-keyboard\.sh     u:object_r:gaokun3_keyboard_exec:s0
 /vendor/bin/smmu-nostall\.sh         u:object_r:gaokun3_smmustall_exec:s0
 /vendor/bin/gaokun3-usbrole\.sh      u:object_r:gaokun3_usbrole_exec:s0
+# ⚠️★ 2026-09-18 补：触摸手感模式（v0.6.2 随 #116 加的 touchmode.rc）当初
+#    【整个漏了这一步】—— 服务没有 seclabel、可执行文件没有标签，于是它和
+#    2026-08-23 之前的那批服务一样留在 init 域里。permissive 下功能完全正常，
+#    所以两版都没人发现。这正是 #60 说的那种"denial 主体是 u:r:init:s0"的
+#    噪声源，也是转 enforcing 时会直接起不来的服务。
+/vendor/bin/gaokun3-touch-mode\.sh   u:object_r:gaokun3_touchmode_exec:s0
 
 # ⚠️ bpf-relabel.sh 【故意】不给独立域，继续用 .rc 里的
 #    `seclabel u:r:vendor_init:s0`：它唯一的作用是在【没打 patches/0007 的
@@ -77,10 +98,14 @@
 #    动作，只有 vendor_init 拿得到。给它独立域反而会让那条保命通路失效。
 #    （在打了 0007 的内核上它会提前 exit 0，实测 chcon 一次都不跑 —— 见 #60。）
 
-# ⬜ 未打标签，留待后续：
-#    * /vendor/bin/gaokun3-ota-postinstall.sh —— 由 update_engine 在
-#      postinstall 域里执行，规则归属和上面几个不同，要单独想
-#    * /vendor/bin/tu_debug_loader.sh —— 调试用，不由 init 启动
+# ⬜ /vendor/bin/tu_debug_loader.sh —— 调试用，不由 init 启动，不给标签。
+#
+# ★ gaokun3-ota-postinstall.sh 这里【故意】没有条目，而且不该有：
+#   update_engine 把【新的】vendor 分区挂到 /postinstall 时会把整块文件系统
+#   relabel 成 postinstall_file（system/sepolicy/private/update_engine_common.te:47），
+#   再由 domain_auto_trans(update_engine_common, postinstall_file, postinstall)
+#   （同文件 :14）把脚本转进 postinstall 域 —— 与本文件里的标签无关。
+#   它要的权限写在 sepolicy/postinstall.te 里。
 
 # hexagonrpcd：路径从构建产物核实（out/.../vendor/bin/hexagonrpcd）
 /vendor/bin/hexagonrpcd              u:object_r:hexagonrpcd_exec:s0
@@ -103,6 +128,12 @@
 # ⚠️ 这里写死了分区号，因为本机布局由 scripts/install-gaokun3.sh 固定生成
 #    （by-name 符号链接逐个核对过：p1=esp p2=userdata p3=rescue p4=misc
 #    p5/p6=boot_a/b p8=super p10=metadata）。换布局要同步改这里。
+# ⚠️★ p1 = ESP。此前【没给它类型】，于是它挂着通用的 block_device ——
+#    而 domain.te:705 那条 neverallow 让任何域都打不开通用 block_device。
+#    也就是说 boot_control HAL 挂 ESP 这件事在 enforcing 下【根本不可能成功】，
+#    而且是"加 allow 只会让 sepolicy_neverallows 构建失败"的那种不可能。
+#    类型定义与出处见 device.te。
+/dev/block/nvme0n1p1     u:object_r:gaokun3_esp_block_device:s0
 /dev/block/nvme0n1p2     u:object_r:userdata_block_device:s0
 /dev/block/nvme0n1p4     u:object_r:misc_block_device:s0
 /dev/block/nvme0n1p5     u:object_r:boot_block_device:s0

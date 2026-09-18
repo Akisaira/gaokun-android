@@ -28,6 +28,7 @@ egotouchrev-linux|https://github.com/chiyuki0325/EGoTouchRev-Linux|main
 gaokun-buildbot|https://github.com/KawaiiHachimi/linux-gaokun-buildbot|main
 egotouchrev-rebuild|https://github.com/awarson2233/EGoTouchRev-rebuild|main
 libcamera|https://gitlab.freedesktop.org/camera/libcamera.git|master
+lineage-sepolicy|https://github.com/LineageOS/android_system_sepolicy|lineage-23.0
 "
 
 echo "=== clone start ==="

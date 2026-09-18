@@ -8770,3 +8770,144 @@ GitHub：`gh release create` 一次带 5 个附件，1.28 GB 的 `super.img.zst`
 两个大附件逐个 `upload --clobber`、每个都以 `gh release view --json assets` 的字节数为判据、失败重试 →
 五个全对才 `edit --draft=false --latest`。草稿期间外面看不见，半途失败没有半发布状态。
 记进 `release.sh` 的 gh 坑第 ④ 条。
+
+---
+
+## #117 ★★★ SELinux 第五轮：不靠实机也能查的四个洞（2026-09-18）
+
+用户让"把 SELinux 规则写一下"。设备当时**不在线**（USB 无设备、`192.168.10.0/24`
+全网段扫 5555 零命中），所以这一轮**一条 denial 日志都没看**，全部是
+**拿策略源码跟本仓设备树对账**查出来的。四个洞里有三个在 permissive 下
+"功能完全正常"，正因为如此才活到今天。
+
+> ⚠️★ **先把方法论记下来**：`refs/` 里此前**没有 AOSP/LineageOS 的 sepolicy 树**，
+> 于是"必须从本地源码 grep 出名字"这条强制规则在 SELinux 这一块**根本无法执行**，
+> 只能凭记忆 —— 而这个项目最贵的错误就是自信的记忆。
+> 现在 `scripts/clone-refs.sh` 里加了
+> `lineage-sepolicy|LineageOS/android_system_sepolicy|lineage-23.0`（42 MB，
+> 就是 crDroid 16.0 实际用的那棵），本条里每个行号都出自它。
+
+### 1. 触摸手感服务（v0.6.2 加的）**根本没有域**
+
+`etc/touchmode.rc` 的两个服务既没有 `seclabel`，`gaokun3-touch-mode.sh` 也没有
+`file_contexts` 条目 ⇒ 它一直跑在 `init` 域里，和 2026-08-23 之前那批服务一模一样。
+permissive 下手感一切正常（#116 的验收全过），所以 v0.6.2 的两版都没暴露。
+
+★ **真正的教训不是"漏了一个文件"，是把 #60 定的第 1 步当成了一次性工序。**
+它其实是**每加一个 init 服务都要走一遍**的清单项。判据很便宜：
+
+```
+adb shell ps -AZ | grep -v '^u:r:init:s0' | grep gaokun3   # 每个自研服务都该在这里出现
+```
+
+已补 `gaokun3_touchmode` 域（`sepolicy/gaokun3_scripts.te`）+ 标签 + 两条 sysfs 规则
+（通配 `/sys/bus/spi/devices/*/algo` 要 `dir r_dir_perms`，全局只给了 `dir search`，
+`domain.te:255`）。
+
+### 2. `/dev/dri` **目录本身**：三个月前的判断是错的
+
+`file_contexts` 里那条 ⬜ 写着"给目录换类型解决不了，需要真的写 allow 规则"。
+**不对**：核心策略对 `gpu_device` **这个类型的 dir** 早就写好了 `r_dir_perms`，
+而且覆盖的正是当初被拒的那批主体 —— 逐条核对：
+
+```
+surfaceflinger.te:41  bootanim.te:36  system_server.te:494
+hal_graphics_allocator.te:11  hal_graphics_composer.te:14
+mediaswcodec.te:26  mediaserver.te:67  vendor/mediacodec.te:20
+app.te:394  allow { appdomain -isolated_app_all } gpu_device:dir r_dir_perms;
+```
+
+`system_app` / `platform_app`（launcher3）都在 `appdomain` 里。所以一行
+`/dev/dri u:object_r:gpu_device:s0` 就够，**仍然一条 allow 都不用写** ——
+和当初标 `card1`/`renderD128` 是同一类胜利。
+
+★ 这条值钱的地方在于：**"我当时判断需要写 allow"本身也是要复查的结论。**
+本仓已经有过同形状的两次（EC 挂起、plane 数量），这是第三次。
+
+### 3. ⚠️★★ ESP 挂载在 enforcing 下**根本不可能成功**，且加 allow 只会让构建失败
+
+`hal_bootctl_default.te` 里那组 vfat 规则（sys_admin + mount + 读写）看着很完整，
+但它**只管"挂上之后"**。真正打不开的是块设备本身：
+
+```
+system/sepolicy/private/domain.te:705
+neverallow { domain -kernel -init -recovery } block_device:blk_file { open read write };
+```
+
+而本仓的 `file_contexts` 给 p2/p4/p5/p6/p8/p10 都定了类型，**唯独 p1（ESP）没定**
+—— 它挂着通用的 `block_device`。于是：
+
+* 这不是"少一条 allow"，是**写了 allow 就过不了 `sepolicy_neverallows`**；
+* permissive 下 mount 照样成功，所以这个洞从 2026-08-23 活到现在。
+
+已补：`device.te` 加 `gaokun3_esp_block_device`、`file_contexts` 标 p1、
+`hal_bootctl_default.te` 加 `blk_file rw` 与 `block_device:lnk_file r`
+（`/dev/block/by-name/esp` 是符号链接，读它要 lnk_file，全局没给）。
+
+★ **泛化**：permissive 下"功能正常"对 enforcing **没有任何预测力**，
+而"这条规则写不写得进去"要看 neverallow，不看 denial 日志。**denial 普查查不出这一类洞。**
+
+### 4. OTA 的 postinstall：规则写了，但**兜底探测那条路永久作废**
+
+`gaokun3-ota-postinstall.sh` 由 update_engine 执行。查清楚了它**不需要**
+`file_contexts` 条目：新 vendor 分区挂到 `/postinstall` 时整块被 relabel 成
+`postinstall_file`（`update_engine_common.te:47`），再由同文件 `:14` 的
+`domain_auto_trans` 转进 `postinstall` 域。AOSP 明确邀请设备树来补这个域的权限
+（`public/postinstall.te:1-4` 的原话）。规则已写进 `sepolicy/postinstall.te`。
+
+⚠️ 但 **`find_esp()` 的兜底探测（扫所有块设备找 vfat）在 enforcing 下不可能工作** ——
+那些分区是通用 `block_device`，撞的是上面同一条 neverallow。
+后果要说清楚：**转 enforcing 之后，只有按 `scripts/install-gaokun3.sh` 布局装的机器
+（p1=ESP）能走完 OTA 最后一步**；手工分区的机器（v0.6.0 真有人踩到，#116 §17 的起因）
+会在 postinstall 失败、整次 OTA 回滚。**这不是少一条规则，是布局假设从"兜底"变成了硬约束。**
+正解仍是 [TODO B3] 的自研 EFI 加载器 —— 它做出来，这个脚本连同本文件一起退役。
+
+### 5. ⚠️★★ 自研属性的上下文：`persist.gaokun3.*` 转 enforcing 后**谁都设不了**
+
+`property_contexts` 是**最长前缀匹配 + 兜底 `*`**：
+
+| 属性 | 落到的类型 | 谁能写 |
+|---|---|---|
+| `persist.sys.gaokun3.keyboard` / `.touch_mode` | `system_prop`（`private/property_contexts:77`） | `system_app`（`system_app.te:43`）✅ **adb shell 不行** |
+| `persist.gaokun3.allow_suspend` / `.recovery_entry` | `default_prop`（兜底 `*`，`:149`） | **只有 init**（`property.te:797-800` 的 neverallow）|
+
+两条都要注意：
+
+1. **Parts 应用没问题** —— 它 `sharedUserId=android.uid.system` + platform 证书 ⇒
+   `seapp_contexts:180` 判进 `system_app` 域，而 `system_app` 有 `set_prop(system_prop)`。
+   键盘开关与触摸模式从**设置界面**切是通的。
+2. ⚠️ **`adb shell setprop` 在 enforcing 下会失败** —— `shell` 域既没有 `system_prop`
+   也没有 `default_prop` 的写权限（`shell.te` 的 `set_prop` 清单里逐条查过）。
+   我们所有文档里"排查时 `setprop persist.gaokun3.allow_suspend 0`"的写法，
+   转 enforcing 当天就会全部失效。
+
+**出路只有一条**：vendor 的 `property_contexts` **只允许 vendor 前缀**
+（`tests/check_prop_prefix.py`，VTS 强制），所以要么把这两个属性改名成
+`persist.vendor.gaokun3.*` 并自定义一个属性类型（那样才能 `set_prop(shell, …)`），
+要么接受"只能从 UI 改"。**改名会让已装机器上现有的值失效**
+（本机 `persist.gaokun3.allow_suspend=0` 会变回默认的 1），所以**这一步留给用户定**，
+本轮没做。
+
+### 6. genfscon 前缀盖住 `wakeupN`：那条路也被 neverallow 堵死
+
+TODO B1 末尾那个 ⬜（给 UCSI 的 `power_supply` 打标签时连带盖住了 `wakeup23`）
+本来最自然的修法是"允许 `system_suspend` 读 `sysfs_batteryinfo`"。**不行**：
+
+```
+system/sepolicy/private/domain.te:1555-1572   full_treble_only(`
+  neverallow { coredomain -shell -apexd -init -ueventd -recovery -charger -incidentd }
+              sysfs_batteryinfo:file { open read }; ')
+```
+
+`system_suspend` 是 coredomain 且不在豁免名单里 ⇒ 只能靠**标签**解决，
+而 `wakeupN` 的 N 是动态的、genfscon 又只有前缀匹配。仍未解，但**排除了一条路**。
+
+### 这一轮没有做的事（别把它读成已验证）
+
+* **一行都没编译**：本机编不了 AOSP，`sepolicy_neverallows` / `checkpolicy` 都没跑过。
+* **一条都没上机**：设备不在线，没有新的 denial 普查；新规则是否**够用**（有没有漏权限）
+  只有实机能回答 —— 而上面第 3、4 条说明，**够不够用**与**写不写得进去**是两个独立问题，
+  这一轮只解决了后者。
+* 两个老的结构性阻塞（`gaokun3_hangdump` 读 debugfs、`gaokun3_smmustall` 要 `/dev/mem`）
+  **原封不动** —— 它们要的是产品决定（诊断件只在 userdebug 上装？还是先做 B6？），
+  不是规则。

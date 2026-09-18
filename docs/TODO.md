@@ -42,7 +42,7 @@
 | **B15** | 内核 cmdline 在四处各有一份 | `BoardConfig.mk`（权威）之外，`install-gaokun3.sh` / `live/installer-lib.sh` / `deploy-android.sh` 各写死一份且已过时。OTA 路径已改为从 boot.img 的 `cmdline.txt` 派生（[#116](stage4-findings.md) §17）；全新安装路径也应如此 |
 | **B12** | 释放 R2 桶前要有国内可达的镜像 | GitHub 附件国内不可达（v0.6.0 当天就有用户反馈）。要用户定方案 |
 | **B14** | 息屏 USB adb 的原生化 + 复位根因 | 见 T4，这是它的长期解 |
-| **B1** | SELinux 转 enforcing | 四步已走完，剩两个**结构性**阻塞（hangdump 读 debugfs 的 neverallow 无 userdebug 豁免；smmustall 要 `/dev/mem`）。后者做掉 B6 就消失 |
+| **B1** | SELinux 转 enforcing | 第五轮（[#117](stage4-findings.md)）又补了四处：触摸服务没有域、`/dev/dri` 目录、ESP 块设备类型（**加 allow 也绕不过 neverallow**）、OTA postinstall。**全部未编译未上机**。老的两个结构性阻塞原封不动，另加一条要用户定的（属性改名）|
 | **B5b** | UBWC：仓库写着关、设备上开了 13 天没事 | **一次测量都没有**。下版构建前删掉 `device.mk:174` 那行并带一次实测 |
 | **B6** | GPU SMMU 中断根治 | 做掉它 `smmu-nostall.sh` 整个消失，B1 的一半阻塞跟着消失 |
 | **B3** | 自研 EFI 加载器 | A5 与"默认启动项永远留救援"都依赖它 |
@@ -743,7 +743,7 @@ checkout），让 `git status` 直接说话。⚠️ 换之前先做一次清单
 决定只记录不编码（理由见 [#82](stage4-findings.md) 第五节）。
 下次干净树构建若出现 `tar`/`date` 相关报错，就是它。
 
-### B1. SELinux 转 enforcing —— **四步已走完，剩两个结构性阻塞**
+### B1. SELinux 转 enforcing —— 四步 + 第五轮补漏，剩两个结构性阻塞与一个待定
 [#75](stage4-findings.md) / [#76](stage4-findings.md) / [#77](stage4-findings.md)。
 2026-08-23 夜随构建戳 `1787436126` 装机验收：
 
@@ -758,7 +758,8 @@ checkout），让 `git status` 直接说话。⚠️ 换之前先做一次清单
 **还剩两个加规则解决不了的**（这才是 enforcing 的真正门槛）：
 
 1. **`gaokun3_hangdump`** —— 读 debugfs 那条 neverallow
-   （`domain.te:1527`）**没有 userdebug 豁免**；而它还要读所有域的 `/proc`。
+   （lineage-23.0 的 `domain.te:1462`，名单只有 init/vendor_init/dumpstate）
+   **没有 userdebug 豁免**；而它还要读所有域的 `/proc`。
    它本质上是 `dumpstate` 那一类工具。
    **出路**：binder-debugfs 换成 `dumpsys`，或做成只在 userdebug 启用的诊断件。
 2. **`gaokun3_smmustall`** —— 要 `sys_rawio` + `/dev/mem`。写得进去
@@ -768,6 +769,36 @@ checkout），让 `git status` 直接说话。⚠️ 换之前先做一次清单
 ⬜ 另有一处未解：genfscon 是**前缀匹配**，我给 UCSI 的 `power_supply` 打标签
 时连带盖住了它下面的 `wakeup23`（本该是 `sysfs_wakeup`）。`wakeupN` 编号动态，
 逐条 genfscon 不现实。**⚠️ 症状是 denial 的类型变了而不是消失 —— 别误读成进展。**
+
+**2026-09-18 第五轮（[#117](stage4-findings.md)）—— 不看 denial、只对源码查出来的四个洞**，
+规则已写进 `device/huawei/gaokun3/sepolicy/`：
+
+* ✅ `gaokun3_touchmode` 域 —— v0.6.2 加的触摸手感服务**一直跑在 init 域里**
+  （没 seclabel、没标签）。★ 第 1 步不是一次性工序，是**每加一个 init 服务**的清单项。
+* ✅ `/dev/dri` **目录本身** → `gpu_device` —— 当初判断"换类型解决不了"是错的，
+  核心策略里 `gpu_device:dir r_dir_perms` 对那批主体全都现成，**零 allow**。
+* ⚠️★ `gaokun3_esp_block_device` —— ESP（p1）此前挂通用 `block_device`，而
+  `domain.te:705` 那条 neverallow 让**任何域都打不开它**：boot_control HAL 挂 ESP
+  在 enforcing 下不是"缺一条 allow"，是**写了 allow 就构建失败**。
+  permissive 下它一直好好的，所以活了近一个月。
+* ✅ `postinstall.te` —— OTA 钩子的权限（挂 ESP、读 boot_x、写 BLS 条目）。
+  ⚠️ 代价：`find_esp()` 的兜底探测（扫全盘找 vfat）撞同一条 neverallow，
+  **enforcing 后只有按 `install-gaokun3.sh` 布局装的机器能走完 OTA**，手工分区的会失败。
+
+⬜ **新增一条要用户定的**：`persist.gaokun3.allow_suspend` / `.recovery_entry` 落在
+`default_prop`，而 `property.te:797-800` 规定**只有 init 能写**；`persist.sys.gaokun3.*`
+落在 `system_prop`，Parts 应用（`system_app` 域）写得了、**`adb shell setprop` 写不了**。
+vendor 的 property_contexts 只许 vendor 前缀（VTS 强制），所以要么改名成
+`persist.vendor.gaokun3.*` + 自定义属性类型，要么接受"只能从 UI 改"。
+**改名会让本机现有的 `allow_suspend=0` 失效**，所以没动。
+
+⬜ 上面 `wakeupN` 那条的最自然修法（放行 `system_suspend` 读 `sysfs_batteryinfo`）
+**已排除**：`domain.te:1555-1572` 的 neverallow 不豁免 coredomain 里的 system_suspend。
+
+⚠️★ **这一轮一行都没编译、一条都没上机**（本机编不了 AOSP；设备当天不在线）。
+下一步有两件、互相独立：
+1. 构建机上 `m selinux_policy` —— 只验"规则写不写得进去"（neverallow / 类型可见性）；
+2. 装机后重跑一次 denial 普查 —— 才能验"够不够用"。#117 第 3 条说明这**是两个问题**。
 
 ### B2. ✅ 真温控 HAL —— 已随 v0.6.0 进镜像（2026-09-12 装机验收）
 `device/huawei/gaokun3/thermal/`（自研，读 `/sys/class/thermal`），`device.mk:97` 装它，

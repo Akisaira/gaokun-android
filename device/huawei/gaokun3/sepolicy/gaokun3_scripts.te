@@ -40,16 +40,31 @@ type gaokun3_usbrole, domain;
 type gaokun3_usbrole_exec, exec_type, vendor_file_type, file_type;
 init_daemon_domain(gaokun3_usbrole)
 
+# ── gaokun3-touch-mode.sh：触摸手感预设（game / daily）──────────────────
+# ⚠️★ 2026-09-18 补的。v0.6.2 加这个服务时【整个漏了域这一步】，于是它一直
+#    跑在 init 域里 —— permissive 下手感一切正常，所以两版都没暴露。
+#    ★ 教训：第 1 步不是一次性的工序，是【每加一个 init 服务都要走一遍】的
+#      清单项。判据：`adb shell ps -AZ | grep -v u:r:init:s0` 里该有它。
+type gaokun3_touchmode, domain;
+type gaokun3_touchmode_exec, exec_type, vendor_file_type, file_type;
+init_daemon_domain(gaokun3_touchmode)
+
 # ── 每个脚本域都要能执行自己的解释器 ────────────────────────────────────
 #
-# 这不是"从 denial 抄来的规则"，是结构性事实：这五个脚本的 shebang 都是
+# 这不是"从 denial 抄来的规则"，是结构性事实：这六个脚本的 shebang 都是
 # `#!/vendor/bin/sh`（已逐个核对），而脚本里用的 sed/grep/cat 等来自
 # toybox_vendor。少了这两条，enforcing 下服务连启动都做不到。
-# 类型名出处：system/sepolicy/vendor/file.te 的
-#   type vendor_shell_exec,   exec_type, vendor_file_type, file_type;
-#   type vendor_toolbox_exec, exec_type, vendor_file_type, file_type;
+# 类型名出处（2026-09-18 对着 lineage-23.0 重新核过，此前这里写的 vendor/file.te
+# 是错的 —— 那两个类型在 public/ 里，vendor 策略能引用它们正是因为这一点）：
+#   system/sepolicy/public/vendor_shell.te:2
+#     type vendor_shell_exec,   exec_type, vendor_file_type, file_type;
+#   system/sepolicy/public/vendor_toolbox.te:4
+#     type vendor_toolbox_exec, exec_type, vendor_file_type, file_type;
+# 打标签的是核心策略自己：private/file_contexts:424-425
+#   /(vendor|system/vendor)/bin/sh            u:object_r:vendor_shell_exec:s0
+#   /(vendor|system/vendor)/bin/toybox_vendor u:object_r:vendor_toolbox_exec:s0
 # 显式写全，不用 m4 宏 —— 十行重复远比"一个只在本文件里定义的宏"好读，
-# 也不会因为策略文件的拼接顺序出意外。
+# 也不会因为策略文件的拼接顺序出意外。（2026-09-18 起是六个：加了 touch-mode。）
 allow gaokun3_audioroute vendor_shell_exec:file rx_file_perms;
 allow gaokun3_audioroute vendor_toolbox_exec:file rx_file_perms;
 allow gaokun3_smmustall  vendor_shell_exec:file rx_file_perms;
@@ -60,6 +75,8 @@ allow gaokun3_keyboard   vendor_shell_exec:file rx_file_perms;
 allow gaokun3_keyboard   vendor_toolbox_exec:file rx_file_perms;
 allow gaokun3_usbrole    vendor_shell_exec:file rx_file_perms;
 allow gaokun3_usbrole    vendor_toolbox_exec:file rx_file_perms;
+allow gaokun3_touchmode  vendor_shell_exec:file rx_file_perms;
+allow gaokun3_touchmode  vendor_toolbox_exec:file rx_file_perms;
 
 # ── 第 4 步：照实机拒绝补的规则 ──────────────────────────────────────────
 
@@ -70,11 +87,29 @@ allow gaokun3_usbrole    vendor_toolbox_exec:file rx_file_perms;
 allow gaokun3_keyboard sysfs:dir r_dir_perms;
 allow gaokun3_keyboard sysfs:file rw_file_perms;
 
+# gaokun3-touch-mode.sh：按 `for d in /sys/bus/spi/devices/*/algo` 找触摸驱动的
+# algo 目录，再写 track_smoothing / track_start_debounce / debounce_base /
+# track_jump_dist2 / pressure_enabled 五项（并逐项回读校验）。
+#   * dir r_dir_perms —— 通配要 readdir。全局只给了 search
+#     （system/sepolicy/private/domain.te:255），不够。
+#   * file rw_file_perms —— 写 algo 属性 + 回读。
+#   * 路径上的 /sys/bus/spi/devices/spi0.0 是符号链接，但 lnk_file 读全局已有
+#     （domain.te:197 `allow domain sysfs:lnk_file { getattr read }`），不用写。
+#   * 脚本里的 `log` 也不用写：write_logd(domain) 是全局的（domain.te:121）。
+# ⚠️ 与 keyboard 同样的取舍：sysfs 的面给得宽，但域本身只做这一件事。
+#    ★ 不写死那条 DT 路径是【故意的】（见脚本注释）；反过来说，这里也就没法
+#      用 genfscon 收窄到那一个 algo 目录 —— 收窄要等驱动把 algo 挪到一个
+#      稳定路径下，或者接受"换内核就失效且毫无征兆"。
+allow gaokun3_touchmode sysfs:dir r_dir_perms;
+allow gaokun3_touchmode sysfs:file rw_file_perms;
+
 # ── ⚠️ 故意【不写】的两个域 ─────────────────────────────────────────────
 #
 # gaokun3_smmustall：实测要 `self:capability sys_rawio` +
 #   `gaokun3_devmem_device:chr_file {map open read write}`。
-#   那条 sys_rawio 的 neverallow 带 userdebug_or_eng 豁免（domain.te:2074），
+#   那条 sys_rawio 的 neverallow 带 userdebug_or_eng 豁免
+#   （lineage-23.0 的 domain.te:2012-2024；⚠️ 行号每次同步都会漂，
+#    判据是那条 neverallow 的正文里有没有 `userdebug_or_eng(\`-domain')`），
 #   所以 userdebug 上写得进去 —— 但那意味着 enforcing 与否取决于构建变体。
 #   ★ 正解是把 [TODO B6] 做掉（DT 中断映射修对），这个轮询脚本整个消失。
 #   在那之前，宁可让它在 enforcing 下明确失效，也不要写一条只在
@@ -83,7 +118,10 @@ allow gaokun3_keyboard sysfs:file rw_file_perms;
 # gaokun3_hangdump：实测要读别的域的 /proc（观测到 init 与 kernel，
 #   而它的职责是扫【所有】线程找 D 状态，所以实际需要 domain:file r_file_perms）。
 #   ⚠️ 再加上 debugfs 那条【没有 userdebug 豁免】的 neverallow
-#   （domain.te:1527），这个工具本质上是 dumpstate 那一类特权取证工具。
+#   （lineage-23.0 的 domain.te:1462
+#    `neverallow { domain -init -vendor_init -dumpstate } debugfs:{ file lnk_file } no_rw_file_perms;`
+#    —— 名单里只有三个域，没有任何构建变体豁免），
+#   这个工具本质上是 dumpstate 那一类特权取证工具。
 #   给它半套权限，结果是"能跑但会漏进程"——**比明确不可用更糟**。
 #   出路：要么把 binder-debugfs 部分换成 dumpsys，要么做成只在
 #   userdebug 上启用的诊断件。见 #75。

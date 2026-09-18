@@ -1,0 +1,65 @@
+# A/B OTA 的 postinstall 钩子（bin/gaokun3-ota-postinstall.sh）。
+#
+# ★ 这里为什么是"给 AOSP 的域补规则"而不是"定义自己的域"：
+#   update_engine 把【新的】vendor 分区挂到 /postinstall 时，会把整块文件系统
+#   relabel 成 postinstall_file
+#   （system/sepolicy/private/update_engine_common.te:47），再由
+#   domain_auto_trans(update_engine_common, postinstall_file, postinstall)（同文件 :14）
+#   把脚本转进 postinstall 域。所以 vendor 的 file_contexts 给这个脚本打什么
+#   标签都没有意义 —— 挂载时会被整个盖掉。
+#   AOSP 自己也是这么设计的，public/postinstall.te:1-4 原话：
+#     "Extend the permissions in this domain to allow this program to access
+#      other files needed by the specific device on your device's sepolicy directory."
+#
+# ⚠️ 本机的 postinstall 干的事比一般设备重得多：它要挂 ESP、把刚刷好的那个槽
+#    的内核/ramdisk/dtb 铺上去、并把 boot.img 的 cmdline 同步进 BLS 启动项
+#    （见 bin/gaokun3-ota-postinstall.sh 与 #116 §17）。
+#    [TODO B3] 的自研 EFI 加载器做出来之后，整个脚本连同本文件一起退役。
+
+# ── 挂 ESP ───────────────────────────────────────────────────────────────
+# mount(2) 要 sys_admin。vfat 属于 sdcard_type，被 domain.te:1987-2003 那条
+# "只有 init/vold/update_engine… 能 mount"的 neverallow 显式排除在外
+# （public/file.te:183 `type vfat, sdcard_type, fs_type, mlstrustedobject;`），
+# 所以这条写得进去 —— 与 hal_bootctl_default 那组同理。
+allow postinstall self:capability sys_admin;
+allow postinstall vfat:filesystem { mount unmount };
+allow postinstall vfat:dir { search read open getattr write add_name remove_name };
+allow postinstall vfat:file { create open read write getattr setattr rename unlink };
+
+# 挂载点 /mnt/gaokun3_ota_esp（以及探测用的 /mnt/gaokun3_esp_probe）。
+# /mnt 是 tmpfs（system/sepolicy/private/file_contexts:51）。
+allow postinstall tmpfs:dir { search getattr create write add_name mounton };
+
+# ── 块设备 ───────────────────────────────────────────────────────────────
+# by-name 下都是符号链接（block_device），指向的真实节点才是分区类型。
+# 脚本读 /dev/block/by-name/{esp,boot_a,boot_b}。
+allow postinstall block_device:dir search;
+allow postinstall block_device:lnk_file r_file_perms;
+allow postinstall gaokun3_esp_block_device:blk_file rw_file_perms;
+# gaokun3-bootimg-extract 从刚刷好的那个槽解包（只读）。
+allow postinstall boot_block_device:blk_file r_file_perms;
+
+# ── 不用写、已经现成的那些（核对过，免得下次又有人补一遍）──────────────
+#   * 执行 /system/bin/sh、toybox、以及同目录的 gaokun3-bootimg-extract：
+#     private/postinstall.te:22-25（shell_exec / system_file / toolbox_exec）
+#     与 :17-19（postinstall_file 的 rx / r_dir_perms）。
+#   * 往 update_engine 的管道打日志：同文件 :12-13。
+#   * `df` 看 ESP 剩余空间（statfs）：domain.te:276 `allow domain fs_type:filesystem getattr;`
+#     是全局的，不用为 vfat 单独写 getattr。
+#   * getprop persist.gaokun3.recovery_entry：postinstall 是 coredomain，
+#     private/coredomain.te:33 `get_prop(coredomain, default_prop)` 已覆盖读。
+#     ⚠️ 但【写】那个属性不行 —— 见下。
+
+# ── ⚠️★★ 写不了、也不该在这里写的：find_esp 的兜底探测 ────────────────
+#
+# 脚本在 /dev/block/by-name/esp 不存在时（手工分区 / 双系统的用户，v0.6.0 有人
+# 真的踩到）会扫所有块设备，用 blkid 找 vfat 再试挂。那条路在 enforcing 下
+# 【不可能工作】：那些分区挂的是通用 block_device 标签，而
+#     system/sepolicy/private/domain.te:705
+#     neverallow { domain -kernel -init -recovery } block_device:blk_file { open read write };
+# 是加 allow 也绕不过去的（写了 sepolicy_neverallows 直接构建失败）。
+#
+# 后果要说清楚：转 enforcing 之后，**只有按 scripts/install-gaokun3.sh 的
+# 布局装的机器（p1=ESP）能走完 OTA 最后一步**；手工分区的机器会在
+# postinstall 失败，整次 OTA 回滚。这不是"少一条规则"，是布局假设变成了硬约束。
+# ★ 正解仍是 [TODO B3]：自研 EFI 加载器直接读 misc 选槽，postinstall 整个消失。

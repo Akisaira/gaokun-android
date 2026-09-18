@@ -1,7 +1,7 @@
 # gaokun3 专有的设备类型。
 #
-# 这两个节点在整棵 AOSP 策略里都没有对应类型 —— 和 /dev/dri 是同一类缺口：
-# AOSP 从没设想过"跑在主线内核上的 Android"。
+# 这几个节点在整棵 AOSP 策略里都没有对应类型 —— 和 /dev/dri 是同一类缺口：
+# AOSP 从没设想过"跑在主线内核上的 Android"，也没设想过 ESP 是个要被挂载的分区。
 
 # hexagonrpcd 用它跟 SLPI 上的 DSP 说话（传感器整条链的地基）
 type gaokun3_fastrpc_device, dev_type;
@@ -9,3 +9,17 @@ type gaokun3_fastrpc_device, dev_type;
 # ⚠️ /dev/mem。定义类型是为了让访问【显式可见】，不是为了开权限：
 #    现在没有任何域被 allow 到它。见 sepolicy/file_contexts 里的说明与 #75。
 type gaokun3_devmem_device, dev_type;
+
+# ── ESP（/dev/block/nvme0n1p1）────────────────────────────────────────────
+# ⚠️★ 这不是"顺手也给它个类型"：核心策略里有一条【加 allow 也绕不过去】的
+#    neverallow —— system/sepolicy/private/domain.te:705
+#       neverallow { domain -kernel -init -recovery } block_device:blk_file { open read write };
+#    也就是说：只要 ESP 还挂着通用的 block_device 标签，boot_control HAL 与
+#    OTA 的 postinstall 就【永远】打不开它，写多少 allow 都没用，写了还会
+#    让 sepolicy_neverallows 直接构建失败。必须先换成专用类型。
+#    （AOSP 自己的 hal_bootctl_default.te:15-16 就是这么做的：misc 分区给
+#     misc_block_device，只 search 通用的 block_device 目录。）
+#
+# ⚠️ 分区号写死在 file_contexts 里，与 p2/p4/p5/p6/p8/p10 那几条同一批 ——
+#    本机布局由 scripts/install-gaokun3.sh 固定生成。换布局要一起改。
+type gaokun3_esp_block_device, dev_type;
