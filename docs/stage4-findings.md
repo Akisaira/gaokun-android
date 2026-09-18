@@ -9009,3 +9009,29 @@ deprecated，两者都落到 `/vendor/build.prop`，见 `core/sysprop.mk:194-205
 
 ⚠️ `persist.sys.gaokun3.*`（键盘、触摸模式）**故意没跟着改** —— 见第 5 条的表：
 它们靠 `system_prop` 才让 Parts 应用写得了。
+
+### 10. 顺手把 `wakeupN` 那个 ⬜ 量了一下：确实撞上了，但今天没有任何后果
+
+实机把路径钉死了（`readlink -f /sys/class/wakeup/wakeup2*`）：
+
+```
+wakeup20 -> /sys/devices/virtual/wakeup/wakeup20                                  sysfs_wakeup      ← AOSP 标的
+wakeup21 -> .../huawei_gaokun_ec.ucsi.0/power_supply/ucsi-source-psy-….01/wakeup21 sysfs_batteryinfo ← 我们盖的
+wakeup23 -> .../huawei_gaokun_ec.ucsi.0/power_supply/ucsi-source-psy-….02/wakeup23 sysfs_batteryinfo ← 我们盖的
+wakeup2  -> /sys/devices/platform/soc@0/c252000.thermal-sensor/wakeup/wakeup2      sysfs            ← 谁也没标
+wakeup22 -> .../0006:01:00.0/mhi0/wakeup/wakeup22                                  sysfs            ← 谁也没标
+```
+
+三件新事实：
+
+1. **碰撞是真的**，而且只影响 UCSI 那两个（电池那棵子树下没有 wakeup 节点）。
+2. **本机绝大多数 wakeup 节点根本没人标**（thermal-sensor、mhi0 都是通用 `sysfs`）——
+   AOSP 的 `genfscon sysfs /devices/virtual/wakeup` 只覆盖虚拟设备那一支。
+3. ⚠️★ **`system_suspend` 一条 denial 都没有**（整次启动 + 14 分钟使用，
+   `dmesg | grep -c sysfs_batteryinfo` = 0）。也就是说它在本机**根本没去读**
+   这些节点 —— 既没读我们盖错的，也没读那些没人标的。
+
+所以这个 ⬜ 的性质要改写：**它不是"有个功能坏了等着修"，而是"标签语义不对，
+但当前没有任何主体去碰它"**。修它的收益是语义正确，不是修 bug；
+而第 6 条已经证明"放行 system_suspend 读 sysfs_batteryinfo"那条路被 neverallow 堵死。
+★ 留着不修是可以的，**但要按这个描述留**，别让下一个人以为有条功能在等他。

@@ -767,9 +767,14 @@ checkout），让 `git status` 直接说话。⚠️ 换之前先做一次清单
    （那条 neverallow 有 userdebug 豁免），但会让 enforcing 与否取决于构建变体。
    ★ **正解是先做 B6**，脚本整个消失，这道坎一起没了。
 
-⬜ 另有一处未解：genfscon 是**前缀匹配**，我给 UCSI 的 `power_supply` 打标签
-时连带盖住了它下面的 `wakeup23`（本该是 `sysfs_wakeup`）。`wakeupN` 编号动态，
-逐条 genfscon 不现实。**⚠️ 症状是 denial 的类型变了而不是消失 —— 别误读成进展。**
+⬜ 另有一处**语义不对、但当前无后果**：genfscon 是前缀匹配，给 UCSI 的
+`power_supply` 打标签时连带盖住了它下面的 `wakeup21`/`wakeup23`（本该是 `sysfs_wakeup`）。
+`wakeupN` 编号动态，逐条 genfscon 不现实。
+**2026-09-18 实测（[#117](stage4-findings.md) 第 10 条）**：本机绝大多数 wakeup 节点
+（thermal-sensor、mhi0）**谁也没标**，而 `system_suspend` 整次启动 + 14 分钟使用
+**一条 denial 都没有** ⇒ 它在本机根本不读这些节点。
+⇒ 修它的收益是语义正确，不是修 bug；而"放行 system_suspend 读 sysfs_batteryinfo"
+那条路被 `domain.te:1555-1572` 的 neverallow 堵死。**别当成有功能在等着修。**
 
 **2026-09-18 第五轮（[#117](stage4-findings.md)）—— 不看 denial、只对源码查出来的四个洞**，
 规则已写进 `device/huawei/gaokun3/sepolicy/`：
