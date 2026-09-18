@@ -6,7 +6,7 @@
 最终目标是能稳定运行 arm64 手游。
 
 **当前阶段：Stage 6 收尾 —— 产品化。v0.6.2-alpha 已发布（2026-09-16，构建戳 `1789570683`）：触摸手感按实测定案（跳点判据、fuzz=0、按下 17 ms、触点面积轴）、驱动 6 个缺陷 + 可观测性、OTA postinstall 同步 cmdline。手上还剩画质（降噪/闪光过曝）、息屏 USB adb、Google 认证、手掌碎块 —— 都在 `docs/TODO.md` 的总表里。
-2026-09-18：SELinux 第五轮（案卷 #117）—— 补了 7 处规则（触摸服务的域 / `/dev/dri` 目录 / ESP 块设备类型 / OTA postinstall / 温控 HAL 的 sysfs_thermal / audioroute 的 tinymix / hwc 的 uevent socket），自研属性改名 `persist.vendor.gaokun3.*` 且 **allow_suspend 默认值改成 0**（新装机默认不进待机，发版说明要写）。构建机 `m selinux_policy` 通过（第一次被 neverallow 打回，已改）。⚠️★ 当晚整包装机**失败并已定案**：我把变体编成了 `-user`，而 **user 构建的 init 强制 enforcing**（`selinux.cpp:112-116`，忽略 `androidboot.selinux=permissive`），与规则内容无关。设备已回到 `_b`（v0.6.2）健康运行。要验「够不够用」需用 **`-userdebug`** 重编一版。案卷 #117 §15-17。（每次开工时更新这一行）**
+2026-09-18：SELinux 第五轮（案卷 #117）—— 补了 7 处规则（触摸服务的域 / `/dev/dri` 目录 / ESP 块设备类型 / OTA postinstall / 温控 HAL 的 sysfs_thermal / audioroute 的 tinymix / hwc 的 uevent socket），自研属性改名 `persist.vendor.gaokun3.*` 且 **allow_suspend 默认值改成 0**（新装机默认不进待机，发版说明要写）。构建机编译验证通过；`-userdebug` 重编后**装机成功**（戳 `1789737346`，槽 `_a`，60 秒起来）：温控 HAL 的 35 条 denial 归零且 `dumpsys thermalservice` 报真温度、audioroute 的 7 条归零、`/dev/dri` 与 ESP 的标签实机确认、功能零回归。⚠️ 中途误用 `-user` 变体导致一次装机失败（#117 §15）。⬜ 新查出的 4 处规则（hwc 的 create/bind、同进程 HAL 库、mediaswcodec、wakeup genfscon）**已写未验**，下次构建一起。（每次开工时更新这一行）**
 
 > ## ★★★ 开工前先读（这一段是"现在"，历史在 `docs/project-log.md`）
 >
@@ -62,13 +62,16 @@
 > * **不推仓库、不发版**是需要用户点头的两件事；其余（本地提交、构建、staging、设备实验）直接做。
 >
 > ### 现在设备上跑的是什么
-> 槽 `_b` = **v0.6.2 第二版**（戳 `1789570683`，内核 `#24`，fuzz=0、触点面积轴、新触摸脚本 `game` 预设全部生效，#116 §18 验收全过）。
-> 槽 `_a` = v0.6.2 第一版（戳 `1789568947`，缺触点面积轴，其余相同）—— 可回落。v0.6.1 已被覆盖。
-> `default` 由 boot_control 在成功启动后自动指向当前槽。
-> ⚠️ 本机 `persist.gaokun3.allow_suspend` 仍是 **0**，它现在不进 s2idle。
-> ⚠️★ 2026-09-18 起仓库里这个属性改名成 **`persist.vendor.gaokun3.allow_suspend`**
-> 且镜像默认值改成 **0**（旧名在 enforcing 下谁都写不了，见案卷 #117）——
-> 也就是说下一版镜像装上去之后，**待机默认是关的**，行为与本机现状一致。
+> ⚠️★ **槽 `_a` = 未发布的开发版**（戳 `1789737346`，2026-09-18 装，`lineage_gaokun3-bp4a-userdebug`）——
+> 本轮 SELinux 规则 + 属性改名都在里面，装机验收见案卷 #117 §18。**它没有发过版**，
+> 发版前要么重新构建、要么用 `release.sh --no-build` 发这一版（戳必须是 `1789737346`）。
+> 槽 `_b` = **v0.6.2 第二版**（戳 `1789570683`，已发布）—— 可回落，出事就把 `default` 掰回它。
+> `default` 由 boot_control 在成功启动后自动指向当前槽（现在是 `_a`）。
+> ⚠️ 本机待机仍然关着：属性已改名为 **`persist.vendor.gaokun3.allow_suspend`**（现值 0，
+> 镜像默认也是 0）。旧名 `persist.gaokun3.allow_suspend` 在设备上还留着一个孤儿值，无害。
+> ⚠️★★ **不要用 `-user` 变体构建本机的 ROM** —— user 构建的 init 强制 enforcing
+> （忽略 `androidboot.selinux=permissive`，`selinux.cpp:112-116`），而我们的策略还不完整，
+> 结果是**装上去起不来**。本机一直用 `lineage_gaokun3-bp4a-userdebug`。案卷 #117 §15。
 > **v0.6.2-alpha 已全部发布**（2026-09-16）：R2 清单已更新（设备侧抓取 200）、
 > GitHub release 5 个附件服务端字节数逐一核对并标 Latest、仓库已推送。说明见 `docs/relnotes/v0.6.2-alpha.md`。
 
