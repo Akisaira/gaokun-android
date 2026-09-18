@@ -9226,3 +9226,76 @@ enforcing 打开了，我们那个跑在 `u:r:kernel:s0` 的 busybox `cat /dev/k
   另有未知缺口）。所以"转 enforcing"离可用还有距离，**不能靠换个变体蒙混过去**。
 * ⚠️ Virtual A/B 的坑（第 10、14 条同类）：**每次回落到 `_b` 都会取消待生效的快照**，
   所以每重试一次都要先重装一次 OTA（payload 留在设备上，2 分钟）。
+
+### 18. ★★★★ `-userdebug` 重编：装机成功，三条目标规则实机验证通过
+
+`lunch lineage_gaokun3-bp4a-userdebug` + `m bacon superimage`，戳 `1789737346`。
+**变体判据先验后用**（吃过一次亏了）：`adevice_fingerprint`/`arping` 在、system 文件数
+2693（user 那版 2624、v0.6.2 是 2695）、`ro.debuggable=1` 由 system_ext 发。
+
+装机（payload 已在设备上，`update_engine_client --reset_status` 先清掉上一版的
+待生效状态，否则报 `An update already applied, waiting for reboot`）→ oneshot → 重启，
+**60 秒起来**，槽 `_a`、`boot_completed=1`、`getenforce` = Permissive、
+`bootctl is-slot-marked-successful 0` = 1。
+
+**标签全部生效（实机 `ls -Z`）**：
+
+```
+/dev/dri                → u:object_r:gpu_device:s0                （原 device）
+/dev/block/nvme0n1p1    → u:object_r:gaokun3_esp_block_device:s0  （原 block_device）
+```
+
+**本轮三条目标规则，逐条实机验证**：
+
+| 规则 | 旧版 denial | 新版 | 旁证 |
+|---|---|---|---|
+| 温控 HAL 的 `sysfs_thermal` | 35 条 | **0** | `dumpsys thermalservice` 现在报真温度（GPU 31.1 °C / cpu0 32.0 °C）|
+| audioroute 执行 tinymix + `audio_device` | 7 条 | **0** | 声卡节点齐、路由照常 |
+| hwc 的 uevent socket | 10 条（`read`）| **2 条（`create`/`bind`）** | 见下，这条是半个 |
+
+功能零回归：WiFi 自动连上（192.168.10.159）、声卡 4 个节点、传感器 2 个硬件传感器
+（SH3001 加速度/陀螺，SSC 链路正常）、freedreno + `/dev/dri`、触摸 `game` 预设
+（smooth=0 / jump=0 / pressure=1）全部就位。
+
+### 19. ⚠️★★★ 取样偏差：滚掉的 dmesg 会静默藏起"只发生一次"的权限
+
+hwc 那条规则暴露了一个方法论缺陷，值得单独立条。
+
+* 上一轮我从旧机器 dmesg 里只看到 `netlink_kobject_uevent_socket { read }`，
+  于是按"只写观测到的权限"给了 `read`。
+* 这一轮完整启动历史（dmesg 从 uptime 7.28 秒起）显示：`read` 消失了（规则生效），
+  露出来的是 **`create` 与 `bind`** —— 它们只在开机那一瞬发生一次，
+  而旧机器的 dmesg 环形缓冲**早把开机段冲掉了**（最早一条在 uptime 8154 秒）。
+
+★ **「只写观测到的权限」是对的，但它有个前提：观测窗口要覆盖整个生命周期。**
+滚掉的日志不会报错，它只是让"一次性权限"看起来不存在 —— 而启动类权限几乎全是一次性的。
+**判据：取样前先看 `dmesg | head -1` 的时间戳，它必须接近 0。** 不接近就别做减法。
+
+同一个偏差还藏了三件事（都不是新问题，只是旧样本看不见）：
+
+1. **同进程 HAL 库**：surfaceflinger / bootanim / system_app / platform_app 各 5 条，
+   `/vendor/lib64/hw/vulkan.freedreno.so` 与两个 graphics.allocator 挂着通用 `vendor_file`。
+   ★ 标成 `same_process_hal_file` 就好，**零 allow**（`app.te:478` 与
+   `hal_graphics_allocator.te:7` 已放行）——"标对就够"的第四次。已写进 file_contexts。
+2. **mediaswcodec 读 `vendor_minigbm_debug_prop`**（4 条）：与已有的 mediaserver 那条
+   同根同源，只是旧样本只露了一个主体。已补。
+3. ⚠️ **`system_suspend` 确实在读 wakeup 节点**（6 条）——**这一条推翻了第 10 条**。
+   当时我量出"它一条 denial 都没有"，据此把那个 ⬜ 降级成"语义不对、当前无后果"。
+   **那个测量本身就是取样偏差的受害者**：它只在开机时枚举一次 `/sys/class/wakeup`。
+   已按实测的三处补 genfscon，并用上一个之前没意识到的语义：
+   **genfscon 是【字符串前缀】匹配，不是路径分量匹配** —— 所以 `.../wakeup` 能盖住
+   `.../wakeup21`，动态编号根本不是障碍（AOSP 自己的 `/devices/virtual/wakeup` 就是这么写的）。
+   更长的前缀还能把 `wakeup23` 从 `sysfs_batteryinfo` 手里抢回来。
+
+⬜ 以上四处改动**尚未编译、未上机** —— 下次构建时一起验。
+
+### 20. 结论：B1 现在卡在哪
+
+* ✅ 本轮 7 处规则里，**3 条已实机验证**（温控 / audioroute / hwc 半条），
+  2 条标签实机确认生效（`/dev/dri`、ESP），属性改名生效（`persist.vendor.gaokun3.*`）。
+* ⬜ 4 处新写的（hwc 补 create/bind、同进程 HAL 库、mediaswcodec、wakeup genfscon）等下次构建。
+* ⚠️ **两个结构性阻塞原封不动**：`gaokun3_smmustall`（64 条 `/dev/mem` + 18 条 `sys_rawio`，
+  正解是 [TODO B6]）与 `gaokun3_hangdump`（本轮样本里没出现，因为它 60 秒才采一次、
+  而样本只有 2 分钟 —— **不是修好了**）。
+* ★ 顺带，那次误编的 `user` 版其实是一次**真 enforcing 试跑**：起不来。
+  所以 enforcing 还差得远，B1 不可能靠"少写几条规则"蒙过去。

@@ -4,8 +4,12 @@
 #   scontext=tcontext=u:r:hal_graphics_composer_default:s0
 #   tclass=netlink_kobject_uevent_socket { read }   path="socket:[21923]"
 #
-# ⚠️ 只写观测到的 read：create / bind / setopt 从来没被拒过（socket 编号一直是
-#    同一个 21923，说明它确实建起来了）。多给等于凭空放权 —— 与
-#    hal_sensors_default 那条 qipcrtr_socket 同一个取舍（见该文件）。
-# ⬜ 上机复查判据：enforcing 下如果 hwc 的热插拔/vblank 失灵，再按新的 denial 补。
-allow hal_graphics_composer_default self:netlink_kobject_uevent_socket read;
+# ⚠️★★ 2026-09-18 装机复查，这条规则【写漏了】，而漏的原因值得单独记：
+#    第一版只写了 `read`，理由是"只写观测到的权限"—— 但那次观测用的 dmesg
+#    **早期启动已经滚掉了**（最早一条在 uptime 8154 秒），而 create/bind 恰恰
+#    只在开机那一瞬发生一次。换成完整启动历史之后，`read` 消失了（规则生效），
+#    露出来的正是 `create` 与 `bind`。
+#    ★ 教训：「只写观测到的」是对的，但**观测窗口必须覆盖整个生命周期** ——
+#      滚掉的日志会静默地把"只发生一次"的权限藏起来，而那恰恰是启动类权限。
+# ⬜ 仍然不给 setopt/write：没被拒过。
+allow hal_graphics_composer_default self:netlink_kobject_uevent_socket { create bind read };

@@ -5,3 +5,9 @@
 # 起因是 gralloc（minigbm）在 mediaserver 进程内被加载，而它会去读
 # vendor.minigbm.debug —— 本机 device.mk 确实设了这个属性。
 get_prop(mediaserver, vendor_minigbm_debug_prop)
+
+# mediaswcodec 同理（2026-09-18 完整启动日志里 4 条）：gralloc(minigbm) 在它进程内
+# 被加载，同样要读 vendor.minigbm.debug。
+# ⚠️ 这条与上面那条是【同一个根因的两个主体】—— 上一轮只看到 mediaserver，
+#    是因为旧样本滚掉了开机段。
+get_prop(mediaswcodec, vendor_minigbm_debug_prop)

@@ -49,3 +49,26 @@ genfscon sysfs /devices/platform/soc@0/c440000.spmi/spmi-0/0-02/c440000.spmi:pmi
 #    核心策略里有 sysfs_thermal 规则的只有 system_server 与 recovery。
 genfscon sysfs /class/thermal                     u:object_r:sysfs_thermal:s0
 genfscon sysfs /devices/virtual/thermal           u:object_r:sysfs_thermal:s0
+
+# ── 唤醒源：system_suspend 读 wakeup 节点（2026-09-18 实机，6 条）──────────
+#
+# ⚠️★★ 这一组推翻了 #117 第 10 条的结论。当时我量出"system_suspend 一条 denial
+#    都没有"，据此把那个 ⬜ 改写成"语义不对但当前无后果"。**那个测量是错的** ——
+#    旧机器的 dmesg 早期启动已经滚掉，而 system_suspend 恰恰只在开机时枚举一次
+#    /sys/class/wakeup。换成完整启动历史，它清清楚楚地读，而且被拒：
+#      4 条 → tcontext=sysfs           （谁也没标的那些）
+#      2 条 → tcontext=sysfs_batteryinfo（被我们 power_supply 的 genfscon 盖住的）
+#
+# ★ 修法的关键是一条容易被误解的语义：**genfscon 是【字符串前缀】匹配，
+#   不是路径分量匹配** —— 所以 `.../wakeup` 这个前缀能盖住 `.../wakeup21`、
+#   `.../wakeup23`。AOSP 自己那条 `/devices/virtual/wakeup` 正是这么用的。
+#   动态编号因此不再是障碍，父目录静态就够了。
+#
+# ⚠️ 这是按【观测到的】三处写的，不是普查全部唤醒源 —— 本机还有 mhi0 等没被读到，
+#    读到了再加。别图省事去标整个 /devices/platform（会盖掉一大片无关节点）。
+genfscon sysfs /devices/platform/soc@0/c265000.thermal-sensor/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/c440000.spmi/spmi-0/0-00/c440000.spmi:pmic@0:pon@1300/c440000.spmi:pmic@0:pon@1300:pwrkey/wakeup u:object_r:sysfs_wakeup:s0
+# ★ 这条比上面 power_supply 那条【更长】，所以它赢 —— 正是它把 wakeup23 从
+#   sysfs_batteryinfo 手里抢回来标成 sysfs_wakeup。
+genfscon sysfs /devices/platform/soc@0/ac0000.geniqup/a9c000.i2c/i2c-15/15-0038/huawei_gaokun_ec.ucsi.0/power_supply/ucsi-source-psy-huawei_gaokun_ec.ucsi.01/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/ac0000.geniqup/a9c000.i2c/i2c-15/15-0038/huawei_gaokun_ec.ucsi.0/power_supply/ucsi-source-psy-huawei_gaokun_ec.ucsi.02/wakeup u:object_r:sysfs_wakeup:s0

@@ -148,6 +148,29 @@
 /dev/media[0-9]*         u:object_r:video_device:s0
 /dev/v4l-subdev[0-9]*    u:object_r:video_device:s0
 
+# ── 同进程 HAL 库：又一次"标对就零 allow"（2026-09-18 实机）────────────────
+#
+# 证据：新构建完整启动日志里，surfaceflinger / bootanim / system_app /
+# platform_app(launcher3) 四个域各 5 条
+#   scontext=… tcontext=u:object_r:vendor_file:s0 tclass=file
+#   { execute getattr map open read }
+#   path=/vendor/lib64/hw/vulkan.freedreno.so
+#   path=/vendor/lib64/android.hardware.graphics.allocator@{3,4}.0.so
+# —— 这三个库现在挂的是通用 vendor_file（实机 ls -Z 核过），而 /vendor/lib64/hw
+# 下别的库已经是 same_process_hal_file 了。
+#
+# ★ 标成 same_process_hal_file 之后【一条 allow 都不用写】：
+#     app.te:478                  allow appdomain same_process_hal_file:file {…}
+#     hal_graphics_allocator.te:7 allow hal_graphics_allocator_client … {…}
+#     （surfaceflinger / bootanim 都是 graphics allocator 的客户端）
+#   核心策略 domain.te:165-169 把 coredomain 排除在通用放行之外、
+#   "由各个 coredomain 单独授予"，而上面那两条正是那些单独授予。
+#
+# ⚠️ 这批 denial **一直都在**，只是上一轮的样本（旧机器上滚掉早期启动的 dmesg）
+#    看不见它们 —— 与 hwc 那条 netlink 是同一个取样偏差。
+/vendor/lib(64)?/hw/vulkan\.freedreno\.so                          u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/android\.hardware\.graphics\.allocator@[0-9]+\.[0-9]+\.so   u:object_r:same_process_hal_file:s0
+
 # libcamera 的日志文件（gaokun3-camera.rc 的 LIBCAMERA_LOG_FILE）
 /data/vendor/camera(/.*)?   u:object_r:gaokun3_camera_vendor_data_file:s0
 
