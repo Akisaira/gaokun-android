@@ -692,7 +692,8 @@ features xml 补 `android.hardware.camera` + `android.hardware.camera.flash`（S
 
 ### B14. ⬜ 息屏 USB adb：脚本折中已做，原生化两步 + 复位根因（[#112](stage4-findings.md)）
 `bin/gaokun3-usbrole.sh` v2：插着主机（UDC configured）息屏不切 host、不放行挂起，拔线再切。随下次构建进镜像；
-装后把本机 `persist.gaokun3.allow_suspend` 设回 1（现在是 0，根本不睡）。
+装后把本机 `persist.vendor.gaokun3.allow_suspend` 设回 1（现在是 0，根本不睡；
+⚠️ 属性 2026-09-18 已改名且**默认值改成 0**，见 [#117](stage4-findings.md)）。
 源码定性：device 模式系统挂起无条件 `dwc3_core_exit()`（PHY 下电）且 gadget 总 soft disconnect ⇒
 上游 dwc3 没有"adb 穿越睡眠"。⬜ 复位根因（combo PHY exit → TZ 复位？）开放。⬜ UCSI 角色修好后可去掉脚本的 host 切换。
 
@@ -785,12 +786,31 @@ checkout），让 `git status` 直接说话。⚠️ 换之前先做一次清单
   ⚠️ 代价：`find_esp()` 的兜底探测（扫全盘找 vfat）撞同一条 neverallow，
   **enforcing 后只有按 `install-gaokun3.sh` 布局装的机器能走完 OTA**，手工分区的会失败。
 
-⬜ **新增一条要用户定的**：`persist.gaokun3.allow_suspend` / `.recovery_entry` 落在
-`default_prop`，而 `property.te:797-800` 规定**只有 init 能写**；`persist.sys.gaokun3.*`
-落在 `system_prop`，Parts 应用（`system_app` 域）写得了、**`adb shell setprop` 写不了**。
-vendor 的 property_contexts 只许 vendor 前缀（VTS 强制），所以要么改名成
-`persist.vendor.gaokun3.*` + 自定义属性类型，要么接受"只能从 UI 改"。
-**改名会让本机现有的 `allow_suspend=0` 失效**，所以没动。
+✅ **属性改名已落地**（用户 2026-09-18 定的）：`persist.gaokun3.allow_suspend` /
+`.recovery_entry` → **`persist.vendor.gaokun3.*`**，新类型 `vendor_gaokun3_prop`
+（`vendor_public_prop`，见 `sepolicy/property_contexts` + `sepolicy/vendor_gaokun3_props.te`；
+⚠️ 上下文名**必须** `vendor_` 开头，构建器硬检查，见 [#117](stage4-findings.md) 第 9 条），
+`shell` 可写、`postinstall` 可读。
+⚠️★ **`allow_suspend` 的默认值同时从 1 改成 0** —— 改名会让已装机器上现有的值失效，
+默认改成 0 才能让本机（一直是 0）行为不变。**代价：新装机的用户默认也不进 s2idle，
+与 v0.3.0–v0.6.2 的镜像默认相反 —— 发版说明必须写。**
+⚠️ `persist.sys.gaokun3.*`（键盘、触摸模式）**故意没跟着改**：它们靠 `system_prop`
+才让 Parts 应用（`system_app` 域）写得了，改成 vendor 前缀反而写不了。
+
+**2026-09-18 晚补：设备回来了，又查出三条（都写了规则）**
+
+* ✅ **温控 HAL 读不到温区**（35 条）—— `sysfs_thermal` 是 AOSP 公共类型，
+  但核心策略**没给它写任何 genfscon**，本机温区因此是通用 `sysfs`。
+  已标 `/class/thermal` 与 `/devices/virtual/thermal` 两处（照 AOSP 对 wakeup 的写法），
+  ⚠️ 这次**标对了还不够**：核心策略里有 `sysfs_thermal` 规则的只有 system_server
+  与 recovery，HAL 自己那条要我们写。
+* ⚠️★ **`audio-route.sh` 执行 `/system/bin/tinymix` 撞 Treble 的 neverallow**
+  （`domain.te:1238-1275` 的 `}:file *;` —— vendor 域对 system_file_type 的**任何**
+  权限都禁，只豁免 shell_exec/toolbox_exec 等）。而 AOSP **没有 tinymix 的 vendor 变体**
+  （`external/tinyalsa/Android.bp:66-71`，只有 `libtinyalsa` 是 `vendor_available`）。
+  只能挂 `vendor_executes_system_violators` 属性（AOSP 正是为这种情况准备的）。
+  ⬜ 干净解：给 tinyalsa 投一个 tinymix 的 vendor 变体，那三行就能删。
+* ✅ drm_hwcomposer 的 uevent 监听（`netlink_kobject_uevent_socket read`，10 条）。
 
 ⬜ 上面 `wakeupN` 那条的最自然修法（放行 `system_suspend` 读 `sysfs_batteryinfo`）
 **已排除**：`domain.te:1555-1572` 的 neverallow 不豁免 coredomain 里的 system_suspend。

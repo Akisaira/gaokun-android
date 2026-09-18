@@ -1,0 +1,30 @@
+# gaokun3 自研属性的类型与访问规则。对应 sepolicy/property_contexts。
+#
+# 宏出处：system/sepolicy/public/te_macros:1042
+#   define(`vendor_public_prop', `define_prop($1, vendor, public)')
+# 展开成：type vendor_gaokun3_prop, property_type, vendor_property_type,
+#                            vendor_public_property_type;
+# ⚠️★ 类型名必须以 `vendor_` 开头 —— 这不是风格，是构建时的硬检查：
+#    system/sepolicy/build/soong/selinux_contexts.go:391-397
+#      allowedContextPrefixes = []string{"vendor_", "odm_"}
+#    再由 tests/check_prop_prefix.py 逐行比对，--strict 下不匹配就构建失败。
+#    同一处（:365-382）也给出了允许的【属性名】前缀清单，`persist.vendor.` 在里面
+#    （`persist.gaokun3.` 不在，这正是必须改名的原因）。
+#    ★ 我第一版把类型写成 gaokun3_prop，正会撞这条 —— 属性名合规不等于上下文名合规。
+vendor_public_prop(vendor_gaokun3_prop)
+
+# 排查用：adb shell setprop persist.vendor.gaokun3.allow_suspend 0
+# ⚠️ set_prop 连读也一起给了（te_macros:393-397 里 set_prop 自带 get_prop），
+#    所以不用再写 get_prop(shell, ...)。
+# ⚠️ shell 是 coredomain，这条之所以写得进去，全靠上面选了 public 类型 ——
+#    换成 vendor_internal_prop 或 vendor_restricted_prop，这一行就会撞 neverallow。
+set_prop(shell, vendor_gaokun3_prop)
+
+# OTA 钩子读 persist.vendor.gaokun3.recovery_entry 决定要不要写 recovery 启动项。
+# （见 bin/gaokun3-ota-postinstall.sh 与 sepolicy/postinstall.te）
+get_prop(postinstall, vendor_gaokun3_prop)
+
+# ⬜ 没给 system_app / system_server 任何权限：现在没有 UI 去改这两个属性。
+#    键盘开关与触摸模式走的是 persist.sys.gaokun3.*（system_prop，AOSP 已经
+#    allow system_app 写，见 private/system_app.te:43）——【那两个不要跟着改名】，
+#    改了 Parts 应用反而写不了。#117 第 5 条。

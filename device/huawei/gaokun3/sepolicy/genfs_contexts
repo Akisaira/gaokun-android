@@ -38,3 +38,14 @@ genfscon sysfs /devices/platform/soc@0/a6f8800.usb/a600000.usb/xhci-hcd.5.auto/w
 # 真实 inode 路径上（同 backlight 那条的教训，#77）。打上 sysfs_leds 之后 hal_camera_default.te
 # 里那两条 allow 才有对象。路径来自实机 readlink -f /sys/class/leds/white:flash。
 genfscon sysfs /devices/platform/soc@0/c440000.spmi/spmi-0/0-02/c440000.spmi:pmic@2:led-controller@ee00/leds u:object_r:sysfs_leds:s0
+
+# ── 温控：自研 thermal HAL 被拒 35 次（2026-09-18 实机）────────────────────
+# path="/sys/devices/virtual/thermal/thermal_zone0/temp"，tcontext 是通用 sysfs。
+# sysfs_thermal 是 AOSP 的公共类型（public/file.te:171），但核心策略【没给它
+# 写任何 genfscon】—— 温区路径各家 SoC 不同，AOSP 把标注留给设备树。
+# 两条都要：/sys/class/thermal 是 HAL opendir 的入口，/sys/devices/virtual/thermal
+# 才是真实 inode。这正是 AOSP 自己对 wakeup 的写法（上面 :138 与 :151 两条）。
+# ⚠️ 与上面几条不同，标对之后【还要写 allow】—— 见 sepolicy/hal_thermal_default.te，
+#    核心策略里有 sysfs_thermal 规则的只有 system_server 与 recovery。
+genfscon sysfs /class/thermal                     u:object_r:sysfs_thermal:s0
+genfscon sysfs /devices/virtual/thermal           u:object_r:sysfs_thermal:s0

@@ -491,17 +491,39 @@ PRODUCT_COPY_FILES += \
 # 挂起前把 a600000.usb 的 USB role 切到 host —— 那个控制器停在 role=device 时，
 # 设备挂起阶段会【整板复位】且不留任何日志；而 USB adb 的 UDC 就在它上面，
 # 所以不能简单把 DTS 改成 host。见 docs/stage4-findings.md #52 / #54 / #56。
-# ★ 默认【启用】（见下面的 persist.gaokun3.allow_suspend）。
+# ★ 默认【停用】（见下面的 persist.vendor.gaokun3.allow_suspend，2026-09-18 起是 0）。
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/gaokun3-usbrole.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-usbrole.sh \
     $(LOCAL_PATH)/etc/usbrole.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/usbrole.rc
 
-# ★ 默认【开启】待机（2026-08-22 起）。开关留着是为了排查时能一条属性关掉。
-#   开启后：息屏切 role=host（挂起安全）、亮屏切回 device（USB adb 可用）。
-#   实测 Android 真实挂起/唤醒 ×4 零复位、救援 Ubuntu systemctl suspend 3/3。
-# ⚠️ 用户可见代价：息屏时 USB device-mode adb 断开，亮屏恢复；TCP adb 不受影响。
-PRODUCT_PROPERTY_OVERRIDES += \
-    persist.gaokun3.allow_suspend=1
+# ⚠️★★ 2026-09-18 两处改动，都要读一遍再动：
+#
+# ① 属性【改名】persist.gaokun3.* → persist.vendor.gaokun3.*。
+#    原名落在 property_contexts 的兜底 `*` 上 ⇒ default_prop ⇒
+#    `neverallow { domain -init } default_prop:property_service set`
+#    ⇒ 转 enforcing 之后连 adb shell setprop 都写不了。而 vendor 的
+#    property_contexts 只许标注 vendor 前缀（VTS 强制），所以改名是唯一出路。
+#    新名字的类型与权限见 sepolicy/property_contexts + sepolicy/vendor_gaokun3_props.te。
+#    ⚠️ persist.sys.gaokun3.*（键盘、触摸模式）【不要】跟着改 —— 那两个靠
+#      system_prop 才让 Parts 应用写得了，改成 vendor 前缀反而会写不了。
+#
+# ② 默认值 1 → 0（= 待机默认【关】）。这是用户 2026-09-18 的决定：
+#    改名会让已装机器上现有的 persist.gaokun3.allow_suspend=0 失效，
+#    而本机正是 0（见 CLAUDE.md 状态框）。默认改成 0，改名前后行为一致。
+#    ⚠️ 代价说清楚：**新装机的用户默认也不进 s2idle**，息屏耗电按不睡算 ——
+#      这与 v0.3.0～v0.6.2 的镜像默认相反，发版说明里必须写。
+#      要开：adb shell setprop persist.vendor.gaokun3.allow_suspend 1（重启后回默认）。
+#
+# 开启后：息屏切 role=host（挂起安全）、亮屏切回 device（USB adb 可用）。
+# 实测 Android 真实挂起/唤醒 ×4 零复位、救援 Ubuntu systemctl suspend 3/3。
+# ⚠️ 开启的可见代价：息屏时 USB device-mode adb 断开，亮屏恢复；TCP adb 不受影响。
+#
+# ★ 变量也换了：PRODUCT_PROPERTY_OVERRIDES 是 build/make 明确标了
+#   "TODO(b/117892318) deprecate this ... in favor of PRODUCT_VENDOR_PROPERTIES"
+#   的老写法（core/product.mk:92-93），两者都落到 /vendor/build.prop
+#   （core/sysprop.mk:194-205 的 _prop_vars_）。既然要动这一行，顺手换成新的。
+PRODUCT_VENDOR_PROPERTIES += \
+    persist.vendor.gaokun3.allow_suspend=0
 
 # ★ WindowManager 每显示器设置：关掉大屏默认的 ignoreOrientationRequest。
 # 不装它 → 应用请求横屏时系统不转屏而是把应用信箱化（原神被压成 1600x1000）。

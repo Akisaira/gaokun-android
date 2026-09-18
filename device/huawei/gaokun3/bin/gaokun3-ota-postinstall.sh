@@ -145,10 +145,10 @@ if [ -f "$REC_SRC" ]; then
         #   panic，所以 init_fatal_panic + efi_pstore 抓不到）。
         #   条目一旦存在，用户在 15 秒菜单里误选一次就要跑到机器旁按电源键 ——
         #   在验证通过之前不能把这个坑发出去。
-        #   要调试就设 persist.gaokun3.recovery_entry=1 再触发一次 OTA/部署。
-        if [ "$(getprop persist.gaokun3.recovery_entry 2>/dev/null)" != "1" ]; then
+        #   要调试就设 persist.vendor.gaokun3.recovery_entry=1 再触发一次 OTA/部署。
+        if [ "$(getprop persist.vendor.gaokun3.recovery_entry 2>/dev/null)" != "1" ]; then
             log "recovery 启动项按默认跳过（未验证会复位循环）；"
-            log "  要调试请 setprop persist.gaokun3.recovery_entry 1"
+            log "  要调试请 setprop persist.vendor.gaokun3.recovery_entry 1"
         elif [ -f "$SRC_ENT" ]; then
             sed -e "s|^initrd .*|initrd     /$MID/android/slot_$SUFFIX/recovery-ramdisk.img|" \
                 -e "s|^title .*|title      Recovery (gaokun3) — slot _$SUFFIX|" \

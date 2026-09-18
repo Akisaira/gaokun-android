@@ -1,9 +1,10 @@
 # 挂起前把 USB role 切到 host —— 见 bin/gaokun3-usbrole.sh 与
 # docs/stage4-findings.md #52 / #54 / #56。
 #
-# ★ 默认【已启用】（device.mk 把 persist.gaokun3.allow_suspend 设成 1）。
-#   启用后 gaokun3_nosuspend 被放开，改由 gaokun3_usbrole 单独把关。
-#   排查时关掉：adb shell setprop persist.gaokun3.allow_suspend 0（要重启才完全生效）。
+# ⚠️ 2026-09-18 起默认【停用】（device.mk 把 persist.vendor.gaokun3.allow_suspend
+#   设成 0；属性改名的理由见 device.mk 与 sepolicy/property_contexts）。
+#   设成 1 才启用：那时 gaokun3_nosuspend 被放开，改由 gaokun3_usbrole 单独把关。
+#   开：adb shell setprop persist.vendor.gaokun3.allow_suspend 1（重启回默认 0）。
 #
 # ⚠️ 屏幕状态属性的值是 Android 的 Display.STATE_*：**1 = OFF，2 = ON**，
 #    不是 0/1（2026-08-22 实机核对过，差点按 0/1 写错）。
@@ -27,8 +28,8 @@ service gaokun3_role_device /vendor/bin/gaokun3-usbrole.sh device
 on init
     write /sys/power/wake_lock gaokun3_usbrole
 
-on property:persist.gaokun3.allow_suspend=1 && property:debug.tracing.screen_state=1
+on property:persist.vendor.gaokun3.allow_suspend=1 && property:debug.tracing.screen_state=1
     start gaokun3_role_host
 
-on property:persist.gaokun3.allow_suspend=1 && property:debug.tracing.screen_state=2
+on property:persist.vendor.gaokun3.allow_suspend=1 && property:debug.tracing.screen_state=2
     start gaokun3_role_device

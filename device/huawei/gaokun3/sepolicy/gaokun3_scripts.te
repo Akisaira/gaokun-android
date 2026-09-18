@@ -103,6 +103,39 @@ allow gaokun3_keyboard sysfs:file rw_file_perms;
 allow gaokun3_touchmode sysfs:dir r_dir_perms;
 allow gaokun3_touchmode sysfs:file rw_file_perms;
 
+# ── audio-route.sh：2026-09-18 实机重跑一次这个服务抓到的完整清单 ────────────
+#
+# ★ 方法：`setprop ctl.start audioroute` 之前记下 dmesg 里 avc 的行数，重跑之后
+#   只看新增的几行。比"翻整次启动的日志"干净得多，而且这个服务是幂等的
+#   （只写混音器、不出声），代价为零。★ 这招适用于任何 oneshot 服务。
+#
+# 混音器控制节点：脚本自己先 `[ -e /dev/snd/controlC0 ]` 等声卡就绪（dir search +
+# getattr），tinymix 再真正开它读写（read write，实测两条都被拒过）。
+# ⚠️ 给 rw_file_perms 而不是 { read write }：tinymix 走 ioctl 下发控件值，
+#    而 ioctl 在 r_file_perms 里 —— 只给 read/write 会在 enforcing 下卡在 ioctl。
+allow gaokun3_audioroute audio_device:dir r_dir_perms;
+allow gaokun3_audioroute audio_device:chr_file rw_file_perms;
+
+# ⚠️★★ tinymix 在 /system/bin 里，而 Treble 有一条 neverallow 禁止 vendor 域
+#    碰 system_file_type 的【任何】权限（domain.te:1238-1275 那条 `}:file *;`，
+#    豁免名单里只有 shell_exec / toolbox_exec 等几个）。
+#    所以这不是"加一条 allow"就完的事：必须先挂上 AOSP 为这种情况准备的属性
+#    vendor_executes_system_violators（public/attributes:266）。
+#
+# ★ 为什么不走"把 tinymix 放进 /vendor/bin"那条路：external/tinyalsa 的
+#   Android.bp 里 libtinyalsa 是 vendor_available: true，但 tinymix 自己只是个
+#   普通 cc_binary（android-16.0.0_r4 的 Android.bp:66-71，没有 vendor_available）
+#   —— 也就是说 AOSP 根本没有 tinymix 的 vendor 变体可装。
+#   device.mk:229 记着的那个坑（"放进 /vendor/bin 但 .so 在 /system"）就是这么来的。
+#   要干净解决得改 external/tinyalsa 加一个 vendor 变体，那是【树外补丁】，
+#   而本仓已经被"构建机的树 ≠ 本仓 checkout"咬过五次。两害相权，选属性。
+# ⬜ 如果哪天给 tinyalsa 投了那个 vendor 变体的补丁并进了构建配方，
+#    这三行就可以一起删掉 —— 判据：/vendor/bin/tinymix 存在（脚本第 33 行已经
+#    在找它了，一存在就自动切过去）。
+typeattribute gaokun3_audioroute vendor_executes_system_violators;
+allow gaokun3_audioroute system_file:file rx_file_perms;
+allow gaokun3_audioroute system_file:file execute_no_trans;
+
 # ── ⚠️ 故意【不写】的两个域 ─────────────────────────────────────────────
 #
 # gaokun3_smmustall：实测要 `self:capability sys_rawio` +

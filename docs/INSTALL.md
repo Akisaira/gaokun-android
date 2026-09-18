@@ -198,7 +198,9 @@ What that costs you today:
   from the rescue Linux: `mkfs.ext4 -F /dev/disk/by-partlabel/userdata`.
 
 If you want to debug it, `ENABLE_RECOVERY_ENTRY=1` makes the installer create
-the entry, and `persist.gaokun3.recovery_entry=1` makes the OTA hook create it.
+the entry, and `persist.vendor.gaokun3.recovery_entry=1` makes the OTA hook create it
+(renamed from `persist.gaokun3.*` on 2026-09-18 — the old name is unwritable once
+SELinux goes enforcing, see `docs/stage4-findings.md` #117).
 ⚠️ Be at the machine when you do: recovering from the loop needs the power
 button.
 

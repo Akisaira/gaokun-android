@@ -1,0 +1,22 @@
+# gaokun3 自研属性的上下文。
+#
+# ⚠️★★ 为什么必须是 `persist.vendor.` 前缀：vendor 的 property_contexts
+#    【只许标注 vendor 前缀的属性】，这条由 VTS 强制、构建时用
+#    system/sepolicy/tests/check_prop_prefix.py 检查
+#    （报错原文："vendor's and odm's property_contexts MUST use ONLY
+#     vendor-prefixed properties."）。
+#
+# 改名之前这两个属性叫 persist.gaokun3.*，落在兜底的 `*` 规则上
+#   （system/sepolicy/private/property_contexts:149）⇒ 类型是 default_prop
+#   ⇒ `neverallow { domain -init } default_prop:property_service set;`
+#   （private/property.te:797-800）⇒ 转 enforcing 之后【只有 init 能写】，
+#   连 adb shell setprop 都不行。#117 第 5 条。
+#
+# ★ 为什么用 vendor_public_prop 而不是 vendor_internal/restricted：
+#   core 侧的两条 neverallow（private/property.te:192-203）把
+#   coredomain 读/写 vendor 属性一律禁掉，**只豁免 vendor_public_property_type**。
+#   而我们恰恰需要两个 coredomain：
+#     * shell      —— 排查时 `adb shell setprop`（这是本仓文档里到处写的操作）
+#     * postinstall —— OTA 钩子 getprop 那个 recovery_entry
+#   所以只能是 public。类型定义与 allow 在 sepolicy/vendor_gaokun3_props.te。
+persist.vendor.gaokun3.  u:object_r:vendor_gaokun3_prop:s0

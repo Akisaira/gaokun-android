@@ -1,0 +1,20 @@
+# 自研温控 HAL（thermal/Thermal.cpp，读 /sys/class/thermal；[TODO B2]，v0.6.0 起进镜像）。
+#
+# 证据：2026-09-18 实机 dmesg，35 条
+#   scontext=u:r:hal_thermal_default:s0 tcontext=u:object_r:sysfs:s0 tclass=file
+#   path="/sys/devices/virtual/thermal/thermal_zone0/temp" { getattr open read }
+#
+# ★ 又一次"标签对了就好"——但这次【只标不够】，两件事都要做：
+#   ① AOSP 有 sysfs_thermal 这个公共类型（public/file.te:171），却【没给它写
+#      genfscon】：手机 SoC 的温区路径各家不同，AOSP 把标注留给设备树。
+#      本机真实 inode 在 /sys/devices/virtual/thermal 下（/sys/class/thermal
+#      是符号链接目录，SELinux 标的是真实 inode —— #77 的教训），
+#      两处都标，写法照抄 AOSP 对 wakeup 的做法（genfs_contexts:138 与 :151）。
+#      标注在 sepolicy/genfs_contexts 里。
+#   ② 读规则要自己写：核心策略里只有 system_server（system_server.te:479-480）
+#      与 recovery（recovery.te:151）有 sysfs_thermal 的规则，
+#      hal_thermal_default 一条都没有（vendor/hal_thermal_default.te 只有域定义）。
+#
+# ⚠️ HAL 是 opendir("/sys/class/thermal") 再逐个 zone 读 temp/type，所以 dir 与
+#    file 都要 —— r_dir_file 一次给全。
+r_dir_file(hal_thermal_default, sysfs_thermal)

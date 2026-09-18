@@ -8775,10 +8775,11 @@ GitHub：`gh release create` 一次带 5 个附件，1.28 GB 的 `super.img.zst`
 
 ## #117 ★★★ SELinux 第五轮：不靠实机也能查的四个洞（2026-09-18）
 
-用户让"把 SELinux 规则写一下"。设备当时**不在线**（USB 无设备、`192.168.10.0/24`
-全网段扫 5555 零命中），所以这一轮**一条 denial 日志都没看**，全部是
-**拿策略源码跟本仓设备树对账**查出来的。四个洞里有三个在 permissive 下
-"功能完全正常"，正因为如此才活到今天。
+用户让"把 SELinux 规则写一下"。**前半程设备不在线**（USB 无设备、`192.168.10.0/24`
+全网段扫 5555 零命中），所以第 1–6 条**一条 denial 日志都没看**，全部是
+**拿策略源码跟本仓设备树对账**查出来的；那些洞在 permissive 下"功能完全正常"，
+正因为如此才活到今天。**后半程设备回来了**（第 7–9 条）：离线结论逐条被实机标签证实，
+又从新一轮 denial 普查里挖出三件。
 
 > ⚠️★ **先把方法论记下来**：`refs/` 里此前**没有 AOSP/LineageOS 的 sepolicy 树**，
 > 于是"必须从本地源码 grep 出名字"这条强制规则在 SELinux 这一块**根本无法执行**，
@@ -8885,8 +8886,8 @@ neverallow { domain -kernel -init -recovery } block_device:blk_file { open read 
 （`tests/check_prop_prefix.py`，VTS 强制），所以要么把这两个属性改名成
 `persist.vendor.gaokun3.*` 并自定义一个属性类型（那样才能 `set_prop(shell, …)`），
 要么接受"只能从 UI 改"。**改名会让已装机器上现有的值失效**
-（本机 `persist.gaokun3.allow_suspend=0` 会变回默认的 1），所以**这一步留给用户定**，
-本轮没做。
+（本机 `persist.gaokun3.allow_suspend=0` 会变回默认的 1），所以这一步问了用户。
+→ **用户当晚定了：改名，且默认值同时改成 0**。落地见下面第 9 条。
 
 ### 6. genfscon 前缀盖住 `wakeupN`：那条路也被 neverallow 堵死
 
@@ -8904,10 +8905,107 @@ system/sepolicy/private/domain.te:1555-1572   full_treble_only(`
 
 ### 这一轮没有做的事（别把它读成已验证）
 
-* **一行都没编译**：本机编不了 AOSP，`sepolicy_neverallows` / `checkpolicy` 都没跑过。
-* **一条都没上机**：设备不在线，没有新的 denial 普查；新规则是否**够用**（有没有漏权限）
-  只有实机能回答 —— 而上面第 3、4 条说明，**够不够用**与**写不写得进去**是两个独立问题，
-  这一轮只解决了后者。
+* ⚠️ **一行都没编译**：本机编不了 AOSP，`sepolicy_neverallows` / `checkpolicy`
+  一次都没跑过。第 3、4、8② 条那几个"写了会直接构建失败"的判断，**是读 neverallow
+  推出来的，不是被构建器拒绝过**。下一次构建（不管为什么构建）必须看这一步。
+* ⚠️ **新规则一条都没上机跑过**：设备上装的仍是 v0.6.2（permissive），
+  新策略要重新构建才进得去。第 7、8 条的实机证据只证明了**问题存在**，
+  没有证明**修法有效**。
+* **够不够用 ≠ 写不写得进去**：这两件事互相独立（第 3 条就是"写不进去"的例子，
+  第 8① 条是"写得进去但标签不够"的例子）。这一轮把两边都往前推了一段，
+  但只有"重新构建 + 装机 + 再普查一次"能收口。
+* 两个老的结构性阻塞（`gaokun3_hangdump` 读 debugfs、`gaokun3_smmustall` 要 `/dev/mem`）
+  **原封不动** —— 它们要的是产品决定（诊断件只在 userdebug 上装？还是先做 B6？），
+  不是规则。这一轮的实机普查再次确认了它们的权限需求没有变化。
 * 两个老的结构性阻塞（`gaokun3_hangdump` 读 debugfs、`gaokun3_smmustall` 要 `/dev/mem`）
   **原封不动** —— 它们要的是产品决定（诊断件只在 userdebug 上装？还是先做 B6？），
   不是规则。
+
+### 7. 设备当晚回来了 —— 四条离线结论逐条被实机标签证实
+
+用户指出设备在 `192.168.10.166`。⚠️ 先说清楚**我之前的扫描没有误判**：
+连上去 `uptime` 是 **14 分钟**，也就是说全网段扫 5555 的那一刻它确实不在线。
+（这条要记：本仓有过一次把好好跑着的机器误判成挂死的事故，所以"扫不到"这种结论
+**必须带上后来的证据一起复盘**，而不是默认自己错了或默认自己对了。）
+
+实机对账，四条全中：
+
+```
+ls -Zd /dev/dri                 → u:object_r:device:s0            （通用兜底，正是要修的）
+ls -Z  /dev/block/nvme0n1p1     → u:object_r:block_device:s0      （ESP，撞 domain.te:705）
+ls -Zd /dev/block/by-name/esp   → u:object_r:block_device:s0      （符号链接，要 lnk_file）
+ps -AZ | grep parts             → u:r:system_app:s0               （Parts 应用的域，与 seapp_contexts:180 的推断一致）
+```
+
+★ 最后一条值得单独说：**"Parts 应用能不能写 persist.sys.*"这个问题，我是先从
+`seapp_contexts` + `AndroidManifest.xml` 的 `sharedUserId` 推出 `system_app`，
+再被实机确认的。** 推断和实测一致时，推断链本身也就被验证了一次 ——
+下次遇到同类问题可以直接用它，不必每次都开机。
+
+### 8. 新一轮 denial 普查（14 分钟、真实使用）：三件新的
+
+`dmesg` 257 条 avc，去重后除了已知的 hangdump/smmustall 两个结构性阻塞，新的有三件：
+
+| 条数 | 主体 → 客体 | 性质 |
+|---|---|---|
+| 35 | `hal_thermal_default` → `sysfs:file` | **我们自己的温控 HAL 读不到温区** |
+| 5+ | `gaokun3_audioroute` → `system_file:file` | 执行 `/system/bin/tinymix` |
+| 10 | `hal_graphics_composer_default` → self `netlink_kobject_uevent_socket` | hwc 的 uevent 监听 |
+
+**① 温控 HAL**：`sysfs_thermal` 是 AOSP 的公共类型（`public/file.te:171`），
+但核心策略**一条 genfscon 都没给它写** —— 温区路径各家 SoC 不同，AOSP 把标注留给设备树。
+已按 AOSP 自己对 wakeup 的写法（`genfs_contexts:138` 与 `:151`）标两处：
+`/class/thermal`（HAL opendir 的入口）与 `/devices/virtual/thermal`（真实 inode）。
+⚠️ 这次**标对了还不够**：有 `sysfs_thermal` 规则的只有 `system_server` 与 `recovery`，
+`vendor/hal_thermal_default.te` 里只有域定义。allow 要自己写。
+★ 与 #77 那三次"标对就零 allow"对照着看：**"标签优先"是对的，但不能当成公式。**
+
+**② ⚠️★★ tinymix 这条是死结，只能挂"违规者"属性**：
+
+```
+domain.te:1238-1275   full_treble_only(`neverallow { domain -coredomain -appdomain
+    -vendor_executes_system_violators -vendor_init } { system_file_type
+    -shell_exec -toolbox_exec … }:file *; ')
+```
+
+注意结尾是 **`:file *`** —— vendor 域对 `/system/bin/tinymix` 的**任何**权限
+（连 read 都算）都被禁。而 AOSP **根本没有 tinymix 的 vendor 变体**：
+`external/tinyalsa/Android.bp`（android-16.0.0_r4）里 `libtinyalsa` 是
+`vendor_available: true`（:18-24），但 `tinymix` 只是个普通 `cc_binary`（:66-71）。
+`device.mk:229` 记着的那个坑（"放进 /vendor/bin 但 .so 在 /system"）就是这么来的。
+出路只有两条：
+* 给 `external/tinyalsa` 加一个 tinymix 的 vendor 变体 —— **树外补丁**，
+  而"构建机的树 ≠ 本仓 checkout"已经咬过本仓五次；
+* 挂 `vendor_executes_system_violators`（`public/attributes:266`，AOSP 正是为这种
+  情况准备的）。**选了后者**，并在规则旁写清退出判据：
+  `/vendor/bin/tinymix` 一旦存在，脚本第 33 行会自动切过去，那三行就能删。
+
+**③ 方法论（便宜、可复用）**：audioroute 是 oneshot 且幂等（只写混音器、不出声），
+所以不必翻整次启动的日志 —— 记下 `dmesg | grep -c avc:` 的行数，
+`setprop ctl.start audioroute`，再只看新增的几行。这一下就把"tinymix 要 map、
+controlC0 要 read write"这些**首次启动时被 audit 去重吃掉**的条目全抓了出来。
+★ 任何 oneshot 服务都能这么查。
+
+### 9. 属性改名落地（用户决定）
+
+`persist.gaokun3.allow_suspend` / `.recovery_entry` → **`persist.vendor.gaokun3.*`**，
+新类型 **`vendor_gaokun3_prop`**（`vendor_public_prop`，`te_macros:1042`），
+`set_prop(shell, …)` + `get_prop(postinstall, …)`。
+
+⚠️★ **自己抓到的一个必炸项**：第一版我把类型写成 `gaokun3_prop`，那会构建失败。
+约束在 `system/sepolicy/build/soong/selinux_contexts.go`：:365-382 是允许的**属性名**
+前缀清单（`persist.vendor.` 在内，`persist.gaokun3.` 不在 —— 这正是改名的理由），
+而 :391-397 另有一份允许的**上下文名**前缀清单，**只有 `vendor_` 和 `odm_`**，
+`--strict` 下由 `tests/check_prop_prefix.py` 逐行比对。
+**属性名合规 ≠ 上下文名合规，是两条独立检查。**
+★ 顺带说明这一轮为什么值得把 sepolicy 树拉到 `refs/`：这条约束写在构建器的
+Go 源码里，既不在文档里、也不会在 permissive 的实机上留下任何痕迹。
+⚠️★ **`allow_suspend` 的默认值同时 1 → 0**：改名会让已装机器上现有的值失效，
+而本机一直是 0；默认改成 0，改名前后本机行为不变。
+**代价：新装机的用户默认也不进 s2idle —— 与 v0.3.0–v0.6.2 的镜像默认相反，
+发版说明必须写。** 变量顺手从 `PRODUCT_PROPERTY_OVERRIDES` 换成
+`PRODUCT_VENDOR_PROPERTIES`（前者被 `build/make/core/product.mk:92-93` 明确标了
+deprecated，两者都落到 `/vendor/build.prop`，见 `core/sysprop.mk:194-205`）。
+
+⚠️ `persist.sys.gaokun3.*`（键盘、触摸模式）**故意没跟着改** —— 见第 5 条的表：
+它们靠 `system_prop` 才让 Parts 应用写得了。

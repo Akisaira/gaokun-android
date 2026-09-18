@@ -46,9 +46,12 @@ allow postinstall boot_block_device:blk_file r_file_perms;
 #   * 往 update_engine 的管道打日志：同文件 :12-13。
 #   * `df` 看 ESP 剩余空间（statfs）：domain.te:276 `allow domain fs_type:filesystem getattr;`
 #     是全局的，不用为 vfat 单独写 getattr。
-#   * getprop persist.gaokun3.recovery_entry：postinstall 是 coredomain，
-#     private/coredomain.te:33 `get_prop(coredomain, default_prop)` 已覆盖读。
-#     ⚠️ 但【写】那个属性不行 —— 见下。
+#   * getprop persist.vendor.gaokun3.recovery_entry：⚠️ 2026-09-18 改名之后
+#     它不再是 default_prop（此前靠 private/coredomain.te:33 的
+#     `get_prop(coredomain, default_prop)` 白拿），而是我们自己的 vendor_gaokun3_prop。
+#     读权限现在【显式写在】sepolicy/vendor_gaokun3_props.te 里的
+#     `get_prop(postinstall, vendor_gaokun3_prop)` —— 少了那一行，OTA 会当成"没设过"
+#     而永远跳过 recovery 条目，且不报错。
 
 # ── ⚠️★★ 写不了、也不该在这里写的：find_esp 的兜底探测 ────────────────
 #
