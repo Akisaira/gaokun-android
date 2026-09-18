@@ -9295,7 +9295,9 @@ hwc 那条规则暴露了一个方法论缺陷，值得单独立条。
   2 条标签实机确认生效（`/dev/dri`、ESP），属性改名生效（`persist.vendor.gaokun3.*`）。
 * ⬜ 4 处新写的（hwc 补 create/bind、同进程 HAL 库、mediaswcodec、wakeup genfscon）等下次构建。
 * ⚠️ **两个结构性阻塞原封不动**：`gaokun3_smmustall`（64 条 `/dev/mem` + 18 条 `sys_rawio`，
-  正解是 [TODO B6]）与 `gaokun3_hangdump`（本轮样本里没出现，因为它 60 秒才采一次、
-  而样本只有 2 分钟 —— **不是修好了**）。
+  正解是 [TODO B6]）与 `gaokun3_hangdump`。
+  ★ hangdump 那一组在 2 分钟的样本里"消失"过，我差点把它算进战果 —— 等到 uptime 8 分钟
+  再采一次，**36 条全回来了**（它 60 秒才采一次样）。温控与 audioroute 则仍是 0。
+  **同一份数据、隔 6 分钟再取一次，就能把"修好了"和"还没轮到它"分开。**
 * ★ 顺带，那次误编的 `user` 版其实是一次**真 enforcing 试跑**：起不来。
   所以 enforcing 还差得远，B1 不可能靠"少写几条规则"蒙过去。
