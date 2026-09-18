@@ -6,7 +6,7 @@
 最终目标是能稳定运行 arm64 手游。
 
 **当前阶段：Stage 6 收尾 —— 产品化。v0.6.2-alpha 已发布（2026-09-16，构建戳 `1789570683`）：触摸手感按实测定案（跳点判据、fuzz=0、按下 17 ms、触点面积轴）、驱动 6 个缺陷 + 可观测性、OTA postinstall 同步 cmdline。手上还剩画质（降噪/闪光过曝）、息屏 USB adb、Google 认证、手掌碎块 —— 都在 `docs/TODO.md` 的总表里。
-2026-09-18：SELinux 第五轮补漏（案卷 #117，规则已写：触摸服务的域 / `/dev/dri` 目录 / ESP 块设备类型 / OTA postinstall）—— ⚠️ **未编译、未上机**。（每次开工时更新这一行）**
+2026-09-18：SELinux 第五轮（案卷 #117）—— 补了 7 处规则（触摸服务的域 / `/dev/dri` 目录 / ESP 块设备类型 / OTA postinstall / 温控 HAL 的 sysfs_thermal / audioroute 的 tinymix / hwc 的 uevent socket），自研属性改名 `persist.vendor.gaokun3.*` 且 **allow_suspend 默认值改成 0**（新装机默认不进待机，发版说明要写）。构建机 `m selinux_policy` 按 **user 变体**通过（第一次被 neverallow 打回，已改）。⚠️ **仍未上机** —— 只证明了写得进去，没证明够用。（每次开工时更新这一行）**
 
 > ## ★★★ 开工前先读（这一段是"现在"，历史在 `docs/project-log.md`）
 >
