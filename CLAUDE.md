@@ -6,6 +6,10 @@
 最终目标是能稳定运行 arm64 手游。
 
 **当前阶段：Stage 6 收尾 —— 产品化。v0.6.2-alpha 已发布（2026-09-16，构建戳 `1789570683`）：触摸手感按实测定案（跳点判据、fuzz=0、按下 17 ms、触点面积轴）、驱动 6 个缺陷 + 可观测性、OTA postinstall 同步 cmdline。手上还剩画质（降噪/闪光过曝）、息屏 USB adb、Google 认证、手掌碎块 —— 都在 `docs/TODO.md` 的总表里。
+2026-09-24 凌晨（用户睡觉、授权自主推进）：**PR #6 相机（AF / 朝向 / 崩溃）已接手修完并合并推送**（`9c79b78`，之后的提交留在本地未推）；
+**测试版 `1790184271` 已构建（产物在构建机，payload 未能预推：夜里直传只有 142 KB/s），未安装**（要人在场重启）——步骤与验收清单见 `docs/TODO.md` 顶部。设备上旧 payload 已改名防误装。
+⚠️ 设备现在的相机 provider 是 **bind-mount 的新 HAL**（`/data/local/tmp/hal-pr6.bin`，重启即失效，属正常）。
+新工具 `gaokun3-ncam-smoke`（应用视角的相机冒烟测试，设备上 `/data/local/tmp/`）。案卷 #119。
 2026-09-18：SELinux 第五轮（案卷 #117）—— 补了 7 处规则（触摸服务的域 / `/dev/dri` 目录 / ESP 块设备类型 / OTA postinstall / 温控 HAL 的 sysfs_thermal / audioroute 的 tinymix / hwc 的 uevent socket），自研属性改名 `persist.vendor.gaokun3.*` 且 **allow_suspend 默认值改成 0**（⚠️ 不只新装机：v0.6.2 老用户多半没设过这个属性，OTA 后也会落到 0、失去待机 —— 发版前要用户定，见 `docs/TODO.md` S1）。构建机编译验证通过；`-userdebug` 重编后**装机成功**（戳 `1789737346`，槽 `_a`，60 秒起来）：温控 HAL 的 35 条 denial 归零且 `dumpsys thermalservice` 报真温度、audioroute 的 7 条归零、`/dev/dri` 与 ESP 的标签实机确认、功能零回归。⚠️ 中途误用 `-user` 变体导致一次装机失败（#117 §15）。⬜ 新查出的 4 处规则（hwc 的 create/bind、同进程 HAL 库、mediaswcodec、wakeup genfscon）**已写未验**，下次构建一起。（每次开工时更新这一行）**
 
 > ## ★★★ 开工前先读（这一段是"现在"，历史在 `docs/project-log.md`）
@@ -27,6 +31,9 @@
 >    各栽过一次。判据要看**产物**（时间戳 / 大小 / 服务端列表），不看管道尾巴。
 >    ★ 大文件传输同理：2026-09-16 `scp` 1.35 GB 的 payload **退出码 0、文件只有 77%**（连接中途断了）。
 >    传完必看字节数 + sha256；续传用 `rsync --partial --append-verify`，别重来。
+>    ⚠️ 2026-09-24：**本机（macOS）的 `/usr/bin/rsync` 是 openrsync（"2.6.9 compatible"），没有 `--append-verify`**，
+>    只打印用法就退出 —— 包在"失败就重试"的循环里会变成死循环。本机上续传用
+>    `ssh 构建机 "tail -c +$((已有字节+1)) 文件" >> 文件` 按偏移追加，最后比 sha256；循环要设重试上限。
 > 2. **沙箱代理会掐断到构建机的 ssh，并 MITM 掉 `az` 的证书。**
 >    长任务与大流量的 ssh 一律绕沙箱；`az` 加 `AZURE_CLI_DISABLE_CONNECTION_VERIFICATION=1`。
 >    主机名 `cicd` 会被解析成 fake-IP `198.18.0.92`，**用真实 IP 直连**。

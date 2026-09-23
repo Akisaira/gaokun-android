@@ -24,16 +24,30 @@
 等用户点头的对外动作 **5** 条 · 明确搁置 **4** 条。下面按"下一步是什么"分组，
 详情见各自的条目。
 
-### ▶ 眼前的下一步（一次构建就能收掉一串）
+### ▶ 眼前的下一步：装测试版 `1790184271` 并验收（2026-09-24 凌晨已构建，payload 还没上设备）
 
-设备槽 `_a` 跑的是**未发布**的开发版（戳 `1789737346`）。2026-09-23 实测**正常启动**
-（用户一度说过"起不来"，但说不清现象、自己也不确定 —— 以实机为准）。
-⚠️ 槽 `_b` 已不可启动（B19），**没有回落槽**，装新版本要把这一点算进风险。
+**测试版**（未发布；userdebug；构建戳 `1790184271`，incremental `20260923172431`；内核 #24 不变，
+dtb `6b8c7dea…` = 0048 + 0049）。产物在构建机 `~/crdroid/out/` 与 `~/ota-0923/`（payload.bin sha `21098fe9…`，1345136545 字节）。
+⚠️ **payload 没能预推**：夜里本机↔构建机只有 142 KB/s（1.3 GB 要 2.5 小时），R2 中转要凭据（构建机与本机环境里都没有，按规矩不去翻）。
+   早上：`az vm start` → 带凭据 `release.sh --stage-only`（只进 staging、不动清单）→ 设备从 R2 拉 payload；
+   或者慢速直传。⚠️ 设备上旧的 payload 已改名为 `payload-1789737346.*`，免得误装旧版（`--check` 现在会报缺 payload.bin）。
+比 `_a` 上的 `1789737346` 多出：PR #6 相机（AF / 朝向 / 旋转崩溃，维护者修过 14 处 + 键清单）、
+T5 平板声明（`product/etc/build.prop:64` 已确认）、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、
+usbrole follow + 0048（USB 角色）、#117 §19 那 4 处 SELinux 规则 + usbrole/rproc-kick 规则。
 
-**下一版**：`1789737346` 之后本仓又进了镜像侧的改动（T5 平板声明、#117 §19 那 4 处 SELinux 规则），
-所以直接 `--no-build` 发 `1789737346` 意义不大 —— 建议重编：
-`-userdebug` + 上述改动 → 装机 denial 普查（开机后 ≥8 分钟再采，#117 §20）→ 验 `ro.build.characteristics=tablet`
-→ `release.sh --no-build`。正式版那一次记得把 `allow_suspend` 默认改回 1（S1）。
+**装**（⚠️ 要人在场：新系统第一次启动；`_b` 当前不可启动，装完 OTA 就是写进 `_b`）：
+`bash scripts/install-ota-local.sh --check` → `--go` → 重启。脚本会把 `default` 掰回 `_a`、只 oneshot 到新槽，
+起不来下一次重启就回 `_a`。
+
+**验收清单**（装好后逐条）：
+1. ☐ `getprop ro.build.date.utc` = `1790184271`；`getprop ro.build.characteristics` = `tablet`（issue #5 请报告者测 QQ）
+2. ☐ **解锁屏幕**后开 Aperture：后摄点按对焦能锁；**竖拿 / 横拿各开一次前后摄，取景与照片都应是正的**（0049 待人眼）
+3. ☐ `adb shell /data/local/tmp/gaokun3-ncam-smoke`（已在设备上）后摄 / `front` 全过
+4. ☐ 拔插一次 USB 线：USB adb 能回来（0048 + follow）
+5. ☐ `dumpsys connectivity | grep TcpBufferSizes` 含 `8388608`；系统更新下载速度
+6. ☐ 开机 ≥8 分钟后 denial 普查（#117 §20 的办法，dmesg 要从 ~0 秒开始）
+7. ☐ `ps -AZ | grep -E "rprockick|usbrole"` 各自在自己的域；三颗 DSP running
+都过 ⇒ S1（allow_suspend 默认改回 1）之后**重新构建**正式版，再 `release.sh --no-build` 发那一版。
 ⚠️ **变体必须 `lineage_gaokun3-bp4a-userdebug`**（#117 §15）。
 
 ### 🔴 第一梯队：用户明确点名 / 用户能直接感觉到
