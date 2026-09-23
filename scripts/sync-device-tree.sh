@@ -26,6 +26,25 @@ DST=vahiru@$HOST:crdroid/device/huawei/gaokun3
 die() { echo "✗ $*" >&2; exit 1; }
 ok()  { echo "✓ $*"; }
 
+echo "═══ 0. 同步之前：设备树里每个 .xml 都必须能解析 ═══"
+# ★ 2026-09-24：PR #6 的 features xml 少了一个注释结尾，整包构建到 systemfeatures-gen-tool
+#   才报错（构建开始后约 2 分钟，而且只有整包构建会碰它 —— 单编 HAL 发现不了）。
+#   在这里 1 秒内拦下；坏的 XML 同步过去只会浪费一次构建。
+python3 - "$SRC" <<'PY' || die "设备树里有解析不了的 XML（见上），先修再同步"
+import sys, pathlib, xml.etree.ElementTree as ET
+bad = 0
+for p in sorted(pathlib.Path(sys.argv[1]).rglob("*.xml")):
+    if any(part in ("firmware", "hexagonrpcd-root", "prebuilt-boot") for part in p.parts):
+        continue
+    try:
+        ET.parse(p)
+    except ET.ParseError as e:
+        print("  ✗ %s: %s" % (p.relative_to(sys.argv[1]), e))
+        bad += 1
+sys.exit(1 if bad else 0)
+PY
+ok "设备树 XML 全部可解析"
+
 echo "═══ 1. 同步受版本控制的部分（--delete 但排除四样不入库的构建输入）═══"
 rsync -a --delete \
       --exclude '._*' --exclude '.DS_Store' \

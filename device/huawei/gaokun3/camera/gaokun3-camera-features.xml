@@ -17,6 +17,9 @@
          ⚠️ 闪光灯这条不是装饰：SystemUI 的 FlashlightControllerImpl 先查
          PackageManager.FEATURE_CAMERA_FLASH，没有它快捷设置里根本不会出现手电筒砖 ——
          HAL 报了 FLASH_INFO_AVAILABLE=TRUE 也没用（2026-09-14 实机：mCameraId=null）。
+         ⚠️ 2026-09-24：PR #6 删上一版的"不声明 autofocus"那行时把这条注释的结尾也删了，
+            下面两条 feature 被吞进注释、下一个注释开头的双连字符又让整份 XML 解析失败
+            （构建期 systemfeatures-gen-tool 直接报错）。sync-device-tree.sh 现在会先校验 XML。 -->
     <feature name="android.hardware.camera" />
     <feature name="android.hardware.camera.flash" />
     <!-- 自动对焦（2026-09-20 新增）：后摄有 dw9714 VCM，HAL 自实现 CDAF

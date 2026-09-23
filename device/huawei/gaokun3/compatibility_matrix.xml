@@ -10,7 +10,8 @@
   所以这里刻意保持为空 —— 空矩阵在 checkvintf 里是平凡兼容的。
 
   为什么必须有这个文件（2026-08-19 实测）：
-      checkvintf --check-one 在"Checking vendor manifest"通过后会接着
+      checkvintf 的 check-one 模式在"Checking vendor manifest"通过后会接着
+      （⚠️ 注释里不能写双连字符的参数原文 —— 严格的 XML 不允许注释含两个连字符）
       "Checking vendor matrix"，两个候选路径都找不到就直接失败：
         Fetch '.../vendor/etc/vintf/compatibility_matrix.xml': NAME_NOT_FOUND
         Fetch '.../vendor/compatibility_matrix.xml':           NAME_NOT_FOUND

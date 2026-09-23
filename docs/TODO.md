@@ -60,13 +60,13 @@
 | **B0** | 让构建机的树**就是**本仓 checkout | **已经咬了六次**。`kernel-apply-patches.sh --verify` 与 `sync-device-tree.sh`（带断言）是探测器，不是根治 |
 | **B5b** | UBWC：仓库写着关 | `device.mk:174` 仍是 `nocompression`，**一次测量都没有**。下版构建前删那行并带一次实测 |
 | **B6** | GPU SMMU 中断根治 | 做掉它 `smmu-nostall.sh` 整个消失，B1 的一半阻塞跟着消失 |
-| **B9** | SLPI 每 200 ms 的 handover 噪声 | 已定位到 sensors HAL 的采样节拍。下一步：accel 采样率 2× / ½× 看计数是否跟着变 |
+| **B9** ✅ | SLPI handover 噪声 | **2026-09-24 结案**（[#119](stage4-findings.md) §4）：它是 SSC 向 AP 投递一批数据的门铃（封顶 5 Hz，采样率 25→50 Hz 不变，没人读时为 0），不是故障。`patches/0014` 的 ratelimit 就是正解 |
 | **B12** | 释放 R2 桶前要有国内可达的镜像 | GitHub 附件国内不可达。要用户定方案（Worker 反代 / 保留桶） |
-| **B16** 🆕 | 设备 WAN 吞吐：两份文档结论相反 | A8 按 [#108](stage4-findings.md) 结案"不成立"（平板 8.14 MB/s ≈ 本机），但 v0.6.2 发版说明的 Known issues 写"设备下载只有 1–2 MB/s、原因未明、OTA 受影响"。**要实测一次定哪份对**，再改另一份。用户 2026-09-23：自己也不清楚快慢 ⇒ 没有用户侧的现象可依，只能等设备在线时同 URL、同时刻对照测一次（#108 的做法） |
+| **B16** 🔄 | 设备外网单连接慢 | **2026-09-24 定位并修**（[#119](stage4-findings.md) §3）：到海外 CDN 的 RTT ~294 ms，Android 默认 Wi-Fi TCP 接收上限 2 MB ⇒ 单连接 ~3.5 MB/s；临时改 8 MB 实测 9.1–9.8 MB/s（4 连接合计 12.6 MB/s，局域网 32 MB/s）。`rro/Gaokun3WifiOverlay` 进下一版镜像。⬜ 装机后核对 `TcpBufferSizes` |
 | **B3** | 自研 EFI 加载器 | A5 与"默认启动项永远留救援"都依赖它 |
 | **B7** | 用轻量系统替掉救援 Ubuntu（= B4） | 24.6 GiB 换成 55 MiB squashfs，⏸ 用户暂缓 |
 | — | 相机零碎 | `patches/0022` 仍未在**健康**状态下验证 unbind/rebind；libcamera 生成源码仍靠手工，未改成 Soong `genrule`（`patches/libcamera/README.md:34`）；`kDarkLuma=50` 是启发式 |
-| **B18** 🆕 | init 泄漏 remoteproc 引用 | `init.gaokun3.rc:97-101` 每次 `sys.boot_completed=1` 都给三颗 DSP 写 `start`，已在运行时只加引用 ⇒ sysfs `stop` 减不到 0 静默失败（[#118](stage4-findings.md) §3）。改成只在不在运行时才 start |
+| **B18** 🔄 | init 泄漏 remoteproc 引用 | 已修（[#119](stage4-findings.md) §5）：`gaokun3-rproc-kick.sh` 只对不在运行的 DSP 写 start；新域 + usbrole 补 sysfs 规则，`selinux_policy` 通过。⬜ 随下一版镜像验证 |
 | **B19** 🆕 | 没有回落槽 | `_b` 不可启动（[#118](stage4-findings.md) §2）。出事只能靠救援系统；Virtual A/B 合并后 `-cow` 还在的原因未查 |
 | **B20** 🆕 | wlan0 MAC 每次开机都变 | 框架不做 MAC 随机化，驱动每次给新地址 ⇒ 每台机器在路由器上都是"新设备"，IP 漂。本机已用静态 IP 绕开；根治是稳定 MAC |
 | — | tinymix 的 vendor 变体 | 有了它 `audioroute` 就不用挂 `vendor_executes_system_violators`（#117 §8） |

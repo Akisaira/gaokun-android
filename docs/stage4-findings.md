@@ -9486,3 +9486,81 @@ init 的 `write .../UDC` 报 EBUSY 是因为 gadget 已经自己重绑上了，�
 ✅ 用户同意后已把 0048 的 dtb 覆盖进 ESP 的 `slot_a/gaokun3.dtb`（先核对原件是 `77f049bb…` 再动；原件留作
 `slot_a/gaokun3.dtb.pre0048`），测试条目与 `test0048/` 已删，oneshot 变量已被引导器消费。
 ⬜ follow 读 `/sys/class/typec`、xhci 目录，转 enforcing 前要给 `gaokun3_usbrole` 补规则（B1）。
+
+## #119 PR #6 接手合并后的实机验证；整包构建被 PR 的一个 XML 注释打断；外网慢是 TCP 窗口；SLPI handover 是数据门铃（2026-09-24 凌晨）
+
+用户睡觉前的指令："修完 PR 合了、然后看 TODO 自己找活干"。约束：不重启、不发版、不拍照存图。
+本机当晚是 `RUNNING_LOCKED`（22:37 那次重启之后没人解锁）⇒ **任何相机应用都起不来**（Direct Boot 下
+非 direct-boot-aware 的应用连 activity 都解析不到，`resolve-activity` 报 No activity found）。
+
+### 1. 应用视角的冒烟测试：`gaokun3-ncam-smoke`
+
+绕开"应用起不来"：NDK Camera2 命令行客户端（`device/huawei/gaokun3/camera/tools/ncam-smoke.cpp`），
+以 root 直连 cameraserver，读【应用会读的】结果键。不落盘任何图像（JPEG 只解析 SOF 取宽高）。
+⚠️ 第一次跑 0 个结果：没起 binder 线程池，cameraserver 的回调没人接（它自己的警告：
+"Linking to death ... but there are no threads (yet?) listening"）。`ABinderProcess_startThreadPool()` 之后正常。
+⚠️ 尺寸不能写死：HAL 按传感器比例算尺寸，后摄是 640x474 / 1280x948 —— 从静态元数据挑。
+⚠️ 测"空设置沿用上一帧"要用【重复请求】：框架只对同一个 CaptureRequest 对象的后续帧发空设置
+（Camera3Device 按 mPrevRequest 比较），burst 里的两个元素是不同对象、各带完整设置。
+
+新 HAL（bind-mount，sha `063a84d5…`）：
+
+| 项 | 结果 |
+|---|---|
+| 后摄连续对焦 | 结果里 `PASSIVE_SCAN → PASSIVE_FOCUSED`，带 `LENS_FOCUS_DISTANCE` ✅（初版恒 INACTIVE） |
+| 连续模式 START | **33 ms** 进 `FOCUSED_LOCKED`（初版重扫全程约 2 s）；CANCEL 解锁 ✅ |
+| AUTO 单次对焦 | `INACTIVE → ACTIVE_SCAN → FOCUSED_LOCKED` ✅ |
+| 重复请求 3 张 JPEG（90°） | 全部 948x1280 ✅（第 2 张起 HAL 收到的是空设置） |
+| 前摄 | 出帧 + 3 张 960x1280 ✅ |
+| 出流 0.7 s 时 kill -9 客户端 | `binderDied` → 会话干净关闭，随即重跑 PASS ✅ |
+
+合计后摄 15/15、前摄全过，每轮 120–140 个结果 0 帧失败。
+⚠️ 找进程别用 `/proc/*/exe` 扫描做"0.7 秒内杀掉"：几百个进程读一遍要好几秒，测试早跑完了 —— 用 `$!`。
+
+### 2. ⚠️★ PR #6 的 features XML 会让【每一次整包构建】失败
+
+`gaokun3-camera-features.xml`：PR 删上一版"⚠️ 不声明 autofocus"那行时，把那条注释的 `-->` 一起删了 ⇒
+后面的 `android.hardware.camera` / `camera.flash` 两条 feature 被吞进注释，下一条注释开头的双连字符又让
+解析失败。构建期 `systemfeatures-gen-tool` 报 `The string "--" is not permitted within comments` 退出。
+PR 作者只单编了 HAL（`m android.hardware.camera.provider-service.gaokun3` 碰不到它）。
+修：补回注释结尾（五条 feature 用 ElementTree 解析确认）。★ `sync-device-tree.sh` 加第 0 步：
+设备树里每个 `.xml` 都用严格解析器过一遍，失败就拒绝同步 —— 第一次跑顺带抓到 `compatibility_matrix.xml`
+的注释里写了双连字符的命令行参数（assemble_vintf 的解析器宽松所以一直没事），一并改掉。
+
+### 3. B16 外网"慢"：单连接被 Android 默认的 TCP 接收上限卡住
+
+同一 URL（Cloudflare 60 MB）：设备单连接 **3.3–3.9 MB/s**，4 连接并发合计 **12.6 MB/s**；到 Cloudflare 边缘
+RTT **~294 ms**；局域网 Mac→设备 **32 MB/s**（Wi-Fi 1200 Mbps / RSSI −20，链路没问题）。
+⚠️ 本机（Mac）不能当对照：它的流量走系统级代理隧道（fake-IP 198.18.x），只有 67–81 KB/s —— 与 #108 的警告同一件事。
+Android 给 Wi-Fi 下发的 `TcpBufferSizes` = `524288,1048576,2097152,…`（`dumpsys connectivity`），
+来源 `config_wifi_tcp_buffers`（`packages/modules/Wifi/service/ServiceWifiResources/res/values/config.xml:453`，
+`ClientModeImpl.java:8386` 读取）。2 MB 上限 ⇒ 实际窗口 ~1 MB ⇒ 1 MB / 0.294 s ≈ 3.5 MB/s，与实测吻合。
+**A/B**：root 临时把 `/proc/sys/net/ipv4/tcp_rmem` 上限改 8 MB，同一 URL 单连接 **9.1–9.8 MB/s**（2.6 倍），测完恢复。
+⇒ `rro/Gaokun3WifiOverlay`（写法照 AOSP Cuttlefish 的 Wi-Fi RRO）把上限改成 rmem 8 MB / wmem 4 MB。
+系统内 OTA 是单连接下载，受益最直接。⬜ 随下一版镜像验证：装好后 `dumpsys connectivity | grep TcpBufferSizes`。
+⚠️ 这也解释了 #108 与 v0.6.2 发版说明的矛盾：#108 那天测到 8 MB/s，多半是当时到 CDN 的 RTT 低；
+单连接吞吐随 RTT 反比变化，**同一台机器换个时段就能差一倍**。
+
+### 4. B9 SLPI 的 handover 中断：是"数据门铃"，不随采样率涨
+
+停掉 sensors HAL，用 `gaokun3-ssc-test accel <Hz>` 自己读，数 `smp2p-slpi 2 q6v5 handover`：
+
+| 读法 | handover / 5 s | 实际测量 / s |
+|---|---|---|
+| HAL 在跑 | 25 | — |
+| 没人读 | **0** | — |
+| 5 Hz 请求（实为 12.5） | 15 | 12.5 |
+| 10 Hz 请求（实为 12.5） | 21 | 12.5 |
+| 20 Hz | 25 | 25 |
+| 50 Hz | **25** | **50** |
+
+采样率从 25 翻到 50，handover 不动（封顶 5 Hz）⇒ 它不是"每个样本一次"，而是 **SSC 每向 AP 投递一批数据一次**
+（批的间隔至少约 200 ms）。SLPI 固件把 smp2p 的 ready/handover 位当成了数据就绪门铃。
+⇒ `patches/0014` 的 ratelimit 就是正解，没有要根治的东西。B9 结案。
+
+### 5. B18 修了：remoteproc 兜底不再泄漏引用
+
+`bin/gaokun3-rproc-kick.sh` 只对不在 running 的 DSP 写 start（幂等），rc 改成 `start gaokun3_rprockick`；
+新域 `gaokun3_rprockick`。同时给 `gaokun3_usbrole` 补上它此前【完全没有】的 sysfs 规则（按实机 `ls -Z`：
+role / UDC state / typec 全是 `sysfs`，wake_lock 是 `sysfs_wake_lock`，allow_suspend 是 `vendor_gaokun3_prop`）。
+`m selinux_policy`（含 neverallow 检查）通过。设备上手动跑脚本：三颗 DSP 都 running ⇒ 零动作。

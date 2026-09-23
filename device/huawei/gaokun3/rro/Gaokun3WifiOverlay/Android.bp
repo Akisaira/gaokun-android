@@ -1,0 +1,9 @@
+// Wi-Fi 模块资源（com.android.wifi.resources）的运行时 overlay。
+// 写法照 AOSP device/google/cuttlefish/shared/phone/overlays/CuttlefishWifiOverlay。
+// ⚠️ 静态 overlay（DEVICE_PACKAGE_OVERLAYS）管不到 APEX 里的资源包，必须是 RRO。
+runtime_resource_overlay {
+    name: "Gaokun3WifiOverlay",
+    resource_dirs: ["res"],
+    vendor: true,
+    sdk_version: "current",
+}
