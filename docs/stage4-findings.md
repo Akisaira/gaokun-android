@@ -9449,3 +9449,39 @@ host 模式 6 秒没有下游设备就切 device（PC）；我方供电时交给
 带 PD 直通的 hub（它们供电、却要我们当主机），不能那样写。**
 
 本日测完 port0 停在 **device 但 gadget 起不来**（USB adb 不通，TCP adb 正常）—— 重启即恢复。
+
+### 8. ★★★★ 0048 上机：角色切换不再弄坏控制器；用户态 follow 三个场景
+
+用户同意后 oneshot 进 `…-android-a-t0048.conf`（内核/ramdisk 同 `slot_a`，只换 dtb），48 秒起来；
+`LoaderEntrySelected` = t0048、`/proc/device-tree/soc@0/usb@a6f8800/qcom,select-utmi-as-pipe-clk` 在。
+
+**来回切三次**（线不动，对端是那台能枚举我们的主机）：
+
+| | 上一次开机（无 0048） | 本次（有 0048） |
+|---|---|---|
+| → host | `Host halt failed, -110`，xhci probe 失败 | xhci **绑上驱动** 200 ms，2 个 root hub；三次都是 |
+| → device | `failed to start g1: -524`，每秒一次直到重启 | UDC **`configured`** 400 ms；三次都是 |
+| 本次开机累计 | — | **`-524` 0 次、`-110` 0 次** |
+
+残留：每次切回 device 仍有一条 `dwc3: request ... was not queued to ep0out`（不影响绑定）；
+init 的 `write .../UDC` 报 EBUSY 是因为 gadget 已经自己重绑上了，测试结束后不再出现。
+
+**follow 模式**（`gaokun3-usbrole.sh follow`，从 `/data/local/tmp` 手动起）：
+
+* A 现状（device + `configured`）：12 秒不动作 ✅
+* B 手动写 host（模拟重新插线时内核照 `partner_type=2` 切 host）：**6 秒后自己切回 device，
+  对端重新枚举（`configured`）** ✅ —— #27 在同一次开机里被自动纠正
+* C "对端不是主机"（hub / 充电器）：真实场景造不出来 ——
+  解绑 gadget 会被 init 立刻重绑、`soft_connect disconnect` 后 UDC 状态照样是 `configured`。
+  改用假的 UDC 状态文件（`not attached`）测**状态机**：device 6 秒 → host，host 6 秒无下游 → 停在 host ✅。
+  ⚠️ 所以"hub/充电器时 UDC 真的是 `not attached`"这一条**是按协议推的，没实测**
+  （它们从不向上游发 USB 复位）。
+
+⚠️ 测试里又踩了一次运维坑 3：`grep "[u]sbrole-test"` 匹配到了命令行自己（命令行别处含 `usbrole-test.sh`）。
+按 `/proc/*/cmdline` 精确比对才确认旧 watcher 早已退出、C 的结果没被干扰。
+
+同时改掉 `usbrole.sh` 判"host 已确认"的判据：数 `xhci-hcd.*/driver`（绑上驱动）而不是平台设备。
+**已入库、待下次构建**：`patches/0048`；`prebuilt-boot/dtb/gaokun3.dtb` 换成 0048 版（sha `8b390878…`，
+旧的 `77f049bb…` 可从 v0.6.2 的 boot.img 解出）；`usbrole.rc` 加常驻 `gaokun3_usbfollow`。
+⚠️ 本机下次重启会回到**旧 dtb**（oneshot 只管一次）—— #27 随之回来，除非把 0048 的 dtb 放进 `slot_a`。
+⬜ follow 读 `/sys/class/typec`、xhci 目录，转 enforcing 前要给 `gaokun3_usbrole` 补规则（B1）。

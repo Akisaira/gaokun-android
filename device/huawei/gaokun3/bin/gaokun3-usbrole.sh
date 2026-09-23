@@ -24,13 +24,75 @@ WATCH_PID=/data/vendor/gaokun3/usbrole-watch.pid
 say() { log -t $TAG "$*"; }
 
 case "$WANT" in
-    host|device|watch) ;;
-    *) say "用法: $0 host|device|watch"; exit 2 ;;
+    host|device|watch|follow) ;;
+    *) say "用法: $0 host|device|watch|follow"; exit 2 ;;
 esac
 
 if [ ! -e "$S" ]; then
     say "没有 $S —— 不做任何事（wakelock 保持原状）"
     exit 0
+fi
+
+# ── follow：让数据角色跟着"对面实际是什么"走（docs/stage4-findings.md #118 §6-8）──
+# 为什么不信 UCSI：EC 的 GET_CONNECTOR_STATUS 在插着能枚举我们的主机时报 partner_type=2（UFP），
+#   没插也报 2 ⇒ 内核在重新插线时照它切 host，PC 那头的 adb 就没了（#27 的另一半）。
+# 为什么不按供电方向推：带 PD 直通的 hub 给我们供电、却要我们当主机 ——
+#   "受电 ⇒ 对面是主机"会把它弄坏。
+# ★ 只信电气事实：
+#   我方受电 + device 模式 + ~6 秒没被枚举（UDC 不是 configured/addressed/default/suspended）⇒ 切 host（hub/扩展坞/充电器）
+#   我方受电 + host 模式 + ~6 秒 xhci 下没有任何下游设备 ⇒ 切 device（对面是 PC）
+#   两边都试过还是没东西（纯充电器）⇒ 停在 host（挂起安全），直到这根线拔掉
+#   我方供电（U 盘、手机）⇒ 对面只能是设备，内核给的 host 是对的，不插手
+# ⚠️ 前提是 patches/0048：没有它，任何一次切换都会把 port0 控制器弄坏（xhci -110 / gadget -524）。
+# ⚠️ 息屏且允许挂起时不插手 —— 那段时间归上面 host/device/watch 三个模式管（挂起安全的不变量在那边）。
+# ★ 切到 device 之前先拿 wakelock，保持"device 模式不挂起"的不变量（#52）。
+P=/sys/class/typec/port0
+if [ "$WANT" = follow ]; then
+    partner_present() { [ -d ${P}-partner ]; }
+    we_are_sink() { case "$(cat $P/power_role 2>/dev/null)" in *"[sink]"*) return 0 ;; esac; return 1; }
+    enumerated_by_host() {
+        case "$(cat $UDC 2>/dev/null)" in
+            configured|addressed|default|suspended) return 0 ;;
+        esac
+        return 1
+    }
+    has_downstream() {
+        for u in "$D"/xhci-hcd.*/usb*; do
+            [ -d "$u" ] && ls "$u" 2>/dev/null | grep -qE '^[0-9]+-[0-9.]+$' && return 0
+        done
+        return 1
+    }
+    miss=0; tried=""; settled=0
+    say "follow 启动"
+    while :; do
+        sleep 2
+        if ! partner_present; then miss=0; tried=""; settled=0; continue; fi
+        if [ "$(getprop persist.vendor.gaokun3.allow_suspend)" = 1 ] &&
+           [ "$(getprop debug.tracing.screen_state)" != 2 ]; then miss=0; continue; fi
+        we_are_sink || { miss=0; continue; }
+        [ $settled = 1 ] && continue
+        cur=$(cat "$S" 2>/dev/null)
+        case "$cur" in
+            device) enumerated_by_host && { miss=0; tried=""; continue; } ;;
+            host)   has_downstream     && { miss=0; tried=""; continue; } ;;
+            *) miss=0; continue ;;
+        esac
+        miss=$((miss + 1))
+        [ $miss -lt 3 ] && continue
+        miss=0
+        case " $tried " in *" $cur "*) ;; *) tried="$tried $cur" ;; esac
+        [ "$cur" = device ] && next=host || next=device
+        case " $tried " in
+            *" $next "*)
+                # 两边都试过：纯充电器。停在 host。
+                settled=1
+                [ "$cur" = host ] && { say "受电、两种角色都没见到对端 —— 停在 host（纯充电器？）"; continue; }
+                next=host ;;
+        esac
+        [ "$next" = device ] && echo $WL > /sys/power/wake_lock
+        echo "$next" > "$S" 2>/dev/null
+        say "受电、$cur 模式约 6 秒没见到对端 → 切 $next（已试: $tried）"
+    done
 fi
 
 # ★ 2026-09-14（#112）：插着 USB 主机（PC 在用 adb）时【不切 host、不放行挂起】。
@@ -86,8 +148,10 @@ while [ $i -lt 60 ]; do
     CUR=$(cat "$S" 2>/dev/null)
     if [ "$CUR" = "$WANT" ]; then
         if [ "$WANT" = host ]; then
-            # host 模式的判据是 xhci 子设备真的实例化了，不是 role 读回来对
-            NX=$(ls "$D"/ 2>/dev/null | grep -c '^xhci')
+            # host 模式的判据是 xhci 【绑上了驱动】，不是 role 读回来对。
+            # ⚠️ 2026-09-23 以前数的是 `ls $D | grep ^xhci`（平台设备）—— xhci probe 失败（-110）时
+            #    平台设备照样在，这个判据从来没真正验过 host 起来了（#118 §7）。
+            NX=$(ls -d "$D"/xhci-hcd.*/driver 2>/dev/null | wc -l)
             [ "$NX" -ge 1 ] && { OK=1; break; }
         else
             [ -e /sys/class/udc/a600000.usb ] && { OK=1; break; }
@@ -97,7 +161,7 @@ while [ $i -lt 60 ]; do
     i=$((i + 1))
 done
 
-NX=$(ls "$D"/ 2>/dev/null | grep -c '^xhci')
+NX=$(ls -d "$D"/xhci-hcd.*/driver 2>/dev/null | wc -l)
 if [ "$WANT" = host ]; then
     if [ "$OK" = 1 ]; then
         echo $WL > /sys/power/wake_unlock

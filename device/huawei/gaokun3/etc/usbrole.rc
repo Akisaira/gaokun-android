@@ -24,6 +24,13 @@ service gaokun3_role_device /vendor/bin/gaokun3-usbrole.sh device
     oneshot
     disabled
 
+# 数据角色跟着"对面实际是什么"走（gaokun3-usbrole.sh 的 follow 模式，#118 §8）。
+# 与 allow_suspend 无关，常驻；息屏且允许挂起时它自己让开。前提是 dtb 带 patches/0048。
+service gaokun3_usbfollow /vendor/bin/gaokun3-usbrole.sh follow
+    class late_start
+    user root
+    group root wakelock
+
 # 开机就把门关上：role 出厂是 device，未经确认一律不放行挂起。
 on init
     write /sys/power/wake_lock gaokun3_usbrole
