@@ -24,6 +24,8 @@ cc_binary {
         "Device.cpp",
         "Session.cpp",
         "Metadata.cpp",
+        "Lens.cpp",          // VCM 直驱（libcamera 不实现 LensPosition，见 Lens.h）
+        "AutoFocus.cpp",     // 对比度检测 AF
     ],
 
     // libcamera 的公开头 + 我们为 Soong 写的 config.h/生成头。
@@ -66,6 +68,24 @@ cc_binary {
         "-Werror",
         "-Wno-unused-parameter",
         // libcamera 的公开头要求 C++20（上游 meson.build:9 cpp_std=c++20）
+        "-std=c++20",
+    ],
+}
+
+// 后摄 VCM 的独立探针（对焦标定用）。不进 PRODUCT_PACKAGES：
+// 只有显式 `m gaokun3-lens-probe` 才编，产物在 out 里直接 pull 走即可。
+cc_binary {
+    name: "gaokun3-lens-probe",
+    vendor: true,
+    srcs: [
+        "lens-probe.cpp",
+        "Lens.cpp",
+    ],
+    shared_libs: ["liblog"],
+    cflags: [
+        "-Wall",
+        "-Wextra",
+        "-Werror",
         "-std=c++20",
     ],
 }

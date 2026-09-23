@@ -28,6 +28,17 @@ struct SensorFacts {
 	/* 闪光灯的 LED class 目录（如 /sys/class/leds/white:flash）；空 = 这个相机没有闪光灯。
 	 * ★ #110：后摄的 LED 挂在 PM8350C 闪光模块 1+4 路，内核侧只暴露成一个 LED。 */
 	std::string flashLed;
+	/* ── 对焦马达 ──
+	 * ★ 只有后摄有（i2c 1-000c 的 dw9714，内核把它暴露成独立的 v4l2 子设备）。
+	 *   Device::init() 里按名字探测：找不到就保持 false，对焦相关的 tag 一律
+	 *   退回"定焦"（AF_AVAILABLE_MODES={OFF}、MINIMUM_FOCUS_DISTANCE=0）。
+	 *   ⚠️ 这两条必须【成对】一致：只把 MODES 放开而 MINIMUM_FOCUS_DISTANCE 还是 0，
+	 *      框架会按"定焦但能设 AF 模式"理解，CameraX 会一直等一个不会到来的
+	 *      FOCUSED_LOCKED。 */
+	bool hasAf = false;
+	/* 最近对焦距离（屈光度 = 1/m）。硬件手册没有可信值，按 10 diopter(10 cm) 声明，
+	 * 并把 FOCUS_DISTANCE_CALIBRATION 报成 UNCALIBRATED —— 不谎称已标定。 */
+	float minFocusDiopters = 10.0f;
 	int64_t minFrameDurationNs = 33333333;
 	/* 我们打算对外声明的输出尺寸（软件 ISP 产出，见 Provider.cpp 的说明）。 */
 	std::vector<std::pair<int32_t, int32_t>> outputSizes;
@@ -54,6 +65,11 @@ struct FrameResultFacts {
 	 * 0 = 这一帧没有。ISO 按 100 × 模拟增益折算（软件 ISP 没有别的定义）。 */
 	int64_t exposureNs = 0;
 	int32_t sensitivity = 0;
+	/* ── 对焦（#AF）：定焦相机恒为 INACTIVE / STATIONARY / 0。 ── */
+	uint8_t afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+	uint8_t lensState = ANDROID_LENS_STATE_STATIONARY;
+	float focusDistance = 0.0f;     /* 屈光度；UNCALIBRATED ⇒ 只保证单调 */
+	bool hasAf = false;             /* false 时不写 AF 相关动态条目（保持定焦语义） */
 };
 std::vector<uint8_t> buildResult(const std::vector<uint8_t> &requestSettings,
 				 int64_t timestampNs, uint8_t pipelineDepth,
@@ -61,6 +77,17 @@ std::vector<uint8_t> buildResult(const std::vector<uint8_t> &requestSettings,
 
 /* RequestTemplate → 默认请求设置。 */
 std::vector<uint8_t> buildDefaultRequest(int templateId, const SensorFacts &f);
+
+/*
+ * 从【请求设置】里读一个整型条目，读不到就给 def。
+ *
+ * ★ 必要性：JPEG 的旋转角与质量是【应用】在每一帧的请求里给的
+ *   （ANDROID_JPEG_ORIENTATION / ANDROID_JPEG_QUALITY），HAL 必须自己取。
+ *   类型不匹配时返回 def 而不是硬转 —— ANDROID_JPEG_QUALITY 是 byte、
+ *   ANDROID_JPEG_ORIENTATION 是 int32，读错类型会读出垃圾值。
+ */
+int32_t requestEntryInt(const std::vector<uint8_t> &requestSettings,
+			uint32_t tag, int32_t def);
 
 /* 小工具：把 camera_metadata_t 打包成字节。 */
 std::vector<uint8_t> pack(const camera_metadata_t *m);

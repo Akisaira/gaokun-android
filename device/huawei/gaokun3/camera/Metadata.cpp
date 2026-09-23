@@ -29,6 +29,32 @@ std::vector<uint8_t> pack(const camera_metadata_t *m)
 	return out;
 }
 
+int32_t requestEntryInt(const std::vector<uint8_t> &requestSettings,
+			uint32_t tag, int32_t def)
+{
+	if (requestSettings.empty())
+		return def;
+
+	/* ★ CameraMetadata.aidl 原文：这就是 camera_metadata_t 的序列化 blob，
+	 *   可以就地当成 camera_metadata* 用（与 buildResult() 同一手法）。 */
+	const camera_metadata_t *m =
+		reinterpret_cast<const camera_metadata_t *>(requestSettings.data());
+	camera_metadata_ro_entry_t e;
+	if (find_camera_metadata_ro_entry(m, tag, &e) != 0)
+		return def;
+
+	if (e.count == 0)
+		return def;
+	if (e.type == TYPE_INT32)
+		return e.data.i32[0];
+	if (e.type == TYPE_BYTE)
+		return e.data.u8[0];
+
+	ALOGW("请求里的 tag %u 类型是 %d，不是整数类型 —— 用默认值 %d",
+	      tag, static_cast<int>(e.type), def);
+	return def;
+}
+
 namespace {
 
 /* 我们对外声明支持的像素格式。
@@ -133,7 +159,13 @@ std::vector<uint8_t> buildCharacteristics(const SensorFacts &f)
 	const uint8_t pipelineDepth = 4;
 	add_camera_metadata_entry(m, ANDROID_REQUEST_PIPELINE_MAX_DEPTH, &pipelineDepth, 1);
 
-	/* ── 3A：软件 ISP 只有 AE/AWB，没有 AF（定焦镜头） ── */
+	/* ── 3A：软件 ISP 只有 AE/AWB；AF 是【马达有才有】（后摄 dw9714，见 Lens.h） ──
+	 * ⚠️ AF 的两处声明必须同时成立，否则框架会陷入"等一个永不到来的对焦结果"：
+	 *    ① AF_AVAILABLE_MODES 里除了 OFF 还有别的值；
+	 *    ② LENS_INFO_MINIMUM_FOCUS_DISTANCE > 0。
+	 *    只做①不做② → 框架认为这是"定焦镜头"（min=0），但也可能把 AF 模式发下来，
+	 *    我们若没有马达就会一直报 INACTIVE；只做②不做① → 应用永远不会去设 AF 模式。
+	 *    CameraX（Aperture 用的就是它）判"能不能对焦"看的就是 min focus distance。 */
 	/* 有闪光灯的相机（后摄，#110）才声明两个闪光 AE 模式：框架规定 FLASH_INFO_AVAILABLE=true
 	 * 时 AE 模式必须含 ON_AUTO_FLASH / ON_ALWAYS_FLASH。 */
 	const bool hasFlash = !f.flashLed.empty();
@@ -144,8 +176,16 @@ std::vector<uint8_t> buildCharacteristics(const SensorFacts &f)
 				  hasFlash ? 3 : 1);
 	const uint8_t awbModes[] = { ANDROID_CONTROL_AWB_MODE_AUTO };
 	add_camera_metadata_entry(m, ANDROID_CONTROL_AWB_AVAILABLE_MODES, awbModes, 1);
-	const uint8_t afModes[] = { ANDROID_CONTROL_AF_MODE_OFF };
-	add_camera_metadata_entry(m, ANDROID_CONTROL_AF_AVAILABLE_MODES, afModes, 1);
+	/* 只声明我们真实现的四种：OFF / AUTO（单次）/ CONTINUOUS_PICTURE / CONTINUOUS_VIDEO。
+	 * ⚠️ 不声明 MACRO 和 EDOF：MACRO 在 AOSP 里是"近距单次对焦"，我们的 CDAF
+	 *    不区分行程区间，声明了就得额外实现一套近距优先逻辑，容易出假报。 */
+	const uint8_t afModesOn[] = { ANDROID_CONTROL_AF_MODE_OFF,
+				      ANDROID_CONTROL_AF_MODE_AUTO,
+				      ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+				      ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO };
+	const uint8_t afModesOff[] = { ANDROID_CONTROL_AF_MODE_OFF };
+	add_camera_metadata_entry(m, ANDROID_CONTROL_AF_AVAILABLE_MODES,
+				  f.hasAf ? afModesOn : afModesOff, f.hasAf ? 4 : 1);
 	const uint8_t controlModes[] = { ANDROID_CONTROL_MODE_AUTO };
 	add_camera_metadata_entry(m, ANDROID_CONTROL_AVAILABLE_MODES, controlModes, 1);
 	const uint8_t sceneModes[] = { ANDROID_CONTROL_SCENE_MODE_DISABLED };
@@ -192,7 +232,7 @@ std::vector<uint8_t> buildCharacteristics(const SensorFacts &f)
 				  opticalStab, 1);
 	const float hyperfocal = 0.0f;
 	add_camera_metadata_entry(m, ANDROID_LENS_INFO_HYPERFOCAL_DISTANCE, &hyperfocal, 1);
-	const float minFocus = 0.0f;                 /* 0 = 定焦 */
+	const float minFocus = f.hasAf ? f.minFocusDiopters : 0.0f;   /* 0 = 定焦 */
 	add_camera_metadata_entry(m, ANDROID_LENS_INFO_MINIMUM_FOCUS_DISTANCE, &minFocus, 1);
 	const uint8_t focusCalib = ANDROID_LENS_INFO_FOCUS_DISTANCE_CALIBRATION_UNCALIBRATED;
 	add_camera_metadata_entry(m, ANDROID_LENS_INFO_FOCUS_DISTANCE_CALIBRATION,
@@ -295,22 +335,26 @@ std::vector<uint8_t> buildResult(const std::vector<uint8_t> &requestSettings,
 	add_camera_metadata_entry(m, ANDROID_SENSOR_TIMESTAMP, &timestampNs, 1);
 	add_camera_metadata_entry(m, ANDROID_REQUEST_PIPELINE_DEPTH, &pipelineDepth, 1);
 
-	/* 3A 状态：我们没有 AF，AE/AWB 由软件 ISP 的 IPA 在跑，
-	 * 这里如实报"已收敛"，不谎报正在搜索。 */
+	/* 3A 状态：AE/AWB 由软件 ISP 的 IPA 在跑；AF 由本 HAL 自己爬山（见 AutoFocus.cpp）。
+	 * fr.afState/lensState/focusDistance 由会话每帧填。 */
 	add_camera_metadata_entry(m, ANDROID_CONTROL_AE_STATE, &fr.aeState, 1);
 	setOrAdd(m, ANDROID_CONTROL_AE_MODE, &fr.aeMode, 1);
 	setOrAdd(m, ANDROID_FLASH_MODE, &fr.flashMode, 1);
 	const uint8_t awbState = ANDROID_CONTROL_AWB_STATE_CONVERGED;
 	add_camera_metadata_entry(m, ANDROID_CONTROL_AWB_STATE, &awbState, 1);
-	const uint8_t afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
-	add_camera_metadata_entry(m, ANDROID_CONTROL_AF_STATE, &afState, 1);
 	add_camera_metadata_entry(m, ANDROID_FLASH_STATE, &fr.flashState, 1);
 	if (fr.exposureNs > 0)
 		setOrAdd(m, ANDROID_SENSOR_EXPOSURE_TIME, &fr.exposureNs, 1);
 	if (fr.sensitivity > 0)
 		setOrAdd(m, ANDROID_SENSOR_SENSITIVITY, &fr.sensitivity, 1);
-	const uint8_t lensState = ANDROID_LENS_STATE_STATIONARY;   /* 定焦 */
-	add_camera_metadata_entry(m, ANDROID_LENS_STATE, &lensState, 1);
+
+	add_camera_metadata_entry(m, ANDROID_CONTROL_AF_STATE, &fr.afState, 1);
+	add_camera_metadata_entry(m, ANDROID_LENS_STATE, &fr.lensState, 1);
+	/* LENS_FOCUS_DISTANCE 与 AF_STATE 是同一个"对焦结果组"：
+	 * 应用（CameraX 的 FocusMeteringControl）会在收到 FOCUSED_LOCKED 时读它。
+	 * 定焦相机不写这条（保持"没有这个能力"的语义）。 */
+	if (fr.hasAf)
+		setOrAdd(m, ANDROID_LENS_FOCUS_DISTANCE, &fr.focusDistance, 1);
 
 	std::vector<uint8_t> out = pack(m);
 	free_camera_metadata(m);
@@ -333,8 +377,27 @@ std::vector<uint8_t> buildDefaultRequest(int templateId, const SensorFacts &f)
 	add_camera_metadata_entry(m, ANDROID_CONTROL_AE_MODE, &aeMode, 1);
 	const uint8_t awbMode = ANDROID_CONTROL_AWB_MODE_AUTO;
 	add_camera_metadata_entry(m, ANDROID_CONTROL_AWB_MODE, &awbMode, 1);
-	const uint8_t afMode = ANDROID_CONTROL_AF_MODE_OFF;
+	/*
+	 * AF 模式按模板给（AOSP 对模板的约定）：
+	 *   PREVIEW(1) / STILL_CAPTURE(2) / ZERO_SHUTTER_LAG(4) → CONTINUOUS_PICTURE
+	 *   VIDEO_RECORD(3) → CONTINUOUS_VIDEO
+	 *   MANUAL(5) → OFF，定焦相机也一律 OFF
+	 * ★ 为什么要给 CONTINUOUS 而不是 AUTO：应用（CameraX）默认只把模板设下来的
+	 *   模式原样用；给 AUTO 的话要等应用发 AF_TRIGGER=START 才会动，而很多应用
+	 *   在预览里根本不发。CONTINUOUS_PICTURE 才是"预览就该一直对焦"的语义。
+	 */
+	uint8_t afMode = ANDROID_CONTROL_AF_MODE_OFF;
+	if (f.hasAf) {
+		if (templateId == 3)
+			afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
+		else if (templateId != 5)
+			afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+	}
 	add_camera_metadata_entry(m, ANDROID_CONTROL_AF_MODE, &afMode, 1);
+	/* 触发器必须显式给 IDLE：框架要求默认请求里出现这个键，且 START 只在
+	 * 应用真的要单次对焦时才由它发。 */
+	const uint8_t afTrigger = ANDROID_CONTROL_AF_TRIGGER_IDLE;
+	add_camera_metadata_entry(m, ANDROID_CONTROL_AF_TRIGGER, &afTrigger, 1);
 	const uint8_t flashMode = ANDROID_FLASH_MODE_OFF;
 	add_camera_metadata_entry(m, ANDROID_FLASH_MODE, &flashMode, 1);
 	const int32_t fps[] = { 5, 15 };

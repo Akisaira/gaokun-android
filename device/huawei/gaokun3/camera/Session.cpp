@@ -11,6 +11,7 @@
 #include "Session.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
@@ -33,6 +34,12 @@
 #include <libyuv.h>
 #include <log/log.h>
 #include <sys/mman.h>
+/* ⚠️ 不要在这里直接 #include <system/camera_metadata_tags.h>！
+ * 该文件【没有 include guard】也没有 #pragma once（system/media/camera/include/system/），
+ * 而 <system/camera_metadata.h> 内部本来就 include 了它 ⇒ 再写一次就是二次包含，
+ * 立刻 20 个 "redefinition of 'camera_metadata_enum_android_control_*'"（实测：
+ * 编到 HAL 那一步才炸）。
+ * ANDROID_JPEG_ORIENTATION / ANDROID_JPEG_QUALITY 由 Metadata.h → camera_metadata.h 传递可见。 */
 #include <system/graphics.h>
 #include <ui/GraphicBufferMapper.h>
 #include <ui/Rect.h>
@@ -65,6 +72,40 @@ namespace {
 ndk::ScopedAStatus err(Status s)
 {
 	return ndk::ScopedAStatus::fromServiceSpecificError(static_cast<int32_t>(s));
+}
+
+/*
+ * Android 的 JPEG 旋转角（顺时针）→ libyuv 的 RotationMode。
+ *
+ * ★★ 这里【不需要取反】，但理由必须写下来，因为它极容易被想当然搞错：
+ *   ANDROID_JPEG_ORIENTATION 与 EXIF Orientation 都用【顺时针】；
+ *   libyuv 的 rotate.h 原文注释也是顺时针 ——
+ *     kRotate90  = 90,  // Rotate 90 degrees clockwise.
+ *     kRotate270 = 270, // Rotate 270 degrees clockwise.
+ *   而且它还留着把方向写死在名字里的历史别名：
+ *     kRotateClockwise = 90 / kRotateCounterClockwise = 270
+ *   ⇒ 直接一对一映射。
+ *   ⚠️ 别拿 OpenCV / PIL 的直觉套过来：那些库的"旋转 90"是逆时针，
+ *      照抄一遍会把前后摄一起转歪 180°。
+ *
+ * 非 0/90/180/270 的取值按"不旋转"处理并记日志 —— Android 只允许这四个值，
+ * 出现别的说明上游算错了；静默接受会得到一个随机的方向。
+ */
+libyuv::RotationMode toLibyuvRotation(int32_t deg)
+{
+	switch (deg) {
+	case 90:
+		return libyuv::kRotate90;
+	case 180:
+		return libyuv::kRotate180;
+	case 270:
+		return libyuv::kRotate270;
+	case 0:
+		return libyuv::kRotate0;
+	default:
+		ALOGW("JPEG_ORIENTATION=%d 不是 0/90/180/270，按不旋转处理", deg);
+		return libyuv::kRotate0;
+	}
 }
 } /* namespace */
 
@@ -149,20 +190,41 @@ bool Session::init()
 		ALOGE("建 FMQ 元数据队列失败");
 		return false;
 	}
+
+	/*
+	 * 对焦马达：Device 只回答"有没有"（探测到 dw9714 子设备即 hasAf），
+	 * 真正的打开放在这里 —— 有会话才需要它上电（open() 里会 streamon）。
+	 * ★ 打不开不算致命：如实降级成定焦，别让整个会话起不来。
+	 *   ⚠️ 此时 characteristics 已经声明了 AF（那是建会话之前发出去的），
+	 *      所以会短暂出现"声明有 AF 但马达不可用"——AutoFocus 拿不到马达时
+	 *      一律报 INACTIVE / STATIONARY，行为等价于定焦。
+	 */
+	if (facts_.hasAf) {
+		lens_ = std::make_unique<Lens>();
+		if (lens_->open())
+			af_.attach(lens_.get());
+		else {
+			ALOGW("声明了 AF 但打不开 VCM —— 本次会话退化为定焦");
+			lens_.reset();
+		}
+	}
 	return true;
 }
 
 ndk::ScopedAStatus Session::close()
 {
 	{
-		std::lock_guard<std::mutex> lk(mutex_);
+		std::unique_lock<std::mutex> lk(mutex_);
 		if (closed_)
 			return ndk::ScopedAStatus::ok();
 		closed_ = true;
 
 		if (streaming_) {
-			cam_->stop();
 			streaming_ = false;
+			/* 同 configureStreams：持锁 stop 会与完成回调争 mutex_ → 死锁。 */
+			lk.unlock();
+			cam_->stop();
+			lk.lock();
 		}
 		cam_->requestCompleted.disconnect(this, &Session::onRequestCompleted);
 		freeRequests_.clear();
@@ -172,6 +234,12 @@ ndk::ScopedAStatus Session::close()
 		config_.reset();
 		cam_->release();
 		setLed(false);   /* 会话结束灯必须灭，别让 torch 请求把灯留着 */
+		/* 对焦：先摘掉 AutoFocus 的句柄，再关 fd（顺序见 Session.h）。 */
+		af_.attach(nullptr);
+		if (lens_) {
+			lens_->close();
+			lens_.reset();
+		}
 		ALOGI("会话已关闭");
 	}
 	/* 在锁外通知 Device（它会拿自己的锁）。 */
@@ -183,7 +251,7 @@ ndk::ScopedAStatus Session::close()
 ndk::ScopedAStatus Session::configureStreams(const StreamConfiguration &cfg,
 					     std::vector<HalStream> *out)
 {
-	std::lock_guard<std::mutex> lk(mutex_);
+	std::unique_lock<std::mutex> lk(mutex_);
 	out->clear();
 
 	if (cfg.streams.empty())
@@ -206,8 +274,31 @@ ndk::ScopedAStatus Session::configureStreams(const StreamConfiguration &cfg,
 	}
 
 	if (streaming_) {
-		cam_->stop();
+		/*
+		 * ★★ 绝不能在【持 mutex_】时调 cam_->stop()：stop() 会把在途请求以
+		 *   RequestCancelled 撤销并触发 onRequestCompleted，而回调第一件事就是
+		 *   拿 mutex_ —— 一旦 stop() 要等回调返回，就是重入死锁。症状与实测
+		 *   完全吻合：旋转/切换后的 reconfigure 卡住十几秒 → 框架
+		 *   waitUntilIdle 超时(-110) → ERROR_CAMERA_DEVICE(CRITICAL)。
+		 *   先放锁 stop，再上锁 drain/清理。
+		 */
 		streaming_ = false;
+		lk.unlock();
+		cam_->stop();
+		lk.lock();
+		/*
+		 * 必须等 libcamera 把在途请求全部以 RequestCancelled 还回来，
+		 * 才能清理 pending_/freeRequests_。否则已释放的 Request* 还会
+		 * 被 onRequestCompleted 访问，造成 use-after-free / 请求泄漏，
+		 * 最终 waitUntilIdle 超时 → ERROR_CAMERA_DEVICE。
+		 */
+		if (!pending_.empty()) {
+			ALOGI("stop 后等待 %zu 个在途请求完成...", pending_.size());
+			bool drained = drainCv_.wait_for(lk, std::chrono::milliseconds(3000),
+							 [&] { return pending_.empty(); });
+			if (!drained)
+				ALOGW("stop 后 %zu 个在途请求仍未完成，强制清理", pending_.size());
+		}
 		freeRequests_.clear();
 		pending_.clear();
 		allocator_.reset();
@@ -256,6 +347,11 @@ ndk::ScopedAStatus Session::configureStreams(const StreamConfiguration &cfg,
 		}
 		freeRequests_.push_back(std::move(r));
 	}
+
+	ALOGI("空闲请求池已建：%zu 个（bufferCount=%d，allocator 缓冲=%zu 个）",
+	      freeRequests_.size(), sc.bufferCount, allocator_->buffers(stream_).size());
+	if (freeRequests_.empty())
+		ALOGE("★★ 池子为空：allocator 没给出任何缓冲 —— 预览必然冻结，这就是池枯竭根因");
 
 	if (cam_->start()) {
 		ALOGE("Camera::start 失败");
@@ -343,19 +439,35 @@ ndk::ScopedAStatus Session::processCaptureRequest(const std::vector<CaptureReque
 						  const std::vector<BufferCache> &cachesToRemove,
 						  int32_t *out)
 {
-	std::lock_guard<std::mutex> lk(mutex_);
+	std::unique_lock<std::mutex> lk(mutex_);
 	dropCaches(cachesToRemove);
 	*out = 0;
-	if (!streaming_)
-		return err(Status::INTERNAL_ERROR);
+	{
+		/* ── 临时诊断：请求有没有真的进来、进来时池里还剩几个 ── */
+		static std::atomic<int> diagCalls{0};
+		const int c = diagCalls.fetch_add(1);
+		if (c < 15 || c % 60 == 0)
+			ALOGI("收到请求 #%d：本批 %zu 个，空闲池=%zu，streaming=%d",
+			      c, reqs.size(), freeRequests_.size(), streaming_ ? 1 : 0);
+	}
+	if (!streaming_) {
+		/* crashfix: 非致命接受0，避免 ERROR_CAMERA_DEVICE */
+		return ndk::ScopedAStatus::ok();
+	}
 
 	for (const auto &r : reqs) {
 		if (r.outputBuffers.empty())
 			continue;
+		/* ★ 池子瞬间枯竭时【绝不拒绝】框架的请求——拒绝会让框架永远等不到
+		 *   这个结果 → waitUntilIdle 超时 → ERROR_CAMERA_DEVICE。改为等一个
+		 *   空闲请求（完成回调还回时会 notify freeCv_），最多等 ~200ms。 */
+		int waited = 0;
+		while (freeRequests_.empty() && waited < 200) {
+			freeCv_.wait_for(lk, std::chrono::milliseconds(20));
+			waited += 20;
+		}
 		if (freeRequests_.empty()) {
-			/* ⚠️ 没有空闲请求就如实返回已接受的数量，让框架回压 ——
-			 *    悄悄丢帧会让上层等一个永远不来的结果。 */
-			ALOGW("无空闲请求，已接受 %d/%zu", *out, reqs.size());
+			ALOGW("无空闲请求（等了 %dms 仍空），已接受 %d/%zu", waited, *out, reqs.size());
 			break;
 		}
 		auto lreq = std::move(freeRequests_.front());
@@ -406,6 +518,7 @@ ndk::ScopedAStatus Session::processCaptureRequest(const std::vector<CaptureReque
 		if (!importOk) {
 			/* ⚠️ 不要在这里 free：句柄归缓存所有，下一帧还要用。 */
 			freeRequests_.push_back(std::move(lreq));
+			freeCv_.notify_one();
 			break;
 		}
 
@@ -470,16 +583,39 @@ ndk::ScopedAStatus Session::processCaptureRequest(const std::vector<CaptureReque
 			p.flashMode = flashMode_;
 		}
 
+		/*
+		 * ── 对焦控制（只后摄有马达）──
+		 * ⚠️ 两个键都必须"请求里带了才动"：ANDROID_CONTROL_AF_MODE 是粘滞的
+		 *    （框架通常只在模式变化那一帧才带），而 AF_TRIGGER 只在
+		 *    START/CANCEL 那一刻出现，其余帧是 IDLE。
+		 *    用 -1 当"没带"的哨兵 —— 0 是合法值（AF_MODE_OFF /
+		 *    AF_TRIGGER_IDLE），不能用 0 兜底。
+		 */
+		if (facts_.hasAf) {
+			const int32_t afMode = requestEntryInt(p.settings, ANDROID_CONTROL_AF_MODE, -1);
+			if (afMode >= 0)
+				af_.setMode(static_cast<uint8_t>(afMode));
+			const int32_t afTrig = requestEntryInt(p.settings, ANDROID_CONTROL_AF_TRIGGER, -1);
+			if (afTrig > 0)   /* 1=START 2=CANCEL；0=IDLE 不必下发 */
+				af_.trigger(static_cast<uint8_t>(afTrig));
+		}
+
 		pending_[key] = std::move(p);
 
 		if (cam_->queueRequest(key)) {
 			ALOGE("queueRequest 失败 frame=%d", r.frameNumber);
 			pending_.erase(key);   /* 句柄归缓存，不在这里释放 */
 			freeRequests_.push_back(std::move(lreq));
+			freeCv_.notify_one();
 			break;
 		}
-		/* libcamera 持有裸指针直到完成，所以这里放掉所有权，
-		 * 完成回调里再放回 freeRequests_。 */
+		/*
+		 * ★ libcamera 从 queueRequest 起接管裸指针，完成回调里再包回
+		 *   freeRequests_（见 onRequestCompleted）。
+		 * ★ pending_ 只存簿记（键=裸指针），【不】持有 Request 所有权——
+		 *   否则 close()/configureStreams() 里的 pending_.clear() 会析构
+		 *   在途请求 → use-after-free。这条是硬约束，别再改回去。
+		 */
 		lreq.release();
 		(*out)++;
 	}
@@ -693,9 +829,13 @@ bool Session::deliver(const uint8_t *rgb, buffer_handle_t dst,
  * ⚠️ libcamera 给的是 B,G,R 顺序（formats::RGB888 → V4L2_PIX_FMT_BGR24，
  *    见 formats.cpp:185），而 libjpeg 的 JCS_EXT_BGR 正好对应它 ——
  *    用 JCS_RGB 会红蓝互换，而且不报任何错。
+ *
+ * ★★ 2026-09-19：补上 JPEG 旋转（照片方向不对的根因就在这一处）。
+ *   见下面 "旋转" 那一段的说明。
  */
 bool Session::deliverJpeg(const uint8_t *rgb, buffer_handle_t dst,
-			  int32_t dstW, int32_t dstH, int32_t blobSize, int quality)
+			  int32_t dstW, int32_t dstH, int32_t blobSize,
+			  int quality, int32_t jpegOrientation)
 {
 	auto &mapper = android::GraphicBufferMapper::get();
 	void *raw = nullptr;
@@ -707,35 +847,90 @@ bool Session::deliverJpeg(const uint8_t *rgb, buffer_handle_t dst,
 	}
 
 	/*
-	 * 源尺寸与目标不同的话先缩放。
-	 * ⚠️ libyuv **没有** RGBScale（我一开始想当然写了，编译器拦下）。
-	 *    走 RGB24 → ARGB → ARGBScale 这条：libyuv 的 "ARGB" 在内存里是
-	 *    B,G,R,A，正好对上 libjpeg 的 JCS_EXT_BGRA，不用再转回 3 通道。
+	 * ★★ 旋转：必须在【编码之前】把像素真的转过来。
+	 *
+	 *   ANDROID_JPEG_ORIENTATION 是应用按"传感器朝向 + 当前设备旋转"算出来的
+	 *   顺时针校正角。HAL 的合同是把它落到交付物上，两个合法做法二选一：
+	 *     ① 旋转像素，交付物里不要再有方向标记；
+	 *     ② 不转像素，把这个值写进 EXIF 的 Orientation 标记
+	 *        （上游 libcamera 的 Android HAL 走的就是这条：
+	 *         post_processor_jpeg.cpp 里 exif.setOrientation(jpegOrientation)）。
+	 *   本 HAL 选 ①，因为它是更强的保证 —— 不依赖看图程序是否解析 EXIF。
+	 *   ⚠️ 两者只能选一个：又转像素又写 EXIF 的旋转值 = 转两次，反而歪。
+	 *   像素已经转正，所以这里【不需要】libexif；缺 Orientation 标记 ≡ 1（正常），
+	 *   这正是我们想要的结果，别事后又去补一个别样的标记。
+	 *
+	 * ⚠️ 90/270 会把宽高换过来：流的 (dstW, dstH) 是【传感器坐标系】里的尺寸，
+	 *   转完之后 JPEG 的实际尺寸是 (dstH, dstW)。Android 允许这样 —— BLOB 流
+	 *   只声明缓冲字节数，应用自己读 JPEG 头取真实尺寸。不要为了"跟流尺寸对上"
+	 *   把宽高改回去，那就等于转了个寂寞。
 	 */
-	std::vector<uint8_t> scaled;
+	const libyuv::RotationMode rotMode = toLibyuvRotation(jpegOrientation);
+	const bool swapDims = rotMode == libyuv::kRotate90 || rotMode == libyuv::kRotate270;
+	const int32_t outW = swapDims ? dstH : dstW;
+	const int32_t outH = swapDims ? dstW : dstH;
+
+	/*
+	 * 源尺寸与目标不同就得缩放；要旋转就得先有一个 4 通道缓冲。
+	 * ⚠️ libyuv **没有** RGBScale（我一开始想当然写了，编译器拦下），
+	 *    也没有 RGB24 的旋转 —— 两条路都走 ARGB 中间体：libyuv 的 "ARGB"
+	 *    在内存里是 B,G,R,A，正好对上 libjpeg 的 JCS_EXT_BGRA，不用再转回
+	 *    3 通道，也正好对上 ARGBScale / ARGBRotate 的入参。
+	 */
+	const bool needScale = dstW != srcWidth_ || dstH != srcHeight_;
+	const bool needRotate = rotMode != libyuv::kRotate0;
+
+	std::vector<uint8_t> argb;      /* dstW×dstH，已缩放、未旋转（BGRA） */
+	std::vector<uint8_t> rotated;   /* outW×outH，已旋转（BGRA） */
 	const uint8_t *src = rgb;
 	int srcStride = srcWidth_ * 3;
 	int components = 3;
 	J_COLOR_SPACE colorSpace = JCS_EXT_BGR;   /* ★ 字节序见上面的说明 */
 
-	if (dstW != srcWidth_ || dstH != srcHeight_) {
-		std::vector<uint8_t> argbSrc(static_cast<size_t>(srcWidth_) * srcHeight_ * 4);
-		if (libyuv::RGB24ToARGB(rgb, srcStride, argbSrc.data(), srcWidth_ * 4,
-					srcWidth_, srcHeight_) != 0) {
-			ALOGE("deliverJpeg: RGB24ToARGB 失败");
-			mapper.unlock(dst);
-			return false;
+	if (needScale || needRotate) {
+		argb.resize(static_cast<size_t>(dstW) * dstH * 4);
+
+		if (needScale) {
+			std::vector<uint8_t> full(static_cast<size_t>(srcWidth_) *
+						  srcHeight_ * 4);
+			if (libyuv::RGB24ToARGB(rgb, srcWidth_ * 3, full.data(),
+						srcWidth_ * 4, srcWidth_, srcHeight_) != 0) {
+				ALOGE("deliverJpeg: RGB24ToARGB 失败");
+				mapper.unlock(dst);
+				return false;
+			}
+			if (libyuv::ARGBScale(full.data(), srcWidth_ * 4, srcWidth_,
+					      srcHeight_, argb.data(), dstW * 4, dstW, dstH,
+					      libyuv::kFilterBilinear) != 0) {
+				ALOGE("deliverJpeg: ARGBScale 失败");
+				mapper.unlock(dst);
+				return false;
+			}
+		} else {
+			if (libyuv::RGB24ToARGB(rgb, srcWidth_ * 3, argb.data(), dstW * 4,
+						dstW, dstH) != 0) {
+				ALOGE("deliverJpeg: RGB24ToARGB 失败");
+				mapper.unlock(dst);
+				return false;
+			}
 		}
-		scaled.resize(static_cast<size_t>(dstW) * dstH * 4);
-		if (libyuv::ARGBScale(argbSrc.data(), srcWidth_ * 4, srcWidth_, srcHeight_,
-				      scaled.data(), dstW * 4, dstW, dstH,
-				      libyuv::kFilterBilinear) != 0) {
-			ALOGE("deliverJpeg: ARGBScale 失败");
-			mapper.unlock(dst);
-			return false;
+
+		if (needRotate) {
+			rotated.resize(static_cast<size_t>(outW) * outH * 4);
+			/* ★ 目标 stride 用【旋转后】的宽度 outW ——
+			 *   沿用 dstW 会让每一行都错位（画面斜切成条）。 */
+			if (libyuv::ARGBRotate(argb.data(), dstW * 4, rotated.data(),
+					       outW * 4, dstW, dstH, rotMode) != 0) {
+				ALOGE("deliverJpeg: ARGBRotate(%d°) 失败", jpegOrientation);
+				mapper.unlock(dst);
+				return false;
+			}
+			src = rotated.data();
+			srcStride = outW * 4;
+		} else {
+			src = argb.data();
+			srcStride = dstW * 4;
 		}
-		src = scaled.data();
-		srcStride = dstW * 4;
 		components = 4;
 		colorSpace = JCS_EXT_BGRA;
 	}
@@ -751,8 +946,8 @@ bool Session::deliverJpeg(const uint8_t *rgb, buffer_handle_t dst,
 	unsigned long outSize = maxJpeg;
 	jpeg_mem_dest(&cinfo, &out, &outSize);
 
-	cinfo.image_width = dstW;
-	cinfo.image_height = dstH;
+	cinfo.image_width = outW;
+	cinfo.image_height = outH;
 	cinfo.input_components = components;
 	cinfo.in_color_space = colorSpace;
 	jpeg_set_defaults(&cinfo);
@@ -779,7 +974,8 @@ bool Session::deliverJpeg(const uint8_t *rgb, buffer_handle_t dst,
 		memcpy(static_cast<uint8_t *>(raw) + blobSize - sizeof(CameraBlob),
 		       &blob, sizeof(CameraBlob));
 		ok = true;
-		ALOGD("JPEG %dx%d 质量%d → %zu 字节", dstW, dstH, quality, jpegLen);
+		ALOGD("JPEG %dx%d（请求 %dx%d，旋转 %d°）质量%d → %zu 字节",
+		      outW, outH, dstW, dstH, jpegOrientation, quality, jpegLen);
 	} else {
 		ALOGE("deliverJpeg: JPEG 长度异常 %zu（上限 %zu）", jpegLen, maxJpeg);
 	}
@@ -879,19 +1075,62 @@ void Session::boxBlurPlane(uint8_t *plane, int w, int h, int stride, int radius)
 
 void Session::onRequestCompleted(libcamera::Request *req)
 {
-	if (req->status() == libcamera::Request::RequestCancelled)
+	/*
+	 * ★ 所有权模型（别再改）：idle 时 Request 归 freeRequests_；queueRequest
+	 *   之后由 libcamera 持有裸指针；本回调收到时 libcamera 已交还，包回
+	 *   unique_ptr 放进 owned，函数最后一定还回 freeRequests_。任何 return
+	 *   路径都不能把请求弄丢，否则池子枯竭 → 设备永远 busy → waitUntilIdle
+	 *   超时 → ERROR_CAMERA_DEVICE。
+	 */
+	std::unique_ptr<libcamera::Request> owned;
+	{
+		/* ── 临时诊断：确认完成回调到底有没有在跑 ── */
+		static std::atomic<int> diagDone{0};
+		const int c = diagDone.fetch_add(1);
+		if (c < 15 || c % 60 == 0)
+			ALOGI("完成回调 #%d：seq=%u status=%d 空闲池=%zu",
+			      c, req->sequence(), static_cast<int>(req->status()),
+			      freeRequests_.size());
+	}
+
+	if (req->status() == libcamera::Request::RequestCancelled) {
+		std::lock_guard<std::mutex> lk(mutex_);
+		/*
+		 * ★ pending_ 只持有 key=原始指针 + Pending(簿记)，不拥有 Request 本身；
+		 *   Request 的所有权一直在 freeRequests_（deque<unique_ptr>）。
+		 *   所以这里只是从 pending_ 清掉簿记，再把 raw req 包回 freeRequests_。
+		 *   （之前一处误把 it->second(Pending) 当 unique_ptr 还回，编译不过。）
+		 */
+		auto it = pending_.find(req);
+		if (it != pending_.end())
+			pending_.erase(it);
+		/* Request 的所有权从 libcamera 交还给我们：包回 unique_ptr 还池。
+		 * ★ 绝不能写 it->second.req —— pending_ 不拥有 Request。 */
+		owned = std::unique_ptr<libcamera::Request>(req);
+		freeRequests_.push_back(std::move(owned));
+		freeCv_.notify_one();
+		drainCv_.notify_all();
 		return;
+	}
 
 	Pending pend;
 	{
 		std::lock_guard<std::mutex> lk(mutex_);
 		auto it = pending_.find(req);
 		if (it == pending_.end()) {
+			/* 兜底：不在 pending_ 中（可能已被 reconfigure 清掉），
+			 * 直接把裸指针包回，绝不放飞导致池枯竭。 */
 			ALOGW("完成了一个不认识的请求 %p", (void *)req);
-			return;
+			owned = std::unique_ptr<libcamera::Request>(req);
+		} else {
+			/* libcamera 完成时已把 Request 交还；包回所有权，再取走簿记。
+			 * ★ 同 RequestCancelled：pending_ 不拥有 Request。 */
+			owned = std::unique_ptr<libcamera::Request>(req);
+			pend = std::move(it->second);
+			pending_.erase(it);
+			if (pending_.empty())
+				drainCv_.notify_all();
 		}
-		pend = std::move(it->second);
-		pending_.erase(it);
 	}
 
 	/*
@@ -905,7 +1144,8 @@ void Session::onRequestCompleted(libcamera::Request *req)
 	if (req->buffers().empty()) {
 		ALOGE("完成的请求里没有 buffer");
 		std::lock_guard<std::mutex> lk(mutex_);
-		freeRequests_.push_back(std::unique_ptr<libcamera::Request>(req));
+		freeRequests_.push_back(std::move(owned));
+		freeCv_.notify_one();
 		return;
 	}
 	const libcamera::FrameBuffer *fb = req->buffers().begin()->second;
@@ -933,7 +1173,9 @@ void Session::onRequestCompleted(libcamera::Request *req)
 	}
 
 	/* 采样平均亮度（每 16 行 × 每 16 列），给 AUTO 闪光当"太暗"判据。软件 ISP 的 IPA
-	 * 不往结果元数据里写曝光/增益，这是我们唯一现成的亮度信号。 */
+	 * 不往结果元数据里写曝光/增益，这是我们唯一现成的亮度信号。
+	 * ★ 同一个信号还给自动对焦当"AE 已收敛"判据（见 AutoFocus.h 的 sceneStable）。 */
+	int lumaStableFor = 0;
 	if (rgb) {
 		uint64_t sum = 0;
 		uint32_t n = 0;
@@ -949,8 +1191,18 @@ void Session::onRequestCompleted(libcamera::Request *req)
 			std::lock_guard<std::mutex> lk(mutex_);
 			lumaStable_ = (std::abs(luma - lastLuma_) < kLumaStableDelta) ? lumaStable_ + 1 : 0;
 			lastLuma_ = luma;
+			lumaStableFor = lumaStable_;
 		}
 	}
+
+	/*
+	 * ── 自动对焦：喂这一帧的清晰度，必要时把马达挪一步（见 AutoFocus.cpp）──
+	 * ★ 时机的关键：这里挪位置，下一帧的请求是在 processCaptureRequest 里入队的，
+	 *   到那时新位置已经写进马达，所以"下一帧的分数"确实属于新位置 —— 等价于
+	 *   每帧采一个点。软件 ISP 每帧 70–130 ms，一次粗到细搜索约 1.2–2.4 s。
+	 */
+	if (rgb && facts_.hasAf)
+		af_.onFrame(rgb, srcWidth_, srcHeight_, lumaStableFor >= 2);
 
 	/* libcamera（libipa 的 Agc::fillMetadata）每帧报实际曝光与模拟增益：回填结果、驱动降噪强度与闪光判据。 */
 	int64_t exposureNs = 0;
@@ -998,11 +1250,28 @@ void Session::onRequestCompleted(libcamera::Request *req)
 	msgs.push_back(std::move(msg));
 	cb_->notify(msgs);
 
+	/*
+	 * ★★ 拍照参数来自【这一帧的请求】，不是静态元数据。
+	 *   ANDROID_JPEG_ORIENTATION = 应用按"传感器朝向 + 当前设备旋转"算好的
+	 *     顺时针校正角；ANDROID_JPEG_QUALITY = 它要的质量。
+	 *   老代码这两个一个都没读（质量恒 90、方向恒 0）—— 这正是"前后摄照片
+	 *   都固定歪一个角度"的直接原因：不管用户怎么拿机器，JPEG 永远是传感器
+	 *   原始朝向。两条请求键都取不到时退回 0 / 90，行为与修前一致。
+	 */
+	const int32_t jpegOrientation =
+		requestEntryInt(pend.settings, ANDROID_JPEG_ORIENTATION, 0);
+	int32_t jpegQuality = requestEntryInt(pend.settings, ANDROID_JPEG_QUALITY, 90);
+	/* libjpeg 只认 1..100；应用给 0 或越界时夹住，别让它产出垃圾。 */
+	if (jpegQuality < 1)
+		jpegQuality = 1;
+	if (jpegQuality > 100)
+		jpegQuality = 100;
+
 	std::vector<bool> okv;
 	for (auto &pb : pend.buffers) {
 		bool ok = rgb && (pb.isBlob
 				  ? deliverJpeg(rgbStill, pb.handle, pb.width, pb.height,
-						pb.blobSize, /*quality=*/90)
+						pb.blobSize, jpegQuality, jpegOrientation)
 				  : deliver(rgb, pb.handle, pb.width, pb.height, chromaBlur));
 		okv.push_back(ok);
 		if (!ok) {
@@ -1054,7 +1323,10 @@ void Session::onRequestCompleted(libcamera::Request *req)
 	/* 到这里才用完 req，可以还回空闲池了（见上面的说明）。 */
 	{
 		std::lock_guard<std::mutex> lk(mutex_);
-		freeRequests_.push_back(std::unique_ptr<libcamera::Request>(req));
+		freeRequests_.push_back(std::move(owned));
+		freeCv_.notify_one();
+		if (freeRequests_.empty())
+			ALOGW("⚠️ 归还后空闲池仍为空：请求可能已枯竭，预览将冻结");
 		/* 闪光灯：点过灯的请求都完成了、而且没人还要灯，才灭。 */
 		if (pend.endsFlash)
 			flashArmed_ = false;

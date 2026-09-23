@@ -1,0 +1,1809 @@
+diff --git a/device/huawei/gaokun3/camera/Device.cpp b/device/huawei/gaokun3/camera/Device.cpp
+index bfeb751..9b1ef2b 100644
+--- a/device/huawei/gaokun3/camera/Device.cpp
++++ b/device/huawei/gaokun3/camera/Device.cpp
+@@ -3,9 +3,12 @@
+ #include "Provider.h"
+ #include "Session.h"
+ 
++#include <cstdlib>
+ #include <fcntl.h>
+ #include <unistd.h>
+ 
++#include <sys/system_properties.h>   /* __system_property_get：仅用于方向标定的调试覆盖 */
++
+ #include <aidl/android/hardware/camera/common/CameraResourceCost.h>
+ #include <aidl/android/hardware/camera/common/Status.h>
+ #include <aidl/android/hardware/camera/common/TorchModeStatus.h>
+@@ -108,8 +111,76 @@ bool Device::init()
+ 	/* ── 朝向 ── */
+ 	auto loc = props.get(libcamera::properties::Location);
+ 	facts_.frontFacing = !loc || *loc == libcamera::properties::CameraLocationFront;
++
++	/*
++	 * ⚠️★★ 两个"方向"的约定是【相反的】，直接抄数值会差 180°。
++	 *
++	 *   libcamera properties::Rotation = 传感器相对机身的【物理安装角】，
++	 *     用【逆时针】表达（property_ids 原文："the angular difference in the
++	 *     counter-clockwise direction between the camera reference system 'Rc'
++	 *     and the projected scene reference system 'Rp'"；内核
++	 *     Documentation/devicetree/bindings/media/video-interface-devices.yaml
++	 *     的 rotation 属性是同一套文字，libcamera 从这里继承 ——
++	 *     camera_sensor_legacy.cpp 读的就是 V4L2_CID_CAMERA_SENSOR_ROTATION，
++	 *     而那个控件由驱动 v4l2_ctrl_new_fwnode_properties() 从设备树填）。
++	 *
++	 *   ANDROID_SENSOR_ORIENTATION = 把输出图像转正所需的【顺时针】角。
++	 *
++	 *   ⇒ android = (360 - rotation) % 360。上游 libcamera 自己的 Android HAL
++	 *     就是这么算的（src/android/camera_device.cpp）：
++	 *       "The Android orientation metadata specifies its rotation correction
++	 *        value in clockwise direction whereas libcamera specifies the
++	 *        rotation property in anticlockwise direction."
++	 *
++	 *   ⚠️ 本机目前两个相机的 rotation 都是 0 或 180 —— 这两个值互为反数，
++	 *      所以这条 bug 现在是【隐性】的；但只要设备树里的 rotation 改成
++	 *      90 或 270（后摄那行本来就标着 FIXME 待核），立刻差 180°。
++	 */
+ 	auto rot = props.get(libcamera::properties::Rotation);
+-	facts_.orientation = rot ? *rot : 0;
++	const int32_t rawRotation = rot ? *rot : 0;
++	if (!rot)
++		ALOGW("libcamera 没报 Rotation 属性，按 0° 处理"
++		      "（到 /dev/v4l-subdev* 上查 camera_sensor_rotation 控件）");
++	int32_t ccw = ((rawRotation % 360) + 360) % 360;
++
++	/*
++	 * ★ 调试覆盖：用系统属性顶掉设备树的值，省掉标定时的
++	 *   「改设备树 → 重编内核 → 刷机 → 重启」循环。
++	 *
++	 *   为什么必须留这个口子：设备树里的 rotation 经驱动
++	 *   v4l2_ctrl_new_fwnode_properties() 变成 V4L2_CID_CAMERA_SENSOR_ROTATION，
++	 *   而那个控件 min==max==def，是【只读】的 —— 运行时 v4l2-ctl 改不动它，
++	 *   每次试一个角都要重来一遍内核。而设备树里现存的两个值（前摄 0、
++	 *   后摄 180）本来就都不可信。
++	 *
++	 *   ⚠️ 属性给的数就是【写进设备树的那个数】（同一个约定，不用再换算），
++	 *      免得标定时多做一次 360-x 的心算：
++	 *        setprop debug.gaokun3.camera.orientation.rear 270
++	 *      标定完把属性清空，并把值写进设备树 —— 正确的位置是设备树。
++	 *      步骤见 docs/camera-photo-rotation-2026-09-19.md。
++	 */
++	const char *prop = facts_.frontFacing
++				   ? "debug.gaokun3.camera.orientation.front"
++				   : "debug.gaokun3.camera.orientation.rear";
++	char propVal[PROP_VALUE_MAX] = {};
++	if (__system_property_get(prop, propVal) > 0) {
++		const int32_t v = atoi(propVal);
++		if (v == 0 || v == 90 || v == 180 || v == 270) {
++			ALOGW("%s 方向被属性覆盖：%s=%d（设备树报的是 %d）—— 仅调试用",
++			      name_.c_str(), prop, v, rawRotation);
++			ccw = v;
++		} else {
++			ALOGW("%s 属性 %s=\"%s\" 不是 0/90/180/270，忽略",
++			      name_.c_str(), prop, propVal);
++		}
++	}
++
++	if (ccw % 90 != 0) {
++		ALOGW("Rotation=%d 不是 90 的整数倍，按 0° 处理（Android 只认 0/90/180/270）",
++		      rawRotation);
++		ccw = 0;
++	}
++	facts_.orientation = (360 - ccw) % 360;
+ 
+ 	/*
+ 	 * ── 闪光灯（#110）──
+@@ -144,9 +215,9 @@ bool Device::init()
+ 		return false;
+ 	}
+ 
+-	ALOGI("%s 就绪：阵列 %dx%d 有效 %dx%d 朝向 %d %s%s",
++	ALOGI("%s 就绪：阵列 %dx%d 有效 %dx%d 朝向 %d（libcamera rotation=%d，逆时针） %s%s",
+ 	      name_.c_str(), facts_.pixelArrayW, facts_.pixelArrayH,
+-	      facts_.activeW, facts_.activeH, facts_.orientation,
++	      facts_.activeW, facts_.activeH, facts_.orientation, rawRotation,
+ 	      facts_.frontFacing ? "前摄" : "后摄",
+ 	      facts_.flashLed.empty() ? "" : "（带闪光灯）");
+ 	return true;
+diff --git a/device/huawei/gaokun3/camera/Metadata.cpp b/device/huawei/gaokun3/camera/Metadata.cpp
+index 886dffa..e811db3 100644
+--- a/device/huawei/gaokun3/camera/Metadata.cpp
++++ b/device/huawei/gaokun3/camera/Metadata.cpp
+@@ -29,6 +29,32 @@ std::vector<uint8_t> pack(const camera_metadata_t *m)
+ 	return out;
+ }
+ 
++int32_t requestEntryInt(const std::vector<uint8_t> &requestSettings,
++			uint32_t tag, int32_t def)
++{
++	if (requestSettings.empty())
++		return def;
++
++	/* ★ CameraMetadata.aidl 原文：这就是 camera_metadata_t 的序列化 blob，
++	 *   可以就地当成 camera_metadata* 用（与 buildResult() 同一手法）。 */
++	const camera_metadata_t *m =
++		reinterpret_cast<const camera_metadata_t *>(requestSettings.data());
++	camera_metadata_ro_entry_t e;
++	if (find_camera_metadata_ro_entry(m, tag, &e) != 0)
++		return def;
++
++	if (e.count == 0)
++		return def;
++	if (e.type == TYPE_INT32)
++		return e.data.i32[0];
++	if (e.type == TYPE_BYTE)
++		return e.data.u8[0];
++
++	ALOGW("请求里的 tag %u 类型是 %d，不是整数类型 —— 用默认值 %d",
++	      tag, static_cast<int>(e.type), def);
++	return def;
++}
++
+ namespace {
+ 
+ /* 我们对外声明支持的像素格式。
+diff --git a/device/huawei/gaokun3/camera/Metadata.h b/device/huawei/gaokun3/camera/Metadata.h
+index 93ec415..3cac6a0 100644
+--- a/device/huawei/gaokun3/camera/Metadata.h
++++ b/device/huawei/gaokun3/camera/Metadata.h
+@@ -62,6 +62,17 @@ std::vector<uint8_t> buildResult(const std::vector<uint8_t> &requestSettings,
+ /* RequestTemplate → 默认请求设置。 */
+ std::vector<uint8_t> buildDefaultRequest(int templateId, const SensorFacts &f);
+ 
++/*
++ * 从【请求设置】里读一个整型条目，读不到就给 def。
++ *
++ * ★ 必要性：JPEG 的旋转角与质量是【应用】在每一帧的请求里给的
++ *   （ANDROID_JPEG_ORIENTATION / ANDROID_JPEG_QUALITY），HAL 必须自己取。
++ *   类型不匹配时返回 def 而不是硬转 —— ANDROID_JPEG_QUALITY 是 byte、
++ *   ANDROID_JPEG_ORIENTATION 是 int32，读错类型会读出垃圾值。
++ */
++int32_t requestEntryInt(const std::vector<uint8_t> &requestSettings,
++			uint32_t tag, int32_t def);
++
+ /* 小工具：把 camera_metadata_t 打包成字节。 */
+ std::vector<uint8_t> pack(const camera_metadata_t *m);
+ 
+diff --git a/device/huawei/gaokun3/camera/Session.cpp b/device/huawei/gaokun3/camera/Session.cpp
+index fe02a85..28a29c7 100644
+--- a/device/huawei/gaokun3/camera/Session.cpp
++++ b/device/huawei/gaokun3/camera/Session.cpp
+@@ -33,6 +33,12 @@
+ #include <libyuv.h>
+ #include <log/log.h>
+ #include <sys/mman.h>
++/* ⚠️ 不要在这里直接 #include <system/camera_metadata_tags.h>！
++ * 该文件【没有 include guard】也没有 #pragma once（system/media/camera/include/system/），
++ * 而 <system/camera_metadata.h> 内部本来就 include 了它 ⇒ 再写一次就是二次包含，
++ * 立刻 20 个 "redefinition of 'camera_metadata_enum_android_control_*'"（实测：
++ * 编到 HAL 那一步才炸）。
++ * ANDROID_JPEG_ORIENTATION / ANDROID_JPEG_QUALITY 由 Metadata.h → camera_metadata.h 传递可见。 */
+ #include <system/graphics.h>
+ #include <ui/GraphicBufferMapper.h>
+ #include <ui/Rect.h>
+@@ -66,6 +72,40 @@ ndk::ScopedAStatus err(Status s)
+ {
+ 	return ndk::ScopedAStatus::fromServiceSpecificError(static_cast<int32_t>(s));
+ }
++
++/*
++ * Android 的 JPEG 旋转角（顺时针）→ libyuv 的 RotationMode。
++ *
++ * ★★ 这里【不需要取反】，但理由必须写下来，因为它极容易被想当然搞错：
++ *   ANDROID_JPEG_ORIENTATION 与 EXIF Orientation 都用【顺时针】；
++ *   libyuv 的 rotate.h 原文注释也是顺时针 ——
++ *     kRotate90  = 90,  // Rotate 90 degrees clockwise.
++ *     kRotate270 = 270, // Rotate 270 degrees clockwise.
++ *   而且它还留着把方向写死在名字里的历史别名：
++ *     kRotateClockwise = 90 / kRotateCounterClockwise = 270
++ *   ⇒ 直接一对一映射。
++ *   ⚠️ 别拿 OpenCV / PIL 的直觉套过来：那些库的"旋转 90"是逆时针，
++ *      照抄一遍会把前后摄一起转歪 180°。
++ *
++ * 非 0/90/180/270 的取值按"不旋转"处理并记日志 —— Android 只允许这四个值，
++ * 出现别的说明上游算错了；静默接受会得到一个随机的方向。
++ */
++libyuv::RotationMode toLibyuvRotation(int32_t deg)
++{
++	switch (deg) {
++	case 90:
++		return libyuv::kRotate90;
++	case 180:
++		return libyuv::kRotate180;
++	case 270:
++		return libyuv::kRotate270;
++	case 0:
++		return libyuv::kRotate0;
++	default:
++		ALOGW("JPEG_ORIENTATION=%d 不是 0/90/180/270，按不旋转处理", deg);
++		return libyuv::kRotate0;
++	}
++}
+ } /* namespace */
+ 
+ Session::Session(std::shared_ptr<libcamera::Camera> cam, SensorFacts facts,
+@@ -693,9 +733,13 @@ bool Session::deliver(const uint8_t *rgb, buffer_handle_t dst,
+  * ⚠️ libcamera 给的是 B,G,R 顺序（formats::RGB888 → V4L2_PIX_FMT_BGR24，
+  *    见 formats.cpp:185），而 libjpeg 的 JCS_EXT_BGR 正好对应它 ——
+  *    用 JCS_RGB 会红蓝互换，而且不报任何错。
++ *
++ * ★★ 2026-09-19：补上 JPEG 旋转（照片方向不对的根因就在这一处）。
++ *   见下面 "旋转" 那一段的说明。
+  */
+ bool Session::deliverJpeg(const uint8_t *rgb, buffer_handle_t dst,
+-			  int32_t dstW, int32_t dstH, int32_t blobSize, int quality)
++			  int32_t dstW, int32_t dstH, int32_t blobSize,
++			  int quality, int32_t jpegOrientation)
+ {
+ 	auto &mapper = android::GraphicBufferMapper::get();
+ 	void *raw = nullptr;
+@@ -707,35 +751,90 @@ bool Session::deliverJpeg(const uint8_t *rgb, buffer_handle_t dst,
+ 	}
+ 
+ 	/*
+-	 * 源尺寸与目标不同的话先缩放。
+-	 * ⚠️ libyuv **没有** RGBScale（我一开始想当然写了，编译器拦下）。
+-	 *    走 RGB24 → ARGB → ARGBScale 这条：libyuv 的 "ARGB" 在内存里是
+-	 *    B,G,R,A，正好对上 libjpeg 的 JCS_EXT_BGRA，不用再转回 3 通道。
++	 * ★★ 旋转：必须在【编码之前】把像素真的转过来。
++	 *
++	 *   ANDROID_JPEG_ORIENTATION 是应用按"传感器朝向 + 当前设备旋转"算出来的
++	 *   顺时针校正角。HAL 的合同是把它落到交付物上，两个合法做法二选一：
++	 *     ① 旋转像素，交付物里不要再有方向标记；
++	 *     ② 不转像素，把这个值写进 EXIF 的 Orientation 标记
++	 *        （上游 libcamera 的 Android HAL 走的就是这条：
++	 *         post_processor_jpeg.cpp 里 exif.setOrientation(jpegOrientation)）。
++	 *   本 HAL 选 ①，因为它是更强的保证 —— 不依赖看图程序是否解析 EXIF。
++	 *   ⚠️ 两者只能选一个：又转像素又写 EXIF 的旋转值 = 转两次，反而歪。
++	 *   像素已经转正，所以这里【不需要】libexif；缺 Orientation 标记 ≡ 1（正常），
++	 *   这正是我们想要的结果，别事后又去补一个别样的标记。
++	 *
++	 * ⚠️ 90/270 会把宽高换过来：流的 (dstW, dstH) 是【传感器坐标系】里的尺寸，
++	 *   转完之后 JPEG 的实际尺寸是 (dstH, dstW)。Android 允许这样 —— BLOB 流
++	 *   只声明缓冲字节数，应用自己读 JPEG 头取真实尺寸。不要为了"跟流尺寸对上"
++	 *   把宽高改回去，那就等于转了个寂寞。
++	 */
++	const libyuv::RotationMode rotMode = toLibyuvRotation(jpegOrientation);
++	const bool swapDims = rotMode == libyuv::kRotate90 || rotMode == libyuv::kRotate270;
++	const int32_t outW = swapDims ? dstH : dstW;
++	const int32_t outH = swapDims ? dstW : dstH;
++
++	/*
++	 * 源尺寸与目标不同就得缩放；要旋转就得先有一个 4 通道缓冲。
++	 * ⚠️ libyuv **没有** RGBScale（我一开始想当然写了，编译器拦下），
++	 *    也没有 RGB24 的旋转 —— 两条路都走 ARGB 中间体：libyuv 的 "ARGB"
++	 *    在内存里是 B,G,R,A，正好对上 libjpeg 的 JCS_EXT_BGRA，不用再转回
++	 *    3 通道，也正好对上 ARGBScale / ARGBRotate 的入参。
+ 	 */
+-	std::vector<uint8_t> scaled;
++	const bool needScale = dstW != srcWidth_ || dstH != srcHeight_;
++	const bool needRotate = rotMode != libyuv::kRotate0;
++
++	std::vector<uint8_t> argb;      /* dstW×dstH，已缩放、未旋转（BGRA） */
++	std::vector<uint8_t> rotated;   /* outW×outH，已旋转（BGRA） */
+ 	const uint8_t *src = rgb;
+ 	int srcStride = srcWidth_ * 3;
+ 	int components = 3;
+ 	J_COLOR_SPACE colorSpace = JCS_EXT_BGR;   /* ★ 字节序见上面的说明 */
+ 
+-	if (dstW != srcWidth_ || dstH != srcHeight_) {
+-		std::vector<uint8_t> argbSrc(static_cast<size_t>(srcWidth_) * srcHeight_ * 4);
+-		if (libyuv::RGB24ToARGB(rgb, srcStride, argbSrc.data(), srcWidth_ * 4,
+-					srcWidth_, srcHeight_) != 0) {
+-			ALOGE("deliverJpeg: RGB24ToARGB 失败");
+-			mapper.unlock(dst);
+-			return false;
++	if (needScale || needRotate) {
++		argb.resize(static_cast<size_t>(dstW) * dstH * 4);
++
++		if (needScale) {
++			std::vector<uint8_t> full(static_cast<size_t>(srcWidth_) *
++						  srcHeight_ * 4);
++			if (libyuv::RGB24ToARGB(rgb, srcWidth_ * 3, full.data(),
++						srcWidth_ * 4, srcWidth_, srcHeight_) != 0) {
++				ALOGE("deliverJpeg: RGB24ToARGB 失败");
++				mapper.unlock(dst);
++				return false;
++			}
++			if (libyuv::ARGBScale(full.data(), srcWidth_ * 4, srcWidth_,
++					      srcHeight_, argb.data(), dstW * 4, dstW, dstH,
++					      libyuv::kFilterBilinear) != 0) {
++				ALOGE("deliverJpeg: ARGBScale 失败");
++				mapper.unlock(dst);
++				return false;
++			}
++		} else {
++			if (libyuv::RGB24ToARGB(rgb, srcWidth_ * 3, argb.data(), dstW * 4,
++						dstW, dstH) != 0) {
++				ALOGE("deliverJpeg: RGB24ToARGB 失败");
++				mapper.unlock(dst);
++				return false;
++			}
+ 		}
+-		scaled.resize(static_cast<size_t>(dstW) * dstH * 4);
+-		if (libyuv::ARGBScale(argbSrc.data(), srcWidth_ * 4, srcWidth_, srcHeight_,
+-				      scaled.data(), dstW * 4, dstW, dstH,
+-				      libyuv::kFilterBilinear) != 0) {
+-			ALOGE("deliverJpeg: ARGBScale 失败");
+-			mapper.unlock(dst);
+-			return false;
++
++		if (needRotate) {
++			rotated.resize(static_cast<size_t>(outW) * outH * 4);
++			/* ★ 目标 stride 用【旋转后】的宽度 outW ——
++			 *   沿用 dstW 会让每一行都错位（画面斜切成条）。 */
++			if (libyuv::ARGBRotate(argb.data(), dstW * 4, rotated.data(),
++					       outW * 4, dstW, dstH, rotMode) != 0) {
++				ALOGE("deliverJpeg: ARGBRotate(%d°) 失败", jpegOrientation);
++				mapper.unlock(dst);
++				return false;
++			}
++			src = rotated.data();
++			srcStride = outW * 4;
++		} else {
++			src = argb.data();
++			srcStride = dstW * 4;
+ 		}
+-		src = scaled.data();
+-		srcStride = dstW * 4;
+ 		components = 4;
+ 		colorSpace = JCS_EXT_BGRA;
+ 	}
+@@ -751,8 +850,8 @@ bool Session::deliverJpeg(const uint8_t *rgb, buffer_handle_t dst,
+ 	unsigned long outSize = maxJpeg;
+ 	jpeg_mem_dest(&cinfo, &out, &outSize);
+ 
+-	cinfo.image_width = dstW;
+-	cinfo.image_height = dstH;
++	cinfo.image_width = outW;
++	cinfo.image_height = outH;
+ 	cinfo.input_components = components;
+ 	cinfo.in_color_space = colorSpace;
+ 	jpeg_set_defaults(&cinfo);
+@@ -779,7 +878,8 @@ bool Session::deliverJpeg(const uint8_t *rgb, buffer_handle_t dst,
+ 		memcpy(static_cast<uint8_t *>(raw) + blobSize - sizeof(CameraBlob),
+ 		       &blob, sizeof(CameraBlob));
+ 		ok = true;
+-		ALOGD("JPEG %dx%d 质量%d → %zu 字节", dstW, dstH, quality, jpegLen);
++		ALOGD("JPEG %dx%d（请求 %dx%d，旋转 %d°）质量%d → %zu 字节",
++		      outW, outH, dstW, dstH, jpegOrientation, quality, jpegLen);
+ 	} else {
+ 		ALOGE("deliverJpeg: JPEG 长度异常 %zu（上限 %zu）", jpegLen, maxJpeg);
+ 	}
+@@ -998,11 +1098,28 @@ void Session::onRequestCompleted(libcamera::Request *req)
+ 	msgs.push_back(std::move(msg));
+ 	cb_->notify(msgs);
+ 
++	/*
++	 * ★★ 拍照参数来自【这一帧的请求】，不是静态元数据。
++	 *   ANDROID_JPEG_ORIENTATION = 应用按"传感器朝向 + 当前设备旋转"算好的
++	 *     顺时针校正角；ANDROID_JPEG_QUALITY = 它要的质量。
++	 *   老代码这两个一个都没读（质量恒 90、方向恒 0）—— 这正是"前后摄照片
++	 *   都固定歪一个角度"的直接原因：不管用户怎么拿机器，JPEG 永远是传感器
++	 *   原始朝向。两条请求键都取不到时退回 0 / 90，行为与修前一致。
++	 */
++	const int32_t jpegOrientation =
++		requestEntryInt(pend.settings, ANDROID_JPEG_ORIENTATION, 0);
++	int32_t jpegQuality = requestEntryInt(pend.settings, ANDROID_JPEG_QUALITY, 90);
++	/* libjpeg 只认 1..100；应用给 0 或越界时夹住，别让它产出垃圾。 */
++	if (jpegQuality < 1)
++		jpegQuality = 1;
++	if (jpegQuality > 100)
++		jpegQuality = 100;
++
+ 	std::vector<bool> okv;
+ 	for (auto &pb : pend.buffers) {
+ 		bool ok = rgb && (pb.isBlob
+ 				  ? deliverJpeg(rgbStill, pb.handle, pb.width, pb.height,
+-						pb.blobSize, /*quality=*/90)
++						pb.blobSize, jpegQuality, jpegOrientation)
+ 				  : deliver(rgb, pb.handle, pb.width, pb.height, chromaBlur));
+ 		okv.push_back(ok);
+ 		if (!ok) {
+diff --git a/device/huawei/gaokun3/camera/Session.h b/device/huawei/gaokun3/camera/Session.h
+index 3ade59d..e8a8bcd 100644
+--- a/device/huawei/gaokun3/camera/Session.h
++++ b/device/huawei/gaokun3/camera/Session.h
+@@ -94,10 +94,15 @@ private:
+ 	 * 必要时缩放到该路流自己的尺寸。 */
+ 	bool deliver(const uint8_t *rgb, buffer_handle_t dst,
+ 		     int32_t dstW, int32_t dstH, int chromaBlur);
+-	/* JPEG 流：把 RGB 编码成 JPEG 写进 BLOB 缓冲。 */
++	/*
++	 * JPEG 流：把 RGB 编码成 JPEG 写进 BLOB 缓冲。
++	 * jpegOrientation 是应用给的【顺时针】校正角（ANDROID_JPEG_ORIENTATION）。
++	 * ⚠️ 90/270 时交付的 JPEG 实际宽高与流声明的 (dstW, dstH) 互换 ——
++	 *    BLOB 流只声明缓冲字节数，这是 Android 允许且常见的行为。
++	 */
+ 	bool deliverJpeg(const uint8_t *rgb, buffer_handle_t dst,
+ 			 int32_t dstW, int32_t dstH, int32_t blobSize,
+-			 int quality);
++			 int quality, int32_t jpegOrientation);
+ 
+ 	/*
+ 	 * ── 闪光灯（#110 / #111）──
+diff --git a/docs/TODO.md b/docs/TODO.md
+index 16493c3..0a02e8e 100644
+--- a/docs/TODO.md
++++ b/docs/TODO.md
+@@ -630,7 +630,11 @@ hi846 的完整控件表在 [#81](stage4-findings.md) 第六节。
+ 轨亮着时扫总线 0x36/0x50 应答。`patches/0032`（DT）+ `0034`（ov13b10 OF 匹配 + 板级上电）+ `VIDEO_DW9714=y`
+ 之后：47 个 subdev、`camtest --rear` 出 2104×1560 帧、HAL 枚举 2 个相机。内核 `#19`（+0035 回落 +0036 闪光）在 `slot_cam5`，两路验收全过（[#110](stage4-findings.md)）。
+ ⬜ 应用层实测；⬜ libcamera：`camera_sensor_properties` 加 ov13b10、增益模型 helper、`ov13b10.yaml`；
+-⬜ 上游 `ov13b10.c` 补 `get_selection`；⬜ 读 EEPROM@0x50（模组标定）；⬜ `rotation` FIXME；
++⬜ 上游 `ov13b10.c` 补 `get_selection`；⬜ 读 EEPROM@0x50（模组标定）；
++⬜ **`rotation` FIXME —— 2026-09-19：这条已成"照片方向"的最后一环。**
++HAL 侧的 JPEG 旋转与朝向换算都已修好（见 [camera-photo-rotation-2026-09-19.md](camera-photo-rotation-2026-09-19.md)），
++照片方向现在**完全由设备树这两个 `rotation` 值决定**，而它们恰恰是猜的。
++标定用 `setprop debug.gaokun3.camera.orientation.{front,rear}`（该文档第六节）；实机已量出前摄 270 / 后摄 0。
+ ✅ 稳健性：`patches/0035` —— 某颗传感器 20 s 没绑上就只带绑上的完成 notifier；`ov13b10.fail_probe=1` 实测前摄照常（45 个 subdev，[#110](stage4-findings.md)）。
+ ✅ 2026-09-14 收尾：用户手电筒照镜头看到景物/亮度变化 ⇒ **`#18` + 后摄 dtb 已设为默认槽**；prebuilt-boot 已是 `#19` + dtb v2。
+ `slot_cam` / `slot_cam4`（#14 时代）已从 ESP 删除（它们把 ESP 吃到只剩 4.5 MB，会让 postinstall 失败，#110）。
+diff --git a/docs/camera-photo-rotation-2026-09-19.md b/docs/camera-photo-rotation-2026-09-19.md
+new file mode 100644
+index 0000000..f6fa2f5
+--- /dev/null
++++ b/docs/camera-photo-rotation-2026-09-19.md
+@@ -0,0 +1,345 @@
++# 前后摄照片逆时针旋转 90° —— 根因定位与修复
++
++> 2026-09-19 · 仓库 `gaokun-android` · 涉及 `device/huawei/gaokun3/camera/`
++> 症状：前摄、后摄都能正常打开，但拍出来的照片**画面固定被转了 90°（用户描述为逆时针）**。
++
++> ### ⚠️ 基线说明（2026-09-19 晚，后补）
++>
++> 本修复最初基于 `c9cae65`，那是**落后 `origin/main` 52 个提交**的旧树。
++> 已 **rebase 到 `823585f`**（= `origin/main`），分支 `fix/photo-rotation-2026-09-19`。
++>
++> 起因：装上 ROM(09-16) 的设备上，HAL 二进制比本地源码多出**闪光灯/手电筒**与**静态照片降噪**两组功能。
++> 一度判断为"构建机上有超集，需人工反向回收"——**该判断已被推翻**：
++> 把 `origin/main` 的 camera 源码取出来重跑同一套二进制差集，"ROM 独有"从 **11 条塌到 2 条假阳性**
++> ⇒ **`origin/main` 就是那版 ROM 的源码**，本地只是落后。结论：先 `git fetch`，再谈反推。
++>
++> rebase 过程有 4 处冲突，其中一处值得单独记：
++> **远端新增了静态照片降噪，JPEG 的输入源已从 `rgb` 变成 `rgbStill`**（`Session.cpp:1072` 的降噪副本）。
++> 所以合并时既不能"以我们为准"（会丢掉降噪），也不能"以远端为准"（会丢掉方向修复）——
++> 两边的语义都对，必须合成 `deliverJpeg(rgbStill, …, jpegQuality, jpegOrientation)`。
++>
++> 合并后复跑两套自测：**55 + 19 = 74 项，0 失败**。
++> 部署与构建的完整方案见工作区 `docs/build/构建机方案建议-2026-09-19.md`。
++
++---
++
++## 一、结论（先看这一段）
++
++**根因是一条，而且是硬缺陷、可复现的：JPEG 交付路径里完全没有"方向"这个概念。**
++
++`Session::deliverJpeg()`（`device/huawei/gaokun3/camera/Session.cpp`）**从来没有读过
++`ANDROID_JPEG_ORIENTATION`**，既不旋转像素、也不写 EXIF 的 Orientation 标记。它唯一的
++"方向来源"是传入的 `dstW/dstH`，而那是**传感器坐标系**里的尺寸、与朝向无关。
++
++后果是确定的、与硬件无关：
++
++> 无论用户怎么拿机器、无论应用算出多大的校正角，交付出去的 JPEG **恒等于传感器原始读出**。
++
++前摄和后摄走的是**同一份代码、同一个函数**，所以症状必然一致 —— 这正是"两台都歪、而且歪
++的角度看起来一样"的原因。
++
++**次因（同一批，属隐性缺陷）**：`Device::init()` 把 libcamera 的 `properties::Rotation`
++**直接当成** `ANDROID_SENSOR_ORIENTATION` 用了，缺 `(360 - x) % 360` 的换算。这两个量的
++方向约定**相反**（下面第二节有出处）。它在本机当前是隐性的（现值为 0 / 180，互为反数），
++但只要按第六节把设备树的值标定成 90 或 270，**立刻会差 180°** —— 所以必须一起修。
++
++**修完之后，照片方向就完全取决于设备树里那两个 `rotation` 值**，而它们恰恰是猜的
++（后摄那行自己就标着 `/* FIXME */`）。所以本文第六节给出了实机标定步骤 ——
++**这是让"照片方向正确"真正落地的最后一环**。
++
++---
++
++## 二、完整的方向链条与出处
++
++先把四个"角度"摆清楚。它们分布在四个不同的层次上，**约定并不统一，其中两个是反向的**：
++
++| # | 名字 | 位置 | 方向约定 | 含义 |
++|---|---|---|---|---|
++| ① | 设备树 `rotation` | `dts/…-camera.dtsi` | **逆时针** | 传感器物理安装角 |
++| ② | `properties::Rotation` | libcamera | **逆时针**（原样继承 ①） | 同上 |
++| ③ | `ANDROID_SENSOR_ORIENTATION` | Android 元数据 | **顺时针** | 把画面转正所需的角 |
++| ④ | `ANDROID_JPEG_ORIENTATION` | 每帧请求 | **顺时针** | 应用算好的 JPEG 校正角 |
++| ⑤ | `libyuv::RotationMode` | libyuv | **顺时针** | 实际做旋转的算子 |
++
++### ①→② 是通的，不是摆设（这条必须先确认）
++
++曾经以为设备树里的 `rotation` 只是注释性质的东西（内核驱动不读它）—— **不是**。
++链路是：
++
++```
++设备树 rotation 属性
++  → 驱动 hi846.c / ov13b10.c 调用 v4l2_fwnode_device_parse() + v4l2_ctrl_new_fwnode_properties()
++  → 注册只读控件 V4L2_CID_CAMERA_SENSOR_ROTATION（min == max == def）
++  → libcamera CameraSensorLegacy::initProperties()
++       properties_.set(properties::Rotation, 该控件默认值)
++  → HAL Device::init()
++```
++
++两个驱动**都**调用了那两个函数（已在上游 `drivers/media/i2c/hi846.c` 与 `ov13b10.c` 里核对），
++而本机内核是 **mainline v7.2-rc2**（`scripts/kernel-setup-resukisu.sh:13`），远新于引入这套
++fwnode 属性的版本 ⇒ 设备树那两个值**确实会被消费**。
++反过来说：libcamera 里 `V4L2_CID_ROTATION` 一次都没出现，只有
++`V4L2_CID_CAMERA_SENSOR_ROTATION`——名字不同，别混。
++
++### ②→③ 的约定是**相反**的（这是那条隐性 bug 的来源）
++
++libcamera 自己的文档（`property_ids`）原文：
++
++> The camera rotation property is then defined as the angular difference **in the
++> counter-clockwise direction** between the camera reference system 'Rc' and the projected
++> scene reference system 'Rp'.
++
++内核 `Documentation/devicetree/bindings/media/video-interface-devices.yaml` 的 `rotation`
++属性是**同一段文字**（libcamera 从这里继承）。而 Android 的 `ANDROID_SENSOR_ORIENTATION`
++是**顺时针**校正角。
++
++上游 libcamera 的 Android HAL 在 `src/android/camera_device.cpp` 里就是为这件事写的一行：
++
++```c
++/*
++ * The Android orientation metadata specifies its rotation correction value in
++ * clockwise direction whereas libcamera specifies the rotation property in
++ * anticlockwise direction. ...
++ */
++const auto &rotation = properties.get(properties::Rotation);
++if (rotation)
++        orientation_ = (360 - *rotation) % 360;
++```
++
++**本 HAL 缺的就是这个 `(360 - x) % 360`。**
++
++### ⑤ 是**同向**的（这条我一开始也搞错了，所以写进注释）
++
++`include/libyuv/rotate.h` 原文把方向写死在注释和别名里了：
++
++```c
++kRotate90  = 90,   // Rotate 90 degrees clockwise.
++kRotate270 = 270,  // Rotate 270 degrees clockwise.
++kRotateClockwise = 90, kRotateCounterClockwise = 270,   // 历史别名
++```
++
++⇒ Android 的 90° **就是** `libyuv::kRotate90`，**不需要取反**。
++⚠️ 别把 OpenCV / PIL 的直觉套过来：那些库的"旋转 90"是逆时针，照抄一遍会把前后摄一起转歪 180°。
++
++---
++
++## 三、根因（源码级证据）
++
++### 3.1 主因：`deliverJpeg()` 里没有任何方向处理
++
++修复前的函数签名就说明了一切：
++
++```cpp
++bool Session::deliverJpeg(const uint8_t *rgb, buffer_handle_t dst,
++                          int32_t dstW, int32_t dstH, int32_t blobSize,
++                          int quality);          /* ← 没有旋转参数 */
++```
++
++调用点（`onRequestCompleted`）：
++
++```cpp
++    ? deliverJpeg(rgb, pb.handle, pb.width, pb.height,
++                  pb.blobSize, /*quality=*/90)   /* ← 质量也写死 */
++```
++
++- `ANDROID_JPEG_ORIENTATION`：全仓库搜不到（`CameraMetadata` 里那两条**请求键**一个都没被消费）。
++- EXIF：`Session.cpp` 里没有 `jpeg_write_marker`、也没有 `libexif`；JPEG 里**根本没有
++  APP1/Orientation 标记**。按 EXIF 规范，"没有 Orientation 标记"等价于 **1（正常方向）**
++  ⇒ 所有看图程序都按"不用转"处理 ⇒ 显示的就是传感器原始朝向。
++
++两件事叠加，结论就是：**交付的 JPEG 永远等于传感器原始读出，方向信息在 HAL 这一层被整个丢掉。**
++
++### 3.2 次因：朝向换算缺反向
++
++修复前（`Device.cpp`）：
++
++```cpp
++auto rot = props.get(libcamera::properties::Rotation);
++facts_.orientation = rot ? *rot : 0;      /* ← 少了 (360 - x) % 360 */
++```
++
++`0` 和 `180` 互为反数，所以本机现在"看起来没错"；一旦是 90/270 就差 180°。
++
++### 3.3 为什么"前后摄症状一致"
++
++两台相机共用 `Session::deliverJpeg()` 这一条路径。传感器各自的安装角不同，但**被丢掉的动作相同**
++——都是"把该转的角度丢掉"。用户看到的偏差角 = 各传感器自己的安装角，所以表现成"两台都歪、
++看起来差不多"。这也解释了为什么**同一批证据里，预览与照片的表现可能不一致**：预览走的是
++Android 框架的纹理变换（依赖 ③），照片走的是 HAL 的编码路径（依赖 ④）——**是两条独立的路径**。
++
++---
++
++## 四、改了什么
++
++### 4.1 改动清单（5 个文件）
++
++| 文件 | 改动 |
++|---|---|
++| `camera/Session.cpp` | 新增 `toLibyuvRotation()`；`deliverJpeg()` 增加 `jpegOrientation` 形参并在编码前用 `ARGBRotate` **真的转像素**；`onRequestCompleted()` 从本帧请求里解析 `ANDROID_JPEG_ORIENTATION` / `ANDROID_JPEG_QUALITY`（后者顺手夹到 1..100） |
++| `camera/Session.h` | `deliverJpeg()` 声明同步 |
++| `camera/Metadata.h/.cpp` | 新增 `requestEntryInt()`：从请求的 camera_metadata blob 里安全取整型条目（**类型必须匹配**：`ANDROID_JPEG_ORIENTATION` 是 int32、`ANDROID_JPEG_QUALITY` 是 byte，按错类型硬取会读出垃圾） |
++| `camera/Device.cpp` | ① 补上 `(360 - ccw) % 360` 换算 + 非 90 倍数告警；② 加一个**仅供标定**的属性覆盖开关（见第六节）；③ 日志同时打出 libcamera 的原始角和换算后的角 |
++
++### 4.2 为什么选"转像素"而不是"写 EXIF 的 Orientation"
++
++HAL 的合同是"把这个角落到交付物上"，两个合法做法**二选一**：
++
++- ① 旋转像素，交付物里不要再有方向标记；
++- ② 不转像素，把这个值写进 EXIF `Orientation`
++  （**上游 libcamera 的 Android HAL 走的就是这条**：`post_processor_jpeg.cpp` 里
++  `exif.setOrientation(jpegOrientation)`）。
++
++本 HAL 选 ①，理由是**它更强**：不依赖看图程序是否解析 EXIF。代价是每张照片多一次
++ARGB 旋转（8 MP 量级，毫秒级；BLOB 流本来就声明了 200 ms 的 stall，吃得下）。
++
++⚠️ **两者绝不能同时做**：又转像素又写 EXIF 的旋转值 = 转两次，反而歪。所以这里**不需要**
++`libexif`，也**不要**事后补一个别样的标记（缺标记 ≡ Orientation 1，正是我们要的）。
++
++### 4.3 两个容易踩的点（已处理）
++
++- **90/270 必须交换宽高**：流的 `(dstW, dstH)` 是传感器坐标系里的尺寸，转完之后 JPEG 的实际
++  尺寸是 `(dstH, dstW)`。Android 允许这样 —— BLOB 流只声明缓冲**字节数**，应用自己读 JPEG 头
++  取真实尺寸。**不要**为了"跟流尺寸对上"把宽高改回去，那就等于没转。
++- **目标 stride 必须用旋转后的宽度** `outW * 4`。沿用 `dstW * 4` 会让每一行都错位（画面斜切成条）。
++  这条在纯数学的模型里看不出来，只能让数据真的流一遍 —— 所以下面有一套**真编译真运行**的自测专门盯它。
++
++---
++
++## 五、验证
++
++### 5.1 源码级：`scripts/camera/test-jpeg-rotation.py`（55 项，全过）
++
++它**直接解析 `.cpp`**（不是把代码再抄一遍），所以把方向改回去就会红：
++
++- `A2b` `toLibyuvRotation` 的映射表必须是恒等的 `{0:0, 90:90, 180:180, 270:270}`
++- `A2c` 表里不允许出现 `360-x` 这类反向换算
++- `A4b` `ARGBRotate` 的第 4 个实参必须是 `outW*4`
++- `A5b` `deliverJpeg` 调用点必须把 `jpegOrientation` 真的传下去
++- `A7` `facts_.orientation = (360 - ccw) % 360` 必须存在，且老的 `rot ? *rot : 0` 必须消失
++- `B*` 用"顺时针"的数学定义建模型走一遍：场景 → 传感器读出 → 元数据 → JPEG，
++  并验证**修复前的行为恰好复现用户的症状**（`B3b`：安装角 270° 逆时针时，
++  修复前看起来是顺时针 270° = **逆时针 90°**，与描述逐字吻合）
++
++```bash
++python3 scripts/camera/test-jpeg-rotation.py
++```
++
++### 5.2 运行级：`scripts/camera/test-jpeg-rotation.cc`（19 项，全过）
++
++把同一段表达式**真编译真跑**，用严格按 libyuv 注释实现顺时针语义的**替身**，
++验证调用形状（实参序、源/目标 stride、宽高互换）并逐像素反查。
++覆盖 8×6 → 8×6 / 4×3 / 4×6 三种目标尺寸 × {0,90,180,270} 四种角度
++—— **非正方形**是必须的，否则 stride 类错误会被掩盖。
++
++```bash
++g++ -std=c++20 -Wall -Wextra -Werror -O1 -o /tmp/tj \
++    scripts/camera/test-jpeg-rotation.cc && /tmp/tj
++```
++
++### 5.3 真机验证（还没做）
++
++1. 构建 ROM（`device.mk` 已引用本模块；`external/libcamera/generated/` 必须先就位，见 `camera/README.md`）。
++2. `logcat -s CameraProvider` 里应看到两行：
++   `… 就绪：阵列 … 朝向 N（libcamera rotation=M，逆时针）…`
++   —— **M 是设备树的值，N 是换算后的 Android 值，两者应满足 `N == (360-M)%360`**。
++3. 拍一张，`logcat | grep "JPEG "` 应看到
++   `JPEG WxH（请求 w×h，旋转 R°）质量Q → n 字节`，其中 90/270 时 `W,H` 与请求的 `w,h` 互换。
++4. 照片在**机身自然朝向**（横屏）下应当是正的。
++
++---
++
++## 六、设备树 `rotation`：**已实机标定（2026-09-19）**
++
++### 6.1 实测结论
++
++| 相机 | 安装角 φ | 需要的 `SENSOR_ORIENTATION` | **`rotation` 应为** | 改动前 | 判定 |
++|---|---|---|---|---|---|
++| 前摄 hi846（`internal/1`） | **270°** | 90° | **`<270>`** | `<0>` | ❌ 错 |
++| 后摄 ov13b10（`internal/0`） | **0°** | 0° | **`<0>`** | `<180>` | ❌ 错 |
++
++（φ = 设备处于自然朝向时，交付出来的照片看起来**顺时针**歪的度数；`rotation` 的数值**等于** φ，
++因为 libcamera 的 rotation 就是**逆时针**校正角。`SENSOR_ORIENTATION = (360-φ) % 360`。）
++
++**测量方法**（可用加速度计当参考系，不必改机重编 —— 详见工作区
++`docs/camera-android-photo-orientation-measurement-2026-09-19.md`）：
++读 `dumpsys sensorservice` 的加速度计拿到"世界的上"在设备坐标系里的方向，
++再和照片里的重力线索（书竖着立在层板上、罐子立在地上）对照。
++★ 差分技巧：**同一个物体**在两台相机里的姿态（那个装公仔的圆柱罐：前摄里**立着**、后摄里**躺着**）
++⇒ 两台相差 90°，免掉"哪边是上"的主观判断。
++
++⚠️ 两个把人带偏的坑，记在这里免得再犯：
++1. **显示旋转 ≠ 设备物理朝向**：Aperture 把 UI 锁竖屏，于是设备明明是横屏，
++   `DisplayDeviceInfo` 仍报 `1600 x 2560, rotation 0`。据它判断设备朝向会差 90°。
++2. `settings get system user_rotation` 在自动旋转开着时恒为 0；要读 `dumpsys window displays` 的 `mRotation`。
++
++### 6.2 已改的三处副本（B0 那个老毛病）
++
++| 位置 | 状态 |
++|---|---|
++| `MateBookEgo-linux-kernel/dts/sc8280xp-huawei-gaokun3-camera.dtsi` | ✅ 前摄改为 `<270>`（该文件**只有前摄节点**） |
++| 本仓 `patches/0032-*.patch` | ✅ 后摄改为 `<0>`（后摄节点是这个补丁加的） |
++| `/home/ms/kernel-src-android/arch/arm64/boot/dts/qcom/…-camera.dtsi` | ✅ 已同步（WSL 里**真正编 DTB** 的那份） |
++
++改 `rotation` 只影响 **boot 镜像**（内核/DTB 是 `BoardConfig.mk` 的 `TARGET_PREBUILT_KERNEL`），
++**不需要重编 ROM** —— 但见下一条。
++
++### 6.3 ⚠️ 与 HAL 修复的**部署顺序**（颠倒会更糟）
++
++| 运行中的 HAL | 前摄 `rotation` | 后摄 |
++|---|---|---|
++| 老 HAL（θ = `rotation` 直接抄，即当前 ROM） | **90**（预览立刻正，照片仍不转） | 0 |
++| **新 HAL**（θ = `(360-rotation)%360`，本文的修复） | **270** | **0** |
++
++本文按**新 HAL** 给值。DT 在 boot 镜像、HAL 在 super.img，两者可以分别刷 ⇒ 存在这个中间态：
++**要么一起刷，要么先按"老 HAL"那一列临时填 90。**
++（后摄的 0 是自反的，两种 HAL 下都对；只有前摄要看这个表。）
++
++### 6.4 顺带可查的一件事：前摄是否镜像
++
++另一处记录（Ubuntu 侧的 GStreamer 桥）写过"**hi846 的 readout + SoftISP 输出的是镜像画面
++（自拍视角）**"，因此那边的管线里加了 `videoflip`。**Android 的前摄 JPEG 不应该镜像**
++（镜像只该出现在预览里，由应用自己做）。这不是旋转问题、你没报它，但如果标定时顺手看到了，
++拍一行有字的纸即可分辨：字是反的 ⇒ 前摄缺一次水平翻转，那是另一处改动。
++
++---
++
++## 七、其余建议（本次未改，按需处理）
++
++1. **`ANDROID_JPEG_SIZE` 没回填**。结果元数据里现在没有它。上游 libcamera 会填
++   （`resultMetadata->addEntry(ANDROID_JPEG_SIZE, jpeg_size)`）。框架多数情况下靠
++   `CameraBlob` 拿长度，但补上更规范。
++2. **没有声明 `ANDROID_REQUEST_AVAILABLE_REQUEST_KEYS` / `_RESULT_KEYS`**。
++   `buildCharacteristics()` 里目前完全没这两条。相机现在能用，但按 `INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED`
++   的要求应当声明；顺带把 `ANDROID_JPEG_ORIENTATION` / `ANDROID_JPEG_QUALITY` / `ANDROID_JPEG_SIZE`
++   列进去，语义更清楚。
++3. **静态元数据里的 `ANDROID_JPEG_QUALITY` 默认 90 现在是活的**：请求里没带该键时我们用 90，
++   带上就用应用的。若哪天要改默认值，记得两边一致。
++4. **`buildResult()` 会把请求的键原样回显**，所以 `ANDROID_JPEG_ORIENTATION` 自动出现在结果里
++   （与上游行为一致），不需要额外代码 —— 但**不要**因此在 EXIF 里再写一次角度（见 4.2）。
++5. **`deliver()`（预览/YUV 路径）刻意不旋转**：预览的方向由框架按 `SENSOR_ORIENTATION` 做
++   纹理变换，HAL 这里转了就是双重校正。改这一段之前先想清楚这一点。
++
++---
++
++## 八、改动文件与自测
++
++```
++device/huawei/gaokun3/camera/Device.cpp       朝向换算 + 标定开关
++device/huawei/gaokun3/camera/Metadata.cpp     requestEntryInt()
++device/huawei/gaokun3/camera/Metadata.h
++device/huawei/gaokun3/camera/Session.cpp      JPEG 旋转（主修复）
++device/huawei/gaokun3/camera/Session.h
++scripts/camera/test-jpeg-rotation.py          源码级断言（55 项）
++scripts/camera/test-jpeg-rotation.cc          运行级自测（19 项）
++docs/TODO.md                                  `rotation` FIXME 条目指向本文
++docs/camera-photo-rotation-2026-09-19.patch   自包含补丁（含本文与两套自测）
++```
++
++> 补丁文件是给构建机用的：本仓的 `~/crdroid/device/huawei/gaokun3` 与本仓靠人手拷贝
++> （见 `docs/TODO.md` B0，已经因此付过四次账）。`git apply` 一次即可，不用再逐文件对齐。
++
++**未做的一件事要说清楚**：这里没有 AOSP 源码树与工具链，**HAL 本身没有经过一次真实编译**。
++上面两套自测覆盖了改动的逻辑（源码级断言 + 真编译真运行，`-Wall -Wextra -Werror -std=c++20`），
++但 Soong 侧的链接与真机行为尚未验证。
++第一次构建时请留意 `Metadata.h` 的签名、`<system/camera_metadata_tags.h>` 的包含路径，
++以及 `<sys/system_properties.h>` 里的 `PROP_VALUE_MAX`。
+diff --git a/patches/0032-arm64-dts-gaokun3-camera-rear-ov13b10-with-board-rails.patch b/patches/0032-arm64-dts-gaokun3-camera-rear-ov13b10-with-board-rails.patch
+index eb46724..f82b2a6 100644
+--- a/patches/0032-arm64-dts-gaokun3-camera-rear-ov13b10-with-board-rails.patch
++++ b/patches/0032-arm64-dts-gaokun3-camera-rear-ov13b10-with-board-rails.patch
+@@ -107,7 +107,7 @@ index 690db45..937eda9 100644
+ +		lens-focus = <&voice_coil_motor>;
+ +
+ +		orientation = <1>;
+-+		rotation = <180>; /* FIXME */
+++		rotation = <0>; /* 2026-09-19 实机标定：φ=0 */
+ +
+ +		port {
+ +			ov13b10_ep: endpoint {
+diff --git a/patches/libcamera/include/libcamera/libcamera.h b/patches/libcamera/include/libcamera/libcamera.h
+new file mode 100644
+index 0000000..7b35db0
+--- /dev/null
++++ b/patches/libcamera/include/libcamera/libcamera.h
+@@ -0,0 +1,38 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * libcamera 的【伞头文件】（umbrella header）—— 本项目的 HAL 用 <libcamera/libcamera.h>
++ * 一次性拿到公开 API，而上游 libcamera 只提供单个头文件、并没有这个名字的文件。
++ *
++ * ⚠️ 来历要说清楚（这是本仓第 N 次遇到同一类坑）：
++ *   上游 `include/libcamera/` 里没有 libcamera.h；AOSP 的 platform/external/libcamera
++ *   也没有（2026-09-19 在 android-16.0.0_r4 上复核过）。而 device/huawei/gaokun3/camera
++ *   的 Device.h / Provider.h / Session.h **都 include 了它**，且 `Android.bp` 的
++ *   include_dirs 里有 `external/libcamera/include` —— 说明当年构建机上的
++ *   `external/libcamera/include/libcamera/libcamera.h` 是**手工放进去的、从未入库**
++ *   （与 `adb_keys` / `firmware` 整个目录 / mesa 那份生成出来的 Android.bp 同一类）。
++ *   ⚠️ 写注释别出现两个连续字符「斜杠 + 星号」—— 在块注释里那是嵌套注释开始，
++ *      clang 会以 -Werror,-Wcomment 直接判死（本文件第一次就是这么挂的，4 个 TU 全挂）。
++ *   本文件是**按 HAL 实际用到的符号重建**的，一并在 prep 里安装，别再让它只活在构建机上。
++ *
++ * 内容取自 HAL 真正用到的东西（`grep -rhoE 'libcamera::[A-Za-z_:]+'`，2026-09-19）：
++ *   Camera / CameraConfiguration / CameraManager / ControlList / FrameBuffer /
++ *   FrameBufferAllocator / Request / Size / Stream / StreamConfiguration / StreamRole
++ *   controls::{AnalogueGain, ExposureTime}  formats::RGB  properties::{...}
++ * 故意【不】包含 logging.h / fence.h 这类会引入宏或额外类型的头 —— 用不到就别拉进来。
++ */
++#pragma once
++
++#include <libcamera/camera.h>
++#include <libcamera/camera_manager.h>
++#include <libcamera/controls.h>
++#include <libcamera/framebuffer.h>
++#include <libcamera/framebuffer_allocator.h>
++#include <libcamera/geometry.h>
++#include <libcamera/request.h>
++#include <libcamera/stream.h>
++
++/* 这三个是构建时【生成】的头（在 generated/include/libcamera/ 下）：
++ * control_ids.h / formats.h 来自 .yaml + gen-controls.py，property_ids.h 同理。 */
++#include <libcamera/control_ids.h>
++#include <libcamera/formats.h>
++#include <libcamera/property_ids.h>
+diff --git a/scripts/camera/gen-libcamera-sources.sh b/scripts/camera/gen-libcamera-sources.sh
+new file mode 100644
+index 0000000..9bf6f0d
+--- /dev/null
++++ b/scripts/camera/gen-libcamera-sources.sh
+@@ -0,0 +1,270 @@
++#!/usr/bin/env bash
++# ============================================================================
++# gen-libcamera-sources.sh — 产出 libcamera 的「生成文件」，供
++#                            patches/libcamera/libcamera-Android.bp 消费。
++#
++#   ⚠️ 这个脚本在仓库里【原本被引用却不存在】：
++#      patches/libcamera/libcamera-Android.bp:15 写着
++#        "…见 generated/ 目录与 scripts/camera/gen-libcamera-sources.sh"
++#      但全仓（含 origin/main）找不到它 ⇒ 构建 ROM 的这一步是"口口相传"的。
++#      本脚本把它补上，并自带断言 —— 缺文件就报错退出，不让你带着半棵生成的树去编。
++#
++# 为什么需要生成：
++#   Soong 不跑 libcamera 的 meson。这 5 个 .cpp 与那批生成头必须另外产出：
++#     generated/src/control_ids.cpp      generated/src/property_ids.cpp
++#     generated/src/version.cpp          generated/src/ipa_pub_key.cpp
++#     generated/src/softisp_ipa_proxy.cpp
++#     generated/include/libcamera/**（control_ids.h / property_ids.h / formats.h /
++#                                    version.h / ipa/*_ipa_interface.h …）
++#
++# 为什么走 meson 而不是手调各个 Python 生成器：
++#   生成器本身只依赖树内 YAML/mojom，但 softisp 的代理 cpp 还要 mojo 的 bytecode
++#   templates（utils/codegen/ipc/...）与一套 env；照 meson 拼参数极易拼错且不报错。
++#   ⇒ 让 meson 把生成规则搭好，我们只 `ninja` 那几个【生成类】目标，不编 C++ 本体。
++#
++# ★ 重要前提：libcamera 必须是【上游源码】（含 src/ipa/softisp）。
++#   AOSP 的 external/libcamera（platform/external/libcamera @ android-16.0.0_r4）
++#   【没有】softisp —— 只有 ipu3/libipa/mtkisp7/rkisp1/rpi/vimc。
++#   构建流程是：用上游 libcamera 换掉 external/libcamera，再打 patches/libcamera/*.patch。
++#   见 patches/libcamera/README.md 与 docs/stage4-findings.md（#109 的坑）。
++#
++# 用法：
++#   bash scripts/camera/gen-libcamera-sources.sh <libcamera_tree>            # 干跑：只检查
++#   bash scripts/camera/gen-libcamera-sources.sh <libcamera_tree> --apply    # 真生成
++#   bash scripts/camera/gen-libcamera-sources.sh ~/crdroid/external/libcamera --apply
++#
++# 退出码：0 成功；非 0 表示生成不完整（绝不"部分成功"）。
++# ============================================================================
++set -uo pipefail
++
++TREE="${1:-}"
++APPLY=0
++[ "${2:-}" = "--apply" ] && APPLY=1
++[ -z "$TREE" ] && { sed -n '2,40p' "$0"; exit 2; }
++TREE="$(cd "$TREE" 2>/dev/null && pwd)" || { echo "✗ 目录不存在: $1"; exit 1; }
++
++BUILD="$TREE/build-gen"
++GEN="$TREE/generated"
++
++fail=0
++say()  { echo "$*"; }
++ok()   { echo "  ✔ $*"; }
++bad()  { echo "  ✗ $*"; fail=1; }
++
++say "════ gen-libcamera-sources ════"
++say "  树   : $TREE"
++say "  模式 : $([ $APPLY = 1 ] && echo APPLY || echo 干跑)"
++
++# ---------------------------------------------------------------- 0. 前置
++say ""
++say "── 0. 前置检查 ──"
++for t in meson ninja python3 pkg-config; do
++    command -v "$t" >/dev/null 2>&1 && ok "$t" || bad "缺 $t（apt install meson ninja-build pkg-config）"
++done
++python3 -c "import ply" 2>/dev/null && ok "python3-ply" \
++    || bad "缺 python3-ply（mojo 生成器要它；缺了会在 meson configure 最后一步才炸）"
++python3 -c "import yaml" 2>/dev/null && ok "python3-yaml" || bad "缺 python3-yaml"
++pkg-config --exists yaml-0.1 2>/dev/null && ok "libyaml (yaml-0.1)" \
++    || bad "缺 libyaml-dev（★ pkg-config 名是 yaml-0.1，不是 libyaml）"
++[ -f "$TREE/meson.build" ] && ok "libcamera meson.build 在" || bad "不像 libcamera 源码树"
++[ -d "$TREE/src/ipa/softisp" ] && ok "src/ipa/softisp 在（上游版本，别再拿 AOSP 那份）" \
++    || bad "没有 src/ipa/softisp —— 这是 AOSP 的 libcamera，不是上游；生成不出 softisp 代理"
++[ -d "$TREE/utils/codegen" ] && ok "utils/codegen 在" || bad "没有 utils/codegen（生成器所在）"
++[ "$fail" = 0 ] || { echo; echo "✗ 前置不满足，中止。"; exit 1; }
++
++# ---------------------------------------------------------------- 1. meson 配置
++if [ "$APPLY" = 0 ]; then
++    say ""
++    say "（干跑：前置都过了。加 --apply 才真正跑 meson/ninja 生成。）"
++    say "  将执行：meson setup $BUILD && ninja（只编生成类目标）→ 收集到 $GEN"
++    exit 0
++fi
++
++say ""
++say "── 1. meson setup（只配置；用最省的选项集，避免拉无关依赖）──"
++rm -rf "$BUILD"
++# 这些选项只为"能配置成功 + 让 softisp 的 mojom 参与生成"，不追求能编出库：
++#   -Dtest=false -Ddocumentation=false  : 省掉一大堆测试/文档依赖
++#   -Dv4l2=false -Dgstreamer=disabled -Dcam=disabled -Dqcam=disabled -Dpycamera=disabled
++#   -Dpipelines=simple                   : 我们只用 simple pipeline（软件 ISP）
++#   -Dipas=softisp                       : ★ 必须，否则 softisp 的代理不会被生成
++#   -Dandroid=disabled                   : 不给它加 Android 专属的东西（那是 AOSP 版的行为）
++# ⚠️ 选项名与【类型】都不能猜（README 第 3 条的老教训，我照旧踩了两次）：
++#    - documentation / v4l2 / gstreamer / cam / qcam / pycamera ：feature → enabled|disabled|auto
++#      写 =false 会报 'Value "false" (of type "string") … is not one of the choices'
++#    - test ：是【boolean】→ 只能 true|false；写成 disabled 会报 'Value disabled is not boolean'
++#    - pipelines / ipas ：是【array】，取值来自各自 choices
++#    ⇒ 照 meson_options.txt 抄，别按直觉填。
++if ! meson setup "$BUILD" "$TREE" \
++        -Dtest=false -Ddocumentation=disabled \
++        -Dv4l2=disabled -Dgstreamer=disabled \
++        -Dcam=disabled -Dqcam=disabled -Dpycamera=disabled \
++        -Dpipelines=simple -Dipas=softisp \
++        > "$BUILD.setup.log" 2>&1; then
++    echo "✗ meson setup 失败。日志尾部："
++    tail -25 "$BUILD.setup.log" | sed 's/^/    /'
++    echo "    （完整日志：$BUILD.setup.log）"
++    exit 1
++fi
++ok "configure 成功"
++
++# ---------------------------------------------------------------- 2. 找出生成目标
++say ""
++say "── 2. 从 meson 的目标表里找出【生成类】目标 ──"
++# 生成目标的清单在下面那段 python 里（want_exact / want_re）——
++# 别在这里再维护第二份，两处一定会漂移。
++TARGETS_JSON="$BUILD/targets.json"
++meson introspect --targets "$BUILD" > "$TARGETS_JSON" 2>/dev/null || { bad "introspect 失败"; exit 1; }
++
++# introspect 的 JSON 里每个 target 有 name / filename / type；生成类的是 custom。
++# ★ 关键：自定义目标的【输出路径】才是 ninja 认的目标名 —— 用 meson 的 target name
++#   去 ninja 会得到 "unknown target 'controls_ids_cpp'"（踩过）。
++#   所以这里输出 "输出路径<TAB>meson 名"，ninja 用前者。
++python3 - "$TARGETS_JSON" <<'PY' > "$BUILD/gen_targets.txt"
++import json, re, sys
++# 生成文件分两类，都要：
++#   .cpp —— libcamera-Android.bp 的 srcs 直接引用这 5 个
++#   .h   —— 那组 local_include_dirs 里的 generated/include/libcamera/**
++#           （IPA 源码大量用【裸名】include，少一个就一串看不出关联的 unknown type name）
++want_exact = {
++    "control_ids.cpp", "property_ids.cpp", "version.cpp",
++    "ipa_pub_key.cpp", "softisp_ipa_proxy.cpp",
++    "control_ids.h", "property_ids.h", "formats.h", "version.h",
++    # ★ tracepoints.h 走的是 meson 的 custom_target('tp_header')，
++    #   由 utils/tracepoints/gen-tracepoints.py 从 include/libcamera/internal/tracepoints/*.tp
++    #   生成。漏了它 ⇒ request.cpp:24 找不到 "libcamera/internal/tracepoints.h"，
++    #   而且是在【编到 90%】时才报（实测：17 分钟后）。
++    "tracepoints.h",
++}
++want_re = re.compile(r".*(_ipa_interface|_ipa_serializer|_ipa_proxy)\.h$")
++seen = {}
++for t in json.load(open(sys.argv[1])):
++    filenames = t.get("filename") or []
++    if isinstance(filenames, str):
++        filenames = [filenames]
++    for f in filenames:
++        base = f.split("/")[-1]
++        if (base in want_exact or want_re.match(base)) and f not in seen:
++            seen[f] = t["name"]
++for f in sorted(seen):
++    print("%s\t%s" % (f, seen[f]))
++PY
++if [ ! -s "$BUILD/gen_targets.txt" ]; then
++    bad "introspect 里找不到生成目标 —— 检查 -Dipas=softisp 是否生效"
++    exit 1
++fi
++say "  发现 $(wc -l < "$BUILD/gen_targets.txt") 个生成目标"
++sed 's/^/    /' "$BUILD/gen_targets.txt" | head -30
++
++# ---------------------------------------------------------------- 3. ninja 生成
++say ""
++say "── 3. ninja 构建这些生成目标（不编 libcamera 本体）──"
++# ★ ninja 的目标名要【相对 build 目录】，introspect 给的是绝对路径 —— 直接喂会得到
++#   "unknown target '/home/.../control_ids.cpp'"（踩过）。也【不要】用 meson 的 target
++#   name（"unknown target 'controls_ids_cpp'"）—— 那是 meson 侧的名字，ninja 不认。
++REL_TARGETS=""
++while IFS=$'\t' read -r outpath tname; do
++    [ -z "${outpath:-}" ] && continue
++    rel="${outpath#"$BUILD"/}"
++    REL_TARGETS="$REL_TARGETS $rel"
++done < "$BUILD/gen_targets.txt"
++say "  目标（相对 build 目录）：$REL_TARGETS"
++
++if ninja -C "$BUILD" $REL_TARGETS >> "$BUILD.ninja.log" 2>&1; then
++    ok "生成目标全部构建成功"
++else
++    say "  ⚠ 指定目标失败，退回【整体 ninja】（会连 libcamera 本体一起编，慢但保证产出）："
++    if ninja -C "$BUILD" >> "$BUILD.ninja.log" 2>&1; then
++        ok "整体构建成功（已产出生成文件）"
++    else
++        bad "整体 ninja 也失败 —— 日志尾部："
++        tail -20 "$BUILD.ninja.log" | sed 's/^/    /'
++        echo; echo "✗ 生成失败，中止。"; exit 1
++    fi
++fi
++
++# ---------------------------------------------------------------- 4. 收集
++say ""
++say "── 4. 收集产物到 generated/ ──"
++rm -rf "$GEN"
++mkdir -p "$GEN/src" "$GEN/include"
++
++for f in control_ids.cpp property_ids.cpp version.cpp ipa_pub_key.cpp softisp_ipa_proxy.cpp; do
++    src="$(find "$BUILD" -name "$f" -type f 2>/dev/null | head -1)"
++    if [ -n "$src" ]; then
++        cp "$src" "$GEN/src/$f" && ok "generated/src/$f  ($(stat -c %s "$src") 字节)"
++    else
++        bad "找不到生成的 $f"
++    fi
++done
++
++# 生成头：定位到 build 树里的 include/libcamera/，整棵拷过来。
++# ★ 别用 `find -type d -path "*/include/libcamera" | head -1` —— 源码树里那份
++#   手写的 include/libcamera 也会被匹配到，结果只拷到 1 个头（踩过）。
++#   改用【锚文件】control_ids.h 反推，它只可能来自生成。
++HDR_ANCHOR="$(find "$BUILD" -type f -path "*/include/libcamera/control_ids.h" 2>/dev/null | head -1)"
++if [ -n "$HDR_ANCHOR" ]; then
++    HDR_ROOT="${HDR_ANCHOR%/control_ids.h}"          # …/include/libcamera
++    mkdir -p "$GEN/include"
++    rm -rf "$GEN/include/libcamera"
++    cp -r "$HDR_ROOT" "$GEN/include/libcamera"
++    n_hdr="$(find "$GEN/include/libcamera" -name '*.h' | wc -l)"
++    n_ipa="$(find "$GEN/include/libcamera" -name '*_ipa_interface.h' | wc -l)"
++    ok "generated/include/libcamera/**  ($n_hdr 个 .h，其中 IPA 接口头 $n_ipa 个)"
++else
++    bad "找不到生成的 include/libcamera/control_ids.h"
++fi
++
++# ---------------------------------------------------------------- 5. 断言
++say ""
++say "── 5. 断言（缺一个就失败，绝不"部分成功"）──"
++for f in control_ids.cpp property_ids.cpp version.cpp ipa_pub_key.cpp softisp_ipa_proxy.cpp; do
++    [ -s "$GEN/src/$f" ] && ok "src/$f 非空" || bad "src/$f 缺失或为空"
++done
++for h in control_ids.h property_ids.h formats.h version.h; do
++    find "$GEN/include/libcamera" -name "$h" 2>/dev/null | grep -q . \
++        && ok "include/libcamera/$h" || bad "include/libcamera/$h 缺失"
++done
++# softisp 的 IPA 接口头（libcamera_ipa_softisp_gk3 依赖它）
++find "$GEN/include/libcamera" -name '*_ipa_interface.h' 2>/dev/null | grep -q . \
++    && ok "include/libcamera/**/*_ipa_interface.h" || bad "IPA 接口头缺失"
++
++# tracepoints.h 在 internal/ 下，单独断言一次（它在 bp 的 include 路径里是裸名 include）
++find "$GEN/include/libcamera" -name 'tracepoints.h' 2>/dev/null | grep -q . \
++    && ok "include/libcamera/internal/tracepoints.h" \
++    || bad "include/libcamera/internal/tracepoints.h 缺失（meson 目标 tp_header）"
++
++# ── 合同检查：libcamera-Android.bp 引用的每个 generated/** 路径都必须存在 ──
++# 为什么要这道：生成产物不全时，失败点离原因很远（15 分钟的构建 + 一句
++# "file not found"）。这里把"生成物是否齐"在 1 秒内判掉。
++# 只检查 generated/ 开头的路径 —— 那些是我们【必须】产出的；bp 里还有 ipu3 等
++# AOSP 专有路径，在【上游】libcamera 树上本来就不存在，检查它们会全是假阳性。
++BP="$TREE/Android.bp"
++if [ -f "$BP" ]; then
++    miss=""
++    while read -r rel; do
++        [ -n "$rel" ] || continue
++        [ -e "$TREE/$rel" ] || miss="$miss $rel"
++    done < <(grep -oE '"generated/[A-Za-z0-9_./-]+"' "$BP" | tr -d '"' | sort -u)
++    n_ref="$(grep -oE '"generated/[A-Za-z0-9_./-]+"' "$BP" | tr -d '"' | sort -u | wc -l)"
++    if [ -z "$miss" ]; then
++        ok "合同检查：bp 引用的 $n_ref 个 generated/** 路径全部存在"
++    else
++        bad "合同检查：bp 引用了不存在的生成物 ——$miss"
++    fi
++else
++    warn "找不到 $BP，跳过合同检查"
++fi
++
++say ""
++if [ "$fail" = 0 ]; then
++    say "✔ 生成完成：$GEN"
++    say "  下一步：确认 device.mk 引用的路径就是这里（libcamera-Android.bp 的"
++    say "          local_include_dirs 里有 \"generated/include\"，srcs 里有"
++    say "          \"generated/src/...\"，所以生成物必须落在 \$TREE/generated/ 下）。"
++    say "  ⚠️ 这一步是【手动】的 —— 别指望 repo sync 会带来它。"
++    exit 0
++fi
++say "✗ 生成不完整（见上面的 ✗）。别拿着半棵树去编 —— 失败会以"
++say "  'unknown type name' 这种看不出关联的形式出现在很后面。"
++exit 1
+diff --git a/scripts/camera/test-jpeg-rotation.cc b/scripts/camera/test-jpeg-rotation.cc
+new file mode 100644
+index 0000000..c82321c
+--- /dev/null
++++ b/scripts/camera/test-jpeg-rotation.cc
+@@ -0,0 +1,358 @@
++/*
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * deliverJpeg 旋转逻辑的【真编译 + 真运行】自测（无第三方依赖）。
++ *
++ * 为什么要有这个：scripts/camera/test-jpeg-rotation.py 做的是【源码级】断言
++ * —— 它保证 Session.cpp 里的表达式就是我们想的那几行；本文件做的是【运行级】
++ * 检查 —— 把同一段表达式编译起来跑，用按 libyuv 契约实现的替身，验证调用
++ * 形状真的对：实参顺序、源/目标 stride、90/270 的宽高互换、像素真的搬对了。
++ *
++ * 出 bug 的地方几乎都在调用形状上（比如目标 stride 顺手写成 dstW*4，画面会被
++ * 斜切成条），而那种错在纯数学的模型里看不出来 —— 必须让数据真的流一遍。
++ *
++ * ⚠️ 这里用到的 libyuv 是【替身】，语义严格照 include/libyuv/rotate.h 的注释
++ *    写死为顺时针：
++ *       kRotate90  = 90,   // Rotate 90 degrees clockwise.
++ *       kRotate270 = 270,  // Rotate 270 degrees clockwise.
++ *    真机上换成真库即可，调用点不变。
++ *
++ * 构建与运行（WSL / 任意 Linux）：
++ *     g++ -std=c++20 -Wall -Wextra -Werror -O1 \
++ *         -o /tmp/t scripts/camera/test-jpeg-rotation.cc && /tmp/t
++ */
++
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <vector>
++
++/* ───────────── libyuv 替身（只实现我们用到的三个函数） ───────────── */
++
++namespace libyuv {
++
++enum RotationMode {
++	kRotate0 = 0,     /* No rotation. */
++	kRotate90 = 90,   /* Rotate 90 degrees clockwise. */
++	kRotate180 = 180, /* Rotate 180 degrees. */
++	kRotate270 = 270, /* Rotate 270 degrees clockwise. */
++};
++
++enum FilterMode {
++	kFilterNone = 0,
++	kFilterBilinear = 2,
++};
++
++/* "ARGB" 在内存里其实是 B,G,R,A —— 与 libcamera 的 RGB888(=BGR24) 和
++ * libjpeg 的 JCS_EXT_BGRA 都对得上，替身照这个布局来。 */
++inline int RGB24ToARGB(const uint8_t *s, int ss, uint8_t *d, int ds, int w, int h)
++{
++	if (!s || !d || w <= 0 || h <= 0)
++		return -1;
++	for (int y = 0; y < h; y++) {
++		for (int x = 0; x < w; x++) {
++			const uint8_t *sp = s + static_cast<size_t>(y) * ss + x * 3;
++			uint8_t *dp = d + static_cast<size_t>(y) * ds + x * 4;
++			dp[0] = sp[0];
++			dp[1] = sp[1];
++			dp[2] = sp[2];
++			dp[3] = 0xFF;
++		}
++	}
++	return 0;
++}
++
++/* 最近邻缩放：只为跑通"需要缩放"那条分支，精度不重要。 */
++inline int ARGBScale(const uint8_t *s, int ss, int sw, int sh,
++		     uint8_t *d, int ds, int dw, int dh, int)
++{
++	if (!s || !d || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0)
++		return -1;
++	for (int y = 0; y < dh; y++) {
++		const int sy = y * sh / dh;
++		for (int x = 0; x < dw; x++) {
++			const int sx = x * sw / dw;
++			memcpy(d + static_cast<size_t>(y) * ds + x * 4,
++			       s + static_cast<size_t>(sy) * ss + sx * 4, 4);
++		}
++	}
++	return 0;
++}
++
++/*
++ * 顺时针旋转。width/height 是【源】尺寸 —— 与真库一致：目标 stride 由调用方
++ * 按旋转后的宽度给，给错了就会错位，这正是本测试要抓的东西。
++ *
++ * 用"源像素正向散射"写，避免逆映射那套下标把自己绕进去：
++ *   源 (sx,sy) 顺时针 90 度后落在 (dstH-1-sy, sx)      —— 源的上边变成 dst 的右边
++ *   180 度落在 (dstW-1-sx, dstH-1-sy)
++ *   270 度落在 (sy, dstW-1-sx)
++ */
++inline int ARGBRotate(const uint8_t *s, int ss, uint8_t *d, int ds,
++		      int w, int h, RotationMode mode)
++{
++	if (!s || !d || w <= 0 || h <= 0)
++		return -1;
++	const bool swap = mode == kRotate90 || mode == kRotate270;
++	const int ow = swap ? h : w;
++	const int oh = swap ? w : h;
++	for (int sy = 0; sy < h; sy++) {
++		for (int sx = 0; sx < w; sx++) {
++			int dx = sx, dy = sy;
++			switch (mode) {
++			case kRotate90:  dx = h - 1 - sy; dy = sx;         break;
++			case kRotate180: dx = w - 1 - sx; dy = h - 1 - sy; break;
++			case kRotate270: dx = sy;         dy = w - 1 - sx; break;
++			default:                                           break;
++			}
++			memcpy(d + static_cast<size_t>(dy) * ds + dx * 4,
++			       s + static_cast<size_t>(sy) * ss + sx * 4, 4);
++		}
++	}
++	(void)ow;
++	(void)oh;
++	return 0;
++}
++
++} /* namespace libyuv */
++
++#define ALOGW(...)                                                             \
++	do {                                                                   \
++		fprintf(stderr, "    W: " __VA_ARGS__);                        \
++		fprintf(stderr, "\n");                                         \
++	} while (0)
++
++/* ──────────────── 被测代码：照抄 Session.cpp 的表达式 ──────────────── */
++
++/*
++ * ★ 逐字照抄 Session.cpp 的 toLibyuvRotation()。
++ *   Python 那边（A2）会断言源码里就是这张表，所以这里和源码任何一边改错
++ *   都会有人报错。
++ */
++static libyuv::RotationMode toLibyuvRotation(int32_t deg)
++{
++	switch (deg) {
++	case 90:
++		return libyuv::kRotate90;
++	case 180:
++		return libyuv::kRotate180;
++	case 270:
++		return libyuv::kRotate270;
++	case 0:
++		return libyuv::kRotate0;
++	default:
++		ALOGW("JPEG_ORIENTATION=%d 不是 0/90/180/270，按不旋转处理", deg);
++		return libyuv::kRotate0;
++	}
++}
++
++/*
++ * 照抄 Session::deliverJpeg() 里"缩放 + 旋转"那一段（编码器换成"把最终像素
++ * 与尺寸交回来"），表达式一字不改。
++ */
++struct JpegOut {
++	std::vector<uint8_t> buf;   /* 按 stride 紧凑排布 */
++	int32_t w = 0, h = 0;
++	int channels = 0;           /* 3 = BGR（快捷路径），4 = BGRA */
++};
++
++static bool preparePixels(const uint8_t *rgb, int32_t srcWidth_, int32_t srcHeight_,
++			  int32_t dstW, int32_t dstH, int32_t jpegOrientation,
++			  JpegOut *out)
++{
++	const libyuv::RotationMode rotMode = toLibyuvRotation(jpegOrientation);
++	const bool swapDims = rotMode == libyuv::kRotate90 || rotMode == libyuv::kRotate270;
++	const int32_t outW = swapDims ? dstH : dstW;
++	const int32_t outH = swapDims ? dstW : dstH;
++
++	const bool needScale = dstW != srcWidth_ || dstH != srcHeight_;
++	const bool needRotate = rotMode != libyuv::kRotate0;
++
++	std::vector<uint8_t> argb;      /* dstW×dstH，已缩放、未旋转（BGRA） */
++	std::vector<uint8_t> rotated;   /* outW×outH，已旋转（BGRA） */
++	const uint8_t *src = rgb;
++	int srcStride = srcWidth_ * 3;
++	int components = 3;
++
++	if (needScale || needRotate) {
++		argb.resize(static_cast<size_t>(dstW) * dstH * 4);
++
++		if (needScale) {
++			std::vector<uint8_t> full(static_cast<size_t>(srcWidth_) *
++						  srcHeight_ * 4);
++			if (libyuv::RGB24ToARGB(rgb, srcWidth_ * 3, full.data(),
++						srcWidth_ * 4, srcWidth_, srcHeight_) != 0)
++				return false;
++			if (libyuv::ARGBScale(full.data(), srcWidth_ * 4, srcWidth_,
++					      srcHeight_, argb.data(), dstW * 4, dstW, dstH,
++					      libyuv::kFilterBilinear) != 0)
++				return false;
++		} else {
++			if (libyuv::RGB24ToARGB(rgb, srcWidth_ * 3, argb.data(), dstW * 4,
++						dstW, dstH) != 0)
++				return false;
++		}
++
++		if (needRotate) {
++			rotated.resize(static_cast<size_t>(outW) * outH * 4);
++			if (libyuv::ARGBRotate(argb.data(), dstW * 4, rotated.data(),
++					       outW * 4, dstW, dstH, rotMode) != 0)
++				return false;
++			src = rotated.data();
++			srcStride = outW * 4;
++		} else {
++			src = argb.data();
++			srcStride = dstW * 4;
++		}
++		components = 4;
++	}
++
++	if (components == 3) {
++		/* 快捷路径：直接拿 RGB24 编码，没有中间拷贝 */
++		out->w = dstW;
++		out->h = dstH;
++		out->channels = 3;
++		out->buf.assign(src, src + static_cast<size_t>(srcStride) * dstH);
++		return true;
++	}
++
++	out->w = outW;
++	out->h = outH;
++	out->channels = 4;
++	out->buf.assign(src, src + static_cast<size_t>(srcStride) * outH);
++	return true;
++}
++
++/* ─────────────────────────── 断言框架 ─────────────────────────── */
++
++static int g_checks = 0;
++static int g_fail = 0;
++
++static void check(bool ok, const char *label)
++{
++	g_checks++;
++	printf("  [%s] %s\n", ok ? "PASS" : "FAIL", label);
++	if (!ok)
++		g_fail++;
++}
++
++/* 源图：像素 (x,y) 的 (B,G,R) = (x+1, y+1, 0x3C) —— 坐标可反查 */
++static uint8_t bOf(int x, int y)
++{
++	(void)y;   /* B 通道只编码 x，与像素布局对称，保留双参是为了调用点好看 */
++	return static_cast<uint8_t>((x + 1) & 0xFF);
++}
++static uint8_t gOf(int x, int y)
++{
++	(void)x;   /* G 通道只编码 y */
++	return static_cast<uint8_t>((y + 1) & 0xFF);
++}
++
++static std::vector<uint8_t> makeSource(int w, int h)
++{
++	std::vector<uint8_t> buf(static_cast<size_t>(w) * h * 3);
++	for (int y = 0; y < h; y++)
++		for (int x = 0; x < w; x++) {
++			uint8_t *p = buf.data() + (static_cast<size_t>(y) * w + x) * 3;
++			p[0] = bOf(x, y);
++			p[1] = gOf(x, y);
++			p[2] = 0x3C;
++		}
++	return buf;
++}
++
++static void testPixels(int srcW, int srcH, int dstW, int dstH, int deg,
++		       bool expectScale)
++{
++	char label[256];
++	snprintf(label, sizeof(label),
++		 "源 %dx%d → 流 %dx%d、请求旋转 %3d 度：尺寸与每个像素都对",
++		 srcW, srcH, dstW, dstH, deg);
++	std::vector<uint8_t> src = makeSource(srcW, srcH);
++	JpegOut out;
++	if (!preparePixels(src.data(), srcW, srcH, dstW, dstH, deg, &out)) {
++		check(false, label);
++		return;
++	}
++
++	const bool swap = (deg == 90 || deg == 270);
++	const int expW = swap ? dstH : dstW;
++	const int expH = swap ? dstW : dstH;
++	const int stride = out.channels == 4 ? 4 : 3;
++
++	/* 期望图：先把源散射成"未旋转的 dst 图"（缩放用最近邻），
++	 * 再按顺时针的【正向】映射散射到旋转后的帧里。正向写法不容易绕晕。 */
++	const int kW = expW * expH;
++	std::vector<int> expB(kW, -1), expG(kW, -1);
++	bool ok = (out.w == expW && out.h == expH);
++
++	for (int dy = 0; ok && dy < dstH; dy++) {
++		for (int dx = 0; ok && dx < dstW; dx++) {
++			const int ux = expectScale ? dx * srcW / dstW : dx;
++			const int uy = expectScale ? dy * srcH / dstH : dy;
++
++			int ox = dx, oy = dy;
++			switch (deg) {
++			case 90:  ox = dstH - 1 - dy; oy = dx;         break;
++			case 180: ox = dstW - 1 - dx; oy = dstH - 1 - dy; break;
++			case 270: ox = dy;            oy = dstW - 1 - dx; break;
++			default:                                        break;
++			}
++			if (ox < 0 || ox >= expW || oy < 0 || oy >= expH) {
++				ok = false;
++				break;
++			}
++			expB[oy * expW + ox] = bOf(ux, uy);
++			expG[oy * expW + ox] = gOf(ux, uy);
++		}
++	}
++
++	for (int i = 0; ok && i < kW; i++) {
++		if (expB[i] < 0) {
++			ok = false;   /* 有像素没被覆盖到 */
++			break;
++		}
++		const uint8_t *p = out.buf.data() + static_cast<size_t>(i) * stride;
++		if (p[0] != static_cast<uint8_t>(expB[i]) ||
++		    p[1] != static_cast<uint8_t>(expG[i]))
++			ok = false;
++	}
++	check(ok, label);
++}
++
++/* libcamera Rotation（逆时针）→ ANDROID_SENSOR_ORIENTATION（顺时针） */
++static int32_t androidOrientation(int32_t rawRotation)
++{
++	int32_t ccw = ((rawRotation % 360) + 360) % 360;
++	if (ccw % 90 != 0)
++		ccw = 0;
++	return (360 - ccw) % 360;
++}
++
++int main()
++{
++	printf("=== C. 运行级：编译并执行 deliverJpeg 的缩放/旋转路径 ===\n");
++	for (int deg : { 0, 90, 180, 270 }) {
++		testPixels(8, 6, 8, 6, deg, false);   /* 不缩放、只旋转（含快捷路径） */
++		testPixels(8, 6, 4, 3, deg, true);    /* 等比缩小一半再旋转 */
++		testPixels(8, 6, 4, 6, deg, true);    /* 非等比缩放 */
++	}
++
++	printf("\n=== D. 运行级：Rotation → ANDROID_SENSOR_ORIENTATION 换算 ===\n");
++	struct { int32_t in, out; } cases[] = {
++		/* in 是设备树/libcamera 的逆时针安装角，out 是 Android 的顺时针校正角 */
++		{ 0, 0 }, { 90, 270 }, { 180, 180 }, { 270, 90 },
++		{ 360, 0 },      /* 归一化 */
++		{ -90, 90 },     /* -90 逆时针 ≡ 270 逆时针 ⇒ 校正角 90 */
++		{ 45, 0 },       /* 非法 ⇒ 归 0 */
++	};
++	for (auto &c : cases) {
++		char label[128];
++		snprintf(label, sizeof(label), "Rotation=%d -> %d", c.in,
++			 androidOrientation(c.in));
++		check(androidOrientation(c.in) == c.out, label);
++	}
++
++	printf("\n=== 汇总 ===\n  检查项 %d，失败 %d\n", g_checks, g_fail);
++	return g_fail ? 1 : 0;
++}
+diff --git a/scripts/camera/test-jpeg-rotation.py b/scripts/camera/test-jpeg-rotation.py
+new file mode 100644
+index 0000000..39c92c0
+--- /dev/null
++++ b/scripts/camera/test-jpeg-rotation.py
+@@ -0,0 +1,314 @@
++#!/usr/bin/env python3
++"""照片方向链路的离线自检（无依赖，纯 Python 3）。
++
++为什么要写这个
++--------------
++
++整条链路里有【三个】互相独立的「90 度」，任何一个方向反了，用户看到的都是
++「照片逆时针转了 90 度」这同一种症状 —— 而单看照片分辨不出是哪一个反了：
++
++    ① 设备树 rotation                  逆时针，传感器物理安装角
++    ② libcamera properties::Rotation   逆时针，继承 ①
++    ③ ANDROID_SENSOR_ORIENTATION       顺时针，= 360 - ②
++    ④ ANDROID_JPEG_ORIENTATION         顺时针，应用按当前设备姿态算出来的
++    ⑤ libyuv RotationMode              顺时针，与 ④ 同向
++
++HAL 对 ④ 的合同只有一条，也是本脚本 B 部分唯一断言的东西：
++**把传感器读出顺时针旋转 ④ 度**。设备姿态怎么折算成 ④ 是应用的事，HAL 不该
++再猜一次 —— 猜错就是双重校正，而且猜错了从照片上一样看不出来。
++
++用法::
++
++    python3 scripts/camera/test-jpeg-rotation.py
++    python3 scripts/camera/test-jpeg-rotation.py --verbose
++
++退出码 0 = 全部通过。
++"""
++
++import argparse
++import os
++import re
++import sys
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++CAM_DIR = os.path.normpath(
++    os.path.join(HERE, "..", "..", "device", "huawei", "gaokun3", "camera"))
++
++FAILURES = []
++CHECKS = 0
++
++
++def check(cond, label, detail=""):
++    global CHECKS
++    CHECKS += 1
++    if cond:
++        print("  [PASS] %s" % label)
++        if detail:
++            print("         %s" % detail)
++    else:
++        print("  [FAIL] %s" % label)
++        if detail:
++            print("         %s" % detail)
++        FAILURES.append(label)
++    return cond
++
++
++def read(name):
++    with open(os.path.join(CAM_DIR, name), encoding="utf-8") as f:
++        return f.read()
++
++
++def strip_comments(text):
++    """去掉注释 —— 免得断言被注释里的说明文字骗过去。"""
++    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
++    text = re.sub(r"//[^\n]*", "", text)
++    return text
++
++
++# ─────────────────────────── A. 源码级断言 ───────────────────────────
++
++
++def part_a():
++    print("\n=== A. 源码级断言（解析 HAL 的 .cpp）===")
++
++    session = read("Session.cpp")
++    device = read("Device.cpp")
++    header = read("Session.h")
++    code = strip_comments(session)
++    dev_code = strip_comments(device)
++
++    # ── A1. ANDROID_JPEG_ORIENTATION 真的被读了 ──
++    check("ANDROID_JPEG_ORIENTATION" in code,
++          "A1 请求里的 ANDROID_JPEG_ORIENTATION 被消费",
++          "老代码一个字都没读它，JPEG 永远停在传感器原始朝向")
++    check(re.search(r"requestEntryInt\(\s*pend\.settings\s*,\s*ANDROID_JPEG_ORIENTATION",
++                    code) is not None,
++          "A1b 取值来源是【本帧的请求设置】，不是静态元数据")
++    check("ANDROID_JPEG_QUALITY" in code,
++          "A1c ANDROID_JPEG_QUALITY 也读进来了（顺手修掉质量恒 90）")
++
++    # ── A2. libyuv 映射表必须是恒等映射（顺时针 → 顺时针） ──
++    mapper = re.search(r"toLibyuvRotation\s*\(int32_t\s+\w+\)(.*?)\n\}", code, re.S)
++    if not check(mapper is not None, "A2 找到 toLibyuvRotation() 的定义"):
++        return
++    body = mapper.group(1)
++    table = {int(a): int(b)
++             for a, b in re.findall(
++                 r"case\s+(\d+)\s*:\s*return\s+libyuv::kRotate(\d+)\s*;", body)}
++    check(table == {0: 0, 90: 90, 180: 180, 270: 270},
++          "A2b 映射表是恒等的：Android 角 == libyuv 角",
++          "实测表 = %s" % sorted(table.items()))
++    check("360" not in body,
++          "A2c 映射表里没有 360-x 之类的反向换算",
++          "libyuv 的 kRotate90 本身就是顺时针，取反会转反 180 度")
++    default_branch = re.search(r"default\s*:(.*?)(?=\n\s*case\s+\d+\s*:|\Z)", body, re.S)
++    check(default_branch is not None and "kRotate0" in default_branch.group(1),
++          "A2d 非法角度（非 0/90/180/270）落到 kRotate0",
++          "Android 只允许这四个值，静默接受别的值会得到随机方向")
++
++    # ── A3. 90/270 的宽高互换 ──
++    compact = re.sub(r"\s+", "", code)
++    check("swapDims?dstH:dstW" in compact and "constint32_toutW" in compact,
++          "A3 90/270 时交换输出宽高：outW=dstH, outH=dstW",
++          "BLOB 流只声明字节数，JPEG 实际尺寸换了是允许的")
++
++    # ── A4. ARGBRotate 的目标 stride 必须用旋转后的宽度 ──
++    rot_call = re.search(r"libyuv::ARGBRotate\((.*?)\)\s*!=\s*0", code, re.S)
++    if check(rot_call is not None, "A4 找到 ARGBRotate 的调用"):
++        args = [a.strip() for a in re.sub(r"\s+", "", rot_call.group(1)).split(",")]
++        check(len(args) == 7 and args[3] == "outW*4",
++              "A4b 目标 stride 用【旋转后】的宽度 outW*4",
++              "实测第 4 个实参 = %r；沿用 dstW*4 会让每一行错位" % (args[3],))
++        check(len(args) == 7 and args[4] == "dstW" and args[5] == "dstH",
++              "A4c 源宽高仍是传感器坐标系的 (dstW, dstH)")
++        check(len(args) == 7 and args[6] == "rotMode",
++              "A4d 旋转模式来自请求解析出的 rotMode")
++    else:
++        check(False, "A4b/c/d 无法校验（没找到调用）")
++
++    # ── A5. 实参顺序：方向必须真的传进编码函数 ──
++    # 第一个实参是【源缓冲】：修前是 rgb，远端加入静态照片降噪后变成 rgbStill。
++    # 名字不是合同（缓冲换谁进来都行）—— 合同是后两个实参必须是质量与方向。
++    call = re.search(r"deliverJpeg\(\s*[A-Za-z_][A-Za-z0-9_]*\s*,(.*?)\)", code, re.S)
++    if check(call is not None, "A5 找到 deliverJpeg 的调用点"):
++        args = [a.strip() for a in re.sub(r"\s+", " ", call.group(1)).split(",")]
++        check(len(args) == 6 and args[4] == "jpegQuality" and args[5] == "jpegOrientation",
++              "A5b 调用点依次传入 (quality, jpegOrientation)",
++              "实测实参 = %s" % args)
++    sig = re.search(r"bool\s+Session::deliverJpeg\((.*?)\)\s*\{", code, re.S)
++    if check(sig is not None, "A6 找到实现签名"):
++        sig_args = [a.strip() for a in re.sub(r"\s+", " ", sig.group(1)).split(",")]
++        check(len(sig_args) == 7 and sig_args[6].endswith("jpegOrientation"),
++              "A6b 实现的形参里有 jpegOrientation",
++              "实测 = %s" % sig_args)
++    hdr_sig = re.search(r"bool\s+deliverJpeg\((.*?)\)\s*;", header, re.S)
++    check(hdr_sig is not None and "jpegOrientation" in hdr_sig.group(1),
++          "A6c 头文件里的声明同步了")
++
++    # ── A7. Device.cpp 的逆时针 → 顺时针换算 ──
++    check(re.search(r"facts_\.orientation\s*=\s*\(360\s*-\s*ccw\)\s*%\s*360\s*;",
++                    dev_code) is not None,
++          "A7 ANDROID_SENSOR_ORIENTATION = (360 - 逆时针安装角) % 360",
++          "上游 libcamera 的 src/android/camera_device.cpp 就是这个式子")
++    check(re.search(r"facts_\.orientation\s*=\s*rot\s*\?\s*\*\s*rot\s*:\s*0\s*;",
++                    dev_code) is None,
++          "A7b 老的直接抄数值（rot ? *rot : 0）已经删掉",
++          "那个写法在 90/270 上差 180 度")
++    check(re.search(r"ccw\s*%\s*90\s*!=\s*0", dev_code) is not None,
++          "A7c 非 90 倍数的安装角被拦下并告警",
++          "Android 只认 0/90/180/270")
++
++
++# ─────────────────────── B. 行为模型（顺时针定义） ───────────────────────
++
++
++def rotate_cw(img, deg):
++    """按【顺时针】旋转 deg 度（deg ∈ {0,90,180,270}）。
++
++    这是「顺时针」的数学定义，不依赖任何第三方库的命名：
++        90 度：  out[i][j] = in[H-1-j][i]
++        180 度： out[i][j] = in[H-1-i][W-1-j]
++        270 度： out[i][j] = in[j][W-1-i]
++    """
++    deg %= 360
++    if deg == 0:
++        return [row[:] for row in img]
++    h, w = len(img), len(img[0])
++    if deg == 90:
++        return [[img[h - 1 - j][i] for j in range(h)] for i in range(w)]
++    if deg == 180:
++        return [[img[h - 1 - i][w - 1 - j] for j in range(w)] for i in range(h)]
++    if deg == 270:
++        return [[img[j][w - 1 - i] for j in range(h)] for i in range(w)]
++    raise ValueError(deg)
++
++
++def libyuv_rotate(img, mode_deg):
++    """按 libyuv 的【口头契约】旋转。
++
++    include/libyuv/rotate.h 原文::
++
++        kRotate90  = 90,   // Rotate 90 degrees clockwise.
++        kRotate270 = 270,  // Rotate 270 degrees clockwise.
++        kRotateClockwise = 90, kRotateCounterClockwise = 270,   // 历史别名
++
++    所以就是 rotate_cw。上游哪天改了方向，这里和 A2 的断言会一起红掉。
++    """
++    return rotate_cw(img, mode_deg)
++
++
++def part_b(verbose=False):
++    print("\n=== B. 行为模型：场景 → 传感器读出 → HAL 旋转 → JPEG ===")
++    print("""
++    三个量的关系（很容易混，这里一次说清）：
++      · dt_rotation  设备树/libcamera 的角，【逆时针】，= 把画面转正所需的
++                     逆时针角；它【在数值上】恰好等于"照片看起来顺时针歪了多少"
++      · apparent_cw  照片看起来顺时针歪了多少      = dt_rotation
++      · sensor_orient ANDROID_SENSOR_ORIENTATION，【顺时针】校正角
++                     = (360 - apparent_cw) % 360  = (360 - dt_rotation) % 360
++    校正角与"歪了多少"是【互补】关系 —— 这正是最容易写反的地方。
++""")
++
++    # 一张非对称的 3x4 场景图，每格一个唯一标签。
++    # 非对称是关键：对称图案会让「转反 180 度」也蒙混过关。
++    upright = [[10 * (r + 1) + (c + 1) for c in range(4)] for r in range(3)]
++    if verbose:
++        print("    正立场景(3 行 x 4 列):")
++        for row in upright:
++            print("      %s" % row)
++
++    print("\n  -- B1/B2 设备自然朝向下：安装角 → 元数据 → 照片 --")
++    for dt_rotation in (0, 90, 180, 270):
++        # 传感器读出：没做任何校正时，照片看起来顺时针歪了 dt_rotation 度。
++        apparent_cw = dt_rotation
++        raw = rotate_cw(upright, apparent_cw)
++
++        # ① HAL 把逆时针的安装角换算成顺时针的校正角（这才是 Android 要的）
++        sensor_orientation = (360 - dt_rotation) % 360
++        check(sensor_orientation == (360 - apparent_cw) % 360,
++              "B1 Rotation=%3d 度(逆时针) -> 上报 SENSOR_ORIENTATION=%3d 度(顺时针)"
++              % (dt_rotation, sensor_orientation))
++
++        # ② 设备自然朝向下，应用算出的 JPEG 旋转角就等于 SENSOR_ORIENTATION
++        requested = sensor_orientation
++        # ③ HAL 按 libyuv 顺时针语义旋转（A2 已断言映射恒等）
++        out = libyuv_rotate(raw, requested)
++
++        check(out == upright,
++              "B2 Rotation=%3d 度: 修复后 JPEG == 正立场景" % dt_rotation)
++
++        # 回归：老代码完全不动像素
++        if dt_rotation == 0:
++            check(raw == upright, "B3 Rotation=  0 度: 不旋转本来就对（老代码无辜）")
++        else:
++            check(raw != upright,
++                  "B3 Rotation=%3d 度: 修复前 JPEG != 正立场景（用户看到的歪）"
++                  % dt_rotation)
++        if dt_rotation == 270:
++            # 需要补 90 度顺时针而一点没补 ⇒ 看起来是 270 度顺时针
++            # = 90 度逆时针，逐字对上用户的描述。
++            check(raw == rotate_cw(upright, 270),
++                  "B3b Rotation=270 度: 修复前看起来顺时针歪 270 度",
++                  "270 度顺时针 == 90 度逆时针，这就是用户报的症状")
++
++        # 宽高：校正角为 90/270 时必须换过来
++        h, w = len(raw), len(raw[0])
++        swapped = sensor_orientation in (90, 270)
++        dst_w, dst_h = w, h                      # 流声明 = 传感器坐标系尺寸
++        out_w = dst_h if swapped else dst_w      # HAL 的 outW
++        out_h = dst_w if swapped else dst_h      # HAL 的 outH
++        expect = (h, w) if swapped else (w, h)
++        check((out_w, out_h) == expect,
++              "B4 Rotation=%3d 度: 输出 %dx%d（流声明 %dx%d）"
++              % (dt_rotation, out_w, out_h, dst_w, dst_h))
++
++    # ── B5. HAL 对请求角的合同：忠实按【顺时针】转，不自己再猜设备姿态 ──
++    print("\n  -- B5 HAL 的合同：JPEG == 传感器读出顺时针转 请求角 --")
++    for dt_rotation in (0, 90, 180, 270):
++        raw = rotate_cw(upright, dt_rotation)
++        correct_angle = (360 - dt_rotation) % 360
++        for requested in (0, 90, 180, 270):
++            out = libyuv_rotate(raw, requested)
++            faithful = out == rotate_cw(raw, requested)
++            # 只有请求角正好是校正角时才该正立；任何别的组合都必须【不正立】，
++            # 否则说明发生了双重校正。
++            should_be_upright = (requested == correct_angle)
++            check(faithful and (out == upright) == should_be_upright,
++                  "B5 Rotation=%3d 请求=%3d: 忠实旋转，且仅角度正确时正立"
++                  % (dt_rotation, requested),
++                  "" if should_be_upright
++                  else "此时本就不该正立（HAL 不替应用猜设备姿态）")
++
++    # ── B6. 一次旋转 != 两次旋转（防止"转像素 + 又写 EXIF 角度"的经典错） ──
++    print("\n  -- B6 不得双重校正 --")
++    for dt_rotation in (90, 270):
++        raw = rotate_cw(upright, dt_rotation)
++        angle = (360 - dt_rotation) % 360
++        once = libyuv_rotate(raw, angle)
++        twice = rotate_cw(once, angle)
++        check(once == upright and twice != upright,
++              "B6 Rotation=%3d: 只转一次正好，转两次就歪" % dt_rotation,
++              "所以 EXIF 里不能再写这个角，否则看图器会再转一遍")
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--verbose", action="store_true", help="打印场景矩阵")
++    args = ap.parse_args()
++
++    print("照片方向链路自检 —— 目录 %s" % CAM_DIR)
++    part_a()
++    part_b(args.verbose)
++
++    print("\n=== 汇总 ===")
++    print("  检查项 %d，失败 %d" % (CHECKS, len(FAILURES)))
++    for f in FAILURES:
++        print("  [X] %s" % f)
++    if FAILURES:
++        return 1
++    print("  全部通过")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())

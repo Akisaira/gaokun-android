@@ -667,7 +667,11 @@ hi846 的完整控件表在 [#81](stage4-findings.md) 第六节。
 轨亮着时扫总线 0x36/0x50 应答。`patches/0032`（DT）+ `0034`（ov13b10 OF 匹配 + 板级上电）+ `VIDEO_DW9714=y`
 之后：47 个 subdev、`camtest --rear` 出 2104×1560 帧、HAL 枚举 2 个相机。内核 `#19`（+0035 回落 +0036 闪光）在 `slot_cam5`，两路验收全过（[#110](stage4-findings.md)）。
 ⬜ 应用层实测；⬜ libcamera：`camera_sensor_properties` 加 ov13b10、增益模型 helper、`ov13b10.yaml`；
-⬜ 上游 `ov13b10.c` 补 `get_selection`；⬜ 读 EEPROM@0x50（模组标定）；⬜ `rotation` FIXME；
+⬜ 上游 `ov13b10.c` 补 `get_selection`；⬜ 读 EEPROM@0x50（模组标定）；
+⬜ **`rotation` FIXME —— 2026-09-19：这条已成"照片方向"的最后一环。**
+HAL 侧的 JPEG 旋转与朝向换算都已修好（见 [camera-photo-rotation-2026-09-19.md](camera-photo-rotation-2026-09-19.md)），
+照片方向现在**完全由设备树这两个 `rotation` 值决定**，而它们恰恰是猜的。
+标定用 `setprop debug.gaokun3.camera.orientation.{front,rear}`（该文档第六节）；实机已量出前摄 270 / 后摄 0。
 ✅ 稳健性：`patches/0035` —— 某颗传感器 20 s 没绑上就只带绑上的完成 notifier；`ov13b10.fail_probe=1` 实测前摄照常（45 个 subdev，[#110](stage4-findings.md)）。
 ✅ 2026-09-14 收尾：用户手电筒照镜头看到景物/亮度变化 ⇒ **`#18` + 后摄 dtb 已设为默认槽**；prebuilt-boot 已是 `#19` + dtb v2。
 `slot_cam` / `slot_cam4`（#14 时代）已从 ESP 删除（它们把 ESP 吃到只剩 4.5 MB，会让 postinstall 失败，#110）。
