@@ -9329,8 +9329,8 @@ hwc 那条规则暴露了一个方法论缺陷，值得单独立条。
 `bootctl is-slot-bootable 1` = **0**，`is-slot-marked-successful 1` = 0；
 `/dev/block/mapper/` 里只有 `*_a` 与 `*_a-cow`，`snapshotctl dump` 报 `Update state: none`。
 CLAUDE.md 一直写"`_b` = v0.6.2，出事把 `default` 掰回它"—— **现在掰回去也起不来**。
-`-cow` 设备为什么在合并之后还在，未查。用户报的"`_a` 起不来"没有留下痕迹：
-pstore 里最新的记录是 09-13 的，本次开机 `_a` 正常。
+`-cow` 设备为什么在合并之后还在，未查。用户当天说过一句"`_a` 起不来"，追问现象时本人也不确定，
+而 pstore 里最新的记录是 09-13 的、本次开机 `_a` 正常且已标记成功 ⇒ **以实机为准：`_a` 可启动**，不立案。
 
 ### 3. ⚠️★ init 泄漏 remoteproc 引用 —— `sscexp.sh` 停不下 SLPI 的原因
 
