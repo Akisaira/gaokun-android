@@ -9608,3 +9608,92 @@ logcat 里 05:55 打开的是 Aperture。
   设备侧的静态 IP **保留不动**（远程改 Wi-Fi 配置出事了救不回来，两边都在更稳）。
   ⚠️ 通配会匹配任何没有烧录 MAC、落到 `00:03:7f:12:xx:xx` 的 Atheros 设备 —— 家里现在没有第二台。
 * ⬜ 根治仍是让 MAC 稳定（`local-mac-address` 或开机脚本按 SoC 序列号派生），那样换了网络也不漂。
+
+## #120 指纹（FocalTech `FTE7001`）：硬件接口查清了，但总线在安全世界手里 —— 现阶段驱动不了（2026-09-24）
+
+用户要求"尽一切努力研究"指纹。两路调研（本地 ACPI / 实机只读，与公开资料 / Windows 驱动包静态分析），
+实机上只做了只读操作（debugfs gpio、`/proc`、`/sys`、`zcat /proc/config.gz`），没碰 `/dev/mem`、没写任何东西。
+原始报告在当次会话的 scratchpad（`fp-local.md` / `fp-web.md`），不入库；Windows 驱动二进制是专有文件，**不入库**。
+
+### 1. 是哪颗、接在哪【实测 + 文件】
+* DSDT（BIOS 2.16）`\_SB.SPBA`（`refs/matebook-e-go-linux/docs/acpi/DSDT_216.dsl:29205-29320`）：`_HID` 由两根板级 strap
+  GPIO61/GPIO62 选 `FTE7001`（FocalTech）/ `GDIX5125`（Goodix）/ 无传感器。
+  实机 `/sys/kernel/debug/gpio`：**gpio61 低、gpio62 配着下拉仍读高** ⇒ **本机是 FocalTech `FTE7001`**
+  （与 `scripts/archive/windows-preflight.ps1:75` 的注释、aoripus 在 GK-W76 上的 Windows 注册表取证一致）。
+  `FTE7001` 是 ACPI ID，不是芯片型号；Windows 驱动的字符串指向 FocalTech **FT9769** 模组（带 MCU）+ FT9391 传感器前端。
+* `SPBA._CRS` 只有两根 GPIO：
+  * `GpioInt(Edge, ActiveHigh, ExclusiveAndWake, PullDown)` 虚拟脚 `0x340` ⇒ **TLMM GPIO181**。
+    换算：GIO0 `_CRS` 第 13 个 Interrupt（GSIV `0x2BC`）→ GIC SPI 668 → PDC 239（`sc8280xp.dtsi` pdc-ranges `<239 668 1>`）
+    → `{181, 239}`。同一规则对 5 个已知设备交叉验证成立，其中 EC 那条（虚拟脚 `0x2C0` → GPIO103 / PDC 215）是**实机正在工作**的中断。
+  * `GpioIo(Shared, PullUp)` pin `0xB9` = **GPIO185**（社区 README 的 "gpio185"）；大概率是复位（驱动字符串有 `SendRstByGPIO`），未验证。
+  * 现状：181 配着下拉却读高（外部拉高），185 读低；四只脚都没被驱动占用，也都不在实跑 DT 的 `gpio-reserved-ranges` 里。
+* **没有 `SpiSerialBus` / `I2cSerialBus`**，DSDT 里也没有别的设备引用 SPBA —— 对照同一份表里的触屏 `THPB`，它的 `_CRS` 是带 SPI 的。
+* **不是 USB**：实机 USB 上只有键盘 `12d1:10b8`，没有 FocalTech（`2808`）/ Goodix（`27c6`）。
+
+### 2. 为什么驱动不了【文件】
+* Windows 驱动包（`matebook-e-go/uup-drivers-sc8280xp` release 200.0.10.0）里，FocalTech 的 INF 只绑 `ACPI\FTE7001`，
+  并把一个高通签名的可信应用 `fingerpr` 注册进 QcTrEE；取图、注册、比对、模板存储都在这个运行于 TrustZone 的应用里，
+  **SPI 由安全世界直接持有**（这正是 ACPI 不把总线交给 OS 的原因）。非安全侧只拿得到那根中断。
+* 所以这不是"写一个 SPI 驱动"的问题：Linux 侧既看不到那条总线，也没有上游支持的接口去调用那个可信应用
+  （上游的 QTEE 驱动只覆盖更新的 SoC）。**这条路我不继续往下挖** —— 它要么需要高通/华为侧的支持，
+  要么需要绕开平台的安全设计，都不是这个项目该做的事。
+* 就算拿到裸 SPI 也不够：别的机器上有人试过"自己读图 + libfprint 匹配"，图能读出来但质量差、libfprint 匹配失败。
+
+### 3. Android 侧本身不是障碍【上游源码，构建机树】
+本机用的是软件 KeyMint（`com.android.hardware.keymint.rust_nonsecure`）+ 软件 gatekeeper（`device.mk:59-60`）。
+软件 gatekeeper 自己实现了 `ISharedSecret`（`hardware/interfaces/gatekeeper/aidl/software/SharedSecret.cpp`，
+清单 `android.hardware.security.sharedsecret-gatekeeper.xml`），与 KeyMint 协商出同一把 HMAC 密钥来签认证令牌。
+一个自研指纹 HAL 按同样方式加入协商，就能签出 keystore 认的令牌；AOSP 的虚拟指纹 HAL
+（`hardware/interfaces/biometrics/fingerprint/aidl/default/`，`FakeFingerprintEngine.cpp`）可当骨架。
+⇒ **如果将来有了合法可用的取图/比对后端**，Android 这一侧是几天的活；缺的只是后端。
+
+### 4. ⚠️ 顺带查出：`DSDT_217.dsl` 不是本机平台的表
+`refs/matebook-e-go-linux/docs/acpi/DSDT_217.dsl` 表头是 `OEM ID "QCOMM"`、`OEM Table ID "SDM8180"`（本机 216 是 `HUAWEI` / `SDM8280`），
+TLMM 在 `0x03000000`（SC8180X 的布局），来源 capsule `GKQ82217.bin`（本机是 `GKQ83216.bin`）⇒ 它是 **8cx Gen 2（SC8180X）** 那条产品线的 BIOS。
+CLAUDE.md / README / INSTALL 里"2.17 的触摸 SPI 总线和 GPIO 编号完全不同，所以别升"这条理由，比的是**另一颗 SoC**。
+"别升 2.17"作为谨慎做法仍然成立（没人在本机验证过 2.17，甚至不确定本机有没有 2.17），但理由要改写 —— 对外文案改不改由用户定。
+
+### 5. 未决
+* 指纹占的是哪一路 QUP SE —— 本地定不下来（候选 `spi7@99c000` / `spi22@898000`，都只是"没被描述"推出来的）；
+  判定它是否被锁需要读寄存器，有整机挂死的风险，**不做**。
+* GPIO185 的极性与作用、传感器供电轨 —— 要有人在场的受控实验，而且就算做了也解决不了第 2 节的问题，优先级低。
+
+## #121 光感：激活会让 SLPI 的 sensor_process【整个崩溃】；Windows 用的就是同一套 QRD 配置；以及 SLPI 自愈后传感器全丢（2026-09-24）
+
+### 1. 配置没有"华为专用版"【文件】
+DSDT 里 `PSUB = "QRD08280"`（`refs/matebook-e-go-linux/docs/acpi/DSDT_216.dsl:119`），光感所在的 `SEN2`/`QCOM0693` 的 `_SUB` 就是它
+（同文件 `:29026-29036`）；`qcSensorsConfigQrd8280.inf:82` 按 `ACPI\VEN_QCOM&DEV_0693&SUBSYS_QRD08280` 安装。
+两个 release 的驱动包里都没有 OEM 传感器 cab；我们 VFS 里的 26 个 JSON 去掉 CRLF 后与 cab 原件逐字节相同。
+⇒ **Windows 在本机上用的就是 QRD 那套 JSON**；和我们唯一的输入差别是 DSP 自己写出的 registry（我们的 hexagonfs 不许写）。
+（调研报告在当次 scratchpad `als-research.md`，不入库。）
+
+### 2. ★★★ 激活光感 ⇒ SLPI 的 sensor_process fatal error ⇒ SLPI 崩溃并自愈【实测】
+正常栈（HAL 在跑）上用 `/data/local/tmp/gaokun3-ssc-test ambient_light 0 4 onchange`：
+仍是那条 `msg_id=130 / 08 04`，而 dmesg 同一时刻：
+```
+PDM: service 'sensor_process' crash: 'EF:sensor_process:0x2:SNS_SEE_I_0:0x10000010:sns_strea'
+qcom_q6v5_pas 2400000.remoteproc: fatal error received: err_qdi.c:1122:EF:sensor_process:0x2:SNS_SEE_I_0:0x10000010:sns_stream_service.c:436:sns_stream_service.c
+remoteproc remoteproc0: crash detected in slpi: type fatal error … recovering slpi … slpi is now up
+```
+紧接着再查 `ambient_light`：**"没有提供者"**，连 accel 也没有了。
+⇒ #118 §5 的"CRITICAL"不是驱动礼貌地拒绝，是**整个 SEE 进程崩溃前的最后一条消息**。
+#118 那几轮是在 `sscexp.sh` 里做的（每轮都重启 SLPI），崩溃被循环本身盖住了。
+★ 教训：**一个"返回错误码"的实验，要同时看 dmesg 里对面有没有死。**
+
+### 3. ⚠️★ 缺陷：SLPI 崩溃自愈后，系统传感器会全丢【实测】
+自愈时 init 只重启了一次 `vendor.hexagonrpcd-sdsp`（pid 741 退出 → 9002 退出码 4 → 9188），
+而 #118 §4 已知 SEE 要 hexagonrpcd **再重启一次**才注册传感器 ⇒ 自愈之后 SSC 里连 accel 都没有，
+Android 的自动旋转随之失效，直到重启或手动收拾。
+恢复（本次实测有效）：`stop vendor.sensors-gaokun3; stop vendor.hexagonrpcd-sdsp; pkill hexagonrpcd; start vendor.hexagonrpcd-sdsp`，
+等 45 秒 → `gaokun3-ssc-test accel` 2 秒 25 条（X=8.61 Z=4.56）→ `start vendor.sensors-gaokun3`，
+system_server 重新 linkToDeath 上新 HAL、登记 5 个传感器。⬜ 息屏中，框架层事件待亮屏确认（自动旋转）。
+光感本身不在 HAL 暴露的列表里 ⇒ 应用触发不了这个崩溃；但**任何原因的 SLPI 崩溃**都会落到这个状态 ⇒ 记 TODO B21。
+
+### 4. 下一步（按成本排序，都不需要 Windows）
+1. 让 hexagonrpcd 可写：psacal 在 hexagonrpc PR #21 下留言（2026-06-03，本人说法，无人复现）加 fwrite 桩后
+   "Light: TCS3701, ~408 lux"；FadyAckad/hexagonrpc 的 `sp11-sensors` 分支在上游 main 上加了 5 个提交实现真写入。
+   我们的 hexagonrpc 比 main 落后 19 个提交 ⇒ 升级 + 叠这 5 个 + 重打 `\r` 补丁，可写目录放 `/data/vendor`。
+   副产品是一份 DSP 自己生成的 registry。约半天，要重编 hexagonrpcd，实验会让 SLPI 崩溃，得有收拾步骤兜着。
+2. 固件字符串显示华为版 tcs3701 驱动要读 9 个 registry 组，JSON 只给了 7 个（缺 `tcs3701.rgb.config`、
+   `tcs3701_platform.rgb.fac_cal`）—— 缺组是不是崩溃原因，未验证。
+3. 找 psacal 要 Windows 生成的 `registry` + `sns_reg_version` 做 A/B。

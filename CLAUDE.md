@@ -142,7 +142,7 @@ Android 相关知识。因此：
 | SoC | Qualcomm Snapdragon 8cx Gen 3 / **SC8280XP** |
 | 设备代号 | gaokun3（8cx Gen 3 机型）；gaokun2 是另一套 EC 协议 |
 | 型号 | **HUAWEI GK-W7X，SKU C233，2022 款，CSOT 面板，触摸固件 `41 07`** |
-| BIOS | **2.16**（2023-01-31）⚠️ **不要升级到 2.17** —— 触摸的 SPI 总线和 GPIO 编号两版完全不同，上游驱动是按 2.16 开发的（reset=99 / IRQ=175 / 12 MHz）|
+| BIOS | **2.16**（2023-01-31）⚠️ **不要升级到 2.17** —— 上游触摸驱动是按 2.16 开发的（reset=99 / IRQ=175 / 12 MHz）。⚠️ 2026-09-24 查出：此前的理由"两版触摸 SPI 总线和 GPIO 编号完全不同"比的那份 `DSDT_217` 表头是 `QCOMM SDM8180` —— **是 8cx Gen 2 的表，不是本机的下一版**（#120 §4）。"别升"作为谨慎做法保留，理由待重写 |
 | GPU | **Adreno 690** —— mesa freedreno + turnip，主线支持成熟 |
 | 屏幕 | **Himax HX83121A / ppc357db11 WQXGA**，MIPI-DSI。**与三星 Galaxy Tab S7 FE 同款面板** |
 | WiFi/BT | WCN6855 —— ath11k + hci_qca，主线驱动 |
@@ -150,7 +150,7 @@ Android 相关知识。因此：
 | 存储 | NVMe（**不是 UFS**，不是手机那套分区布局） |
 | 引导 | **UEFI，不是 fastboot**。可关 Secure Boot。GRUB/systemd-boot 加载 |
 | 虚拟化 | KVM/EL2 可用 |
-| 已知不支持 | 指纹（FocalTech FTE7001）、TPM。深度休眠 (S4) 仍未测 |
+| 已知不支持 | 指纹（FocalTech FTE7001：中断 GPIO181、另一脚 GPIO185；**SPI 与比对都在 TrustZone 里，OS 拿不到总线**，#120）、TPM。深度休眠 (S4) 仍未测 |
 | 待机 (s2idle) | ✅ **已修复**（M16，v0.3.0-alpha）。⚠️ 本表此前写着"挂得下去、醒不回来、内核/EC 缺陷"，**两句都错**：M15 证明复位发生在**挂起进入**而非唤醒，M16 查出真凶是我们 Stage 2 自己加的 `dr_mode="otg"`，与内核和 EC 都无关 |
 
 ## 关键约束（每次都要记住）

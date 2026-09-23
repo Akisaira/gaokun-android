@@ -33,11 +33,12 @@
 T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0048（USB 角色）、
 #117 §19 那 4 处 SELinux 规则 + usbrole/rproc-kick 规则、S1。
 ★ 开发机已显式 `setprop persist.vendor.gaokun3.allow_suspend 0` 并核对落盘 ⇒ 装上候选版后开发机仍不睡。
-产物：（构建中）
+产物：构建戳 **`1790206017`**，incremental `20260923232657`；payload.bin 1345137069 字节、sha `d2487f96…`；boot.img 的 kernel `9854daa3…`、dtb `8b390878…`（1 个 FDT）。
+✅ **payload 已在设备上**（`/data/local/tmp/payload.bin`，设备上 sha 核对过）；`install-ota-local.sh --check` 全过（2026-09-24 07:4x）。构建机已 deallocate。
 
 **装**（⚠️ 要人在场：新系统第一次启动；`_b` 当前不可启动，装完 OTA 就是写进 `_b`）：
-payload 先上设备（R2 staging 要凭据：`release.sh --stage-only`；没有凭据就直传，白天约 1.3 MB/s ≈ 17 分钟，
-续传别用本机 rsync，见 CLAUDE.md 运维坑 1）→ `bash scripts/install-ota-local.sh --check` → `--go` → 重启。
+~~payload 先上设备~~（已在）→ `SER=192.168.10.239:5555 bash scripts/install-ota-local.sh --check` → `--go` → 重启。
+（这次直传：构建机→本机 137 秒、本机→设备 88 秒；夜里那次 142 KB/s 是时段问题。）
 脚本会把 `default` 掰回 `_a`、只 oneshot 到新槽，起不来下一次重启就回 `_a`。
 ⚠️ 设备上 09-18 的旧 payload 已改名为 `payload-1789737346.*`，免得误装旧版。
 
@@ -59,6 +60,7 @@ payload 先上设备（R2 staging 要凭据：`release.sh --stage-only`；没有
 | # | 事情 | 现在卡在哪 | 下一步（具体） |
 |---|---|---|---|
 | **S1** ✅ | **待机默认值 1→0 会波及老用户**（2026-09-24 已改回 1，见下） | 用户 2026-09-23：这是 SELinux 那轮（属性改名）带出来的，不是为待机本身做的决定。09-18 为改名把 `persist.vendor.gaokun3.allow_suspend` 默认设成 0（`device.mk:526`），`device.mk` 注释只说"新装机默认不睡"。但 v0.6.2 的用户**绝大多数从没设过这个属性**（旧默认 1）⇒ OTA 一过、新名字取默认 0 ⇒ **所有老用户也会失去 s2idle**，README 的"待机 ✅"随之失真 | ✅ **用户 2026-09-23 定**：开发期保持 0，**正式版发布前改回 1**。✅ 2026-09-24 候选版起已改回 1（`device.mk` 的 `PRODUCT_VENDOR_PROPERTIES`），开发机已 `setprop … 0` 并核对落盘；✅ `release.sh` 断言发版的 `vendor/build.prop` 里是 1（`--stage-only` 不拦）。⬜ 装机验收清单第 8 条 |
+| **B21** 🆕 | **SLPI 崩溃自愈后系统传感器全丢**（2026-09-24，[#121 §3](stage4-findings.md)） | 自愈时 init 只重启一次 hexagonrpcd，而 SEE 要再重启一次才注册传感器 ⇒ accel 没了、自动旋转失效，直到重启 | 给 hexagonrpcd 的 rc 加"SLPI 回到 running 后再重启一次"（`on property` 盯不住 remoteproc 状态，多半要一个小守护或 uevent 触发），实测：让 SLPI 崩一次（激活光感就能复现）看 accel 能否自己回来 |
 | **T1** | **触摸** | ✅ v0.6.2 已发（跳点限速线、fuzz=0、按下 17 ms、面积轴、6 个驱动缺陷、可观测性，[#114](stage4-findings.md)–[#116](stage4-findings.md)）。剩：手掌碎成多触点（不影响点击，三种阈值法实测全否） | 下一版驱动做跨帧形态判据；轴已经有了，可以顺手写触摸 IDC（`touch.size.calibration`，本机现在 `ConfigurationFile: <none>`） |
 | **B15** ✅ | **全新安装丢触摸参数**（2026-09-23 已修） | ★ 实锤：`scripts/install-gaokun3.sh:251-257` 写死的 cmdline **没有** `himax_hx83121a_spi.disable_pressure=0`（`BoardConfig.mk:134` 有）⇒ 按 INSTALL.md 全新装 v0.6.2 的机器**没有触点面积轴**，直到第一次 OTA 的 postinstall 把 cmdline 同步过去 | ✅ `install-gaokun3.sh` 改为从 boot.img 头读 cmdline（`cmdline[512]@64 + extra_cmdline[1024]@608`，与 `bootimg_extract.cpp` 同一写法），读不到就拒装。拿 v0.6.2 发布的 `boot.img`（sha `975d7987…`）实测：解出的 cmdline 与 `BoardConfig.mk` **逐字相同**。`deploy-android.sh` 已归档。⬜ 剩 `scripts/live/installer-lib.sh:506` 那份（更旧，还缺 `boot_devices` / `init=/init`），随 B4 一起改 —— 它还假设发布目录有散装 `Image`/`dtb`/`ramdisk`，而发布只带 `boot.img` |
 | **T2** | **Google 未认证** | Play 商店报"设备未经 Play 保护机制认证" | 工具与文档已就位（`scripts/google/gsf-android-id.sh` + INSTALL.md）。**剩下的是用户动作**：拿 Android ID 去 google.com/android/uncertified 登记 |
@@ -67,7 +69,7 @@ payload 先上设备（R2 staging 要凭据：`release.sh --stage-only`；没有
 | **A1** | 音频/蓝牙长期运行后死锁 | 用户报过，我们从未复现 | 设备在线时先 `ls /data/vendor/gaokun3/` 看开发机自己有没有抓到过 `hangdump-*`；否则等下次死锁把目录要过来 |
 | **T5** 🆕 | **声明本机是平板**（[issue #5](https://github.com/vahiru/gaokun-android/issues/5)） | `ro.build.characteristics` 是 `default` ⇒ QQ 不给平板模式登录。原因：从没设过 `PRODUCT_CHARACTERISTICS`，而 `common_full_tablet_wifionly.mk` 也不设它 | ✅ 已写 `lineage_gaokun3.mk`：`PRODUCT_CHARACTERISTICS := tablet`（依据 `build/make/core/product_config.mk:425-428`）。⬜ 下次构建后 `grep ro.build.characteristics …/system/build.prop` 验；请报告者实机测 QQ。⚠️ issue 里「网页把设备认成 Linux」**不一定**跟着好 —— Android 的 UA 本来就含 `Linux; Android`，网页是否给平板版由浏览器决定，不看这个属性（未验证） |
 | **A6** 🔺 | **USB 角色 / #27 拔插后 adb 不回来** | ★ 2026-09-23 真凶查到（[#118](stage4-findings.md) §7）：port0 控制器**任何一次**角色切换后都坏 —— host 时 xhci `Host halt failed, -110`，切回 device 后 gadget `-524`、只能重启。与 0012 记过的 pipe 时钟 -110 同签名，缺 `qcom,select-utmi-as-pipe-clk` ⇒ `patches/0048` —— ✅ **2026-09-23 上机验证**：来回切三次 xhci 200 ms 绑上、UDC 400 ms `configured`，`-110`/`-524` 各 0 次（[#118](stage4-findings.md) §8）。角色策略：用户态 `follow`（电气探测，不信 EC）A/B 两场景实测通过、C 只测了状态机。本机 `slot_a` 的 dtb 已手工换成 0048 版（备份 `.pre0048`）；⬜ 随下次构建进镜像（prebuilt-boot 的 dtb 已换）；⬜ hub/U 盘/充电器真机场景仍未测（用户手边没有）。另：2026-09-23 直接问 EC（[#118](stage4-findings.md) §6）：插着主机时 `partner_type=2`（UFP，应为 1），**没插也是 2** ⇒ 可能是常数；EC 端口数据里没有角色位 | **要用户插拔**：U 盘 / 纯充电器 / 扩展坞各跑一次 `scripts/usb/ucsi-snapshot.sh`，看 partner_type 与 pwr_dir 怎么变，再定 quirk（扩展坞会 DR_Swap，不能盲用"受电⇒对方是主机"） |
-| **A3** 🔄 | **自动亮度** | ★ 2026-09-23：`tcs3701`（ams AG）**注册出来了、芯片应答**（[#118](stage4-findings.md) §5，#72 时是"没有提供者"）。但使能后只回一条 `msg_id=130`、载荷 `08 04`，0 条读数；513/514 三种请求同一回应 ⇒ 传感器侧拒绝激活 | 查 130/4 的语义与 libssc 怎么使能光感；最像的差别是 registry（我们是空文件、只读，psacal 拷的是本机 Windows 生成的）。为什么现在应答：候选 L2C，未做对照 |
+| **A3** 🔄 | **自动亮度** | ★★ 2026-09-24（[#121](stage4-findings.md)）：激活光感 = **SLPI 的 sensor_process 整个崩溃**（`sns_stream_service.c:436` fatal），`08 04` 只是死前最后一条消息；Windows 在本机用的**也是 QRD 那套 JSON**（INF 按 `SUBSYS_QRD08280` 装）⇒ 差别只剩 DSP 自己写的 registry。**下一步：让 hexagonrpcd 可写**（FadyAckad `sp11-sensors` 分支；psacal 称加写入桩后 ~408 lux，未复现）。以下是旧记录 —— ★ 2026-09-23：`tcs3701`（ams AG）**注册出来了、芯片应答**（[#118](stage4-findings.md) §5，#72 时是"没有提供者"）。但使能后只回一条 `msg_id=130`、载荷 `08 04`，0 条读数；513/514 三种请求同一回应 ⇒ 传感器侧拒绝激活 | 查 130/4 的语义与 libssc 怎么使能光感；最像的差别是 registry（我们是空文件、只读，psacal 拷的是本机 Windows 生成的）。为什么现在应答：候选 L2C，未做对照 |
 | **A5** | 恢复出厂设置不起作用 | 走 misc+recovery，而本机 recovery 起不来 | 依赖 B3（自研 EFI 加载器）或让 recovery 能启动 |
 
 ### 🟡 第二梯队：工程债（不修不会坏，但会反复咬人）
