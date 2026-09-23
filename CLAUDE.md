@@ -6,7 +6,7 @@
 最终目标是能稳定运行 arm64 手游。
 
 **当前阶段：Stage 6 收尾 —— 产品化。v0.6.2-alpha 已发布（2026-09-16，构建戳 `1789570683`）：触摸手感按实测定案（跳点判据、fuzz=0、按下 17 ms、触点面积轴）、驱动 6 个缺陷 + 可观测性、OTA postinstall 同步 cmdline。手上还剩画质（降噪/闪光过曝）、息屏 USB adb、Google 认证、手掌碎块 —— 都在 `docs/TODO.md` 的总表里。
-2026-09-18：SELinux 第五轮（案卷 #117）—— 补了 7 处规则（触摸服务的域 / `/dev/dri` 目录 / ESP 块设备类型 / OTA postinstall / 温控 HAL 的 sysfs_thermal / audioroute 的 tinymix / hwc 的 uevent socket），自研属性改名 `persist.vendor.gaokun3.*` 且 **allow_suspend 默认值改成 0**（新装机默认不进待机，发版说明要写）。构建机编译验证通过；`-userdebug` 重编后**装机成功**（戳 `1789737346`，槽 `_a`，60 秒起来）：温控 HAL 的 35 条 denial 归零且 `dumpsys thermalservice` 报真温度、audioroute 的 7 条归零、`/dev/dri` 与 ESP 的标签实机确认、功能零回归。⚠️ 中途误用 `-user` 变体导致一次装机失败（#117 §15）。⬜ 新查出的 4 处规则（hwc 的 create/bind、同进程 HAL 库、mediaswcodec、wakeup genfscon）**已写未验**，下次构建一起。（每次开工时更新这一行）**
+2026-09-18：SELinux 第五轮（案卷 #117）—— 补了 7 处规则（触摸服务的域 / `/dev/dri` 目录 / ESP 块设备类型 / OTA postinstall / 温控 HAL 的 sysfs_thermal / audioroute 的 tinymix / hwc 的 uevent socket），自研属性改名 `persist.vendor.gaokun3.*` 且 **allow_suspend 默认值改成 0**（⚠️ 不只新装机：v0.6.2 老用户多半没设过这个属性，OTA 后也会落到 0、失去待机 —— 发版前要用户定，见 `docs/TODO.md` S1）。构建机编译验证通过；`-userdebug` 重编后**装机成功**（戳 `1789737346`，槽 `_a`，60 秒起来）：温控 HAL 的 35 条 denial 归零且 `dumpsys thermalservice` 报真温度、audioroute 的 7 条归零、`/dev/dri` 与 ESP 的标签实机确认、功能零回归。⚠️ 中途误用 `-user` 变体导致一次装机失败（#117 §15）。⬜ 新查出的 4 处规则（hwc 的 create/bind、同进程 HAL 库、mediaswcodec、wakeup genfscon）**已写未验**，下次构建一起。（每次开工时更新这一行）**
 
 > ## ★★★ 开工前先读（这一段是"现在"，历史在 `docs/project-log.md`）
 >
@@ -83,7 +83,7 @@
 |---|---|
 | **现在什么状态、有什么禁忌** | 本文件上面那个框 |
 | **还剩什么没做、优先级** | `docs/TODO.md` —— 顶上有一张「现在在做 / 待办」总表 |
-| **触摸调参的实机记录与工具** | `docs/stage4-findings.md` #114–#116 + `scripts/touch/README.md`（手册 `touch-morning-runbook.md` 已完成使命，留作 2026-09-16 那一晚的操作记录）|
+| **触摸调参的实机记录与工具** | `docs/stage4-findings.md` #114–#116 + `scripts/touch/README.md`（手册 `docs/archive/touch-morning-runbook.md` 已完成使命，留作 2026-09-16 那一晚的操作记录）|
 | **某个结论是怎么来的**（最权威） | `docs/stage4-findings.md`，按 `#NN` 编号的案卷；Stage 5/6/7 另有专档 |
 | 那一周发生了什么 | `docs/project-log.md`（本文件的历史，原样搬过去的） |
 | 怎么装、用户会踩什么 | `docs/INSTALL.md` |

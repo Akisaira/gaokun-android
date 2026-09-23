@@ -1,6 +1,7 @@
 # 待办清单
 
-最后更新：**2026-09-14 晚**（v0.6.1 已发布；触摸 fuzz 与 Google 认证立项；清掉两条过期条目）
+最后更新：**2026-09-23**（全表对账：把 v0.6.2 发布与 SELinux 第五轮之后已经做完、但正文还写着 ⬜ 的条目逐条核对并收口；
+新增两条 —— 待机默认值对老用户的影响（S1）、全新安装丢触摸参数（B15 实锤））
 
 这份清单的排序原则是**用户能不能感觉到**，而不是有趣程度。每条都尽量写出
 **具体的第一步** —— 没有第一步的条目只是愿望，不是待办。
@@ -9,58 +10,81 @@
 [`stage4-findings.md`](stage4-findings.md) 等案卷里；历史在
 [`project-log.md`](project-log.md)。
 
+> ⚠️ **本次对账的边界**：2026-09-23 设备不在线（USB 无、`192.168.10.0/24` 全段 5555 无应答），
+> 所以凡是写着"应已随 v0.6.2 进镜像"的，依据是**提交时间早于构建戳**（`a7ce25f` 09-14 14:50 <
+> `1789570683` = 09-16 22:58）加 09-16 `sync-device-tree.sh` 的一致性断言，**不是设备上的核对**。
+> 下次设备在线时先 `adb shell` 看一眼 `/vendor/bin/gaokun3-usbrole.sh` 与相机 HAL 是否是新版。
+
 ---
 
 ## 总表：现在还剩什么
 
-**统计（2026-09-14 深夜更新）**：用户能感觉到的缺口 **6** 条未完（T1 主因已修，剩收尾） · 工程债 **9** 条未完 ·
-等用户点头的对外动作 **3** 条 · 明确搁置 **4** 条。下面按"下一步是什么"分组，
+**统计（2026-09-23）**：用户能感觉到的缺口 **9** 条未完 · 工程债 **12** 条未完 ·
+等用户点头的对外动作 **5** 条 · 明确搁置 **4** 条。下面按"下一步是什么"分组，
 详情见各自的条目。
+
+### ▶ 眼前的下一步（一次构建就能收掉一串）
+
+设备槽 `_a` 跑的是**未发布**的开发版（戳 `1789737346`），槽 `_b` 是 v0.6.2。
+#117 §19 新写的 **4 处 SELinux 规则**（hwc create/bind、同进程 HAL 库、mediaswcodec、wakeup genfscon）
+已写未验。⇒ 下一版的路线二选一，**先定 S1 再定这个**：
+① 用 `-userdebug` 再编一版带上那 4 处 → 装机 denial 普查（开机后 ≥8 分钟再采，#117 §20）→ `release.sh --no-build`；
+② 直接 `release.sh --no-build` 发 `1789737346`（那 4 处留下版）。
+⚠️ 不管哪条，**变体必须 `lineage_gaokun3-bp4a-userdebug`**（#117 §15）。
 
 ### 🔴 第一梯队：用户明确点名 / 用户能直接感觉到
 
 | # | 事情 | 现在卡在哪 | 下一步（具体） |
 |---|---|---|---|
-| **T1** | **触摸** | ✅ 主因（跳点检测 = 1.0 m/s 限速线）修掉；✅ fuzz 定案 0（实测抖动 <½ 单位）；✅ 按下延迟 25→17 ms；✅ 触点面积轴进镜像；✅ 6 个驱动缺陷 + 逐级计数器/整帧导出；⛔ peak_threshold 不能抬（切碎快滑）（[#114](stage4-findings.md)–[#116](stage4-findings.md)） | ✅ **v0.6.2 已发**（第二版，戳 `1789570683`；第一版因 postinstall 不同步 cmdline 未发，#116 §17–18）。⬜ 手掌碎成多触点（不影响点击）留下版 |
+| **S1** 🆕 | **待机默认值 1→0 会波及老用户** | 09-18 为改名把 `persist.vendor.gaokun3.allow_suspend` 默认设成 0（`device.mk:526`），`device.mk` 注释只说"新装机默认不睡"。但 v0.6.2 的用户**绝大多数从没设过这个属性**（旧默认 1）⇒ OTA 一过、新名字取默认 0 ⇒ **所有老用户也会失去 s2idle**，README 的"待机 ✅"随之失真 | **要用户定**：(a) 接受，发版说明 + README 写清楚、给开启命令；(b) 默认回 1，本机自己 `setprop … 0`；(c) postinstall 里把旧名的值迁到新名。发版前必须定 |
+| **T1** | **触摸** | ✅ v0.6.2 已发（跳点限速线、fuzz=0、按下 17 ms、面积轴、6 个驱动缺陷、可观测性，[#114](stage4-findings.md)–[#116](stage4-findings.md)）。剩：手掌碎成多触点（不影响点击，三种阈值法实测全否） | 下一版驱动做跨帧形态判据；轴已经有了，可以顺手写触摸 IDC（`touch.size.calibration`，本机现在 `ConfigurationFile: <none>`） |
+| **B15** 🔺 | **全新安装丢触摸参数** | ★ 实锤：`scripts/install-gaokun3.sh:251-257` 写死的 cmdline **没有** `himax_hx83121a_spi.disable_pressure=0`（`BoardConfig.mk:134` 有）⇒ 按 INSTALL.md 全新装 v0.6.2 的机器**没有触点面积轴**，直到第一次 OTA 的 postinstall 把 cmdline 同步过去 | 让 `install-gaokun3.sh` 像 postinstall 一样从 boot.img 的 cmdline 派生（[#116](stage4-findings.md) §17），而不是再抄一份；`deploy-android.sh:133` 那份也已漂（`deferred_probe_timeout=30`、缺 iommu 两项） |
 | **T2** | **Google 未认证** | Play 商店报"设备未经 Play 保护机制认证" | 工具与文档已就位（`scripts/google/gsf-android-id.sh` + INSTALL.md）。**剩下的是用户动作**：拿 Android ID 去 google.com/android/uncertified 登记 |
-| **T3** | **相机画质** | 暗光噪点（增益顶到 15.5x）、闪光白墙过曝 34%、偏绿（[#112](stage4-findings.md) §5） | 降噪已实测有效（高频残差 −44%），**未进镜像**。闪光还要两条：给闪光帧下发 `ExposureValue` 负补偿；libcamera AWB 统计剔除饱和像素（值得投上游） |
-| **T4** | **息屏 USB adb 断** | dwc3 在 device 模式挂起时无条件 `core_exit()`，且 gadget 总 soft disconnect ⇒ 上游没有"adb 穿越睡眠"（[#112](stage4-findings.md) §1） | `usbrole.sh` v2 已写（插着主机就不睡），**未进镜像**。原生化要先修 UCSI 的数据角色（它现在是反的） |
-| **A1** | 音频/蓝牙长期运行后死锁 | 用户报过，我们从未复现 | 取证看门狗已随镜像发布；**下次死锁把 `/data/vendor/gaokun3/hangdump-*` 整个要过来** |
+| **T3** | **相机画质** | 暗光噪点、闪光白墙过曝 34%、偏绿（[#112](stage4-findings.md) §5）。降噪 + 预闪按亮度收敛 + 曝光回填**应已随 v0.6.2 进镜像**（见顶上"对账边界"），1:1 样片颗粒明显变细（#112） | 还没写的两条：闪光帧下发 `ExposureValue` 负补偿；libcamera AWB 剔饱和像素（值得投上游）。CCM 要色卡（用户提供）。手电筒亮度档位（`turnOnTorchWithStrengthLevel`） |
+| **T4** | **息屏 USB adb 断** | `usbrole.sh` v2（插着主机不睡）**应已在 v0.6.2 里**；但在 S1 定下来之前默认根本不睡，这条暂时无感 | 原生化要先修 UCSI 的数据角色（A6，现在是反的） |
+| **A1** | 音频/蓝牙长期运行后死锁 | 用户报过，我们从未复现 | 设备在线时先 `ls /data/vendor/gaokun3/` 看开发机自己有没有抓到过 `hangdump-*`；否则等下次死锁把目录要过来 |
+| **A0** | 侧滑返回 | ✅ 导航栏已出现（#86 装机验收 `mNavigationBar=Window{… Taskbar}`） | 只差用户亲手试一次边缘侧滑 |
+| **A6** | UCSI 数据角色反 / 无 DP alt-mode | typec 已起来但插 PC 报 `[host]`，靠 rc 硬写 `device` | 查 EC partner type 语义 → 修 `ucsi_huawei_gaokun.c` → DT `role-switch-default-mode` → 删 rc 硬写 |
 | **A5** | 恢复出厂设置不起作用 | 走 misc+recovery，而本机 recovery 起不来 | 依赖 B3（自研 EFI 加载器）或让 recovery 能启动 |
 
 ### 🟡 第二梯队：工程债（不修不会坏，但会反复咬人）
 
-> ⬜ **小事一桩**：设备的 `/data/local/tmp` 堆了 **2.8 GB / 398 个文件**，主要是
-> `Image-k11`…`Image-k19` 这些历次测试内核。不在任何启动路径上（启动内核在 ESP），
-> userdata 还剩 277 GB 所以不急，但该清。⚠️ 2026-09-14 深夜没清 —— 用户在睡觉，
-> 删东西是他的决定，不是我的。
-
-
-| # | 事情 | 为什么值得做 |
+| # | 事情 | 为什么值得做 / 现状 |
 |---|---|---|
-| **B0** | 让构建机的树**就是**本仓 checkout | **已经咬了五次**。`kernel-apply-patches.sh --verify` 是新造的精确探测器，但设备树那半边仍靠 rsync + md5 |
-| **B15** | 内核 cmdline 在四处各有一份 | `BoardConfig.mk`（权威）之外，`install-gaokun3.sh` / `live/installer-lib.sh` / `deploy-android.sh` 各写死一份且已过时。OTA 路径已改为从 boot.img 的 `cmdline.txt` 派生（[#116](stage4-findings.md) §17）；全新安装路径也应如此 |
-| **B12** | 释放 R2 桶前要有国内可达的镜像 | GitHub 附件国内不可达（v0.6.0 当天就有用户反馈）。要用户定方案 |
-| **B14** | 息屏 USB adb 的原生化 + 复位根因 | 见 T4，这是它的长期解 |
-| **B1** | SELinux 转 enforcing | 第五轮（[#117](stage4-findings.md)）又补了四处：触摸服务没有域、`/dev/dri` 目录、ESP 块设备类型（**加 allow 也绕不过 neverallow**）、OTA postinstall。**全部未编译未上机**。老的两个结构性阻塞原封不动，另加一条要用户定的（属性改名）|
-| **B5b** | UBWC：仓库写着关、设备上开了 13 天没事 | **一次测量都没有**。下版构建前删掉 `device.mk:174` 那行并带一次实测 |
+| **B1** | SELinux 转 enforcing | 第五轮（[#117](stage4-findings.md)）7 处规则：3 条实机验证、2 个标签实机确认、属性改名生效；**另 4 处已写未验**（见"眼前的下一步"）。两个结构性阻塞原封不动：`gaokun3_smmustall`（正解 = B6）、`gaokun3_hangdump`（36 条，60 秒才采一次样）。09-18 误编 user 版 = 一次真 enforcing 试跑：**起不来** |
+| **B0** | 让构建机的树**就是**本仓 checkout | **已经咬了六次**。`kernel-apply-patches.sh --verify` 与 `sync-device-tree.sh`（带断言）是探测器，不是根治 |
+| **B5b** | UBWC：仓库写着关 | `device.mk:174` 仍是 `nocompression`，**一次测量都没有**。下版构建前删那行并带一次实测 |
 | **B6** | GPU SMMU 中断根治 | 做掉它 `smmu-nostall.sh` 整个消失，B1 的一半阻塞跟着消失 |
+| **B9** | SLPI 每 200 ms 的 handover 噪声 | 已定位到 sensors HAL 的采样节拍。下一步：accel 采样率 2× / ½× 看计数是否跟着变 |
+| **B12** | 释放 R2 桶前要有国内可达的镜像 | GitHub 附件国内不可达。要用户定方案（Worker 反代 / 保留桶） |
+| **B16** 🆕 | 设备 WAN 吞吐：两份文档结论相反 | A8 按 [#108](stage4-findings.md) 结案"不成立"（平板 8.14 MB/s ≈ 本机），但 v0.6.2 发版说明的 Known issues 写"设备下载只有 1–2 MB/s、原因未明、OTA 受影响"。**要实测一次定哪份对**，再改另一份 |
+| **B17** 🆕 | `scripts/find-device.sh` 在 macOS 上跑不了 | 用的是 Windows 的 `ipconfig` / `ping -n -w`，本机认不出自己网段。2026-09-23 找设备时只能手写 `nc -z` 扫全段 |
 | **B3** | 自研 EFI 加载器 | A5 与"默认启动项永远留救援"都依赖它 |
 | **B7** | 用轻量系统替掉救援 Ubuntu（= B4） | 24.6 GiB 换成 55 MiB squashfs，⏸ 用户暂缓 |
-| **B9** | SLPI 每 200 ms 的 handover 噪声 | 已定位到 sensors HAL 的采样节拍（HAL 一停就归零）。它**损害取证能力**（把 panic 栈挤出 pstore） |
+| — | 相机零碎 | `patches/0022` 仍未在**健康**状态下验证 unbind/rebind；libcamera 生成源码仍靠手工，未改成 Soong `genrule`（`patches/libcamera/README.md:34`）；`kDarkLuma=50` 是启发式 |
+| — | tinymix 的 vendor 变体 | 有了它 `audioroute` 就不用挂 `vendor_executes_system_violators`（#117 §8） |
+| — | 设备上的垃圾 | `/data/local/tmp` 2.8 GB 历次测试内核；ESP 上 `slot_cam5` 与 `cam5/6/7` 测试条目（现状未核对）。**删东西等用户点头** |
 
 ### 🟢 等用户点头的对外动作
 
 | # | 事情 |
 |---|---|
+| **R** | 下一版发不发、发哪一版（见"眼前的下一步"与 S1） |
 | **D5** | [PR #3](https://github.com/vahiru/gaokun-android/pulls) 的回复（已审完，等措辞） |
 | **D6** | 把 `drm_crtc` 那个 `BUG_ON` 报到 dri-devel（**上游 master 现存缺陷，普通应用能 panic 整机**） |
 | **D7** | v0.2.0-alpha 的 R2 产物删不删（2.1 GiB，删了老发布页的链接会 404） |
-| — | `docs/upstream/` 里 **5 份补丁稿**（camcc RCG shared / GDSC 等待值 / ov13b10 OF 匹配 / ov13b10 get_selection / camss 回落 RFC）一份都没发 |
+| — | `docs/upstream/` 里 **5 份内核补丁稿**一份都没发；另有可投 libcamera 的 `patches/libcamera/0002`（hi846）/ `0004`（ov13b10） |
 
 ### ⏸ 明确搁置（记录理由，不是忘了）
 A2 硬件视频**编码**（查明后故意关闭）· A3 自动亮度（芯片在总线上不应答，四个维度扫空）·
 A6b WPA3 issue #2（本地不复现，要报告者配合）· B4 LiveCD 图形安装器（用户暂缓）。
+
+### ✅ 本次对账收口的（正文原写着 ⬜，其实早做完了）
+触摸脚本进镜像（T1a，v0.6.2）· 完整 ROM 构建（T1c，v0.6.2）· 指纹 incremental 不一致（T2，v0.6.2 为 `20260916145759`）·
+`wpa_cli` 进镜像（A6b，`f068947` 09-12，v0.6.1 起）· `#14` 进默认槽 / 撤掉 camss 钉住（A7，`a87d79b`）·
+扬声器"用户还听不到"（A′，#86 实测 PA=21）· 侧滑返回的导航栏（A0，#86）·
+SELinux 第五轮"一行都没编译"（B1，#117 §11–§18 已编译并装机）。
+`plan-2026-09-14.md` 与 `touch-morning-runbook.md` 已归档到 [`archive/`](archive/)。
 
 ---
 
@@ -126,9 +150,10 @@ AOSP 默认 `config_showNavigationBar=false`
 所以设备 overlay 在这里有效 —— 不像 `config_isDesktopModeSupported`
 那样要绕到 `crdroid-tree-fixes.py` 去改。
 
-⬜ **只剩上机验证**：随下一版 ROM 一起生效，装好后让用户试一次边缘侧滑。
+✅ **已随 ROM 生效**（#86 装机验收：`mNavigationBar=Window{… Taskbar}` 出现了）。
+⬜ 只差用户亲手试一次边缘侧滑。
 
-### T1. 🟡 触摸手感 —— 主因已定位并当场修掉，剩下的两件要一次重启（[#114](stage4-findings.md) / [#113](stage4-findings.md)）
+### T1. ✅ 触摸手感 —— 已随 v0.6.2 发布，只剩手掌碎块（[#114](stage4-findings.md)–[#116](stage4-findings.md)）
 
 #### T1a. ✅ 幽灵触摸 + 不灵敏 = 同一个根因，已修（不需要新内核）
 用户报「经常出现幽灵触摸、触摸不灵敏」。根因是**我们自己出厂的 game 预设**里的
@@ -145,7 +170,7 @@ jump=0 → 6 条、0 碎片**。一次滑动被切成十几次触摸 ⇒ 滑动�
   仿真验证：修正后到 5 m/s 不丢帧，且**仍能一致抓到 ≥10 mm 的真实换手指**（原版中速误触发、高速全漏）。
 * ✅ 本机已现场改到最优（jump=0 / smoothing=0 / start_debounce=2）；开机属性设成 `daily`，
   **重启后会落到安全值而不是坏配置**（代价是 25 ms 平滑滞后，等下次构建带上修好的脚本就能切回 game）。
-* ⬜ 需要一次构建把修好的 `gaokun3-touch-mode.sh` 进镜像（设备上 `/vendor` 只读）。
+* ✅ 修好的 `gaokun3-touch-mode.sh` 已随 v0.6.2 进镜像（#117 §18 实机：`game` 预设 smooth=0 / jump=0 / pressure=1）。
 
 #### T1d. ✅ 驱动全面审查，六个缺陷已修（`patches/0040`–`0045`，[#115](stage4-findings.md)）
 读完 `himax-spi-core.c`(1478) + `hx-algo.c`(1133) 之后：
@@ -185,11 +210,11 @@ Z8 孤立尖峰过滤实际从没生效（只毙掉八邻域和 <25 的尖峰）
 * ⛔ **`peak_threshold` 不能抬**：1500 把快速甩动切碎（移动手指峰值更低），且没挡住手掌。回 800。
 * ⬜ 手掌碎块（`max_contacts` 打满 10）：三个阈值假设全被实测否决；用户确认不影响点击，降级为"多余触点"。
   真要解得看跨帧形态，下一版驱动的活。
-* ⬜ **完整 ROM 构建进行中**（2026-09-16 14:18 UTC 启动，`BUILD_NUMBER=20260916141806`）——
-  没有它，以上全部一次重启就蒸发（#116 §8）。
+* ✅ 完整 ROM 已构建并作为 v0.6.2 发布（第二版，戳 `1789570683`，#116 §18–19）。
 
-原文（已完成的准备工作）：
-★ **明早照着 [`touch-morning-runbook.md`](touch-morning-runbook.md) 走**，每一步都写了「看什么算通过」。
+<details><summary>（历史）2026-09-16 那一晚的准备工作，已全部完成</summary>
+
+★ **明早照着 [`touch-morning-runbook.md`](archive/touch-morning-runbook.md) 走**，每一步都写了「看什么算通过」。
 已在 ESP 上就位（**default 没动、原内核原封不动**）：
 
 * `slot_b/Image-test`（内核 **`#23`**，sha `b05bcc6e…`）与条目 `…-android-b-test.conf`，
@@ -237,6 +262,8 @@ echo 1 > /sys/bus/spi/devices/spi0.0/algo/pressure_enabled  # ★ 先开这个�
 ⚠️ 别盲目打开就发版：`pressure_enabled=0` 时驱动报的是**常数**（TOUCH_MAJOR=1、PRESSURE=4095），
 那可能比现在更糟（每个触点都成了"针尖"）。要么一起开，要么都别动。
 
+</details>
+
 ⬜ 第三件：本机**没有触摸的 IDC 文件**（`dumpsys input` 里 `ConfigurationFile: <none>`）。
 有了面积/压力轴之后才值得写，那时可以调 `touch.size.calibration` / `touch.pressure.calibration`。
 
@@ -251,7 +278,7 @@ echo 1 > /sys/bus/spi/devices/spi0.0/algo/pressure_enabled  # ★ 先开这个�
 * ⚠️ **边界要说清楚**：这只解决"未认证"那条提示。**Play Integrity（银行类应用）仍然过不了** ——
   它要 bootloader 上锁 + Google 签名的系统，而本机 UEFI 解锁正是"能装别的系统"的前提。
   这是取舍，不是缺陷。
-* ⬜ 顺带修掉的一处不一致：v0.6.1 的指纹里 incremental 是 **`eng.androi`**
+* ✅（v0.6.2 起 incremental = `20260916145759`）顺带修掉的一处不一致：v0.6.1 的指纹里 incremental 是 **`eng.androi`**
   （AOSP 在 `BUILD_NUMBER` 未设时回落成 `eng.$(用户名前6字符)`，而 Lineage 把用户名匿名成
   `android-build`），与 `ro.build.version.incremental`（构建戳）**对不上** —— 一个构建里两个
   互相矛盾的 incremental。`release.sh` 已设 `BUILD_NUMBER`，**下次构建生效**。
@@ -322,7 +349,7 @@ echo 1 > /sys/bus/spi/devices/spi0.0/algo/pressure_enabled  # ★ 先开这个�
 ⚠️ 该文件核的是 **LineageOS `lineage-23.2` 分支的上游副本**，不是构建机上那棵
 checkout —— 构建时若报 "non-existent modules in PRODUCT_PACKAGES" 就去树里再 grep。
 ⚠️ `/data/vendor/wifi/wpa/sockets` 是 0770 wifi:wifi，**shell 不在 wifi 组** ⇒ 要 root。
-⚠️ **这条要等下一次构建 ROM 才生效**，当前镜像里仍然没有。
+✅ 已进镜像（`f068947` 09-12 入库，v0.6.1 起的镜像都带）。
 ✅ **2026-09-13 已用上**：`m wpa_cli` 单编（170 KB）→ push 到 `/data/local/tmp`
 → `-p /data/vendor/wifi/wpa/sockets -i wlan0` 挂上**运行中的** supplicant，
 `status` / `list_networks` / `add_network` / `set_network` / `select_network` 全可用。
@@ -449,9 +476,8 @@ EC 的 ucsi 驱动绑上），但它给的数据角色**是反的**（PC 插着�
 > 三个 RCG 没标 `clk_rcg2_shared_ops`，用完相机后 CAMNOC AXI 的时钟源停在一个熄灭的 PLL 上。
 > 修法 `patches/0031`（3 行）。内核 `#13`（含诊断）与 `#14`（发版形态）实测：解钉、自然塌缩、
 > 空闲后再用，全部成功。**下面那段"量一次钉住 camss 的功耗"已经不需要了** —— 钉住本身可以撤。
-> ⬜ 待办：① `#14` 进默认槽 `slot_a`（换日常内核，要有人在场）；② 撤掉
-> `device/huawei/gaokun3/camera/gaokun3-camera.rc:13` 的 `power/control on`（要等 ROM 的内核
-> 带上 0031，否则撤了就回到 #83）；③ 上游投稿 `camcc-sc8280xp: Mark RCGs shared where applicable`
+> ✅ ① 默认槽早已换成带 0031 的内核（现为 v0.6.2 的 `#24`）；② rc 里的 `power/control on` 已撤（`a87d79b`）。
+> ⬜ 待办：③ 上游投稿 `camcc-sc8280xp: Mark RCGs shared where applicable`
 > （照 x1e80100 口径）+ 等待值 `0027`；④ `patches/0022` 在健康状态下补一次 unbind/rebind 验证
 > （pstore 证明 #83 的"拖死整机"就是它修的 panic）。
 
@@ -662,7 +688,7 @@ features xml 补 `android.hardware.camera` + `android.hardware.camera.flash`（S
   里那行竞态 `BUG_ON`。[#58](stage4-findings.md) / [#62](stage4-findings.md)
 * **硬件视频解码** ✅ v0.4.0-alpha。[#41](stage4-findings.md)
 * **亮度调节** ✅ 真 lights HAL 取代了只接受数值不干活的 stub。
-* **扬声器音量偏小** ⚠️ **返工中，别当已解决。** 原修法（WSA 数字上限 81→90，
+* **扬声器音量偏小** ✅ **已随 ROM 生效**：#86 装机验收 `audio-route.sh` 与仓库逐字节相同、`tinymix` 实测 `SpkrLeft PA Volume = 21`。下面是返工过程，留作记录。 原修法（WSA 数字上限 81→90，
   +5.7 dB）**抬错了那一级** —— 数字级在 DAC 之前，+6 dB 把 −6 dBFS 的内容顶到
   0 dBFS，实测 THD **−20 dB（约 10% 失真）**。现改为数字压在单位增益 84、
   响度由 PA 出（上限 17→23，运行时 17→试 21）。
@@ -691,7 +717,7 @@ features xml 补 `android.hardware.camera` + `android.hardware.camera.flash`（S
 桶只留存储为零的转发层；或干脆保留桶（成本很低：出站免费）。**要用户定**，且改完要在国内网络实测下载。
 
 ### B14. ⬜ 息屏 USB adb：脚本折中已做，原生化两步 + 复位根因（[#112](stage4-findings.md)）
-`bin/gaokun3-usbrole.sh` v2：插着主机（UDC configured）息屏不切 host、不放行挂起，拔线再切。随下次构建进镜像；
+`bin/gaokun3-usbrole.sh` v2：插着主机（UDC configured）息屏不切 host、不放行挂起，拔线再切。应已随 v0.6.2 进镜像（提交 `a7ce25f` 早于构建戳，未在设备上核对）；
 装后把本机 `persist.vendor.gaokun3.allow_suspend` 设回 1（现在是 0，根本不睡；
 ⚠️ 属性 2026-09-18 已改名且**默认值改成 0**，见 [#117](stage4-findings.md)）。
 源码定性：device 模式系统挂起无条件 `dwc3_core_exit()`（PHY 下电）且 gadget 总 soft disconnect ⇒
@@ -823,8 +849,9 @@ checkout），让 `git status` 直接说话。⚠️ 换之前先做一次清单
 ⬜ 上面 `wakeupN` 那条的最自然修法（放行 `system_suspend` 读 `sysfs_batteryinfo`）
 **已排除**：`domain.te:1555-1572` 的 neverallow 不豁免 coredomain 里的 system_suspend。
 
-⚠️★ **这一轮一行都没编译、一条都没上机**（本机编不了 AOSP；设备当天不在线）。
-下一步有两件、互相独立：
+✅ **2026-09-23 更正**：下面这段写于编译之前。之后 `m selinux_policy` 通过（#117 §11–§13）、
+`-userdebug` 重编装机成功并逐条实机验证（§18），又查出 4 处新的、已写未验（§19–§20）。
+原文：~~这一轮一行都没编译、一条都没上机~~。下一步有两件、互相独立：
 1. 构建机上 `m selinux_policy` —— 只验"规则写不写得进去"（neverallow / 类型可见性）；
 2. 装机后重跑一次 denial 普查 —— 才能验"够不够用"。#117 第 3 条说明这**是两个问题**。
 
@@ -977,6 +1004,8 @@ present fence 的名字就能把整机 panic 掉。稿子照那个补丁的 comm
 改一改就能发。我不代发对外邮件。
 
 ### D8. ✅ v0.6.1-alpha 已发布（2026-09-14）—— 下一版（v0.6.2）待装的东西
+> ✅ 2026-09-23：v0.6.2 已于 09-16 发布。降噪/预闪收敛与 usbrole v2 **应已在里面**（提交早于构建戳，未在设备上核对）；
+> 闪光 EV 负补偿与 AWB 剔饱和仍未写（见总表 T3）。
 降噪 + 预闪收敛 + 曝光/增益回填（#112 §4-5，bind mount 实测有效）、usbrole v2（插着主机不睡）、
 闪光 EV 负补偿与 AWB 剔饱和（未写）。发前照旧：构建 → 装机验收（含 HAL 真实出流）→ `--no-build` 发。
 

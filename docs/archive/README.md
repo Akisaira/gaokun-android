@@ -16,6 +16,8 @@
 |---|---|---|
 | `stage1-kernel-plan.md` | Stage 0 收尾 + Stage 1 的内核构建方案 | Stage 1 已于 2026-08-15 完成，结论见 `docs/stage1-results.md` |
 | `stage2-plan.md` | Stage 2 引导链 + AOSP 启动方案 | Stage 2 已于 2026-08-17 完成，结论见 `docs/stage2-findings.md`（12 个实测问题） |
+| `plan-2026-09-14.md` | 09-14 收尾计划（相机内核 #19 + v0.6.1 两批） | 两批都已随 v0.6.1 / v0.6.2 发出；没做完的几条（UBWC、libcamera genrule、CCM）已并进 `docs/TODO.md` 总表。2026-09-23 归档 |
+| `touch-morning-runbook.md` | 2026-09-16 触摸实机调参的逐步手册 | 结论已定案并随 v0.6.2 发布，见案卷 #114–#116 与 `scripts/touch/README.md`。2026-09-23 归档 |
 
 ⚠️ **这些文档里的技术判断按当时的认知写成，其中一部分后来被实测推翻。**
 要查某件事现在是什么状况，去看对应的案卷或 CLAUDE.md，不要看这里。

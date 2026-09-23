@@ -31,7 +31,7 @@ recovery 分区，也没有串口。这不是一次常规移植 —— 它是 **
 | 磁吸键盘 + 触控板 | ✅ | USB HID `12d1:10b8` |
 | Wi-Fi | ✅ | ath11k / WCN6855 |
 | 蓝牙 | ⚠️ | 可用 —— `hci_qca`，adapter `ON`，开机后零崩溃。**但长期运行后可能与音频一起死锁**，见 [#38](docs/stage4-findings.md) |
-| 扬声器 | ⚠️ | 可用 —— 用户实机确认出声，WSA883x 走 audioreach。**⚠️ 增益分配此前是错的，一直在削波**：出厂的"数字 +6 dB / PA −3 dB"组合在 −6 dBFS 素材上实测 THD **−20 dB（约 10% 失真）**；数字级在 DAC 之前，抬它就是吃数字余量。已改成**数字压在单位增益、响度由 PA 出**（干净约 20 dB），⬜ 但新内核尚未在机器上启动成功。**另：长期运行后音频可能死锁**，与蓝牙一起。[#78](docs/stage4-findings.md) / [#38](docs/stage4-findings.md) |
+| 扬声器 | ⚠️ | 可用 —— 用户实机确认出声，WSA883x 走 audioreach。**⚠️ 增益分配此前是错的，一直在削波**：出厂的"数字 +6 dB / PA −3 dB"组合在 −6 dBFS 素材上实测 THD **−20 dB（约 10% 失真）**；数字级在 DAC 之前，抬它就是吃数字余量。已改成**数字压在单位增益、响度由 PA 出**（干净约 20 dB），自 v0.6.0 起随镜像发布（2026-09-12 装机实测 `SpkrLeft PA Volume = 21`，[#86](docs/stage4-findings.md)）。**另：长期运行后音频可能死锁**，与蓝牙一起。[#78](docs/stage4-findings.md) / [#38](docs/stage4-findings.md) |
 | 耳机口 / 麦克风 | ✅ | **已修复，用户实机确认出声。** 三处阻塞，没有一处玄学：真凶是 rx-macro 内部的插值器链从来没接上（输入 mux 与解调 mux 都停在复位值），DAPM 路径不完整 → 后端拒绝打开，而**内核一行日志都不打**；其次是音频策略里没声明耳机设备；最后是框架去看 `/sys/class/switch/h2w`，主线上根本没这个东西。⚠️ 顺带查出**内置麦克风此前完全是断的、而且谁都没发现**，同样已修（安静房间 RMS −30.5 dBFS）。[#40](docs/stage4-findings.md) |
 | 电池、充电、合盖检测 | ✅ | 华为 EC 驱动 |
 | **游戏** | ✅ | 原神画质极高流畅。GPU 空闲 270 MHz、峰值 690 MHz、最高 50 °C |
@@ -160,7 +160,7 @@ Android 相关的配置断言在
 
 | 问题 | 位置 |
 |---|---|
-| ⚠️ **普通应用就能把内核 panic 掉。** 对 present fence 做 `sync_file` ioctl 会与 dma-fence 的「signal 即摘 ops」竞态，撞上 `drm_crtc.c:161` 的 `BUG_ON`，整台机器当场倒下 —— 「切到设置就卡死」就是这个。**上游缺陷，mainline master 至今未修**。`patches/0013` 删掉那个竞态检查，**尚未编译上机** | [#58](docs/stage4-findings.md) |
+| ⚠️ **普通应用就能把内核 panic 掉。** 对 present fence 做 `sync_file` ioctl 会与 dma-fence 的「signal 即摘 ops」竞态，撞上 `drm_crtc.c:161` 的 `BUG_ON`，整台机器当场倒下 —— 「切到设置就卡死」就是这个。**上游缺陷，mainline master 至今未修**。`patches/0013` 删掉那个竞态检查 —— ✅ **本仓自 v0.4.0-alpha 起已修**（[#62](docs/stage4-findings.md)）；留在这张表里是因为上游还没修 | [#58](docs/stage4-findings.md) |
 | **没有可用的 recovery。** 镜像能造能交付，但启动它会让机器进复位循环，所以启动项默认不创建。代价：没有 `adb sideload`、没有 `fastbootd`，设置里的"恢复出厂设置"大概不起作用（它是去请求 bootloader 进 recovery，而 systemd-boot 不读那个请求）| [#39](docs/stage4-findings.md) |
 | **音频与蓝牙在长期运行后可能死锁** —— 用户实机报告，尚未复现定位。两者都走同一条到 DSP 的 QRTR/FastRPC 通路，而那条通路上我们已经实测到过会话级卡死 | [#38](docs/stage4-findings.md) |
 | 使能环境光传感器不但不返回读数，还会污染整个 DSP 会话，所以没有自动亮度（#37）。加速度计与陀螺仪本身已经跑通并接进框架 | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
