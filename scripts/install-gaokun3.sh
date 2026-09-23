@@ -186,8 +186,16 @@ with open(img, "rb") as f:
         with open(os.path.join(out, name), "wb") as o:
             o.write(data)
         print("  %-12s %10d bytes" % (name, size))
+    # cmdline[512] @64 + extra_cmdline[1024] @608, each NUL-terminated — the same
+    # "%.*s%.*s" concatenation bootimg_extract.cpp writes to cmdline.txt on the device.
+    cstr = lambda b: b.split(b"\0", 1)[0].decode("ascii")
+    cmdline = cstr(hdr[64:576]) + cstr(hdr[608:1632])
+    with open(os.path.join(out, "cmdline.txt"), "w") as o:
+        o.write(cmdline)
+    print("  %-12s %10d bytes" % ("cmdline.txt", len(cmdline)))
 PYEOF
 [ -s "$BOOTPARTS/Image" ] || die "boot.img unpack produced no kernel"
+[ -s "$BOOTPARTS/cmdline.txt" ] || die "boot.img carries no kernel command line"
 
 # ── rescue system ──────────────────────────────────────────────────────────
 say "Installing the rescue system"
@@ -248,13 +256,13 @@ cp "$BOOTPARTS/gaokun3.dtb" "/mnt/esp/$MID/rescue/gaokun3.dtb"
 [ -f /boot/initrd.img ] && cp /boot/initrd.img "/mnt/esp/$MID/rescue/initrd.img" || \
   cp "$(ls -1t /boot/initrd.img-* 2>/dev/null | head -1)" "/mnt/esp/$MID/rescue/initrd.img"
 
-ANDROID_CMDLINE="androidboot.hardware=gaokun3 androidboot.boot_devices=soc@0/1c20000.pcie \
-androidboot.selinux=permissive androidboot.veritymode=disabled \
-androidboot.flash.locked=0 androidboot.verifiedbootstate=orange \
-firmware_class.path=/vendor/firmware/ init=/init printk.devkmsg=on \
-deferred_probe_timeout=10 console=tty0 iommu.passthrough=0 iommu.strict=0 \
-clk_ignore_unused pd_ignore_unused arm64.nopauth efi=noruntime fbcon=rotate:1 \
-usbhid.quirks=0x12d1:0x10b8:0x20000000"
+# The command line comes from boot.img (BOARD_KERNEL_CMDLINE), not from a copy
+# kept here. A hand-kept copy lived here until 2026-09-23 and had already drifted:
+# it lacked himax_hx83121a_spi.disable_pressure=0, so fresh v0.6.2 installs had
+# no touch contact-size axes until their first OTA (docs/TODO.md B15). The OTA
+# postinstall hook derives its entry the same way, so both paths now agree.
+ANDROID_CMDLINE=$(tr -d '\r\n' < "$BOOTPARTS/cmdline.txt")
+echo "  kernel command line: $ANDROID_CMDLINE"
 
 # One entry per A/B slot, each pointing at its own slot directory — the kernel
 # is slotted now, exactly like the dynamic partitions inside super. The

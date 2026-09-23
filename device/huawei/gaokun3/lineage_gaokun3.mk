@@ -231,6 +231,18 @@ PRODUCT_BRAND  := Huawei
 PRODUCT_MODEL  := MateBook E Go
 PRODUCT_MANUFACTURER := Huawei
 
+# ★ 声明本机是平板（issue #5：QQ 按 ro.build.characteristics 判断能不能走平板登录）。
+#   此前从没设过 ⇒ 落到默认值 `default`（build/make/core/product_config.mk:425-428）。
+#   ⚠️ 上面 inherit 的 common_full_tablet_wifionly.mk【不设】它 —— Lineage 的 tablet.mk
+#   只补 large_screen_common.mk（见本文件开头那段），名字带 tablet 不等于声明了 tablet。
+#   同一个值还作为 aapt 的 --product 传下去（product_config.mk:428 → TARGET_AAPT_CHARACTERISTICS
+#   → soong_config.mk:103 的 AAPTCharacteristics、definitions.mk:2331），
+#   即资源里 product="tablet" 的变体会被选中 —— 这正是平板该有的样子。
+#   单值变量（product.mk:101），后写的覆盖先写的，所以放在所有 inherit 之后。
+#   ⚠️ 写 build.prop 那一步在 soong 里，本地 refs 没有 soong 源码，**未逐行核对**；
+#   构建后用 `grep ro.build.characteristics out/target/product/gaokun3/system/build.prop` 验。
+PRODUCT_CHARACTERISTICS := tablet
+
 # API 等级：不声明 vendor 冻结，按当前平台走（Android 16 = 36）
 PRODUCT_SHIPPING_API_LEVEL := 36
 

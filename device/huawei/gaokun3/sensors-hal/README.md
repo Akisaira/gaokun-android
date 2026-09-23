@@ -74,5 +74,5 @@ SH3001 Accelerometer: last 50 events
   纠正点就在 `Sensor.cpp` 的两个 `readEventPayload` 里。
 * ✅ **`CONFIG_QCOM_FASTRPC=y`**：M13 起已是 `=y` 并实机验证 —— `#18` 内核起来后
   四个 `/dev/fastrpc-*` 都在而 `/proc/modules` 是 **0 行**，
-  `scripts/sensors-up-android.sh` 那套手动步骤不再需要（这是本项目第 13 个「=m 坑」）。
+  `scripts/archive/sensors-up-android.sh` 那套手动步骤不再需要（这是本项目第 13 个「=m 坑」）。
 * 采样率/batching/flush 的语义映射仍用上游默认（`no batching`）。

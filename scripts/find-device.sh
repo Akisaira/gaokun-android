@@ -24,27 +24,51 @@ set -u
 MODE=android; [ "${1:-}" = "--ssh" ] && MODE=rescue
 KEY=${GAOKUN3_KEY:-$HOME/.ssh/ed25519}
 
-SELF=$(ipconfig 2>/dev/null | grep -oE "192\.168\.[0-9]+\.[0-9]+" | head -1)
-NET=$(echo "$SELF" | cut -d. -f1-3)
-[ -n "$NET" ] || { echo "!! 认不出本机网段" >&2; exit 1; }
+PORT=5555; [ "$MODE" = rescue ] && PORT=22
 
-# 广播 ping 填 ARP（顺带把刚换过 IP 的设备勾出来）
-for i in $(seq 1 254); do (ping -n 1 -w 150 "$NET.$i" >/dev/null 2>&1 &); done
-sleep 5
+# ⚠️ 2026-09-23 改：第三版只认 Windows（ipconfig / `ping -n -w`），在 macOS 上
+#    第一步就"认不出本机网段"退出。现在 Windows(Git Bash) / macOS / Linux 都能跑。
+# macOS 默认没有 `timeout`：依次用 timeout / gtimeout / perl alarm 兜底。
+tmo() {
+    local s=$1; shift
+    if command -v timeout >/dev/null 2>&1; then timeout "$s" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then gtimeout "$s" "$@"
+    else perl -e 'alarm shift; exec @ARGV' "$s" "$@"; fi
+}
 
-CANDS=$(arp -a 2>/dev/null | grep -oE "$NET\.[0-9]+" | sort -u | grep -v "^$SELF$" | grep -v "\.255$")
-[ -n "$CANDS" ] || { echo "!! ARP 表是空的 —— 网络有问题？" >&2; exit 1; }
+# 本机【所有】私网 IPv4（CLAUDE.md：本机自己的网段也会漂，还可能同时在两个网段上）。
+# 198.18.x 是沙箱代理的 fake-IP 段，不是真网卡。
+SELFS=$( { ipconfig 2>/dev/null; ifconfig 2>/dev/null; ip -4 -o addr 2>/dev/null; } \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' \
+    | awk -F. '($1==192 && $2==168) || $1==10 || ($1==172 && $2>=16 && $2<=31)' \
+    | awk -F. '$4!=255 && $4!=0' | sort -u)
+NETS=$(echo "$SELFS" | cut -d. -f1-3 | sort -u)
+[ -n "$NETS" ] || { echo "!! 认不出本机网段" >&2; exit 1; }
+
+# ★ 候选 = 整个 /24 上端口开着的主机，【不看 ARP 表、不按"上次在哪"收窄】——
+#   ARP 只收录应答过 ping 的邻居，而 2026-09-12 正是"收窄"把一台好好的机器判成了挂死。
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+for net in $NETS; do
+    for i in $(seq 1 254); do
+        ip="$net.$i"
+        echo "$SELFS" | grep -qx "$ip" && continue
+        ( tmo 2 bash -c "echo > /dev/tcp/$ip/$PORT" 2>/dev/null && : > "$TMP/$ip" ) &
+    done
+done
+wait
+CANDS=$(ls "$TMP")
+[ -n "$CANDS" ] || { echo "!! 网段 $(echo $NETS) 上没有任何主机开着 $PORT —— 设备关机/休眠，或不在这些网段" >&2; exit 1; }
 
 for ip in $CANDS; do
     if [ "$MODE" = android ]; then
-        timeout 1 bash -c "echo > /dev/tcp/$ip/5555" 2>/dev/null || continue
-        timeout 8 adb connect "$ip:5555" >/dev/null 2>&1
-        d=$(timeout 8 adb -s "$ip:5555" shell getprop ro.crdroid.device 2>/dev/null | tr -d '\r\n')
+        tmo 8 adb connect "$ip:5555" >/dev/null 2>&1
+        d=$(tmo 8 adb -s "$ip:5555" shell getprop ro.crdroid.device 2>/dev/null | tr -d '\r\n')
         if [ "$d" = gaokun3 ]; then echo "$ip"; exit 0; fi
-        timeout 5 adb disconnect "$ip:5555" >/dev/null 2>&1
+        # 小米手机（pudding）等也开着 5555：把认出来的东西打到 stderr，好知道扫到了谁
+        [ -n "$d" ] && echo "  $ip 是 $d，不是 gaokun3" >&2
+        tmo 5 adb disconnect "$ip:5555" >/dev/null 2>&1
     else
-        timeout 1 bash -c "echo > /dev/tcp/$ip/22" 2>/dev/null || continue
-        h=$(timeout 10 ssh -o BatchMode=yes -o StrictHostKeyChecking=no \
+        h=$(tmo 10 ssh -o BatchMode=yes -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null -o ConnectTimeout=6 -i "$KEY" \
               "root@$ip" hostname 2>/dev/null | tr -d '\r\n')
         # ⚠️ 登录失败也是有用的信息：说明那台机器【不是】我们的救援系统，
@@ -54,5 +78,5 @@ for ip in $CANDS; do
         case "$h" in gaokun3-rescue|gaokun3-live) echo "$ip"; exit 0 ;; esac
     fi
 done
-echo "!! 扫完 $(echo "$CANDS" | wc -w) 个邻居，没有一台确认是我们的设备（${MODE}）" >&2
+echo "!! 扫完 $(echo "$CANDS" | wc -w | tr -d " ") 个邻居，没有一台确认是我们的设备（${MODE}）" >&2
 exit 1

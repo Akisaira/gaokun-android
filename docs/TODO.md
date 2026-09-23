@@ -1,7 +1,8 @@
 # 待办清单
 
 最后更新：**2026-09-23**（全表对账：把 v0.6.2 发布与 SELinux 第五轮之后已经做完、但正文还写着 ⬜ 的条目逐条核对并收口；
-新增两条 —— 待机默认值对老用户的影响（S1）、全新安装丢触摸参数（B15 实锤））
+新增两条 —— 待机默认值对老用户的影响（S1）、全新安装丢触摸参数（B15 实锤）。
+同日第二轮：按用户反馈关 A0、记下 `_a` 起不来；修掉 B15 / B17；issue #5 声明平板（T5）；12 个过时脚本归档到 `scripts/archive/`）
 
 这份清单的排序原则是**用户能不能感觉到**，而不是有趣程度。每条都尽量写出
 **具体的第一步** —— 没有第一步的条目只是愿望，不是待办。
@@ -25,25 +26,32 @@
 
 ### ▶ 眼前的下一步（一次构建就能收掉一串）
 
-设备槽 `_a` 跑的是**未发布**的开发版（戳 `1789737346`），槽 `_b` 是 v0.6.2。
-#117 §19 新写的 **4 处 SELinux 规则**（hwc create/bind、同进程 HAL 库、mediaswcodec、wakeup genfscon）
-已写未验。⇒ 下一版的路线二选一，**先定 S1 再定这个**：
-① 用 `-userdebug` 再编一版带上那 4 处 → 装机 denial 普查（开机后 ≥8 分钟再采，#117 §20）→ `release.sh --no-build`；
-② 直接 `release.sh --no-build` 发 `1789737346`（那 4 处留下版）。
-⚠️ 不管哪条，**变体必须 `lineage_gaokun3-bp4a-userdebug`**（#117 §15）。
+⚠️★ **用户 2026-09-23 报：槽 `_a` 那一版（戳 `1789737346`，未发布开发版）起不来。**
+而 #117 §18 记的是 09-18 那次**起来了**（60 秒、`boot_completed=1`、标记成功）——
+所以坏的是**之后某一次**启动，原因未知，**别先入为主地归到 SELinux**。
+同日设备不在线（USB 无、全段 5555 无应答），现在停在哪个槽、是不是卡在启动中都不知道。
+⇒ 原先的路线 ②（直接 `--no-build` 发 `1789737346`）**作废**。
+
+**设备回来之后按这个顺序**：
+1. 先确认活着的是哪个槽（`getprop ro.boot.slot_suffix`、`ro.build.version.incremental`），`default` 指向谁；
+2. 取证 `_a` 为什么起不来：`scripts/pstore-ctl.sh`（efi_pstore）、ESP 上的启动日志，
+   以及 `bootctl` 看 `_a` 是否已被标 unbootable；
+3. 定了因再编下一版：`-userdebug` + #117 §19 那 4 处规则 + T5（平板声明）+ S1 的决定
+   → 装机 denial 普查（开机后 ≥8 分钟再采，#117 §20）→ `release.sh --no-build`。
+⚠️ **变体必须 `lineage_gaokun3-bp4a-userdebug`**（#117 §15）。
 
 ### 🔴 第一梯队：用户明确点名 / 用户能直接感觉到
 
 | # | 事情 | 现在卡在哪 | 下一步（具体） |
 |---|---|---|---|
-| **S1** 🆕 | **待机默认值 1→0 会波及老用户** | 09-18 为改名把 `persist.vendor.gaokun3.allow_suspend` 默认设成 0（`device.mk:526`），`device.mk` 注释只说"新装机默认不睡"。但 v0.6.2 的用户**绝大多数从没设过这个属性**（旧默认 1）⇒ OTA 一过、新名字取默认 0 ⇒ **所有老用户也会失去 s2idle**，README 的"待机 ✅"随之失真 | **要用户定**：(a) 接受，发版说明 + README 写清楚、给开启命令；(b) 默认回 1，本机自己 `setprop … 0`；(c) postinstall 里把旧名的值迁到新名。发版前必须定 |
+| **S1** 🆕 | **待机默认值 1→0 会波及老用户** | 用户 2026-09-23：这是 SELinux 那轮（属性改名）带出来的，不是为待机本身做的决定。09-18 为改名把 `persist.vendor.gaokun3.allow_suspend` 默认设成 0（`device.mk:526`），`device.mk` 注释只说"新装机默认不睡"。但 v0.6.2 的用户**绝大多数从没设过这个属性**（旧默认 1）⇒ OTA 一过、新名字取默认 0 ⇒ **所有老用户也会失去 s2idle**，README 的"待机 ✅"随之失真 | **要用户定**：(a) 接受，发版说明 + README 写清楚、给开启命令；(b) 默认回 1，本机自己 `setprop … 0`；(c) postinstall 里把旧名的值迁到新名。发版前必须定 |
 | **T1** | **触摸** | ✅ v0.6.2 已发（跳点限速线、fuzz=0、按下 17 ms、面积轴、6 个驱动缺陷、可观测性，[#114](stage4-findings.md)–[#116](stage4-findings.md)）。剩：手掌碎成多触点（不影响点击，三种阈值法实测全否） | 下一版驱动做跨帧形态判据；轴已经有了，可以顺手写触摸 IDC（`touch.size.calibration`，本机现在 `ConfigurationFile: <none>`） |
-| **B15** 🔺 | **全新安装丢触摸参数** | ★ 实锤：`scripts/install-gaokun3.sh:251-257` 写死的 cmdline **没有** `himax_hx83121a_spi.disable_pressure=0`（`BoardConfig.mk:134` 有）⇒ 按 INSTALL.md 全新装 v0.6.2 的机器**没有触点面积轴**，直到第一次 OTA 的 postinstall 把 cmdline 同步过去 | 让 `install-gaokun3.sh` 像 postinstall 一样从 boot.img 的 cmdline 派生（[#116](stage4-findings.md) §17），而不是再抄一份；`deploy-android.sh:133` 那份也已漂（`deferred_probe_timeout=30`、缺 iommu 两项） |
+| **B15** ✅ | **全新安装丢触摸参数**（2026-09-23 已修） | ★ 实锤：`scripts/install-gaokun3.sh:251-257` 写死的 cmdline **没有** `himax_hx83121a_spi.disable_pressure=0`（`BoardConfig.mk:134` 有）⇒ 按 INSTALL.md 全新装 v0.6.2 的机器**没有触点面积轴**，直到第一次 OTA 的 postinstall 把 cmdline 同步过去 | ✅ `install-gaokun3.sh` 改为从 boot.img 头读 cmdline（`cmdline[512]@64 + extra_cmdline[1024]@608`，与 `bootimg_extract.cpp` 同一写法），读不到就拒装。拿 v0.6.2 发布的 `boot.img`（sha `975d7987…`）实测：解出的 cmdline 与 `BoardConfig.mk` **逐字相同**。`deploy-android.sh` 已归档。⬜ 剩 `scripts/live/installer-lib.sh:506` 那份（更旧，还缺 `boot_devices` / `init=/init`），随 B4 一起改 —— 它还假设发布目录有散装 `Image`/`dtb`/`ramdisk`，而发布只带 `boot.img` |
 | **T2** | **Google 未认证** | Play 商店报"设备未经 Play 保护机制认证" | 工具与文档已就位（`scripts/google/gsf-android-id.sh` + INSTALL.md）。**剩下的是用户动作**：拿 Android ID 去 google.com/android/uncertified 登记 |
 | **T3** | **相机画质** | 暗光噪点、闪光白墙过曝 34%、偏绿（[#112](stage4-findings.md) §5）。降噪 + 预闪按亮度收敛 + 曝光回填**应已随 v0.6.2 进镜像**（见顶上"对账边界"），1:1 样片颗粒明显变细（#112） | 还没写的两条：闪光帧下发 `ExposureValue` 负补偿；libcamera AWB 剔饱和像素（值得投上游）。CCM 要色卡（用户提供）。手电筒亮度档位（`turnOnTorchWithStrengthLevel`） |
 | **T4** | **息屏 USB adb 断** | `usbrole.sh` v2（插着主机不睡）**应已在 v0.6.2 里**；但在 S1 定下来之前默认根本不睡，这条暂时无感 | 原生化要先修 UCSI 的数据角色（A6，现在是反的） |
 | **A1** | 音频/蓝牙长期运行后死锁 | 用户报过，我们从未复现 | 设备在线时先 `ls /data/vendor/gaokun3/` 看开发机自己有没有抓到过 `hangdump-*`；否则等下次死锁把目录要过来 |
-| **A0** | 侧滑返回 | ✅ 导航栏已出现（#86 装机验收 `mNavigationBar=Window{… Taskbar}`） | 只差用户亲手试一次边缘侧滑 |
+| **T5** 🆕 | **声明本机是平板**（[issue #5](https://github.com/vahiru/gaokun-android/issues/5)） | `ro.build.characteristics` 是 `default` ⇒ QQ 不给平板模式登录。原因：从没设过 `PRODUCT_CHARACTERISTICS`，而 `common_full_tablet_wifionly.mk` 也不设它 | ✅ 已写 `lineage_gaokun3.mk`：`PRODUCT_CHARACTERISTICS := tablet`（依据 `build/make/core/product_config.mk:425-428`）。⬜ 下次构建后 `grep ro.build.characteristics …/system/build.prop` 验；请报告者实机测 QQ。⚠️ issue 里「网页把设备认成 Linux」**不一定**跟着好 —— Android 的 UA 本来就含 `Linux; Android`，网页是否给平板版由浏览器决定，不看这个属性（未验证） |
 | **A6** | UCSI 数据角色反 / 无 DP alt-mode | typec 已起来但插 PC 报 `[host]`，靠 rc 硬写 `device` | 查 EC partner type 语义 → 修 `ucsi_huawei_gaokun.c` → DT `role-switch-default-mode` → 删 rc 硬写 |
 | **A5** | 恢复出厂设置不起作用 | 走 misc+recovery，而本机 recovery 起不来 | 依赖 B3（自研 EFI 加载器）或让 recovery 能启动 |
 
@@ -57,8 +65,7 @@
 | **B6** | GPU SMMU 中断根治 | 做掉它 `smmu-nostall.sh` 整个消失，B1 的一半阻塞跟着消失 |
 | **B9** | SLPI 每 200 ms 的 handover 噪声 | 已定位到 sensors HAL 的采样节拍。下一步：accel 采样率 2× / ½× 看计数是否跟着变 |
 | **B12** | 释放 R2 桶前要有国内可达的镜像 | GitHub 附件国内不可达。要用户定方案（Worker 反代 / 保留桶） |
-| **B16** 🆕 | 设备 WAN 吞吐：两份文档结论相反 | A8 按 [#108](stage4-findings.md) 结案"不成立"（平板 8.14 MB/s ≈ 本机），但 v0.6.2 发版说明的 Known issues 写"设备下载只有 1–2 MB/s、原因未明、OTA 受影响"。**要实测一次定哪份对**，再改另一份 |
-| **B17** 🆕 | `scripts/find-device.sh` 在 macOS 上跑不了 | 用的是 Windows 的 `ipconfig` / `ping -n -w`，本机认不出自己网段。2026-09-23 找设备时只能手写 `nc -z` 扫全段 |
+| **B16** 🆕 | 设备 WAN 吞吐：两份文档结论相反 | A8 按 [#108](stage4-findings.md) 结案"不成立"（平板 8.14 MB/s ≈ 本机），但 v0.6.2 发版说明的 Known issues 写"设备下载只有 1–2 MB/s、原因未明、OTA 受影响"。**要实测一次定哪份对**，再改另一份。用户 2026-09-23：自己也不清楚快慢 ⇒ 没有用户侧的现象可依，只能等设备在线时同 URL、同时刻对照测一次（#108 的做法） |
 | **B3** | 自研 EFI 加载器 | A5 与"默认启动项永远留救援"都依赖它 |
 | **B7** | 用轻量系统替掉救援 Ubuntu（= B4） | 24.6 GiB 换成 55 MiB squashfs，⏸ 用户暂缓 |
 | — | 相机零碎 | `patches/0022` 仍未在**健康**状态下验证 unbind/rebind；libcamera 生成源码仍靠手工，未改成 Soong `genrule`（`patches/libcamera/README.md:34`）；`kDarkLuma=50` 是启发式 |
@@ -85,6 +92,10 @@ A6b WPA3 issue #2（本地不复现，要报告者配合）· B4 LiveCD 图形�
 扬声器"用户还听不到"（A′，#86 实测 PA=21）· 侧滑返回的导航栏（A0，#86）·
 SELinux 第五轮"一行都没编译"（B1，#117 §11–§18 已编译并装机）。
 `plan-2026-09-14.md` 与 `touch-morning-runbook.md` 已归档到 [`archive/`](archive/)。
+
+第二轮（同日）：A0 侧滑返回（**用户确认已好**）· B15 全新安装的 cmdline（见上）·
+B17 `find-device.sh` 改成 macOS / Linux / Git Bash 通用、扫全段不看 ARP（实测：无设备时 2.7 秒给出结论，`--ssh` 模式扫到并正确排除了一台陌生主机）·
+12 个过时脚本归档到 [`../scripts/archive/`](../scripts/archive/README.md)（每个都写了取代者）。
 
 ---
 
@@ -151,7 +162,7 @@ AOSP 默认 `config_showNavigationBar=false`
 那样要绕到 `crdroid-tree-fixes.py` 去改。
 
 ✅ **已随 ROM 生效**（#86 装机验收：`mNavigationBar=Window{… Taskbar}` 出现了）。
-⬜ 只差用户亲手试一次边缘侧滑。
+✅ **用户 2026-09-23 确认边缘侧滑返回已经好了。** 本条结案。
 
 ### T1. ✅ 触摸手感 —— 已随 v0.6.2 发布，只剩手掌碎块（[#114](stage4-findings.md)–[#116](stage4-findings.md)）
 
