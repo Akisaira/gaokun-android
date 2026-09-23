@@ -73,8 +73,10 @@
 > ⚠️★★ 槽 `_b` **已不可启动**（`bootctl is-slot-bootable 1` = 0，mapper 里只有 `*_a`，#118 §2）——
 > **现在没有回落槽**。重启 / 装内核前把这一点算进风险：万一 `_a` 起不来，只能靠救援系统。
 > `default` 由 boot_control 在成功启动后自动指向当前槽（现在是 `_a`）。
-> ⚠️ 2026-09-23 本次开机走的是 oneshot 测试条目 `…-android-a-t0048.conf`（`slot_a` 内核 + 0048 dtb）；
-> 下次重启回到 `slot_a` 的**旧 dtb**，port0 的 #27 会回来，直到 0048 的 dtb 进 `slot_a` 或进下一版镜像。
+> ★ 2026-09-23 起 ESP 上 `slot_a/gaokun3.dtb` 是 **0048 版**（sha `8b390878…`，用户同意后覆盖；
+> 修 port0 角色切换后 xhci -110 / gadget -524，#118 §7-8）。原版备份在同目录 `gaokun3.dtb.pre0048`（`77f049bb…`），
+> 回退 = 挂 ESP 后 `cp gaokun3.dtb.pre0048 gaokun3.dtb`。⚠️ 这是手放的，**不在任何已发布镜像里**；下一版镜像的
+> prebuilt dtb 已换成同一份。
 > ⚠️ 本机待机仍然关着：属性已改名为 **`persist.vendor.gaokun3.allow_suspend`**（现值 0，
 > 镜像默认也是 0）。旧名 `persist.gaokun3.allow_suspend` 在设备上还留着一个孤儿值，无害。
 > ⚠️★★ **不要用 `-user` 变体构建本机的 ROM** —— user 构建的 init 强制 enforcing

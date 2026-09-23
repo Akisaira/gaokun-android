@@ -9483,5 +9483,6 @@ init 的 `write .../UDC` 报 EBUSY 是因为 gadget 已经自己重绑上了，�
 同时改掉 `usbrole.sh` 判"host 已确认"的判据：数 `xhci-hcd.*/driver`（绑上驱动）而不是平台设备。
 **已入库、待下次构建**：`patches/0048`；`prebuilt-boot/dtb/gaokun3.dtb` 换成 0048 版（sha `8b390878…`，
 旧的 `77f049bb…` 可从 v0.6.2 的 boot.img 解出）；`usbrole.rc` 加常驻 `gaokun3_usbfollow`。
-⚠️ 本机下次重启会回到**旧 dtb**（oneshot 只管一次）—— #27 随之回来，除非把 0048 的 dtb 放进 `slot_a`。
+✅ 用户同意后已把 0048 的 dtb 覆盖进 ESP 的 `slot_a/gaokun3.dtb`（先核对原件是 `77f049bb…` 再动；原件留作
+`slot_a/gaokun3.dtb.pre0048`），测试条目与 `test0048/` 已删，oneshot 变量已被引导器消费。
 ⬜ follow 读 `/sys/class/typec`、xhci 目录，转 enforcing 前要给 `gaokun3_usbrole` 补规则（B1）。
