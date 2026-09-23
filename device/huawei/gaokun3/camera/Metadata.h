@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include <aidl/android/hardware/camera/device/StreamConfiguration.h>
 #include <system/camera_metadata.h>
 
 namespace gaokun3 {
@@ -75,6 +76,14 @@ std::vector<uint8_t> buildResult(const std::vector<uint8_t> &requestSettings,
 				 int64_t timestampNs, uint8_t pipelineDepth,
 				 const FrameResultFacts &fr);
 
+/*
+ * 复制一份请求设置，把一次性的触发键（AF_TRIGGER / AE_PRECAPTURE_TRIGGER）改成 IDLE。
+ * ★ 用途：请求不带设置 = "与上一帧相同"（CaptureRequest.aidl），HAL 要沿用上一帧的设置
+ *   （JPEG 方向/质量、结果回显……），但【触发】只属于它出现的那一帧 —— 原样沿用会让
+ *   AF_TRIGGER=START 在之后每一帧重复生效。
+ */
+std::vector<uint8_t> stripTriggers(const std::vector<uint8_t> &settings);
+
 /* RequestTemplate → 默认请求设置。 */
 std::vector<uint8_t> buildDefaultRequest(int templateId, const SensorFacts &f);
 
@@ -88,6 +97,18 @@ std::vector<uint8_t> buildDefaultRequest(int templateId, const SensorFacts &f);
  */
 int32_t requestEntryInt(const std::vector<uint8_t> &requestSettings,
 			uint32_t tag, int32_t def);
+
+/*
+ * 这套 HAL 能不能交付这组流？Device::isStreamCombinationSupported 与
+ * Session::configureStreams 用的是【同一个】判据，与静态元数据一致：
+ *   MAX_NUM_OUTPUT_STREAMS = {0 RAW, 2 非停顿(YUV/IMPL_DEFINED), 1 停顿(BLOB/JPEG)}，
+ *   格式只限 kFormats 那三种（软件 ISP 出 RGB，由我们转 YUV / 编 JPEG，别的格式交付不了），
+ *   只接受输出流、不旋转、尺寸不超过有效阵列。
+ * why 不为空时写入拒绝理由（给日志）。
+ */
+bool streamCombinationSupported(
+	const aidl::android::hardware::camera::device::StreamConfiguration &cfg,
+	const SensorFacts &f, std::string *why);
 
 /* 小工具：把 camera_metadata_t 打包成字节。 */
 std::vector<uint8_t> pack(const camera_metadata_t *m);

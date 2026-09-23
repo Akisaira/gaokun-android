@@ -1,0 +1,48 @@
+From: Vahiru <nekovahiru@gmail.com>
+Subject: [PATCH] arm64: dts: gaokun3: 前后摄的 rotation 按实机标定（前 90 / 后 270）
+
+⚠️ 待实机目视确认（2026-09-24 写）。来源：PR #6（mashen11）的实机标定。
+
+`rotation` 是【逆时针】安装角（Documentation/devicetree/bindings/media/
+video-interface-devices.yaml），驱动经 v4l2_ctrl_new_fwnode_properties() 变成只读的
+V4L2_CID_CAMERA_SENSOR_ROTATION，libcamera 读成 properties::Rotation，HAL 再换算
+ANDROID_SENSOR_ORIENTATION = (360 - rotation) % 360（Device.cpp，与上游 libcamera
+src/android/camera_device.cpp 同一公式）。
+
+PR #6 的最终标定（用户原话"取景每个方向都歪、总是差 90°"之后）：
+    前摄 hi846   rotation 90   ⇒ SENSOR_ORIENTATION 270
+    后摄 ov13b10 rotation 270  ⇒ SENSOR_ORIENTATION 90
+这也正是"面板原生竖屏（1600x2560）的设备"上前/后摄的常规值。
+PR 当时是用 debug.gaokun3.camera.orientation.* 属性（仓库外的 post-fs-data 脚本）
+顶掉设备树值来实现的 —— 干净构建的 ROM 没有那组属性，所以值必须落回设备树。
+
+⚠️ 记录互相矛盾过：PR 的文档第 7 章（09-20）写"前 0 / 后 0"、TODO 写"270 / 0"、
+PR 自己改的 0032 写后摄 0。这里取 PR 描述里【最后】的那组（晚于第 7 章，且是在
+用户报取景歪之后定的）。合并前请在机器上看一次：竖拿 / 横拿各开一次前后摄，
+取景与照片都应是正的。不对就撤掉本补丁（git apply -R），结论记回案卷。
+
+替换 0032 里后摄那行 `rotation = <180>; /* FIXME */`（0032 本身不改，补丁链只追加）。
+---
+--- a/arch/arm64/boot/dts/qcom/sc8280xp-huawei-gaokun3-camera.dtsi
++++ b/arch/arm64/boot/dts/qcom/sc8280xp-huawei-gaokun3-camera.dtsi
+@@ -226,7 +226,9 @@
+ 		lens-focus = <&voice_coil_motor>;
+ 
+ 		orientation = <1>;
+-		rotation = <180>; /* FIXME */
++		/* Counter-clockwise (video-interface-devices.yaml). Calibrated on
++		 * device 2026-09-20 (PR #6): Android SENSOR_ORIENTATION 90. */
++		rotation = <270>;
+ 
+ 		port {
+ 			ov13b10_ep: endpoint {
+@@ -269,7 +271,8 @@
+ 		led-names = "privacy";
+ 
+ 		orientation = <0>;	/* Front facing */
+-		rotation = <0>;
++		/* Calibrated on device 2026-09-20 (PR #6): SENSOR_ORIENTATION 270. */
++		rotation = <90>;
+ 
+ 		port {
+ 			hi846_ep: endpoint {

@@ -66,10 +66,9 @@ private:
 	};
 
 	bool shouldScan() const;          /* 当前模式下该不该跑搜索 */
-	bool locked() const;              /* 单次对焦(或已触发)且已收敛 = 锁定 */
 	void startScan();
 	void finishScan();
-	void apply(int pos);
+	bool apply(int pos);              /* 挪马达并记 justMoved_；失败返回 false */
 
 	double sharpness(const uint8_t *rgb, int w, int h);
 
@@ -82,7 +81,10 @@ private:
 						     标准卡场景：真峰 347、远端平坦区 33、
 						     近端 87 ⇒ 取 20 能把"平坦低分平台"
 						     判成未合焦。要按实测再校准。 */
-	static constexpr double kDropToRescan = 0.70;   /* 连续模式：分数掉 30% 就重扫 */
+	/* 连续模式重扫：相对收敛后基准分数变化超过 30%（涨跌都算），且至少 kRescanAbs，
+	 * 连续 kRescanFrames 帧。绝对下限 = kMinScore/2，挡住低分场景里的噪声。 */
+	static constexpr double kRescanRel = 0.30;
+	static constexpr double kRescanAbs = kMinScore / 2;
 	static constexpr int kRescanFrames = 4;
 	static constexpr float kMinFocusDiopters = 10.0f;  /* 与 Metadata.cpp 声明一致 */
 	/* 降采样：网格步长 16 像素、每格内部再 4×4 平均。
@@ -119,6 +121,7 @@ private:
 	int moves_ = 0;
 	double bestScore_ = 0.0;
 	int bestPos_ = 0;
+	double refScore_ = -1.0;         /* 收敛后第一帧稳定画面的分数；<0 = 还没取 */
 	bool justMoved_ = false;
 	int stable_ = 0;
 	uint8_t lensState_ = ANDROID_LENS_STATE_STATIONARY;

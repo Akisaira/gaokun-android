@@ -12,8 +12,15 @@
 #include <algorithm>
 #include <cstring>
 
+#include <aidl/android/hardware/camera/device/RequestTemplate.h>
 #include <log/log.h>
 #include <system/graphics.h>
+
+using ::aidl::android::hardware::camera::device::RequestTemplate;
+using ::aidl::android::hardware::camera::device::StreamConfiguration;
+using ::aidl::android::hardware::camera::device::StreamRotation;
+using ::aidl::android::hardware::camera::device::StreamType;
+using ::aidl::android::hardware::graphics::common::PixelFormat;
 
 namespace gaokun3 {
 
@@ -361,6 +368,67 @@ std::vector<uint8_t> buildResult(const std::vector<uint8_t> &requestSettings,
 	return out;
 }
 
+bool streamCombinationSupported(const StreamConfiguration &cfg, const SensorFacts &f,
+				std::string *why)
+{
+	auto no = [&](const std::string &r) {
+		if (why)
+			*why = r;
+		return false;
+	};
+	if (cfg.streams.empty())
+		return no("没有流");
+	int processed = 0, stalling = 0;
+	for (const auto &s : cfg.streams) {
+		const std::string id = "流 " + std::to_string(s.id) + ": ";
+		if (s.streamType != StreamType::OUTPUT)
+			return no(id + "不支持输入流（没有 reprocess）");
+		if (s.rotation != StreamRotation::ROTATION_0)
+			return no(id + "不支持流旋转");
+		if (s.width <= 0 || s.height <= 0 || s.width > f.activeW || s.height > f.activeH)
+			return no(id + "尺寸 " + std::to_string(s.width) + "x" +
+				  std::to_string(s.height) + " 超出有效阵列");
+		switch (s.format) {
+		case PixelFormat::BLOB:
+			stalling++;
+			break;
+		case PixelFormat::IMPLEMENTATION_DEFINED:
+		case PixelFormat::YCBCR_420_888:
+			processed++;
+			break;
+		default:
+			return no(id + "格式 " + std::to_string(static_cast<int>(s.format)) +
+				  " 交付不了（只支持 IMPLEMENTATION_DEFINED / YCBCR_420_888 / BLOB）");
+		}
+	}
+	if (processed > 2)
+		return no("非停顿流 " + std::to_string(processed) + " 路，上限 2");
+	if (stalling > 1)
+		return no("JPEG 流 " + std::to_string(stalling) + " 路，上限 1");
+	return true;
+}
+
+std::vector<uint8_t> stripTriggers(const std::vector<uint8_t> &settings)
+{
+	if (settings.empty())
+		return {};
+	const camera_metadata_t *src =
+		reinterpret_cast<const camera_metadata_t *>(settings.data());
+	std::vector<uint8_t> out(get_camera_metadata_size(src));
+	camera_metadata_t *m = copy_camera_metadata(out.data(), out.size(), src);
+	if (!m)
+		return settings;   /* 拷不出来就原样用 —— 最坏是多触发一次，不会丢设置 */
+	const uint8_t afIdle = ANDROID_CONTROL_AF_TRIGGER_IDLE;
+	const uint8_t aeIdle = ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_IDLE;
+	camera_metadata_entry_t e;
+	/* 同类型同长度的原地更新不需要额外空间，所以不会因容量失败。 */
+	if (find_camera_metadata_entry(m, ANDROID_CONTROL_AF_TRIGGER, &e) == 0)
+		update_camera_metadata_entry(m, e.index, &afIdle, 1, nullptr);
+	if (find_camera_metadata_entry(m, ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER, &e) == 0)
+		update_camera_metadata_entry(m, e.index, &aeIdle, 1, nullptr);
+	return out;
+}
+
 std::vector<uint8_t> buildDefaultRequest(int templateId, const SensorFacts &f)
 {
 	camera_metadata_t *m = allocate_camera_metadata(32, 2048);
@@ -369,9 +437,13 @@ std::vector<uint8_t> buildDefaultRequest(int templateId, const SensorFacts &f)
 
 	const uint8_t controlMode = ANDROID_CONTROL_MODE_AUTO;
 	add_camera_metadata_entry(m, ANDROID_CONTROL_MODE, &controlMode, 1);
-	/* 有闪光灯时，静态拍照模板默认 ON_AUTO_FLASH（RequestTemplate.STILL_CAPTURE = 2），
-	 * 与 CameraCharacteristics 文档对模板的约定一致；其余模板不闪。 */
-	const uint8_t aeMode = (!f.flashLed.empty() && templateId == 2)
+	/* ★ 模板一律按 AIDL 的枚举名比较，不写数字：PR #6 的初版把 ZSL/MANUAL 的编号记错了
+	 *   （RequestTemplate.aidl：PREVIEW=1 STILL_CAPTURE=2 VIDEO_RECORD=3 VIDEO_SNAPSHOT=4
+	 *    ZERO_SHUTTER_LAG=5 MANUAL=6）。 */
+	const auto tmpl = static_cast<RequestTemplate>(templateId);
+	/* 有闪光灯时，静态拍照模板默认 ON_AUTO_FLASH，与 CameraCharacteristics 文档对模板的
+	 * 约定一致；其余模板不闪。 */
+	const uint8_t aeMode = (!f.flashLed.empty() && tmpl == RequestTemplate::STILL_CAPTURE)
 				       ? ANDROID_CONTROL_AE_MODE_ON_AUTO_FLASH
 				       : ANDROID_CONTROL_AE_MODE_ON;
 	add_camera_metadata_entry(m, ANDROID_CONTROL_AE_MODE, &aeMode, 1);
@@ -379,19 +451,27 @@ std::vector<uint8_t> buildDefaultRequest(int templateId, const SensorFacts &f)
 	add_camera_metadata_entry(m, ANDROID_CONTROL_AWB_MODE, &awbMode, 1);
 	/*
 	 * AF 模式按模板给（AOSP 对模板的约定）：
-	 *   PREVIEW(1) / STILL_CAPTURE(2) / ZERO_SHUTTER_LAG(4) → CONTINUOUS_PICTURE
-	 *   VIDEO_RECORD(3) → CONTINUOUS_VIDEO
-	 *   MANUAL(5) → OFF，定焦相机也一律 OFF
+	 *   PREVIEW / STILL_CAPTURE / ZERO_SHUTTER_LAG → CONTINUOUS_PICTURE
+	 *   VIDEO_RECORD / VIDEO_SNAPSHOT → CONTINUOUS_VIDEO（录像中抓拍不能让镜头去扫）
+	 *   MANUAL → OFF；定焦相机一律 OFF
 	 * ★ 为什么要给 CONTINUOUS 而不是 AUTO：应用（CameraX）默认只把模板设下来的
 	 *   模式原样用；给 AUTO 的话要等应用发 AF_TRIGGER=START 才会动，而很多应用
 	 *   在预览里根本不发。CONTINUOUS_PICTURE 才是"预览就该一直对焦"的语义。
 	 */
 	uint8_t afMode = ANDROID_CONTROL_AF_MODE_OFF;
 	if (f.hasAf) {
-		if (templateId == 3)
+		switch (tmpl) {
+		case RequestTemplate::VIDEO_RECORD:
+		case RequestTemplate::VIDEO_SNAPSHOT:
 			afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
-		else if (templateId != 5)
+			break;
+		case RequestTemplate::MANUAL:
+			afMode = ANDROID_CONTROL_AF_MODE_OFF;
+			break;
+		default:   /* PREVIEW / STILL_CAPTURE / ZERO_SHUTTER_LAG */
 			afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+			break;
+		}
 	}
 	add_camera_metadata_entry(m, ANDROID_CONTROL_AF_MODE, &afMode, 1);
 	/* 触发器必须显式给 IDLE：框架要求默认请求里出现这个键，且 START 只在

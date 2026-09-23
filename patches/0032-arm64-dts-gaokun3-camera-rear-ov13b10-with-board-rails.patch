@@ -107,7 +107,7 @@ index 690db45..937eda9 100644
 +		lens-focus = <&voice_coil_motor>;
 +
 +		orientation = <1>;
-+		rotation = <0>; /* 2026-09-19 实机标定：φ=0 */
++		rotation = <180>; /* FIXME */
 +
 +		port {
 +			ov13b10_ep: endpoint {

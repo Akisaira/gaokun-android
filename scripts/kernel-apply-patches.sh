@@ -145,6 +145,8 @@ KPATCHES=(
     0047-Input-himax-spi-pressure-follows-axes-and-log-zone-area.patch
     # ⚠️ 0048（#118 §7，待验证）：usb_0 用 UTMI 当 pipe 时钟 —— 角色切换后 xhci -110 / gadget -524。
     0048-arm64-dts-gaokun3-usb0-select-utmi-as-pipe-clk.patch
+    # ⚠️ 0049（PR #6 的标定，待目视确认）：前摄 rotation 0→90、后摄 180→270（逆时针）。
+    0049-arm64-dts-gaokun3-camera-rotation-front-90-rear-270.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，

@@ -671,7 +671,8 @@ hi846 的完整控件表在 [#81](stage4-findings.md) 第六节。
 ⬜ **`rotation` FIXME —— 2026-09-19：这条已成"照片方向"的最后一环。**
 HAL 侧的 JPEG 旋转与朝向换算都已修好（见 [camera-photo-rotation-2026-09-19.md](camera-photo-rotation-2026-09-19.md)），
 照片方向现在**完全由设备树这两个 `rotation` 值决定**，而它们恰恰是猜的。
-标定用 `setprop debug.gaokun3.camera.orientation.{front,rear}`（该文档第六节）；实机已量出前摄 270 / 后摄 0。
+标定用 `setprop debug.gaokun3.camera.orientation.{front,rear}`（该文档第六节）；~~实机已量出前摄 270 / 后摄 0~~。
+⚠️ 2026-09-24 合并 PR #6 时对账：几处记录互相矛盾（这里 270/0、文档第 7 章 0/0、PR 描述 90/270）。取 PR 描述里最后那组（设备树逆时针 **前 90 / 后 270** ⇒ SENSOR_ORIENTATION 前 270 / 后 90，也是竖屏原生设备的常规值），写成 `patches/0049`。⬜ **待目视确认**：竖拿 / 横拿各开一次前后摄，取景与照片都应是正的。
 ✅ 稳健性：`patches/0035` —— 某颗传感器 20 s 没绑上就只带绑上的完成 notifier；`ov13b10.fail_probe=1` 实测前摄照常（45 个 subdev，[#110](stage4-findings.md)）。
 ✅ 2026-09-14 收尾：用户手电筒照镜头看到景物/亮度变化 ⇒ **`#18` + 后摄 dtb 已设为默认槽**；prebuilt-boot 已是 `#19` + dtb v2。
 `slot_cam` / `slot_cam4`（#14 时代）已从 ESP 删除（它们把 ESP 吃到只剩 4.5 MB，会让 postinstall 失败，#110）。

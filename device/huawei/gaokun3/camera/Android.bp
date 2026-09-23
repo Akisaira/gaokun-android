@@ -89,3 +89,18 @@ cc_binary {
         "-std=c++20",
     ],
 }
+
+// 应用视角的冒烟测试（NDK Camera2）：走 cameraserver → HAL 的真实路径，读应用会读的结果键。
+// 不进镜像（不在 PRODUCT_PACKAGES 里），`m gaokun3-ncam-smoke` 后 push 到 /data/local/tmp 跑。
+// ⚠️ 不是 vendor 模块：libcamera2ndk / libmediandk 是 system 侧的 NDK 库。
+cc_binary {
+    name: "gaokun3-ncam-smoke",
+    srcs: ["tools/ncam-smoke.cpp"],
+    shared_libs: [
+        "libbinder_ndk",
+        "libcamera2ndk",
+        "libmediandk",
+        "libnativewindow",
+    ],
+    cflags: ["-Wall", "-Werror"],
+}

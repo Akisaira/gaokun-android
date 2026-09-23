@@ -332,10 +332,11 @@ device/huawei/gaokun3/camera/Session.h
 scripts/camera/test-jpeg-rotation.py          源码级断言（55 项）
 scripts/camera/test-jpeg-rotation.cc          运行级自测（19 项）
 docs/TODO.md                                  `rotation` FIXME 条目指向本文
-docs/camera-photo-rotation-2026-09-19.patch   自包含补丁（含本文与两套自测）
+~~docs/camera-photo-rotation-2026-09-19.patch~~  （2026-09-24 删：代码已在合并 PR #6 时改过，这份快照会把修复回退；
+                                               构建机同步现在用 scripts/sync-device-tree.sh）
 ```
 
-> 补丁文件是给构建机用的：本仓的 `~/crdroid/device/huawei/gaokun3` 与本仓靠人手拷贝
+> ⚠️（已过时，见上）补丁文件是给构建机用的：本仓的 `~/crdroid/device/huawei/gaokun3` 与本仓靠人手拷贝
 > （见 `docs/TODO.md` B0，已经因此付过四次账）。`git apply` 一次即可，不用再逐文件对齐。
 
 **未做的一件事要说清楚**：这里没有 AOSP 源码树与工具链，**HAL 本身没有经过一次真实编译**。
@@ -400,8 +401,11 @@ adb shell su -c 'sha256sum /vendor/bin/hw/android.hardware.camera.provider-servi
 
 ### 7.5 首次真实编译暴露的三处问题（都已修，见 commit c474de6）
 
-1. `<libcamera/libcamera.h>` 上游/AOSP 都没有 —— 当年构建机手工放的，已重建入仓
-   （`patches/libcamera/include/libcamera/libcamera.h`）。
+1. `<libcamera/libcamera.h>` ~~上游/AOSP 都没有 —— 当年构建机手工放的，已重建入仓~~
+   ⚠️ 2026-09-24 更正（合并 PR #6 时）：上游**会生成**它（`include/libcamera/meson.build:127-135`，
+   `custom_target('gen-header')`），构建机 `generated/include/libcamera/libcamera.h` 就是生成的那份
+   （文件头 "auto-generated"，比手写的多 7 个头）。手写副本已删，改由
+   `scripts/camera/gen-libcamera-sources.sh` 生成并断言。
 2. `tracepoints.h` 是 meson `custom_target('tp_header')` 产物，生成清单漏了它
    （编到 90% 才报 file not found）。
 3. `Session.cpp` 重复包含无 guard 的 `camera_metadata_tags.h` ⇒ 20 个 redefinition。

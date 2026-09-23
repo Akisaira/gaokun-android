@@ -132,9 +132,8 @@ bool Device::init()
 	 *        value in clockwise direction whereas libcamera specifies the
 	 *        rotation property in anticlockwise direction."
 	 *
-	 *   ⚠️ 本机目前两个相机的 rotation 都是 0 或 180 —— 这两个值互为反数，
-	 *      所以这条 bug 现在是【隐性】的；但只要设备树里的 rotation 改成
-	 *      90 或 270（后摄那行本来就标着 FIXME 待核），立刻差 180°。
+	 *   ★ patches/0049 起设备树是前 90 / 后 270（PR #6 的实机标定）⇒
+	 *     SENSOR_ORIENTATION 前 270 / 后 90。这组值不对称，换算方向错了会立刻差 180°。
 	 */
 	auto rot = props.get(libcamera::properties::Rotation);
 	const int32_t rawRotation = rot ? *rot : 0;
@@ -150,8 +149,9 @@ bool Device::init()
 	 *   为什么必须留这个口子：设备树里的 rotation 经驱动
 	 *   v4l2_ctrl_new_fwnode_properties() 变成 V4L2_CID_CAMERA_SENSOR_ROTATION，
 	 *   而那个控件 min==max==def，是【只读】的 —— 运行时 v4l2-ctl 改不动它，
-	 *   每次试一个角都要重来一遍内核。而设备树里现存的两个值（前摄 0、
-	 *   后摄 180）本来就都不可信。
+	 *   每次试一个角都要重来一遍内核。
+	 *   ⚠️ 它只是标定用的临时口子：正确值必须写进设备树（patches/0049）。PR #6 初版把
+	 *      标定结果只放在仓库外的 post-fs-data 脚本里设这组属性，干净构建的 ROM 就又歪了。
 	 *
 	 *   ⚠️ 属性给的数就是【写进设备树的那个数】（同一个约定，不用再换算），
 	 *      免得标定时多做一次 360-x 的心算：
@@ -195,8 +195,8 @@ bool Device::init()
 	/*
 	 * ── 对焦马达 ──
 	 * 只有后摄有 VCM（i2c 1-000c 的 dw9714，内核把它暴露成独立 v4l2 子设备）。
-	 * 这里【只找节点】、不开设备：给 /dev/v4l-subdevN 做 streamon 会动马达的
-	 * pm_runtime，相机还没开的时候不该占着它。真正的 open/streamon 在
+	 * 这里【只找节点】、不开设备：打开 /dev/v4l-subdevN 本身就会给马达上电
+	 * （dw9714_open → pm_runtime，见 Lens.h），相机还没开的时候不该占着它。真正的 open 在
 	 * Session::init()（有会话才有必要）。
 	 * 前摄 hi846 无马达 ⇒ hasAf 保持 false，元数据如实按定焦声明。
 	 */
@@ -261,8 +261,13 @@ ndk::ScopedAStatus Device::getResourceCost(CameraResourceCost *out)
 ndk::ScopedAStatus Device::isStreamCombinationSupported(const StreamConfiguration &cfg,
 							bool *out)
 {
-	/* 软件 ISP 一次只喂得起一路。 */
-	*out = cfg.streams.size() <= 2;
+	/* 与 Session::configureStreams 同一个判据（Metadata.h），也与静态元数据的
+	 * MAX_NUM_OUTPUT_STREAMS 一致。⚠️ PR #6 初版把这里从 <=1 悄悄改成 <=2，
+	 * 既不看格式也不看路数构成，与声明的 {0,2,1} 互相矛盾。 */
+	std::string why;
+	*out = streamCombinationSupported(cfg, facts_, &why);
+	if (!*out)
+		ALOGI("isStreamCombinationSupported: 否（%s）", why.c_str());
 	return ndk::ScopedAStatus::ok();
 }
 

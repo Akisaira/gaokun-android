@@ -193,7 +193,7 @@ bool Session::init()
 
 	/*
 	 * 对焦马达：Device 只回答"有没有"（探测到 dw9714 子设备即 hasAf），
-	 * 真正的打开放在这里 —— 有会话才需要它上电（open() 里会 streamon）。
+	 * 真正的打开放在这里 —— 有会话才需要它上电（打开子设备 fd 即上电，见 Lens.h）。
 	 * ★ 打不开不算致命：如实降级成定焦，别让整个会话起不来。
 	 *   ⚠️ 此时 characteristics 已经声明了 AF（那是建会话之前发出去的），
 	 *      所以会短暂出现"声明有 AF 但马达不可用"——AutoFocus 拿不到马达时
@@ -228,6 +228,7 @@ ndk::ScopedAStatus Session::close()
 		}
 		cam_->requestCompleted.disconnect(this, &Session::onRequestCompleted);
 		freeRequests_.clear();
+		configRequests_.clear();
 		pending_.clear();
 		dropAllCaches();
 		allocator_.reset();
@@ -254,8 +255,13 @@ ndk::ScopedAStatus Session::configureStreams(const StreamConfiguration &cfg,
 	std::unique_lock<std::mutex> lk(mutex_);
 	out->clear();
 
-	if (cfg.streams.empty())
-		return err(Status::ILLEGAL_ARGUMENT);
+	{
+		std::string why;
+		if (!streamCombinationSupported(cfg, facts_, &why)) {
+			ALOGE("configureStreams: 不支持的流组合（%s）", why.c_str());
+			return err(Status::ILLEGAL_ARGUMENT);
+		}
+	}
 
 	/*
 	 * ★ 相机应用一定会配多路（预览 + 拍照）。libcamera 只开【一路】，
@@ -300,9 +306,12 @@ ndk::ScopedAStatus Session::configureStreams(const StreamConfiguration &cfg,
 				ALOGW("stop 后 %zu 个在途请求仍未完成，强制清理", pending_.size());
 		}
 		freeRequests_.clear();
+		configRequests_.clear();
 		pending_.clear();
 		allocator_.reset();
 	}
+	lastSettings_.clear();
+	lastAfState_ = 0xff;
 
 	/* Viewfinder role 会启用软件 ISP（Raw role 不会）。 */
 	config_ = cam_->generateConfiguration({ libcamera::StreamRole::Viewfinder });
@@ -334,6 +343,10 @@ ndk::ScopedAStatus Session::configureStreams(const StreamConfiguration &cfg,
 	srcWidth_ = sc.size.width;
 	srcHeight_ = sc.size.height;
 
+	/* 上一次配置若在建池之后失败（start 失败等），池里还是指向旧 allocator 缓冲的 Request ——
+	 * 换 allocator 之前先清掉，别让新旧两代混在一个池里。此时没有在途请求（streaming_ 为假）。 */
+	freeRequests_.clear();
+	configRequests_.clear();
 	allocator_ = std::make_unique<libcamera::FrameBufferAllocator>(cam_);
 	if (allocator_->allocate(stream_) < 0) {
 		ALOGE("分配 libcamera 缓冲失败");
@@ -345,6 +358,7 @@ ndk::ScopedAStatus Session::configureStreams(const StreamConfiguration &cfg,
 			ALOGE("建 libcamera 请求失败");
 			return err(Status::INTERNAL_ERROR);
 		}
+		configRequests_.insert(r.get());
 		freeRequests_.push_back(std::move(r));
 	}
 
@@ -442,33 +456,59 @@ ndk::ScopedAStatus Session::processCaptureRequest(const std::vector<CaptureReque
 	std::unique_lock<std::mutex> lk(mutex_);
 	dropCaches(cachesToRemove);
 	*out = 0;
-	{
-		/* ── 临时诊断：请求有没有真的进来、进来时池里还剩几个 ── */
-		static std::atomic<int> diagCalls{0};
-		const int c = diagCalls.fetch_add(1);
-		if (c < 15 || c % 60 == 0)
-			ALOGI("收到请求 #%d：本批 %zu 个，空闲池=%zu，streaming=%d",
-			      c, reqs.size(), freeRequests_.size(), streaming_ ? 1 : 0);
-	}
-	if (!streaming_) {
-		/* crashfix: 非致命接受0，避免 ERROR_CAMERA_DEVICE */
-		return ndk::ScopedAStatus::ok();
+
+	/*
+	 * ★★ 契约：返回 OK 时 *out 必须等于 reqs.size()。
+	 *   框架（AidlCamera3Device.cpp:1322-1349、Camera3Device.cpp:3546-3589）遇到"OK 但只处理了
+	 *   n/N"时会把【整批】的在途 buffer 簿记弹掉，没提交的请求既不报错也不重试 —— 它们早已登记
+	 *   为在途，于是之后的 waitUntilDrained 必然超时、ERROR_CAMERA_DEVICE。
+	 *   所以只有两种结局：全收，或返回错误（框架按设备错误处理；它自己的注释：
+	 *   "Bad metadata failures should come through notify"）。
+	 *   ⚠️ PR #6 初版在 !streaming_ 时"接受 0 并返回 OK"、池空时"接受一部分"—— 正是上面那种。
+	 */
+	if (closed_ || !streaming_) {
+		ALOGE("processCaptureRequest：会话%s，拒绝 %zu 个请求",
+		      closed_ ? "已关闭" : "还没配置流", reqs.size());
+		return err(Status::ILLEGAL_ARGUMENT);
 	}
 
 	for (const auto &r : reqs) {
-		if (r.outputBuffers.empty())
-			continue;
-		/* ★ 池子瞬间枯竭时【绝不拒绝】框架的请求——拒绝会让框架永远等不到
-		 *   这个结果 → waitUntilIdle 超时 → ERROR_CAMERA_DEVICE。改为等一个
-		 *   空闲请求（完成回调还回时会 notify freeCv_），最多等 ~200ms。 */
-		int waited = 0;
-		while (freeRequests_.empty() && waited < 200) {
-			freeCv_.wait_for(lk, std::chrono::milliseconds(20));
-			waited += 20;
+		/*
+		 * ★ 设置先读：FMQ 是一条顺序队列，这个请求的那一段不读走，下一个请求就会读到它的。
+		 *   设置可能走 FMQ（fmqSettingsSize > 0 时 settings 字段是空的）——框架优先写队列。
+		 */
+		std::vector<uint8_t> explicitSettings;
+		if (r.fmqSettingsSize > 0) {
+			explicitSettings.resize(static_cast<size_t>(r.fmqSettingsSize));
+			if (!requestQueue_->read(reinterpret_cast<int8_t *>(explicitSettings.data()),
+						 static_cast<size_t>(r.fmqSettingsSize))) {
+				ALOGE("从 FMQ 读请求设置失败（frame=%d，%lld 字节）", r.frameNumber,
+				      (long long)r.fmqSettingsSize);
+				return err(Status::INTERNAL_ERROR);
+			}
+		} else {
+			explicitSettings = r.settings.metadata;
 		}
+
+		if (r.outputBuffers.empty()) {
+			ALOGE("frame=%d 没有输出缓冲（请求不合法）", r.frameNumber);
+			return err(Status::ILLEGAL_ARGUMENT);
+		}
+
+		/*
+		 * 空闲请求：框架每路最多 maxBuffers(=池大小 4) 个在途，而完成回调在【交结果之前】就把
+		 * Request 还回池（见 onRequestCompleted），所以正常情况下这里不会空。真空了就是
+		 * 有请求卡在 libcamera 里 —— 有界地等一会儿，还是没有就如实报错，不做"只收一部分"。
+		 */
 		if (freeRequests_.empty()) {
-			ALOGW("无空闲请求（等了 %dms 仍空），已接受 %d/%zu", waited, *out, reqs.size());
-			break;
+			const bool got = freeCv_.wait_for(lk, std::chrono::milliseconds(kPoolWaitMs), [&] {
+				return !freeRequests_.empty() || !streaming_;
+			});
+			if (!got || !streaming_) {
+				ALOGE("frame=%d：等了 %d ms 仍没有空闲请求（在途 %zu）", r.frameNumber,
+				      kPoolWaitMs, pending_.size());
+				return err(Status::INTERNAL_ERROR);
+			}
 		}
 		auto lreq = std::move(freeRequests_.front());
 		freeRequests_.pop_front();
@@ -478,48 +518,38 @@ ndk::ScopedAStatus Session::processCaptureRequest(const std::vector<CaptureReque
 		Pending p;
 		p.frameNumber = r.frameNumber;
 		/*
-		 * ★ 设置可能走 FMQ（fmqSettingsSize > 0 时 settings 字段是空的）——框架优先写队列。
-		 *   此前只读 settings 字段，于是绝大多数请求在我们眼里"没有设置"：结果里回显不了
-		 *   请求键，闪光/AE 模式也读不到。现在两条路都收。
+		 * ★ 设置为空 = "与上一帧相同"（CaptureRequest.aidl）。沿用上一帧的设置 —— JPEG 方向/质量、
+		 *   结果回显都要它（PR #6 初版在空设置时把方向当 0°、质量当 90：连拍第 2 张起就歪）。
+		 *   但沿用的那份先经 stripTriggers() 去掉一次性触发，否则 AF_TRIGGER=START 会在之后
+		 *   每一帧重复生效。
 		 */
-		if (r.fmqSettingsSize > 0) {
-			p.settings.resize(static_cast<size_t>(r.fmqSettingsSize));
-			if (!requestQueue_->read(reinterpret_cast<int8_t *>(p.settings.data()),
-						 static_cast<size_t>(r.fmqSettingsSize))) {
-				ALOGE("从 FMQ 读请求设置失败（%lld 字节）", (long long)r.fmqSettingsSize);
-				p.settings.clear();
-			}
+		if (!explicitSettings.empty()) {
+			lastSettings_ = stripTriggers(explicitSettings);
+			p.settings = std::move(explicitSettings);
 		} else {
-			p.settings = r.settings.metadata;
+			p.settings = lastSettings_;
 		}
 
 		/* ⚠️ 现在就导入每一路的缓冲：AIDL 的 StreamBuffer 不可拷贝
 		 *    （见 Session.h 的说明），而入参是 const&，move 不出来。 */
-		bool importOk = true;
 		for (const auto &ob : r.outputBuffers) {
-			int32_t w = 0, h = 0;
-			bool isBlob = false;
-			int32_t blobSize = 0;
-			for (const auto &hs : halStreams_)
-				if (hs.id == ob.streamId) {
-					w = hs.width; h = hs.height;
-					isBlob = hs.isBlob; blobSize = hs.blobSize;
-				}
-			if (!w || !h) {
-				ALOGE("请求里出现未配置的流 id=%d", ob.streamId);
-				importOk = false;
-				break;
+			const HalStreamInfo *hs = nullptr;
+			for (const auto &h : halStreams_)
+				if (h.id == ob.streamId)
+					hs = &h;
+			if (!hs) {
+				ALOGE("frame=%d 用了未配置的流 id=%d", r.frameNumber, ob.streamId);
+				freeRequests_.push_front(std::move(lreq));
+				return err(Status::ILLEGAL_ARGUMENT);
 			}
 			buffer_handle_t hnd = getBuffer(ob);
-			if (!hnd) { importOk = false; break; }
-			p.buffers.push_back({ ob.streamId, ob.bufferId, hnd, w, h,
-					      isBlob, blobSize });
-		}
-		if (!importOk) {
-			/* ⚠️ 不要在这里 free：句柄归缓存所有，下一帧还要用。 */
-			freeRequests_.push_back(std::move(lreq));
-			freeCv_.notify_one();
-			break;
+			if (!hnd) {
+				/* ⚠️ 不要在这里 free：句柄归缓存所有，下一帧还要用。 */
+				freeRequests_.push_front(std::move(lreq));
+				return err(Status::INTERNAL_ERROR);
+			}
+			p.buffers.push_back({ ob.streamId, ob.bufferId, hnd, hs->width, hs->height,
+					      hs->isBlob, hs->blobSize });
 		}
 
 		/* ── 闪光灯策略（见 Session.h 里的说明）── */
@@ -600,14 +630,17 @@ ndk::ScopedAStatus Session::processCaptureRequest(const std::vector<CaptureReque
 				af_.trigger(static_cast<uint8_t>(afTrig));
 		}
 
+		const bool fired = p.flashFired;
 		pending_[key] = std::move(p);
 
 		if (cam_->queueRequest(key)) {
 			ALOGE("queueRequest 失败 frame=%d", r.frameNumber);
 			pending_.erase(key);   /* 句柄归缓存，不在这里释放 */
-			freeRequests_.push_back(std::move(lreq));
-			freeCv_.notify_one();
-			break;
+			if (fired && --firedPending_ == 0 && !flashArmed_ &&
+			    flashMode_ != ANDROID_FLASH_MODE_TORCH)
+				setLed(false);
+			freeRequests_.push_front(std::move(lreq));
+			return err(Status::INTERNAL_ERROR);
 		}
 		/*
 		 * ★ libcamera 从 queueRequest 起接管裸指针，完成回调里再包回
@@ -1073,81 +1106,107 @@ void Session::boxBlurPlane(uint8_t *plane, int w, int h, int stride, int radius)
 	}
 }
 
+void Session::reportRequestError(const Pending &p)
+{
+	/*
+	 * ERROR_REQUEST 的合同（ErrorCode.aidl:33-39）："No output (metadata or buffers) must be
+	 * produced for this request"，但缓冲仍要带 ERROR 状态还回去，框架据此把这一帧移出在途表。
+	 * 不发 shutter —— 这一帧没有曝光时间戳，而 shutter 必须按帧号递增，乱发反而是设备错误。
+	 * ★ 只在完成回调里调用：libcamera 按入队顺序完成请求，报错因此天然按帧序。
+	 */
+	NotifyMsg msg;
+	ErrorMsg e;
+	e.frameNumber = p.frameNumber;
+	e.errorStreamId = -1;
+	e.errorCode = ErrorCode::ERROR_REQUEST;
+	msg.set<NotifyMsg::Tag::error>(e);
+	std::vector<NotifyMsg> msgs;
+	msgs.push_back(std::move(msg));
+	cb_->notify(msgs);
+
+	CaptureResult result;
+	result.frameNumber = p.frameNumber;
+	result.fmqResultSize = 0;
+	result.partialResult = 0;   /* 只还缓冲、没有元数据 */
+	for (const auto &b : p.buffers) {
+		StreamBuffer sb;
+		sb.streamId = b.streamId;
+		sb.bufferId = b.bufferId;
+		sb.status = BufferStatus::ERROR;
+		result.outputBuffers.push_back(std::move(sb));
+	}
+	result.inputBuffer.streamId = -1;
+	result.inputBuffer.bufferId = 0;
+	std::vector<CaptureResult> results;
+	results.push_back(std::move(result));
+	cb_->processCaptureResult(results);
+}
+
+/* 调用者持 mutex_。点过灯的请求结束（无论成败）时的闪光灯簿记。 */
+void Session::flashRequestDone(const Pending &p)
+{
+	if (p.endsFlash)
+		flashArmed_ = false;
+	if (p.flashFired && --firedPending_ == 0 && !flashArmed_ &&
+	    flashMode_ != ANDROID_FLASH_MODE_TORCH)
+		setLed(false);
+}
+
+/* 调用者持 mutex_。只收【本次配置】建的 Request；上一代的（重配置后迟到的）直接释放。 */
+void Session::returnToPool(std::unique_ptr<libcamera::Request> r)
+{
+	if (configRequests_.count(r.get())) {
+		freeRequests_.push_back(std::move(r));
+		freeCv_.notify_one();
+	}
+}
+
 void Session::onRequestCompleted(libcamera::Request *req)
 {
 	/*
 	 * ★ 所有权模型（别再改）：idle 时 Request 归 freeRequests_；queueRequest
-	 *   之后由 libcamera 持有裸指针；本回调收到时 libcamera 已交还，包回
-	 *   unique_ptr 放进 owned，函数最后一定还回 freeRequests_。任何 return
-	 *   路径都不能把请求弄丢，否则池子枯竭 → 设备永远 busy → waitUntilIdle
-	 *   超时 → ERROR_CAMERA_DEVICE。
+	 *   之后由 libcamera 持有裸指针；本回调收到时 libcamera 已交还 —— 这里立刻包回
+	 *   unique_ptr，每条路径最后都经 returnToPool() 还池（或随作用域释放上一代的）。
+	 *   丢一个 Request = 池子少一个 = 迟早枯竭。
 	 */
-	std::unique_ptr<libcamera::Request> owned;
-	{
-		/* ── 临时诊断：确认完成回调到底有没有在跑 ── */
-		static std::atomic<int> diagDone{0};
-		const int c = diagDone.fetch_add(1);
-		if (c < 15 || c % 60 == 0)
-			ALOGI("完成回调 #%d：seq=%u status=%d 空闲池=%zu",
-			      c, req->sequence(), static_cast<int>(req->status()),
-			      freeRequests_.size());
-	}
-
-	if (req->status() == libcamera::Request::RequestCancelled) {
-		std::lock_guard<std::mutex> lk(mutex_);
-		/*
-		 * ★ pending_ 只持有 key=原始指针 + Pending(簿记)，不拥有 Request 本身；
-		 *   Request 的所有权一直在 freeRequests_（deque<unique_ptr>）。
-		 *   所以这里只是从 pending_ 清掉簿记，再把 raw req 包回 freeRequests_。
-		 *   （之前一处误把 it->second(Pending) 当 unique_ptr 还回，编译不过。）
-		 */
-		auto it = pending_.find(req);
-		if (it != pending_.end())
-			pending_.erase(it);
-		/* Request 的所有权从 libcamera 交还给我们：包回 unique_ptr 还池。
-		 * ★ 绝不能写 it->second.req —— pending_ 不拥有 Request。 */
-		owned = std::unique_ptr<libcamera::Request>(req);
-		freeRequests_.push_back(std::move(owned));
-		freeCv_.notify_one();
-		drainCv_.notify_all();
-		return;
-	}
+	std::unique_ptr<libcamera::Request> owned(req);
 
 	Pending pend;
 	{
 		std::lock_guard<std::mutex> lk(mutex_);
 		auto it = pending_.find(req);
 		if (it == pending_.end()) {
-			/* 兜底：不在 pending_ 中（可能已被 reconfigure 清掉），
-			 * 直接把裸指针包回，绝不放飞导致池枯竭。 */
-			ALOGW("完成了一个不认识的请求 %p", (void *)req);
-			owned = std::unique_ptr<libcamera::Request>(req);
-		} else {
-			/* libcamera 完成时已把 Request 交还；包回所有权，再取走簿记。
-			 * ★ 同 RequestCancelled：pending_ 不拥有 Request。 */
-			owned = std::unique_ptr<libcamera::Request>(req);
-			pend = std::move(it->second);
-			pending_.erase(it);
-			if (pending_.empty())
-				drainCv_.notify_all();
+			/*
+			 * 不认识的请求：只可能是 configureStreams 强制清理（drain 超时）之后迟到的。
+			 * ⚠️ 绝不能往下走去"交付"：它没有 frameNumber（PR #6 初版会给第 0 帧发 shutter
+			 *    —— 框架里不存在的帧 ⇒ SET_ERR），它的 FrameBuffer 也可能已随旧 allocator 释放。
+			 */
+			ALOGW("完成了一个不认识的请求 %p（status=%d），丢弃", (void *)req,
+			      static_cast<int>(req->status()));
+			returnToPool(std::move(owned));
+			return;
 		}
+		pend = std::move(it->second);
+		pending_.erase(it);
+		if (pending_.empty())
+			drainCv_.notify_all();
 	}
 
 	/*
-	 * ⚠️★★ 请求【不能】在这里就还回空闲池 —— 下面还要读 req->buffers()。
-	 *   还回去之后 processCaptureRequest 可能立刻取走并 reuse()，
-	 *   于是我们读到的是一个已经被复用的对象。实测就是这样崩的
-	 *   （tid name=CameraManager，栈顶 onRequestCompleted+1428）。
-	 *   ★ 归还所有权和"用完它"是两件事，顺序不能图省事。
-	 *   现在改成在函数最后才归还。
+	 * libcamera 撤销的请求（stop() 里撤销在途请求，或 queueRequestDevice 失败）：
+	 * 必须告诉框架 —— PR #6 初版只把 Request 还池，框架一直等这一帧，下一次
+	 * configureStreams/close 超时 → ERROR_CAMERA_DEVICE。
 	 */
-	if (req->buffers().empty()) {
-		ALOGE("完成的请求里没有 buffer");
+	if (req->status() == libcamera::Request::RequestCancelled || req->buffers().empty()) {
+		if (req->status() != libcamera::Request::RequestCancelled)
+			ALOGE("frame=%d 完成的请求里没有 buffer", pend.frameNumber);
+		reportRequestError(pend);
 		std::lock_guard<std::mutex> lk(mutex_);
-		freeRequests_.push_back(std::move(owned));
-		freeCv_.notify_one();
+		flashRequestDone(pend);
+		returnToPool(std::move(owned));
 		return;
 	}
+
 	const libcamera::FrameBuffer *fb = req->buffers().begin()->second;
 	const int64_t timestamp = fb->metadata().timestamp;
 
@@ -1286,14 +1345,26 @@ void Session::onRequestCompleted(libcamera::Request *req)
 			cb_->notify(emsgs);
 		}
 	}
+
 	if (srcMap != MAP_FAILED)
 		munmap(srcMap, srcLen);
+
+	/*
+	 * ★ req 到这里才算用完（buffers()/metadata() 都读过了、帧已 munmap）⇒ 先还池，再交结果：
+	 *   框架拿回 buffer 会立刻发下一个请求，池子必须已经有位置（PR #6 初版在
+	 *   processCaptureResult 之后才还，于是框架的下一个请求常常撞上空池）。
+	 *   ⚠️ 也不能更早：还回去之后 processCaptureRequest 可能立刻取走并 reuse()
+	 *   （实测崩过：tid name=CameraManager，栈顶 onRequestCompleted+1428）。
+	 */
+	{
+		std::lock_guard<std::mutex> lk(mutex_);
+		returnToPool(std::move(owned));
+	}
 
 	CaptureResult result;
 	result.frameNumber = pend.frameNumber;
 	result.fmqResultSize = 0;
 	result.partialResult = 1;
-	/* ⬜ 之后应把 libcamera 的实际曝光/增益也填回去（软件 ISP 的 IPA 目前不报）。 */
 	FrameResultFacts fr;
 	fr.flashState = flashLed_.empty() ? ANDROID_FLASH_STATE_UNAVAILABLE
 			: (pend.flashFired ? ANDROID_FLASH_STATE_FIRED : ANDROID_FLASH_STATE_READY);
@@ -1302,6 +1373,22 @@ void Session::onRequestCompleted(libcamera::Request *req)
 	fr.flashMode = pend.flashMode;
 	fr.exposureNs = exposureNs;
 	fr.sensitivity = sensitivity;
+	/*
+	 * ★ 对焦结果组：应用（CameraX 的 FocusMeteringControl、各家相机的拍照前 AF）等的是
+	 *   【结果里的】AF_STATE 到 FOCUSED_LOCKED。PR #6 初版 AutoFocus 算好了状态却从没填进来，
+	 *   于是马达扫到了峰、应用却永远只看到 INACTIVE。
+	 */
+	fr.hasAf = facts_.hasAf;
+	if (facts_.hasAf) {
+		fr.afState = af_.afState();
+		fr.lensState = af_.lensState();
+		fr.focusDistance = af_.focusDistance();
+		if (fr.afState != lastAfState_) {
+			ALOGI("AF 状态 %u → %u（frame=%d，结果里交给应用的就是这个）",
+			      lastAfState_, fr.afState, pend.frameNumber);
+			lastAfState_ = fr.afState;
+		}
+	}
 	result.result.metadata = buildResult(pend.settings, timestamp, /*pipelineDepth=*/4, fr);
 
 	for (size_t i = 0; i < pend.buffers.size(); i++) {
@@ -1320,20 +1407,9 @@ void Session::onRequestCompleted(libcamera::Request *req)
 	results.push_back(std::move(result));
 	cb_->processCaptureResult(results);
 
-	/* 到这里才用完 req，可以还回空闲池了（见上面的说明）。 */
-	{
-		std::lock_guard<std::mutex> lk(mutex_);
-		freeRequests_.push_back(std::move(owned));
-		freeCv_.notify_one();
-		if (freeRequests_.empty())
-			ALOGW("⚠️ 归还后空闲池仍为空：请求可能已枯竭，预览将冻结");
-		/* 闪光灯：点过灯的请求都完成了、而且没人还要灯，才灭。 */
-		if (pend.endsFlash)
-			flashArmed_ = false;
-		if (pend.flashFired && --firedPending_ == 0 && !flashArmed_ &&
-		    flashMode_ != ANDROID_FLASH_MODE_TORCH)
-			setLed(false);
-	}
+	/* 闪光灯：点过灯的请求都完成了、而且没人还要灯，才灭。 */
+	std::lock_guard<std::mutex> lk(mutex_);
+	flashRequestDone(pend);
 }
 
 } /* namespace gaokun3 */

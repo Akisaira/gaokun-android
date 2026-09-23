@@ -59,7 +59,7 @@ std::string Lens::findNode()
 	return found;
 }
 
-bool Lens::open()
+bool Lens::open(bool center)
 {
 	node_ = findNode();
 	if (node_.empty())
@@ -107,37 +107,33 @@ bool Lens::open()
 		return false;
 	}
 
-	/* 上电：dw9714 的 s_stream() 里才做 pm_runtime_resume。不做这一步，
-	 * 后面每一次 i2c 写都可能静默落到断电的马达上。 */
-	{
-		enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-		if (ioctl(fd_, VIDIOC_STREAMON, &type) != 0)
-			ALOGW("%s STREAMON 失败（%s）—— 马达可能没上电，继续试写",
-			      node_.c_str(), strerror(errno));
-	}
-
-	/* 读回当前值（老内核里 def 不一定是 0），并归到行程中点，让第一帧有个
-	 * 大致能看的焦点；真正的对焦由 AutoFocus 爬山完成。 */
-	struct v4l2_control c {};
-	c.id = V4L2_CID_FOCUS_ABSOLUTE;
-	if (ioctl(fd_, VIDIOC_G_CTRL, &c) == 0)
-		pos_ = static_cast<int>(c.value);
-	else
-		pos_ = min_;
-	ALOGI("VCM 就绪：%s 范围 [%d, %d] step=%d 当前位置 %d",
+	/* 上电已经随 open() 完成（见 Lens.h）。取控件的当前值作为起点。 */
+	const int cur = readControl();
+	pos_ = cur >= 0 ? cur : min_;
+	ALOGI("VCM 就绪：%s 范围 [%d, %d] step=%d 控件当前值 %d",
 	      node_.c_str(), min_, max_, step_, pos_);
 
-	setPosition((min_ + max_) / 2);
+	if (center)
+		setPosition((min_ + max_) / 2);
 	return true;
+}
+
+int Lens::readControl() const
+{
+	if (fd_ < 0)
+		return -1;
+	struct v4l2_control c {};
+	c.id = V4L2_CID_FOCUS_ABSOLUTE;
+	if (ioctl(fd_, VIDIOC_G_CTRL, &c) != 0)
+		return -1;
+	return static_cast<int>(c.value);
 }
 
 void Lens::close()
 {
 	if (fd_ < 0)
 		return;
-	enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	ioctl(fd_, VIDIOC_STREAMOFF, &type);
-	::close(fd_);
+	::close(fd_);   /* = 断电（dw9714_close → pm_runtime_put） */
 	fd_ = -1;
 }
 

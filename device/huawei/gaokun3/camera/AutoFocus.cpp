@@ -48,11 +48,6 @@ bool AutoFocus::shouldScan() const
 	}
 }
 
-bool AutoFocus::locked() const
-{
-	return triggered_ && converged_;
-}
-
 void AutoFocus::setMode(uint8_t androidAfMode)
 {
 	Mode nm = Mode::Off;
@@ -81,23 +76,46 @@ void AutoFocus::setMode(uint8_t androidAfMode)
 	scanning_ = false;
 	converged_ = false;
 	stable_ = 0;
-	if (nm != Mode::Off)
+	refScore_ = -1.0;
+	/* 只有连续模式自己开始搜；AUTO 要等应用发 AF_TRIGGER=START（camera3 的 AUTO 状态机：
+	 * 没有触发就停在 INACTIVE，镜头不动）。 */
+	if (nm == Mode::ContinuousPicture || nm == Mode::ContinuousVideo)
 		startScan();
 }
 
 void AutoFocus::trigger(uint8_t androidAfTrigger)
 {
 	std::lock_guard<std::mutex> lk(m_);
+	/*
+	 * 按 CaptureResult 文档里各模式的 AF 状态机（ANDROID_CONTROL_AF_STATE 那几张表）：
+	 *   AUTO             START → ACTIVE_SCAN → FOCUSED/NOT_FOCUSED_LOCKED；CANCEL → INACTIVE。
+	 *   CONTINUOUS_PIC   START：正在扫 → 扫完再锁；没在扫 → 按当前结果【立刻】锁。
+	 *   CONTINUOUS_VIDEO START：立刻结束当前扫描并锁。
+	 *   连续模式 CANCEL → 解锁、恢复连续对焦（不清掉已有的合焦结果）。
+	 * ⚠️ 旧实现在连续模式下收到 START 也从头扫满全程（约 2 秒快门延迟，且报了连续模式
+	 *    状态机里不存在的 ACTIVE_SCAN）—— 应用在拍照前几乎总会发一次 START。
+	 */
+	if (mode_ == Mode::Off)
+		return;
 	if (androidAfTrigger == ANDROID_CONTROL_AF_TRIGGER_START) {
-		ALOGI("AF 触发 START");
+		ALOGI("AF 触发 START（模式 %d，%s）", static_cast<int>(mode_),
+		      scanning_ ? "正在扫" : "未在扫");
 		triggered_ = true;
-		startScan();
+		if (mode_ == Mode::Auto) {
+			startScan();
+		} else if (scanning_ && mode_ == Mode::ContinuousVideo) {
+			finishScan();          /* 视频：立刻停在目前最好的位置并锁 */
+		}
+		/* 连续拍照且正在扫：什么都不做，finishScan() 时 triggered_ 已置位 ⇒ 直接锁定。
+		 * 没在扫：triggered_ 置位即锁定，afState() 按 converged_ 报 FOCUSED/NOT_FOCUSED。 */
 	} else if (androidAfTrigger == ANDROID_CONTROL_AF_TRIGGER_CANCEL) {
 		ALOGI("AF 触发 CANCEL");
 		triggered_ = false;
-		scanning_ = false;
-		converged_ = false;
 		stable_ = 0;
+		if (mode_ == Mode::Auto) {
+			scanning_ = false;
+			converged_ = false;
+		}
 	}
 }
 
@@ -123,14 +141,12 @@ void AutoFocus::startScan()
 	settle_ = kSettleFrames;   /* 起始位置也要等流水线把画面换过来再采第一个点 */
 }
 
-void AutoFocus::apply(int pos)
+bool AutoFocus::apply(int pos)
 {
-	if (!lens_)
-		return;
-	if (lens_->setPosition(pos)) {
-		justMoved_ = true;
-		bestPos_ = (bestScore_ <= 0.0) ? pos : bestPos_;
-	}
+	if (!lens_ || !lens_->setPosition(pos))
+		return false;
+	justMoved_ = true;
+	return true;
 }
 
 /* 调用者必须已持锁。 */
@@ -139,9 +155,16 @@ void AutoFocus::finishScan()
 	scanning_ = false;
 	converged_ = bestScore_ >= kMinScore;
 	stable_ = 0;
-	settle_ = 0;    /* 搜索结束，后面的"画面变化重扫"判定不必再等稳定帧 */
-	if (lens_ && lens_->position() != bestPos_)
-		apply(bestPos_);
+	/*
+	 * 挪回最佳点之后，流水线里还有 kSettleFrames 帧是【细扫最后一个点】曝出来的。
+	 * ⚠️ 旧实现这里 settle_=0，紧接着拿这几帧旧画面去判"画面变化"：若 best+64 那一点的
+	 *    分数低于峰值的 70%，刚收敛就触发重扫，可能一轮接一轮地扫。
+	 * ⇒ 等流水线换过来，再把第一帧当"收敛后的基准分数"（refScore_），重扫只跟它比。
+	 */
+	settle_ = 0;
+	if (lens_ && lens_->position() != bestPos_ && apply(bestPos_))
+		settle_ = kSettleFrames;
+	refScore_ = -1.0;
 	ALOGI("AF 搜索结束：最佳位置 %d 分数 %.1f（%s）共 %d 次移动",
 	      bestPos_, bestScore_, converged_ ? "已合焦" : "未合焦（场景对比度太低）",
 	      moves_);
@@ -272,6 +295,9 @@ void AutoFocus::onFrame(const uint8_t *rgb, int w, int h, bool sceneStable)
 	if (hold_) {
 		ALOGI("AF 钉住解除，恢复自动搜索");
 		hold_ = false;
+		/* 连续模式：钉住期间镜头在别处，放开就重搜（不能把钉住位置的分数当成收敛基准）。 */
+		if (mode_ == Mode::ContinuousPicture || mode_ == Mode::ContinuousVideo)
+			startScan();
 	}
 
 	if (mode_ == Mode::Off)
@@ -308,10 +334,27 @@ void AutoFocus::onFrame(const uint8_t *rgb, int w, int h, bool sceneStable)
 		 * 单次对焦(triggered_)时锁定不重搜，等应用发 CANCEL/START。 */
 		if (triggered_)
 			return;
-		if (bestScore_ > 0.0 && score < bestScore_ * kDropToRescan) {
+		if (settle_ > 0) {
+			settle_--;
+			return;
+		}
+		if (refScore_ < 0.0) {
+			refScore_ = score;        /* 收敛后第一帧稳定画面 = 基准 */
+			stable_ = 0;
+			return;
+		}
+		/*
+		 * ★ 两个方向都要看：
+		 *   变差（被摄物移动/换景）—— 旧实现只看这一个方向，而且是跟【扫描时】的峰值比；
+		 *   变好（比如对着白墙收敛成"未合焦"、分数 15，再转向有纹理的物体：失焦的新物体
+		 *   分数照样高于 0.7×15，旧实现永远不重扫，停在 PASSIVE_UNFOCUSED）。
+		 * 阈值 = max(相对 kRescanRel，绝对 kRescanAbs)：绝对下限挡住低分场景的噪声，
+		 * 也让 refScore_≈0（全平场景、或钉住后刚放开）时照样能触发。
+		 */
+		const double delta = std::fabs(score - refScore_);
+		if (delta > std::max(refScore_ * kRescanRel, kRescanAbs)) {
 			if (++stable_ >= kRescanFrames) {
-				ALOGI("AF 画面变化（分数 %.1f → %.1f），重新搜索",
-				      bestScore_, score);
+				ALOGI("AF 画面变化（基准 %.1f → %.1f），重新搜索", refScore_, score);
 				startScan();
 			}
 		} else {
@@ -360,6 +403,11 @@ void AutoFocus::onFrame(const uint8_t *rgb, int w, int h, bool sceneStable)
 				break;
 			}
 		}
+		if (target >= 0 && moves_ >= kMaxMoves) {
+			ALOGW("AF 探测次数到上限 %d，按当前最佳结束", kMaxMoves);
+			finishScan();
+			return;
+		}
 		if (target >= 0) {
 			moves_++;
 			if (!lens_->setPosition(target)) {
@@ -392,17 +440,21 @@ uint8_t AutoFocus::afState() const
 	std::lock_guard<std::mutex> lk(m_);
 	if (!lens_ || !lens_->usable() || mode_ == Mode::Off || hold_)
 		return ANDROID_CONTROL_AF_STATE_INACTIVE;
-	if (mode_ == Mode::Auto && !triggered_)
-		return ANDROID_CONTROL_AF_STATE_INACTIVE;
-	if (scanning_) {
-		if (mode_ == Mode::Auto || triggered_)
+	if (mode_ == Mode::Auto) {
+		if (!triggered_)
+			return ANDROID_CONTROL_AF_STATE_INACTIVE;
+		if (scanning_)
 			return ANDROID_CONTROL_AF_STATE_ACTIVE_SCAN;
-		return ANDROID_CONTROL_AF_STATE_PASSIVE_SCAN;
+		return converged_ ? ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED
+				  : ANDROID_CONTROL_AF_STATE_NOT_FOCUSED_LOCKED;
 	}
-	if (locked())
-		return ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED;
-	if (mode_ == Mode::Auto || triggered_)
-		return ANDROID_CONTROL_AF_STATE_NOT_FOCUSED_LOCKED;
+	/* 连续模式：状态机里只有 PASSIVE_* 与 *_LOCKED，没有 ACTIVE_SCAN。
+	 * 连续拍照收到 START 时若正在扫，按文档继续报 PASSIVE_SCAN，扫完直接进锁定态。 */
+	if (scanning_)
+		return ANDROID_CONTROL_AF_STATE_PASSIVE_SCAN;
+	if (triggered_)
+		return converged_ ? ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED
+				  : ANDROID_CONTROL_AF_STATE_NOT_FOCUSED_LOCKED;
 	return converged_ ? ANDROID_CONTROL_AF_STATE_PASSIVE_FOCUSED
 			  : ANDROID_CONTROL_AF_STATE_PASSIVE_UNFOCUSED;
 }

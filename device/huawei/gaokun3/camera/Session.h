@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 
 #include <aidl/android/hardware/camera/device/BnCameraDeviceSession.h>
@@ -76,6 +77,12 @@ public:
 private:
 	/* libcamera 的请求完成回调（在 CameraManager 线程上）。 */
 	void onRequestCompleted(libcamera::Request *req);
+	struct Pending;
+	/* 按合同报一帧 ERROR_REQUEST：notify + 缓冲带 ERROR 状态还回去（只在完成回调里调，保证帧序）。 */
+	void reportRequestError(const Pending &p);
+	/* 以下两个调用者持 mutex_。 */
+	void flashRequestDone(const Pending &p);
+	void returnToPool(std::unique_ptr<libcamera::Request> r);
 
 	/*
 	 * 取得一路流某个 bufferId 对应的 gralloc 句柄（带缓存）。
@@ -153,7 +160,7 @@ private:
 
 	/*
 	 * ── 自动对焦（后摄 only）──
-	 * lens_ 是本会话独有的马达句柄：open() 时才 streamon 上电，close() 时放掉。
+	 * lens_ 是本会话独有的马达句柄：open() 打开子设备 fd 即上电，close() 关 fd 即断电。
 	 * af_ 只在这两条线程上被访问：processCaptureRequest（解析模式/触发）与
 	 * onRequestCompleted（喂帧、写位置）—— 内部自带锁，所以不必碰 mutex_。
 	 * ⚠️ af_.attach()/Lens::close() 的顺序：先把 af_ 摘掉再关 fd，
@@ -197,6 +204,16 @@ private:
 
 	/* 空闲的 libcamera 请求。 */
 	std::deque<std::unique_ptr<libcamera::Request>> freeRequests_;
+	/* 本次 configureStreams 建的 Request（裸指针，只作身份判断）。重配置后迟到的上一代
+	 * Request 不在这里 ⇒ returnToPool() 直接释放，不会混进新池子。 */
+	std::set<libcamera::Request *> configRequests_;
+	/* 池子暂空时 processCaptureRequest 最多等多久（正常不会空，见那里的说明）。 */
+	static constexpr int kPoolWaitMs = 1000;
+	/* 上一个【带设置】的请求的设置，已去掉一次性触发（stripTriggers）。
+	 * 请求不带设置 = 与上一帧相同 ⇒ 用它。 */
+	std::vector<uint8_t> lastSettings_;
+	/* 上一帧交给应用的 AF 状态（只为在变化时打一行日志）。 */
+	uint8_t lastAfState_ = 0xff;
 	/*
 	 * libcamera Request* → Android frameNumber + 目标缓冲。
 	 * ⚠️ 不能用 cookie：Request::cookie_ 是 const、只能在构造时给

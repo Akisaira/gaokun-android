@@ -50,6 +50,7 @@ fail=0
 say()  { echo "$*"; }
 ok()   { echo "  ✔ $*"; }
 bad()  { echo "  ✗ $*"; fail=1; }
+warn() { echo "  ⚠ $*"; }
 
 say "════ gen-libcamera-sources ════"
 say "  树   : $TREE"
@@ -130,6 +131,10 @@ want_exact = {
     "control_ids.cpp", "property_ids.cpp", "version.cpp",
     "ipa_pub_key.cpp", "softisp_ipa_proxy.cpp",
     "control_ids.h", "property_ids.h", "formats.h", "version.h",
+    # ★ libcamera.h（伞头）也是生成的：include/libcamera/meson.build:127-135 的
+    #   custom_target('gen-header')（utils/codegen/gen-header.sh）。PR #6 初版以为上游没有它、
+    #   手写了一份放在 patches/libcamera/include/ —— 手写的只覆盖当时用到的头，会随 HAL 漂移。
+    "libcamera.h",
     # ★ tracepoints.h 走的是 meson 的 custom_target('tp_header')，
     #   由 utils/tracepoints/gen-tracepoints.py 从 include/libcamera/internal/tracepoints/*.tp
     #   生成。漏了它 ⇒ request.cpp:24 找不到 "libcamera/internal/tracepoints.h"，
@@ -221,7 +226,7 @@ say "── 5. 断言（缺一个就失败，绝不"部分成功"）──"
 for f in control_ids.cpp property_ids.cpp version.cpp ipa_pub_key.cpp softisp_ipa_proxy.cpp; do
     [ -s "$GEN/src/$f" ] && ok "src/$f 非空" || bad "src/$f 缺失或为空"
 done
-for h in control_ids.h property_ids.h formats.h version.h; do
+for h in control_ids.h property_ids.h formats.h version.h libcamera.h; do
     find "$GEN/include/libcamera" -name "$h" 2>/dev/null | grep -q . \
         && ok "include/libcamera/$h" || bad "include/libcamera/$h 缺失"
 done
