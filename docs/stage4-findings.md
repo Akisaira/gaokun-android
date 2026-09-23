@@ -9564,3 +9564,12 @@ Android 给 Wi-Fi 下发的 `TcpBufferSizes` = `524288,1048576,2097152,…`（`d
 新域 `gaokun3_rprockick`。同时给 `gaokun3_usbrole` 补上它此前【完全没有】的 sysfs 规则（按实机 `ls -Z`：
 role / UDC state / typec 全是 `sysfs`，wake_lock 是 `sysfs_wake_lock`，allow_suspend 是 `vendor_gaokun3_prop`）。
 `m selinux_policy`（含 neverallow 检查）通过。设备上手动跑脚本：三颗 DSP 都 running ⇒ 零动作。
+
+### 6. 相机静态元数据补上三张键清单；以及一次自己造成的 provider 崩溃
+
+`ANDROID_REQUEST_AVAILABLE_{REQUEST,RESULT,CHARACTERISTICS}_KEYS`（PR #6 文档第 7 章的建议 2）：请求键按 HAL 真正读的列、
+结果键按 buildResult() 真正写的列、特性键**枚举已写入的条目生成**。cameraserver 每次枚举都报的
+`addDynamicDepthTags: Supported camera characteristics is empty!` 消失；冒烟测试前后摄照样全过。
+⚠️ 换第二版 HAL 时 provider 崩了两次：`Abort message: 'gralloc-mapper is missing'`，`Executable: … (deleted)` ——
+我往已被 bind 的源文件上 adb push（新 inode），provider 在跑所以 umount 静默失败。正确顺序：
+stop → umount（确认）→ push → mount --bind → start（已补进相机文档 7.4 节）。崩溃与代码无关：同一份旧二进制此前全过。

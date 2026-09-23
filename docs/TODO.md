@@ -68,7 +68,7 @@
 | — | 相机零碎 | `patches/0022` 仍未在**健康**状态下验证 unbind/rebind；libcamera 生成源码仍靠手工，未改成 Soong `genrule`（`patches/libcamera/README.md:34`）；`kDarkLuma=50` 是启发式 |
 | **B18** 🔄 | init 泄漏 remoteproc 引用 | 已修（[#119](stage4-findings.md) §5）：`gaokun3-rproc-kick.sh` 只对不在运行的 DSP 写 start；新域 + usbrole 补 sysfs 规则，`selinux_policy` 通过。⬜ 随下一版镜像验证 |
 | **B19** 🆕 | 没有回落槽 | `_b` 不可启动（[#118](stage4-findings.md) §2）。出事只能靠救援系统；Virtual A/B 合并后 `-cow` 还在的原因未查 |
-| **B20** 🆕 | wlan0 MAC 每次开机都变 | 框架不做 MAC 随机化，驱动每次给新地址 ⇒ 每台机器在路由器上都是"新设备"，IP 漂。本机已用静态 IP 绕开；根治是稳定 MAC |
+| **B20** 🆕 | wlan0 MAC 每次开机都变 | 框架不做 MAC 随机化，驱动每次给新地址 ⇒ 每台机器在路由器上都是"新设备"，IP 漂。本机已用静态 IP 绕开。★ 2026-09-24 查清两条路：① ath11k 先读 DT 的 `local-mac-address`（`mac.c:10712 device_get_mac_address`），读不到才用固件给的 —— 但写死在 DT 会让所有用户同一个 MAC，不可取；② **Android 原生解**：`config_wifi_connected_mac_randomization_supported` 默认 false（`ServiceWifiResources/res/values/config.xml:373`），在 `rro/Gaokun3WifiOverlay` 里打开 ⇒ 每个 SSID 一个固定的随机 MAC。⬜ 故意没进这一版：它要 HAL 在连接前改 MAC，改不动可能连不上网，而夜里只有 Wi-Fi 上的 adb、没法远程救 —— 等有人在旁边时单独试 |
 | — | tinymix 的 vendor 变体 | 有了它 `audioroute` 就不用挂 `vendor_executes_system_violators`（#117 §8） |
 | — | 设备上的垃圾 | `/data/local/tmp` 2.8 GB 历次测试内核；ESP 上 `slot_cam5` 与 `cam5/6/7` 测试条目（现状未核对）。**删东西等用户点头** |
 

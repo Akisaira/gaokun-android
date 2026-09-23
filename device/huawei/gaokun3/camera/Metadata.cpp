@@ -298,9 +298,57 @@ std::vector<uint8_t> buildCharacteristics(const SensorFacts &f)
 	const uint8_t shadingModes[] = { ANDROID_SHADING_MODE_OFF };
 	add_camera_metadata_entry(m, ANDROID_SHADING_AVAILABLE_MODES, shadingModes, 1);
 
+	/*
+	 * ── 键清单（LIMITED 必填；PR #6 文档第 7 章的建议 2）──
+	 * 缺 AVAILABLE_CHARACTERISTICS_KEYS 时 cameraserver 每次枚举都报
+	 * "addDynamicDepthTags: Supported camera characteristics is empty!"；应用侧的
+	 * CaptureRequest/CaptureResult.getKeys() 与 CameraCharacteristics.getKeys() 也全靠这三张表。
+	 *   请求键 = HAL 真正会读的（Session.cpp 的 parseFlashControls / AF / JPEG / 结果回显）；
+	 *   结果键 = buildResult() 真正会写的，外加回显的请求键；
+	 *   特性键 = 上面已经写进 m 的全部条目 —— 枚举生成，不手抄，免得两边漂移。
+	 */
+	std::vector<int32_t> reqKeys = {
+		ANDROID_CONTROL_MODE,
+		ANDROID_CONTROL_AE_MODE,
+		ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER,
+		ANDROID_CONTROL_AE_TARGET_FPS_RANGE,
+		ANDROID_CONTROL_AWB_MODE,
+		ANDROID_CONTROL_CAPTURE_INTENT,
+		ANDROID_FLASH_MODE,
+		ANDROID_JPEG_ORIENTATION,
+		ANDROID_JPEG_QUALITY,
+		ANDROID_SCALER_CROP_REGION,
+	};
+	if (f.hasAf) {
+		reqKeys.push_back(ANDROID_CONTROL_AF_MODE);
+		reqKeys.push_back(ANDROID_CONTROL_AF_TRIGGER);
+	}
+	std::vector<int32_t> resKeys = reqKeys;
+	for (int32_t k : { ANDROID_SENSOR_TIMESTAMP, ANDROID_REQUEST_PIPELINE_DEPTH,
+			   ANDROID_CONTROL_AE_STATE, ANDROID_CONTROL_AWB_STATE, ANDROID_FLASH_STATE,
+			   ANDROID_SENSOR_EXPOSURE_TIME, ANDROID_SENSOR_SENSITIVITY,
+			   ANDROID_CONTROL_AF_STATE, ANDROID_LENS_STATE })
+		resKeys.push_back(k);
+	if (f.hasAf)
+		resKeys.push_back(ANDROID_LENS_FOCUS_DISTANCE);
+	add_camera_metadata_entry(m, ANDROID_REQUEST_AVAILABLE_REQUEST_KEYS, reqKeys.data(),
+				  reqKeys.size());
+	add_camera_metadata_entry(m, ANDROID_REQUEST_AVAILABLE_RESULT_KEYS, resKeys.data(),
+				  resKeys.size());
+	std::vector<int32_t> charKeys;
+	for (size_t i = 0; i < get_camera_metadata_entry_count(m); i++) {
+		camera_metadata_ro_entry_t e;
+		if (get_camera_metadata_ro_entry(m, i, &e) == 0)
+			charKeys.push_back(static_cast<int32_t>(e.tag));
+	}
+	charKeys.push_back(ANDROID_REQUEST_AVAILABLE_CHARACTERISTICS_KEYS);
+	add_camera_metadata_entry(m, ANDROID_REQUEST_AVAILABLE_CHARACTERISTICS_KEYS,
+				  charKeys.data(), charKeys.size());
+
 	std::vector<uint8_t> out = pack(m);
 	free_camera_metadata(m);
-	ALOGI("characteristics 构造完成：%zu 字节", out.size());
+	ALOGI("characteristics 构造完成：%zu 字节（%zu 个特性键、%zu 个请求键、%zu 个结果键）",
+	      out.size(), charKeys.size(), reqKeys.size(), resKeys.size());
 	return out;
 }
 

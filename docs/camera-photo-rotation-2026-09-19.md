@@ -383,6 +383,12 @@ build completed successfully   android.hardware.camera.provider-service.gaokun3
 
 ### 7.4 热替换的可行解（/vendor 100% 满 + ETXTBSY）
 
+> ⚠️★ 2026-09-24 补（合并 PR #6 时实测踩到）：**换第二版时必须 `stop` → `umount`（确认卸掉）→ 再 push → `mount --bind` → `start`。**
+> 直接往已被 bind 的 `/data/local/tmp/hal-new.bin` 上 `adb push`，push 会换一个新 inode，而挂载点仍指着
+> 被删掉的旧 inode（tombstone 里是 `Executable: … (deleted)`）；provider 一重启就在
+> `GraphicBufferMapper()` 里 abort：`gralloc-mapper is missing`（AIDL 的 Gralloc5 没加载上，
+> 退回 HIDL 而本机 hwservicemanager 是死的）。provider 在跑时 `umount` 会因目标忙静默失败 —— 所以要先 stop。
+
 `/vendor` 257 MB **用满（0 可用）**，且 provider 正运行该二进制 ⇒ 直接 push（权限）、
 cp（ETXTBSY）、rename（ENOSPC）**三条路都实测失败**。唯一可行解是 **bind mount 单文件**
 （不占 /vendor 空间、不动运行中的 inode）：
