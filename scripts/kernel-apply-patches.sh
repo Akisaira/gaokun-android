@@ -143,6 +143,8 @@ KPATCHES=(
     # ★ 0047（#116）：pressure_enabled 默认跟着轴走（轴存在却报常数是逻辑缺陷）；
     #    contacts_log 加 zone_area 列 —— ct->area 分不开手掌碎块和指尖（实测 8-20 vs 5-21），能分的是它。
     0047-Input-himax-spi-pressure-follows-axes-and-log-zone-area.patch
+    # ⚠️ 0048（#118 §7，待验证）：usb_0 用 UTMI 当 pipe 时钟 —— 角色切换后 xhci -110 / gadget -524。
+    0048-arm64-dts-gaokun3-usb0-select-utmi-as-pipe-clk.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，

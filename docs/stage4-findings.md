@@ -9407,3 +9407,45 @@ EC 自己的端口数据（每口 2 字节：CC 方向 / mux / DP 引脚 / HPD�
 ⬜ 要写 quirk 之前还缺数据点：插 U 盘（我方供电）、纯充电器、扩展坞各一次。
 候选修法是按 Type-C 默认规则由 pwr_dir 推数据角色（受电 ⇒ 对方 DFP），
 但扩展坞会做 PD DR_Swap，那种情况下这条规则是错的 —— **所以必须先看扩展坞时 EC 报什么。**
+
+### 7. ★★★ #27 的真实机制：port0 控制器在【任何一次】角色切换后就坏了（与 UCSI 无关）
+
+用户手边没有 U 盘 / 扩展坞，只能拿现成的那一根线（port0 接着一台能枚举我们、PD 供电的主机）做实验。
+想用 `CONNECTOR_RESET` 远程模拟"拔插"：**EC 拒绝**（UCSI 错误 `DEAD_BATTERY`，`ucsi.c:188-190`
+—— 我们正从这个口取电，EC 不肯复位它）。于是改成直接写 role switch：
+
+```
+echo host   > /sys/class/usb_role/a600000.usb-role-switch/role
+  xhci-hcd xhci-hcd.5.auto: Host halt failed, -110
+  xhci-hcd xhci-hcd.5.auto: can't setup: -110
+  xhci-hcd xhci-hcd.5.auto: probe with driver xhci-hcd failed with error -110
+echo device > .../role
+  （之后每秒一次，直到重启）
+  dwc3 a600000.usb: request ... was not queued to ep0out
+  udc a600000.usb: failed to start g1: -524
+  UDC core: g1: couldn't find an available UDC or it's busy
+```
+
+* **host 模式在 port0 上根本起不来**（xhci 首次 halt 就超时），切回 device 后 gadget 也起不来 ——
+  UDC `not attached`、USB adb 死掉，**正是 #27 的症状**，一次切换就复现，不需要 UCSI、不需要拔线。
+* 重置 FunctionFS（`sys.usb.config` none→adb，adbd 重写描述符）**无效** ⇒ 坏在控制器，不在 f_fs。
+  `-524` = `-ENOTSUPP`，来自 f_fs 的 `usb_ep_autoconfig()` 找不到端点（`f_fs.c:3350`）。
+* ⚠️ 顺带：`gaokun3-usbrole.sh` 判"host 已确认"的依据是 `ls a600000.usb | grep ^xhci` ——
+  **数的是平台设备，不是绑上了驱动**。本日 xhci probe 失败时平台设备照样在。#52/#56 的
+  "role=host 挂起安全"结论不受影响（那是实测挂起不复位），但"xhci 起来了"这句从来没被真正验过。
+* `-110` 与 `patches/0012` 记过的"QMP combo PHY 的 USB3 pipe 时钟被 DP 抢走，dwc3 软复位超时 -110"
+  同一签名。0012 只用了 `maximum-speed = "high-speed"`，**漏了 dwc3-qcom 为 USB2-only 口准备的
+  `qcom,select-utmi-as-pipe-clk`**（binding `qcom,dwc3.yaml:147`："disable USB3 pipe_clk requirement"；
+  本机 glue `qcom,sc8280xp-dwc3` 由 `dwc3-qcom-legacy.c:792` 读取；上游 otg 先例 `milos-fairphone-fp6.dts:886-893`）。
+  ⇒ `patches/0048`。`--verify` 32/32 一致；dtb（sha `8b390878…`）与本次开机的实际 DT 相比**只多这一行**
+  （其余 7 行差异是引导器在 `/chosen` 里填的 kaslr-seed / UEFI 内存表 / bootargs）。
+* 已放上 ESP 的测试条目 `…-android-a-t0048.conf`：内核/ramdisk 复用 `slot_a`，只换 dtb，加 `panic=10`；
+  `default` 没动。**未设 oneshot、未重启**（要用户同意；`_b` 不可启动，失败只能回默认条目或按电源键）。
+
+**判据**（同一次开机、线不动）：host → xhci 绑上驱动、无 -110；device → UDC 回到 `configured`；来回三次都成立。
+**若 0048 成立**，还剩数据角色的策略（UCSI 在重新插线时仍会按 `partner_type=2` 切 host）：
+候选是用户态"电气探测"——我方受电时，device 模式 6 秒无人枚举就切 host（hub / 充电器），
+host 模式 6 秒没有下游设备就切 device（PC）；我方供电时交给内核。**UCSI 的 quirk 单凭 pwr_dir 推角色会弄坏
+带 PD 直通的 hub（它们供电、却要我们当主机），不能那样写。**
+
+本日测完 port0 停在 **device 但 gadget 起不来**（USB adb 不通，TCP adb 正常）—— 重启即恢复。
