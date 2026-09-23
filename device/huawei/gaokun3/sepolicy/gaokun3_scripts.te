@@ -49,6 +49,11 @@ type gaokun3_touchmode, domain;
 type gaokun3_touchmode_exec, exec_type, vendor_file_type, file_type;
 init_daemon_domain(gaokun3_touchmode)
 
+# ── gaokun3-rproc-kick.sh：只给不在运行的 DSP 补 start（#118 §3，2026-09-24）─
+type gaokun3_rprockick, domain;
+type gaokun3_rprockick_exec, exec_type, vendor_file_type, file_type;
+init_daemon_domain(gaokun3_rprockick)
+
 # ── 每个脚本域都要能执行自己的解释器 ────────────────────────────────────
 #
 # 这不是"从 denial 抄来的规则"，是结构性事实：这六个脚本的 shebang 都是
@@ -77,6 +82,8 @@ allow gaokun3_usbrole    vendor_shell_exec:file rx_file_perms;
 allow gaokun3_usbrole    vendor_toolbox_exec:file rx_file_perms;
 allow gaokun3_touchmode  vendor_shell_exec:file rx_file_perms;
 allow gaokun3_touchmode  vendor_toolbox_exec:file rx_file_perms;
+allow gaokun3_rprockick  vendor_shell_exec:file rx_file_perms;
+allow gaokun3_rprockick  vendor_toolbox_exec:file rx_file_perms;
 
 # ── 第 4 步：照实机拒绝补的规则 ──────────────────────────────────────────
 
@@ -102,6 +109,24 @@ allow gaokun3_keyboard sysfs:file rw_file_perms;
 #      稳定路径下，或者接受"换内核就失效且毫无征兆"。
 allow gaokun3_touchmode sysfs:dir r_dir_perms;
 allow gaokun3_touchmode sysfs:file rw_file_perms;
+
+# ⚠️ 下面两组是 2026-09-24 按【实机 ls -Z 的标签】写的，还没经过 enforcing 下的普查
+#    （本机当时是 permissive、且新服务要等下一版镜像才有），属于第 4 步的"先写后验"。
+# gaokun3-rproc-kick.sh：读 /sys/class/remoteproc/*/{state,name}，必要时写 state。
+#   实机标签：…/2400000.remoteproc/remoteproc/remoteproc0/state = u:object_r:sysfs:s0
+allow gaokun3_rprockick sysfs:dir r_dir_perms;
+allow gaokun3_rprockick sysfs:file rw_file_perms;
+# gaokun3-usbrole.sh（host/device/watch/follow）：写 usb_role 的 role、读 UDC state、
+#   读 /sys/class/typec/port0/{power_role,…}、列 xhci-hcd.*/usb* 与 driver 链接，
+#   以及 /sys/power/wake_lock|wake_unlock。实机标签：role / udc state / typec 全是 sysfs，
+#   wake_lock 是 sysfs_wake_lock。属性：persist.vendor.gaokun3.allow_suspend 是
+#   vendor_gaokun3_prop（要显式 get_prop）；debug.tracing.screen_state 是 debug_prop
+#   （核心策略已给所有域：private/domain.te:485，不用写）。
+#   ⚠️ 此前这个域【一条 sysfs 规则都没有】—— enforcing 下连 role 都写不了。
+allow gaokun3_usbrole sysfs:dir r_dir_perms;
+allow gaokun3_usbrole sysfs:file rw_file_perms;
+allow gaokun3_usbrole sysfs_wake_lock:file rw_file_perms;
+get_prop(gaokun3_usbrole, vendor_gaokun3_prop)
 
 # ── audio-route.sh：2026-09-18 实机重跑一次这个服务抓到的完整清单 ────────────
 #

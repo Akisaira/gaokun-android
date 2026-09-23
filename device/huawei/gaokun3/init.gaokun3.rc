@@ -95,10 +95,17 @@ on post-fs-data
 
 # remoteproc 兜底：ramdisk 里已带固件，早期 probe 正常就已 running；
 # 万一没起来（固件路径变动等），这里补一刀。ADSP 不起来就没有声卡。
+# ⚠️ 2026-09-24：不再直接写 start —— 对已在运行的 DSP 写 start 会泄漏一次引用
+#    （rproc->power +1），而这个触发器在每次 framework 软重启时都会再触发（#118 §3）。
+#    改由脚本只对【不在运行】的那颗写 start，幂等。
+service gaokun3_rprockick /vendor/bin/gaokun3-rproc-kick.sh
+    user root
+    group root
+    oneshot
+    disabled
+
 on property:sys.boot_completed=1
-    write /sys/class/remoteproc/remoteproc0/state start
-    write /sys/class/remoteproc/remoteproc1/state start
-    write /sys/class/remoteproc/remoteproc2/state start
+    start gaokun3_rprockick
 
 # turnip 调试旗标（快速迭代机制 v3，见 docs/stage5-freedreno.md）：
 # 内核 cmdline 加 androidboot.tu_debug=<flags> → ro.boot.tu_debug → 下面的属性。

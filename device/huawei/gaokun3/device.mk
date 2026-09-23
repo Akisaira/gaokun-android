@@ -486,6 +486,7 @@ PRODUCT_COPY_FILES += \
 # 命中后采一份到 /data/vendor/gaokun3/hangdump-<uptime>/，每次启动只采一份。
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/gaokun3-hangdump.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-hangdump.sh \
+    $(LOCAL_PATH)/bin/gaokun3-rproc-kick.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-rproc-kick.sh \
     $(LOCAL_PATH)/etc/hangdump.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/hangdump.rc
 
 # 挂起前把 a600000.usb 的 USB role 切到 host —— 那个控制器停在 role=device 时，
