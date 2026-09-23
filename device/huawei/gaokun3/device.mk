@@ -513,6 +513,8 @@ PRODUCT_COPY_FILES += \
 #    ⚠️ 代价说清楚：**新装机的用户默认也不进 s2idle**，息屏耗电按不睡算 ——
 #      这与 v0.3.0～v0.6.2 的镜像默认相反，发版说明里必须写。
 #      要开：adb shell setprop persist.vendor.gaokun3.allow_suspend 1（重启后回默认）。
+#    ★ 2026-09-23 用户定：开发期保持 0；【正式版】发布前改回 1（老用户 OTA 后不能丢待机，
+#      TODO S1）。改回 1 之后，开发机自己 setprop … 0（persist 属性重启不丢）。
 #
 # 开启后：息屏切 role=host（挂起安全）、亮屏切回 device（USB adb 可用）。
 # 实测 Android 真实挂起/唤醒 ×4 零复位、救援 Ubuntu systemctl suspend 3/3。

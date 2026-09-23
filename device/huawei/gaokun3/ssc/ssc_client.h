@@ -63,6 +63,15 @@ class SscClient {
 
     // 查某个 data_type 对应的真实传感器 UID（多个时取第一个）。
     bool FindSensor(const std::string& data_type, SscUid* out, std::string* err);
+    // 同上，但返回全部 UID（一个 data_type 可能有多个提供者，比如物理芯片 + 虚拟传感器）。
+    bool FindSensors(const std::string& data_type, std::vector<SscUid>* out,
+                     std::string* err);
+
+    // 发属性请求（msg_id=1）；应答是 msg_id=128 的 SscAttrResponse，由 ReadReports 收。
+    bool RequestAttributes(const SscUid& uid, std::string* err);
+
+    // 变化时上报（msg_id=514）。环境光、接近这类 on-change 传感器要用这个，不是 513。
+    bool EnableOnChange(const SscUid& uid, float rate_hz, std::string* err);
 
     // 以指定采样率使能连续上报。
     bool EnableContinuous(const SscUid& uid, float rate_hz, std::string* err);

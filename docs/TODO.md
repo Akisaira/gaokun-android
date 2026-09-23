@@ -44,7 +44,7 @@
 
 | # | 事情 | 现在卡在哪 | 下一步（具体） |
 |---|---|---|---|
-| **S1** 🆕 | **待机默认值 1→0 会波及老用户** | 用户 2026-09-23：这是 SELinux 那轮（属性改名）带出来的，不是为待机本身做的决定。09-18 为改名把 `persist.vendor.gaokun3.allow_suspend` 默认设成 0（`device.mk:526`），`device.mk` 注释只说"新装机默认不睡"。但 v0.6.2 的用户**绝大多数从没设过这个属性**（旧默认 1）⇒ OTA 一过、新名字取默认 0 ⇒ **所有老用户也会失去 s2idle**，README 的"待机 ✅"随之失真 | **要用户定**：(a) 接受，发版说明 + README 写清楚、给开启命令；(b) 默认回 1，本机自己 `setprop … 0`；(c) postinstall 里把旧名的值迁到新名。发版前必须定 |
+| **S1** 🆕 | **待机默认值 1→0 会波及老用户** | 用户 2026-09-23：这是 SELinux 那轮（属性改名）带出来的，不是为待机本身做的决定。09-18 为改名把 `persist.vendor.gaokun3.allow_suspend` 默认设成 0（`device.mk:526`），`device.mk` 注释只说"新装机默认不睡"。但 v0.6.2 的用户**绝大多数从没设过这个属性**（旧默认 1）⇒ OTA 一过、新名字取默认 0 ⇒ **所有老用户也会失去 s2idle**，README 的"待机 ✅"随之失真 | ✅ **用户 2026-09-23 定**：开发期保持 0，**正式版发布前改回 1**（`device.mk:526`，注释里已写），开发机自己 `setprop persist.vendor.gaokun3.allow_suspend 0`。⬜ 进 `release.sh` 的发版前检查：正式版构建时断言该值为 1 |
 | **T1** | **触摸** | ✅ v0.6.2 已发（跳点限速线、fuzz=0、按下 17 ms、面积轴、6 个驱动缺陷、可观测性，[#114](stage4-findings.md)–[#116](stage4-findings.md)）。剩：手掌碎成多触点（不影响点击，三种阈值法实测全否） | 下一版驱动做跨帧形态判据；轴已经有了，可以顺手写触摸 IDC（`touch.size.calibration`，本机现在 `ConfigurationFile: <none>`） |
 | **B15** ✅ | **全新安装丢触摸参数**（2026-09-23 已修） | ★ 实锤：`scripts/install-gaokun3.sh:251-257` 写死的 cmdline **没有** `himax_hx83121a_spi.disable_pressure=0`（`BoardConfig.mk:134` 有）⇒ 按 INSTALL.md 全新装 v0.6.2 的机器**没有触点面积轴**，直到第一次 OTA 的 postinstall 把 cmdline 同步过去 | ✅ `install-gaokun3.sh` 改为从 boot.img 头读 cmdline（`cmdline[512]@64 + extra_cmdline[1024]@608`，与 `bootimg_extract.cpp` 同一写法），读不到就拒装。拿 v0.6.2 发布的 `boot.img`（sha `975d7987…`）实测：解出的 cmdline 与 `BoardConfig.mk` **逐字相同**。`deploy-android.sh` 已归档。⬜ 剩 `scripts/live/installer-lib.sh:506` 那份（更旧，还缺 `boot_devices` / `init=/init`），随 B4 一起改 —— 它还假设发布目录有散装 `Image`/`dtb`/`ramdisk`，而发布只带 `boot.img` |
 | **T2** | **Google 未认证** | Play 商店报"设备未经 Play 保护机制认证" | 工具与文档已就位（`scripts/google/gsf-android-id.sh` + INSTALL.md）。**剩下的是用户动作**：拿 Android ID 去 google.com/android/uncertified 登记 |
@@ -52,7 +52,8 @@
 | **T4** | **息屏 USB adb 断** | `usbrole.sh` v2（插着主机不睡）**应已在 v0.6.2 里**；但在 S1 定下来之前默认根本不睡，这条暂时无感 | 原生化要先修 UCSI 的数据角色（A6，现在是反的） |
 | **A1** | 音频/蓝牙长期运行后死锁 | 用户报过，我们从未复现 | 设备在线时先 `ls /data/vendor/gaokun3/` 看开发机自己有没有抓到过 `hangdump-*`；否则等下次死锁把目录要过来 |
 | **T5** 🆕 | **声明本机是平板**（[issue #5](https://github.com/vahiru/gaokun-android/issues/5)） | `ro.build.characteristics` 是 `default` ⇒ QQ 不给平板模式登录。原因：从没设过 `PRODUCT_CHARACTERISTICS`，而 `common_full_tablet_wifionly.mk` 也不设它 | ✅ 已写 `lineage_gaokun3.mk`：`PRODUCT_CHARACTERISTICS := tablet`（依据 `build/make/core/product_config.mk:425-428`）。⬜ 下次构建后 `grep ro.build.characteristics …/system/build.prop` 验；请报告者实机测 QQ。⚠️ issue 里「网页把设备认成 Linux」**不一定**跟着好 —— Android 的 UA 本来就含 `Linux; Android`，网页是否给平板版由浏览器决定，不看这个属性（未验证） |
-| **A6** | UCSI 数据角色反 / 无 DP alt-mode | typec 已起来但插 PC 报 `[host]`，靠 rc 硬写 `device` | 查 EC partner type 语义 → 修 `ucsi_huawei_gaokun.c` → DT `role-switch-default-mode` → 删 rc 硬写 |
+| **A6** | UCSI 数据角色反 / 无 DP alt-mode | 2026-09-23 直接问 EC（[#118](stage4-findings.md) §6）：插着主机时 `partner_type=2`（UFP，应为 1），**没插也是 2** ⇒ 可能是常数；EC 端口数据里没有角色位 | **要用户插拔**：U 盘 / 纯充电器 / 扩展坞各跑一次 `scripts/usb/ucsi-snapshot.sh`，看 partner_type 与 pwr_dir 怎么变，再定 quirk（扩展坞会 DR_Swap，不能盲用"受电⇒对方是主机"） |
+| **A3** 🔄 | **自动亮度** | ★ 2026-09-23：`tcs3701`（ams AG）**注册出来了、芯片应答**（[#118](stage4-findings.md) §5，#72 时是"没有提供者"）。但使能后只回一条 `msg_id=130`、载荷 `08 04`，0 条读数；513/514 三种请求同一回应 ⇒ 传感器侧拒绝激活 | 查 130/4 的语义与 libssc 怎么使能光感；最像的差别是 registry（我们是空文件、只读，psacal 拷的是本机 Windows 生成的）。为什么现在应答：候选 L2C，未做对照 |
 | **A5** | 恢复出厂设置不起作用 | 走 misc+recovery，而本机 recovery 起不来 | 依赖 B3（自研 EFI 加载器）或让 recovery 能启动 |
 
 ### 🟡 第二梯队：工程债（不修不会坏，但会反复咬人）
@@ -69,6 +70,9 @@
 | **B3** | 自研 EFI 加载器 | A5 与"默认启动项永远留救援"都依赖它 |
 | **B7** | 用轻量系统替掉救援 Ubuntu（= B4） | 24.6 GiB 换成 55 MiB squashfs，⏸ 用户暂缓 |
 | — | 相机零碎 | `patches/0022` 仍未在**健康**状态下验证 unbind/rebind；libcamera 生成源码仍靠手工，未改成 Soong `genrule`（`patches/libcamera/README.md:34`）；`kDarkLuma=50` 是启发式 |
+| **B18** 🆕 | init 泄漏 remoteproc 引用 | `init.gaokun3.rc:97-101` 每次 `sys.boot_completed=1` 都给三颗 DSP 写 `start`，已在运行时只加引用 ⇒ sysfs `stop` 减不到 0 静默失败（[#118](stage4-findings.md) §3）。改成只在不在运行时才 start |
+| **B19** 🆕 | 没有回落槽 | `_b` 不可启动（[#118](stage4-findings.md) §2）。出事只能靠救援系统；Virtual A/B 合并后 `-cow` 还在的原因未查 |
+| **B20** 🆕 | wlan0 MAC 每次开机都变 | 框架不做 MAC 随机化，驱动每次给新地址 ⇒ 每台机器在路由器上都是"新设备"，IP 漂。本机已用静态 IP 绕开；根治是稳定 MAC |
 | — | tinymix 的 vendor 变体 | 有了它 `audioroute` 就不用挂 `vendor_executes_system_violators`（#117 §8） |
 | — | 设备上的垃圾 | `/data/local/tmp` 2.8 GB 历次测试内核；ESP 上 `slot_cam5` 与 `cam5/6/7` 测试条目（现状未核对）。**删东西等用户点头** |
 
@@ -83,7 +87,7 @@
 | — | `docs/upstream/` 里 **5 份内核补丁稿**一份都没发；另有可投 libcamera 的 `patches/libcamera/0002`（hi846）/ `0004`（ov13b10） |
 
 ### ⏸ 明确搁置（记录理由，不是忘了）
-A2 硬件视频**编码**（查明后故意关闭）· A3 自动亮度（芯片在总线上不应答，四个维度扫空）·
+A2 硬件视频**编码**（查明后故意关闭）· ~~A3 自动亮度~~（**2026-09-23 解除搁置**，见第一梯队 A3）·
 A6b WPA3 issue #2（本地不复现，要报告者配合）· B4 LiveCD 图形安装器（用户暂缓）。
 
 ### ✅ 本次对账收口的（正文原写着 ⬜，其实早做完了）

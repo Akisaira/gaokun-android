@@ -9301,3 +9301,109 @@ hwc 那条规则暴露了一个方法论缺陷，值得单独立条。
   **同一份数据、隔 6 分钟再取一次，就能把"修好了"和"还没轮到它"分开。**
 * ★ 顺带，那次误编的 `user` 版其实是一次**真 enforcing 试跑**：起不来。
   所以 enforcing 还差得远，B1 不可能靠"少写几条规则"蒙过去。
+
+## #118 ★★★ 光感芯片【应答了】；UCSI 角色的原始证据；以及两个让实验循环产出假阴性的坑（2026-09-23）
+
+设备 `192.168.10.239`（本日起静态，见第 1 条），槽 `_a`，戳 `1789737346`，permissive。
+
+### 1. 无线调试 + 固定 IP
+
+* 5555 端口 adb 本来就常开（`persist.adb.tcp.port=5555`）。IP 漂的**真正原因**：
+  wlan0 的 MAC 每次开机都变（`00:03:7f:12:62:18`，此前记过 `…4b:19` / `…de:1d`，
+  `WifiConfigStore` 里的 `wifi_sta_factory_mac_address` 又是 `…34:b5`），
+  `addr_assign_type=0`（驱动声称是"永久"地址），而框架 `isMacRandomizationOn=false`、
+  从不下发 MAC ⇒ 每次开机一个新 MAC ⇒ 路由器给新租约。
+  ⇒ `cmd wifi … -r persistent` **无效**（框架根本不设 MAC）。
+* 做法：把家里那个 SSID 改成静态 `192.168.10.239/24`、网关与 DNS `192.168.10.1`。
+  格式按 `packages/modules/Wifi/.../util/XmlUtil.java:1229-1234,1256-1320`（构建机树）——
+  ⚠️ DNS 的标签是 **`DNSServers`**，不是我凭记忆写的 `DnsServerAddresses`；读取端按序读。
+  框架只在启动时读这份文件 ⇒ `stop` → 改文件 → `start`（**不经过引导器**）。
+  脚本在设备上脱离 adb 会话跑，4 分钟内没拿到目标 IP 就自动回滚到 DHCP 备份
+  （`/data/local/tmp/WifiConfigStore.xml.bak-dhcp`）。结果：25 秒回到 `.239`、
+  `VALIDATED`、DNS 可解析，文件里仍是 `STATIC`。
+* ⚠️ 风险留一句：路由器的 DHCP 池若包含 `.239`，将来可能发给别的设备。根治是**让 MAC 稳定**
+  （DT `local-mac-address` 或查清 ath11k 为什么每次生成新地址），那样路由器侧做保留就行。
+
+### 2. ⚠️ 槽 `_b` 已不可启动 —— 回落退路不存在了
+
+`bootctl is-slot-bootable 1` = **0**，`is-slot-marked-successful 1` = 0；
+`/dev/block/mapper/` 里只有 `*_a` 与 `*_a-cow`，`snapshotctl dump` 报 `Update state: none`。
+CLAUDE.md 一直写"`_b` = v0.6.2，出事把 `default` 掰回它"—— **现在掰回去也起不来**。
+`-cow` 设备为什么在合并之后还在，未查。用户报的"`_a` 起不来"没有留下痕迹：
+pstore 里最新的记录是 09-13 的，本次开机 `_a` 正常。
+
+### 3. ⚠️★ init 泄漏 remoteproc 引用 —— `sscexp.sh` 停不下 SLPI 的原因
+
+`init.gaokun3.rc:97-101` 在 `on property:sys.boot_completed=1` 时给三颗 DSP 各写一次 `start`。
+DSP 已在运行时，`rproc_boot()` 只把 `rproc->power` 加一；而 sysfs 的 `stop` 只是减一，
+**减不到 0 就静默返回成功**（`remoteproc_core.c:1996-1998`，不打日志）。
+开机后引用数 = 1（自动启动）+ 1（这条兜底）= 2；每做一次 framework 软重启
+（`sys.boot_completed` 被再设一次）再 +1。本日实测：软重启之后写了 3 次 `stop` 才真停下。
+⇒ `sscexp.sh` 那句"SLPI 没停下"不是 DSP 的问题。已改成循环写到 `offline` 为止。
+⬜ 根治：兜底只在 DSP 不在运行时才 `start`（rc 里做不了条件判断，要一个小脚本 + 域）。
+
+### 4. ⚠️★ SLPI 重启后 hexagonrpcd 要【再重启一次】—— 另一个假阴性
+
+同一轮里阳性对照（accel）三次失败，逐个排除：自定义根目录（换成 `/vendor` 的符号链接照样失败）、
+sensors HAL 在旁边 churn（停掉照样失败）。**SLPI 起来后把 hexagonrpcd 杀掉重起一次**，
+accel 立刻回来。⇒ `sscexp.sh` 已加这一步，并先停 HAL（#37 的 churn）。
+⇒ **#72 之后任何"SSC 说没有提供者"的结论，都要先确认当时阳性对照过了。**
+
+### 5. ★★★ 光感：`tcs3701`（ams AG）注册出来了，芯片在总线上应答
+
+对照过的会话里（accel 在），`gaokun3-ssc-test ambient_light`：
+
+```
+data_type=ambient_light 共 1 个提供者
+  attr 0: "tcs3701"   attr 1: "ams AG"   attr 2: "ambient_light"
+  attr 3: true (available)   attr 16: 1（on-change）   attr 5: "sns_ambient_light.proto"
+```
+
+#72 那时是"SSC 说没有传感器提供 data_type=ambient_light"。SEE 的物理驱动只有在
+硬件探测（读 ID）成功后才注册 UID ⇒ **芯片现在是上电、应答的**。
+
+⬜ 但使能后拿不到读数：513（10 Hz）、514（5 Hz）、514（0 Hz）三种请求**同一个回应**——
+一条 `msg_id=130`，载荷 `08 04`（字段 1 = 4），0 条测量。三种请求同一个回应 ⇒
+是**传感器那头拒绝激活**，不是请求格式。
+★ 语义已查实（libssc 历史里的 `data/ssc-shared.proto`，commit `cede418` 第 30、45-54、91-92 行，
+2023 年被删）：**130 = `SSC_MSG_EVENT_ERROR`，4 = `SSC_ERROR_CRITICAL`**
+（枚举：SUCCESS 0 / FAILED 1 / UNSUPPORTED 2 / INVALID_TYPE 3 / **CRITICAL 4** / INVALID_ARGUMENTS 5 /
+UNAVAILABLE 6 / REJECTED 7）。⚠️ 我当时猜的是"无效值"—— **猜错了**，好在写的是"不确定"。
+libssc 的 on-change 使能**不带载荷**（`libssc-sensor.c:231-235`），我们带了 `sample_rate`；
+已给工具加上空载荷的变体做对照 —— **结果一样**（`08 04`，构建机源码 md5 与本仓一致、
+`ssc_client.cpp` 确实重编过）。⇒ 四种请求（513 / 514+5 Hz / 514+0 Hz / 514 空载荷）全部 CRITICAL，
+**请求格式可以排除**，是芯片或其驱动在激活时出错。
+⬜ 下一步只剩两条：① 要一份**别人机器上 Windows 生成的** `persist/sensors/registry`（+`sns_reg_version`）
+来做 A/B（psacal 的做法，我们的 Windows 已抹除）；② 做 L2C 关着的对照，确认"为什么现在应答"。JSON 里的 `fac_cal` 与 `coefficient` 都是正常值
+（scale 1.0 / bias 0.0 / 12 个系数），不是空校准。
+★ psacal（2026-09-17 博文，未经他人复现）的做法是**拷本机 Windows 生成的 registry**，
+而我们的 `sensors/registry/registry` 是空文件、hexagonfs 只读 —— 这是目前最像的差别。
+
+**为什么 #72 不应答、现在应答**：我**不知道**。候选是 L2C（1.8 V，PM8350C 的 LDO2；
+SM8450 平板上光感正是缺它与 L13C，`aaronsb/sm-x800-linux#37`）：本机 L2C 现在是
+`enabled`、引用 1，但它的两个消费者（后摄 `dovdd`、`2-0020` 的 `vddio`）都是 0 ——
+不是相机在拉着它。#72 那时 L2C 什么状态没记录。**要把因果做实，需要一次 L2C 关着的对照**，
+而那要改 DT、重启。
+另：DSDT 里 `\_SB.SCSS`（传感器子系统）**没有任何 PEP 电源投票** ⇒ Windows 也不从 AP 侧给光感供电。
+顺带：DSDT 给 L12C 的投票是 **1.2 V**（`0x124F80`，属于 `\_SB.ECKB` 键盘），而 DT 写的是 1.8 V；
+DT 里它没有消费者，所以无害。
+顺带：SSC 说物理加速度计是 **`t1000` / TDK-Invensense**，不是 HAL 显示的 "SH3001"。
+
+工具：`gaokun3-ssc-test` 现在会列出某个 data_type 的全部提供者并打印属性，
+`… <type> <rate> <秒> onchange` 用 514 使能，非测量消息打十六进制载荷。
+
+### 6. UCSI 数据角色：原始证据（`scripts/usb/ucsi-snapshot.sh`）
+
+`GET_CONNECTOR_STATUS` 直接问 EC（debugfs，只读）：
+
+| 口 | 实际 | EC 报 | 
+|---|---|---|
+| con1 | PD 充电、UDC `configured`（对方是主机） | connected=1 pwr_dir=0（我方受电 ✓）**partner_type=2（UFP ✗，应为 1）** |
+| con2 | 什么都没插 | connected=0 **partner_type=2** |
+
+UCSI 核心照 partner_type 把我们设成 host（`typec` 显示 `[host]`），靠 rc 硬写 `device` 盖回来。
+EC 自己的端口数据（每口 2 字节：CC 方向 / mux / DP 引脚 / HPD）**没有数据角色位**
+（`ucsi_huawei_gaokun.c:212-270`）。未插时也报 2 ⇒ 这个字段**可能是常数**，而不是"反了"。
+⬜ 要写 quirk 之前还缺数据点：插 U 盘（我方供电）、纯充电器、扩展坞各一次。
+候选修法是按 Type-C 默认规则由 pwr_dir 推数据角色（受电 ⇒ 对方 DFP），
+但扩展坞会做 PD DR_Swap，那种情况下这条规则是错的 —— **所以必须先看扩展坞时 EC 报什么。**

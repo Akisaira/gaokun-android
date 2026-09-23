@@ -262,6 +262,14 @@ bool SscClient::WaitForService(int timeout_ms, std::string* err) {
 
 bool SscClient::FindSensor(const std::string& data_type, SscUid* out,
                            std::string* err) {
+    std::vector<SscUid> all;
+    if (!FindSensors(data_type, &all, err)) return false;
+    *out = all[0];
+    return true;
+}
+
+bool SscClient::FindSensors(const std::string& data_type,
+                            std::vector<SscUid>* out, std::string* err) {
     SscSuidRequest suid;
     suid.set_data_type(data_type);
     std::string sub;
@@ -283,7 +291,7 @@ bool SscClient::FindSensor(const std::string& data_type, SscUid* out,
                 *err = "SSC 说没有传感器提供 data_type=" + data_type;
                 return false;
             }
-            *out = sr.uid(0);
+            out->assign(sr.uid().begin(), sr.uid().end());
             return true;
         }
     }
@@ -298,6 +306,29 @@ bool SscClient::EnableContinuous(const SscUid& uid, float rate_hz,
     std::string sub;
     cfg.SerializeToString(&sub);
     return SendRequest(uid.low(), uid.high(), kMsgRequestEnableContinuous, sub,
+                       err);
+}
+
+bool SscClient::EnableOnChange(const SscUid& uid, float rate_hz,
+                               std::string* err) {
+    // libssc 的 on-change 使能【不带载荷】（libssc-sensor.c:231-235，
+    // "on-change do not need any configuration"）。rate<=0 时照它发空载荷；
+    // rate>0 时仍带 SscEnableConfigRequest，留作对照。
+    std::string sub;
+    if (rate_hz > 0) {
+        SscEnableConfigRequest cfg;
+        cfg.set_sample_rate(rate_hz);
+        cfg.SerializeToString(&sub);
+    }
+    return SendRequest(uid.low(), uid.high(), kMsgRequestEnableOnChange, sub,
+                       err);
+}
+
+bool SscClient::RequestAttributes(const SscUid& uid, std::string* err) {
+    SscAttrRequest req;
+    std::string sub;
+    req.SerializeToString(&sub);
+    return SendRequest(uid.low(), uid.high(), kMsgRequestGetAttributes, sub,
                        err);
 }
 
