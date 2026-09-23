@@ -37,10 +37,11 @@ on early-init
 on init
     write /sys/power/wake_lock gaokun3_nosuspend
 
-# 总开关。⚠️ 2026-09-18 起 device.mk 的默认值是 **0**（= 待机关闭），
-# 属性也改名成 persist.vendor.gaokun3.*（旧名 persist.gaokun3.* 在 enforcing 下
+# 总开关。device.mk 的默认值是 **1**（2026-09-18～09-24 开发期曾是 0，TODO S1），
+# 属性 2026-09-18 起改名成 persist.vendor.gaokun3.*（旧名 persist.gaokun3.* 在 enforcing 下
 # 谁都写不了，理由见 device.mk 与 sepolicy/property_contexts）。
-# 也就是说：不显式设成 1 的话，下面这个 wake_unlock 永远不会执行，机器不进 s2idle。
+# ⚠️ 设成 0 的机器：这个触发器开机时仍可能按镜像默认值 1 先跑一次（持久属性加载得比
+#    属性触发器晚），放掉的只是这一把；挡住挂起的是 usbrole.rc 的 gaokun3_usbrole。
 # ⚠️ 运行时 setprop ... 0 只能阻止后续的息屏切换，【不会】把这个 wakelock 重新拿回来
 #    —— 要完全回到"挡住挂起"的状态得重启。放开容易收回难，所以这里只做放开一个方向。
 on property:persist.vendor.gaokun3.allow_suspend=1

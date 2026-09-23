@@ -6,8 +6,11 @@
 最终目标是能稳定运行 arm64 手游。
 
 **当前阶段：Stage 6 收尾 —— 产品化。v0.6.2-alpha 已发布（2026-09-16，构建戳 `1789570683`）：触摸手感按实测定案（跳点判据、fuzz=0、按下 17 ms、触点面积轴）、驱动 6 个缺陷 + 可观测性、OTA postinstall 同步 cmdline。手上还剩画质（降噪/闪光过曝）、息屏 USB adb、Google 认证、手掌碎块 —— 都在 `docs/TODO.md` 的总表里。
-2026-09-24 凌晨（用户睡觉、授权自主推进）：**PR #6 相机（AF / 朝向 / 崩溃）已接手修完并合并推送**（`9c79b78`，之后的提交留在本地未推）；
-**测试版 `1790184271` 已构建（产物在构建机，payload 未能预推：夜里直传只有 142 KB/s），未安装**（要人在场重启）——步骤与验收清单见 `docs/TODO.md` 顶部。设备上旧 payload 已改名防误装。
+2026-09-24 凌晨（用户睡觉、授权自主推进）：**PR #6 相机（AF / 朝向 / 崩溃）已接手修完并合并推送**（`9c79b78`）。
+2026-09-24 早上：**后摄朝向 180 经用户目视确认**——当时设备上就是 180（0049 的前身写的 270 是错的，已改写，#119 §7）⇒
+测试版 `1790184271` **作废**，重新构建 **v0.6.3 候选版**（dtb = 0048 版 `8b390878…`、**待机默认改回 1**＝S1；开发机已持久 setprop 0）
+——步骤与验收清单见 `docs/TODO.md` 顶部。设备上旧 payload 已改名防误装。
+路由器（OpenWrt，`192.168.10.1`）加了静态租约：`00:03:7f:12:*:*` → `.239`（本机 MAC 只有后两字节每次开机变），设备侧的静态 IP 仍保留。
 ⚠️ 设备现在的相机 provider 是 **bind-mount 的新 HAL**（`/data/local/tmp/hal-pr6.bin`，重启即失效，属正常）。
 新工具 `gaokun3-ncam-smoke`（应用视角的相机冒烟测试，设备上 `/data/local/tmp/`）。案卷 #119。
 2026-09-18：SELinux 第五轮（案卷 #117）—— 补了 7 处规则（触摸服务的域 / `/dev/dri` 目录 / ESP 块设备类型 / OTA postinstall / 温控 HAL 的 sysfs_thermal / audioroute 的 tinymix / hwc 的 uevent socket），自研属性改名 `persist.vendor.gaokun3.*` 且 **allow_suspend 默认值改成 0**（⚠️ 不只新装机：v0.6.2 老用户多半没设过这个属性，OTA 后也会落到 0、失去待机 —— 发版前要用户定，见 `docs/TODO.md` S1）。构建机编译验证通过；`-userdebug` 重编后**装机成功**（戳 `1789737346`，槽 `_a`，60 秒起来）：温控 HAL 的 35 条 denial 归零且 `dumpsys thermalservice` 报真温度、audioroute 的 7 条归零、`/dev/dri` 与 ESP 的标签实机确认、功能零回归。⚠️ 中途误用 `-user` 变体导致一次装机失败（#117 §15）。⬜ 新查出的 4 处规则（hwc 的 create/bind、同进程 HAL 库、mediaswcodec、wakeup genfscon）**已写未验**，下次构建一起。（每次开工时更新这一行）**
@@ -22,7 +25,8 @@
 > 误判成"内核挂死"并让用户去按电源键的。判据用 `getprop ro.crdroid.device`，
 > 局域网里那台小米手机（`pudding`）也开着 5555。
 > ★ 现在直接跑 **`bash scripts/find-device.sh`**（绕沙箱）：2026-09-23 起它在 macOS 上能用，扫本机所在的每个 /24 全段、按协议认身份。
-> ★ **2026-09-23 起 IP 固定为 `192.168.10.239`**（家里那个 SSID 改成了静态 IP，#118 §1）。
+> ★ **2026-09-23 起 IP 固定为 `192.168.10.239`**（家里那个 SSID 改成了静态 IP，#118 §1；
+>   2026-09-24 路由器侧也做了保留，`00:03:7f:12:*:*` → `.239`，#119 §8 —— 池子 `.100–.249` 本来包含 `.239`）。
 >   IP 以前会漂是因为 wlan0 的 MAC 每次开机都变。换了网络（别的 SSID）仍走 DHCP，那时再用 find-device。
 >
 > ### 四条会让你损失一小时以上的运维坑
@@ -85,7 +89,7 @@
 > 回退 = 挂 ESP 后 `cp gaokun3.dtb.pre0048 gaokun3.dtb`。⚠️ 这是手放的，**不在任何已发布镜像里**；下一版镜像的
 > prebuilt dtb 已换成同一份。
 > ⚠️ 本机待机仍然关着：属性已改名为 **`persist.vendor.gaokun3.allow_suspend`**（现值 0，
-> 镜像默认也是 0）。旧名 `persist.gaokun3.allow_suspend` 在设备上还留着一个孤儿值，无害。
+> 2026-09-24 起**显式持久化**；当前镜像默认 0，候选版起镜像默认 1 —— 开发机靠持久值保持 0）。旧名 `persist.gaokun3.allow_suspend` 在设备上还留着一个孤儿值，无害。
 > ⚠️★★ **不要用 `-user` 变体构建本机的 ROM** —— user 构建的 init 强制 enforcing
 > （忽略 `androidboot.selinux=permissive`，`selinux.cpp:112-116`），而我们的策略还不完整，
 > 结果是**装上去起不来**。本机一直用 `lineage_gaokun3-bp4a-userdebug`。案卷 #117 §15。

@@ -143,10 +143,12 @@ KPATCHES=(
     # ★ 0047（#116）：pressure_enabled 默认跟着轴走（轴存在却报常数是逻辑缺陷）；
     #    contacts_log 加 zone_area 列 —— ct->area 分不开手掌碎块和指尖（实测 8-20 vs 5-21），能分的是它。
     0047-Input-himax-spi-pressure-follows-axes-and-log-zone-area.patch
-    # ⚠️ 0048（#118 §7，待验证）：usb_0 用 UTMI 当 pipe 时钟 —— 角色切换后 xhci -110 / gadget -524。
+    # ★ 0048（#118 §7-8，实机验证过）：usb_0 用 UTMI 当 pipe 时钟 —— 角色切换后 xhci -110 / gadget -524。
     0048-arm64-dts-gaokun3-usb0-select-utmi-as-pipe-clk.patch
-    # ⚠️ 0049（PR #6 的标定，待目视确认）：前摄 rotation 0→90、后摄 180→270（逆时针）。
-    0049-arm64-dts-gaokun3-camera-rotation-front-90-rear-270.patch
+    # ★ 0049：后摄 rotation 180 经用户目视确认（2026-09-24），只去掉 FIXME、值不变 ⇒ dtb 与 0048 逐字节同。
+    #    ⚠️ 同号的前身（前 90 / 后 270，按 PR #6 描述）与目视结论相反，已作废 —— 构建机树上若还打着它，
+    #    先 `git apply -R` 旧版（正文在 git 历史 cecb9ec 里）再打这一版。
+    0049-arm64-dts-gaokun3-camera-rear-rotation-180-confirmed.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，

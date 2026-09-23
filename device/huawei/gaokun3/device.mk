@@ -498,7 +498,7 @@ PRODUCT_COPY_FILES += \
 # 挂起前把 a600000.usb 的 USB role 切到 host —— 那个控制器停在 role=device 时，
 # 设备挂起阶段会【整板复位】且不留任何日志；而 USB adb 的 UDC 就在它上面，
 # 所以不能简单把 DTS 改成 host。见 docs/stage4-findings.md #52 / #54 / #56。
-# ★ 默认【停用】（见下面的 persist.vendor.gaokun3.allow_suspend，2026-09-18 起是 0）。
+# ★ 默认【启用】（persist.vendor.gaokun3.allow_suspend=1；2026-09-18～09-24 开发期曾是 0，见下面 ②）。
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/gaokun3-usbrole.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-usbrole.sh \
     $(LOCAL_PATH)/etc/usbrole.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/usbrole.rc
@@ -519,9 +519,16 @@ PRODUCT_COPY_FILES += \
 #    而本机正是 0（见 CLAUDE.md 状态框）。默认改成 0，改名前后行为一致。
 #    ⚠️ 代价说清楚：**新装机的用户默认也不进 s2idle**，息屏耗电按不睡算 ——
 #      这与 v0.3.0～v0.6.2 的镜像默认相反，发版说明里必须写。
-#      要开：adb shell setprop persist.vendor.gaokun3.allow_suspend 1（重启后回默认）。
+#      要开：adb shell setprop persist.vendor.gaokun3.allow_suspend 1（persist 属性，重启不丢）。
 #    ★ 2026-09-23 用户定：开发期保持 0；【正式版】发布前改回 1（老用户 OTA 后不能丢待机，
 #      TODO S1）。改回 1 之后，开发机自己 setprop … 0（persist 属性重启不丢）。
+#    ✅ 2026-09-24 已改回 1（这一版起的构建就是 v0.6.3 的候选版）。开发机已显式
+#      setprop persist.vendor.gaokun3.allow_suspend 0，并核对过它进了 /data/property/persistent_properties
+#      （之前只有旧名字存着，新名字一直是镜像默认值，没落盘）。
+#    ⚠️ 默认 1 + 持久 0 的开机时序：属性触发器在持久属性加载【之前】就按镜像默认值跑过一轮，
+#      于是 init.gaokun3.rc 的 `=1` 触发器会放掉 gaokun3_nosuspend；挡住挂起的是 usbrole.rc
+#      `on init` 拿的 gaokun3_usbrole（只有 allow_suspend=1 且息屏才会去放）。v0.6.2 时期本机就是
+#      这个组合、没有睡过；装机后仍要 `cat /sys/power/wake_lock` 核对一次（TODO 验收清单）。
 #
 # 开启后：息屏切 role=host（挂起安全）、亮屏切回 device（USB adb 可用）。
 # 实测 Android 真实挂起/唤醒 ×4 零复位、救援 Ubuntu systemctl suspend 3/3。
@@ -532,7 +539,7 @@ PRODUCT_COPY_FILES += \
 #   的老写法（core/product.mk:92-93），两者都落到 /vendor/build.prop
 #   （core/sysprop.mk:194-205 的 _prop_vars_）。既然要动这一行，顺手换成新的。
 PRODUCT_VENDOR_PROPERTIES += \
-    persist.vendor.gaokun3.allow_suspend=0
+    persist.vendor.gaokun3.allow_suspend=1
 
 # ★ WindowManager 每显示器设置：关掉大屏默认的 ignoreOrientationRequest。
 # 不装它 → 应用请求横屏时系统不转屏而是把应用信箱化（原神被压成 1600x1000）。

@@ -132,8 +132,10 @@ bool Device::init()
 	 *        value in clockwise direction whereas libcamera specifies the
 	 *        rotation property in anticlockwise direction."
 	 *
-	 *   ★ patches/0049 起设备树是前 90 / 后 270（PR #6 的实机标定）⇒
-	 *     SENSOR_ORIENTATION 前 270 / 后 90。这组值不对称，换算方向错了会立刻差 180°。
+	 *   ★ 本机设备树：后摄 180（2026-09-24 用户目视确认，patches/0049 只去掉了 FIXME）、
+	 *     前摄 0（待目视）⇒ SENSOR_ORIENTATION 后 180 / 前 0。0 和 180 在这个换算下自反，
+	 *     所以换算方向错了在本机看不出来 —— 一旦哪颗标成 90/270，错了就立刻差 180°。
+	 *     ⚠️ PR #6 描述里的"前 90 / 后 270"与目视结论相反，别照它改。
 	 */
 	auto rot = props.get(libcamera::properties::Rotation);
 	const int32_t rawRotation = rot ? *rot : 0;
@@ -150,7 +152,7 @@ bool Device::init()
 	 *   v4l2_ctrl_new_fwnode_properties() 变成 V4L2_CID_CAMERA_SENSOR_ROTATION，
 	 *   而那个控件 min==max==def，是【只读】的 —— 运行时 v4l2-ctl 改不动它，
 	 *   每次试一个角都要重来一遍内核。
-	 *   ⚠️ 它只是标定用的临时口子：正确值必须写进设备树（patches/0049）。PR #6 初版把
+	 *   ⚠️ 它只是标定用的临时口子：正确值必须写进设备树（patches/0032 / 0049）。PR #6 初版把
 	 *      标定结果只放在仓库外的 post-fs-data 脚本里设这组属性，干净构建的 ROM 就又歪了。
 	 *
 	 *   ⚠️ 属性给的数就是【写进设备树的那个数】（同一个约定，不用再换算），

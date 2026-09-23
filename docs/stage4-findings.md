@@ -9573,3 +9573,38 @@ role / UDC state / typec 全是 `sysfs`，wake_lock 是 `sysfs_wake_lock`，allo
 ⚠️ 换第二版 HAL 时 provider 崩了两次：`Abort message: 'gralloc-mapper is missing'`，`Executable: … (deleted)` ——
 我往已被 bind 的源文件上 adb push（新 inode），provider 在跑所以 umount 静默失败。正确顺序：
 stop → umount（确认）→ push → mount --bind → start（已补进相机文档 7.4 节）。崩溃与代码无关：同一份旧二进制此前全过。
+
+### 7. ⚠️★ 后摄朝向：用户目视"是对的"—— 而那时设备上是 180，不是 0049 的 270
+
+2026-09-24 早上用户说"后摄像头的方向是对的"。**先对账设备上的真实状态**再下结论：
+`/proc/device-tree/soc@0/cci@ac4b000/i2c-bus@0/camera@36/rotation` = `00 00 00 b4`（**180**），
+前摄 `camera@20` = 0；`debug.gaokun3.camera.orientation.*` 属性**都没设**；ESP 上 `slot_a` 是 0048 版 dtb
+（`0049` 从没上过机）；provider 是 bind-mount 的 PR #6 新 HAL（`SENSOR_ORIENTATION = (360-180)%360 = 180`）；
+logcat 里 05:55 打开的是 Aperture。
+⇒ 用户确认的是 **180**。而 `patches/0049` 的前身（凌晨按 PR 描述写的"前 90 / 后 270"，编进了测试版
+`1790184271` 的 dtb `6b8c7dea…`）会把后摄转 90° —— **与目视结论相反**。
+* `0049` 改写为只去掉 0032 里后摄那行的 `/* FIXME */`、值仍是 180；前摄那一半一并撤掉
+  （没有目视证据；PR 文档第 7.2 节的照片证据反而支持前摄 0）⇒ dtb 与只打到 0048 的**逐字节相同**（`8b390878…`，
+  就是 ESP 上那份），prebuilt 已换回它。
+* ⇒ **测试版 `1790184271` 作废**（后摄会歪 90°），另起一版。
+* ★ 教训：**"用户确认了 X"之前，先确认用户眼前的是 X。**我在 TODO 里写"0049 待人眼"，用户看的是机器上
+  现有的东西；两者不是一回事，只有读设备树才分得开。PR 里三份互相矛盾的记录（270/0、0/0、90/270），
+  我挑了"最后写的那组"—— 挑法本身就是猜。
+* ⬜ 前摄：设备树 0，未目视。
+
+### 8. 路由器侧的静态租约（B20 的一半）
+
+用户给了家里路由器（LibWrt 25.12.2 = OpenWrt 分支，`192.168.10.1`）的登录，要求给设备做静态 DHCP。
+* 看现状：`dhcp.lan.start=100 limit=150` ⇒ 池子 `.100–.249`，**包含 `.239`** —— #118 §1 留的那个风险是真的
+  （设备侧静态 IP 挡不住路由器把 `.239` 发给别人）。原来没有任何 `config host`。
+  租约表里本机旧租约的主机名是 `MateBook-E-Go`、MAC `00:03:7f:12:62:18`；此刻邻居表是 `00:03:7f:12:96:02`。
+* 本机 wlan0 已记录的 MAC：`…62:18`、`…96:02`、`…4b:19`、`…de:1d`、`…34:b5` —— **前四字节恒为 `00:03:7f:12`**
+  （`00:03:7f` 是 Atheros 的 OUI），只有后两字节每次开机变 ⇒ 用 dnsmasq 的通配 MAC。
+* 做法：先备份 `/etc/config/dhcp` → `/etc/config/dhcp.bak-20260924-gaokun3`，再
+  `uci add dhcp host`（name `MateBook-E-Go`、mac `00:03:7f:12:*:*`、ip `192.168.10.239`、leasetime `infinite`、dns 1），
+  `uci commit` + `dnsmasq reload`。生成的配置行：`dhcp-host=00:03:7f:12:*:*,192.168.10.239,MateBook-E-Go,infinite`，dnsmasq 在跑。
+* 效果（⚠️ 按我对 dnsmasq 的理解，**未实测**：`dhcp-host` 里写了的地址不进动态分配）：`.239` 不会再发给别人；
+  设备哪天回到 DHCP 也拿 `.239`。
+  设备侧的静态 IP **保留不动**（远程改 Wi-Fi 配置出事了救不回来，两边都在更稳）。
+  ⚠️ 通配会匹配任何没有烧录 MAC、落到 `00:03:7f:12:xx:xx` 的 Atheros 设备 —— 家里现在没有第二台。
+* ⬜ 根治仍是让 MAC 稳定（`local-mac-address` 或开机脚本按 SoC 序列号派生），那样换了网络也不漂。

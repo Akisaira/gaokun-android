@@ -127,6 +127,17 @@ PY
     ok "boot.img 的 dtb 段只含 1 个 FDT"
 fi
 
+# ★ TODO S1（2026-09-24）：发给用户的版本，待机默认必须是开的。开发期（2026-09-18～09-24）
+#   这个默认值是 0；而 v0.6.2 的用户多半从没设过这个属性 ⇒ 发出默认 0 的版本，所有人 OTA 后
+#   都会失去 s2idle。--stage-only（只给自己验）不拦。
+AS=$(sed -n 's/^persist\.vendor\.gaokun3\.allow_suspend=//p' "$OUT/vendor/build.prop" | tail -1)
+if [ "$STAGE_ONLY" = 1 ]; then
+    echo "· 待机默认 allow_suspend=${AS:-<无>}（--stage-only 不拦）"
+else
+    [ "$AS" = 1 ] || die "vendor/build.prop 里 persist.vendor.gaokun3.allow_suspend=${AS:-<无>} —— 发版必须是 1（TODO S1）"
+    ok "待机默认开（persist.vendor.gaokun3.allow_suspend=1）"
+fi
+
 VER=$(basename "$ZIP" .zip)
 echo "═══ 3. 打包安装产物 ═══"
 S=$(mktemp -d); trap 'rm -rf "$S"' EXIT
