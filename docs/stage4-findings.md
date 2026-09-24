@@ -9866,3 +9866,11 @@ LOAD 成功后 `LOOKUP "fingerprint"` 返回 `-ENOENT`。app_id 直接来自 LOA
    （`FtWbioDriverUmdf.dll` 只用 4 个 0x80xx，见报告），或按 secelf 里字符串顺序试。
    ⚠️ enroll/authenticate 会触发 listener 回调读写安全存储 —— 那才是下一个"不应答会卡死 TZ"的风险点，需人在场。
 2. **Android 指纹 HAL**：AOSP 虚拟 HAL 骨架 + STRONG + ISharedSecret 签 HAT（#120 §3）。
+
+### 命令收发工具就绪（2026-09-24 续）
+`tools/fingerprint-bringup/qcom_qseecom_fpcmd.c`（编译过、上机验证）：把 TA 常驻（`load` → app_id），
+再由 debugfs `send_hex` 发【任意原始请求字节】、`print_hex_dump` 打响应 —— **命令帧格式不写死在内核里**，
+由用户态按逆向结论拼 hex 喂进来，便于迭代。实测 `load` ⇒ `LOAD ok, app_id=6`，TA 常驻成功。
+⬜ 卡在【命令帧格式 + 安全的第一条只读命令的确切字节】—— 正从驱动二进制静态逆向（`fp-cmd-protocol.md`）。
+安全网：patch 0050 的 service_listeners 对无人认领的安全存储回调自动应答 FAILURE、256 轮后 -ELOOP 放弃，
+所以发错命令【不会硬挂】，最坏是该命令失败。
