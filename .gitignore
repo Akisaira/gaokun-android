@@ -58,3 +58,10 @@ device/huawei/gaokun3/hexagonrpcd-root/**
 # ⚠️ 同 firmware/ 一样【整目录忽略 + 只放行 README.md】。
 device/huawei/gaokun3/prebuilt-boot/**
 !device/huawei/gaokun3/prebuilt-boot/README.md
+
+# 指纹逆向报告（docs/fingerprint/*.md）—— 对华为/高通【签名专有二进制】fingerpr.mbn
+# 与 Windows 驱动 QcTrEE.sys/FtWbioDriverUmdf.dll 的静态逆向笔记（用户从 Windows/Ghidra 侧做）。
+# 结论与工程要点已进 docs/stage4-findings.md #120/#123（受版本控制）；原始报告不入库，
+# 只放行 README.md（说明它们是什么、从哪来）。获取输入的方法同 firmware/README.md（公开 uup-drivers release）。
+docs/fingerprint/*.md
+!docs/fingerprint/README.md

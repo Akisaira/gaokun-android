@@ -147,7 +147,7 @@ Android 相关知识。因此：
 | 存储 | NVMe（**不是 UFS**，不是手机那套分区布局） |
 | 引导 | **UEFI，不是 fastboot**。可关 Secure Boot。GRUB/systemd-boot 加载 |
 | 虚拟化 | KVM/EL2 可用 |
-| 已知不支持 | 指纹（FocalTech FTE7001：中断 GPIO181、另一脚 GPIO185；**SPI 与比对都在 TrustZone 里，OS 拿不到总线**，#120）、TPM。深度休眠 (S4) 仍未测 |
+| 部分可做 | 指纹（FocalTech FTE7001，中断 GPIO181 / 复位 GPIO185）：比对在 TrustZone 的签名 TA `fingerprint` 里，**路线已明确**——本机 QSEECOM 通路已在跑（uefisecapp probe 成功），缺的 LOAD 有 samcday 真机验证过的参考实现，见 #120/#123。TPM 不支持；深度休眠 (S4) 未测 |
 | 待机 (s2idle) | ✅ **已修复**（M16，v0.3.0-alpha）。⚠️ 本表此前写着"挂得下去、醒不回来、内核/EC 缺陷"，**两句都错**：M15 证明复位发生在**挂起进入**而非唤醒，M16 查出真凶是我们 Stage 2 自己加的 `dr_mode="otg"`，与内核和 EC 都无关 |
 
 ## 关键约束（每次都要记住）

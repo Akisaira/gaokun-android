@@ -9738,3 +9738,55 @@ oneshot → `…-android-b.conf`（回读一致）→ 重启，**40 秒 `boot_co
   `core/java/android/util/NtpTrustedTime.java:350-366`；`ntp_server` 设置项优先于资源，`:647-653`）。**已写未编**（下一版）。
   开发机上现在手动设着 `ntp_server=ntp.aliyun.com`；验证 overlay 时先 `settings delete global ntp_server`。
 * ⬜ 40 分钟的偏差最初从哪来（RTC？）没查；有 NTP 之后不重要。
+
+## #123 ★★★ 指纹【路线翻案】：QSEECOM LOAD 已被完整逆向 + 有真机验证过的参考实现；本机 QSEECOM 通路已在跑（2026-09-24）
+
+⚠️ **本案推翻 [#120](stage4-findings.md) 的"现阶段驱动不了"。** #120 当时的判据是"上游 qcom_scm 只有 LOOKUP/SEND、没有 LOAD，而 QTEE 只覆盖 SM8650+"——
+**这个判据错在两点**：(a) 指纹走的是**旧 QSEECOM**（不是新 QTEE/SMCInvoke），gaokun3 恰好在 QSEECOM 的 allowlist 里；
+(b) 缺的 LOAD 已经有人写好并在真机上验证过。来源是用户提供的三份逆向报告（Windows/Ghidra 侧做的，见下），
+与我在 #120 独立查到的事实**逐条吻合**（FTE7001、GPIO61/62 选型、`qsee_spi_*`、片上比对、secelf 格式），可信度高。
+
+### 1. 本机 QSEECOM 通路【实测，只读】已经在跑 —— 这是最强的一条新证据
+运行内核 `7.2.0-rc2-gaokun3+`：
+* `/sys/bus/platform/devices/qcom_qseecom` **存在** ⇒ `qcom_scm_qseecom_init()` 过了 allowlist 那道 gate
+  （上游那个函数只有在 board compatible 命中 `qcom_scm_qseecom_allowlist[]` 且版本查询成功后才建这个 platform device）
+  ⇒ **`huawei,gaokun3` 确实在 allowlist 里**（报告的说法在本机得到证实，不只是引用）。
+* `/sys/bus/auxiliary/devices/qcom_qseecom.uefisecapp.0` **probe 成功** ⇒ **LOOKUP + SEND 这条 QSEECOM 传输在本机今天就是通的**
+  （uefisecapp 正是用 `app_get_id` LOOKUP + `app_send`）。指纹要用的是同一条传输，只多一个动词：**LOAD**。
+* `CONFIG_QCOM_QSEECOM=y` / `CONFIG_QCOM_QSEECOM_UEFISECAPP=y` / `CONFIG_QCOM_TZMEM=y` / `CONFIG_QCOM_TZMEM_MODE_SHMBRIDGE=y`
+  ⇒ 报告讨论的 SHM-bridge 内存路径正是我们的构建选项；`# CONFIG_TEE is not set`（没走 QTEE，符合"旧 QSEECOM 路线"）。
+
+### 2. 报告给出的、已经解决的部分
+* **TA 名字 = `fingerprint`**（不带 t；文件名才是 `fingerpr.mbn`）。来源是 BIOS capsule 里 TZ 固件 oem config 的 QSEECOM TA 名单，权威。
+* **LOAD 机制完整逆向**（从 Windows `QcTrEE.sys`）：`SMC 0x32000101`（owner QSEE_OS=0x32 + svc APP_MGR=1 + cmd 1，即 LOAD 复用 SEND 的 cmd），
+  SMC32，3 个 plain 参数 `{mdt_len=0, img_len=文件大小, 裸物理地址}`，响应 `resp_type==0xEE01` → app_id。
+  ⚠️★ **计算平台特有的坑**：LOAD 是 SMC32 ⇒ **物理地址必须 < 4 GB**；Windows 用 `MmAllocateContiguousNodeMemory(HighestAcceptableAddress=0xffffffff)`。
+  Linux 侧对应 = **连续物理内存 + `dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32))`**。手机（RAM<4GB）天然满足，8280（可 16/32GB）不设就翻车。
+* **参考实现存在且经真机验证**：samcday（Fedora-on-Qualcomm）在 **SDM670 / Pixel 3a** 上跑通完整 QSEECOM 指纹（libfprint+fprintd）。
+  QSEECOM LOAD = 3 个 commit（`drivers/tee/qseecom/core.c` + `qcom_scm.c` 的 `qcom_scm_qseecom_app_load()`/`_app_shutdown()`）。
+  参数与上面逐字段一致 ⇒ **可直接 port**，适配点只有两处：单一 secelf（跳过 mdt 拼接）、32 位 DMA mask。
+* **fingerpr.mbn 是双传感器 secelf**（FocalTech `ff_trustlet_*` + Goodix `gdx_*`，`Milan_v_3.02.00.26`），
+  Qualcomm secelf 格式（hash segment 走 TZ 内部验签，Linux 侧不用管）；华为 efuse 签名链。
+  ⚠️ 这是 **Huawei/Qualcomm 签名的专有二进制**，走和 `qcadsp8280.mbn` 等一样的路子：**从公开的 uup-drivers release 取、`firmware/` 目录 gitignore、不入库**。
+  ★ **加载它不等于绕过安全启动**：TZ 仍然逐段验签，我们用的是厂商自己的 SMC 加载路径、加载厂商自己签名的 TA
+    —— 性质与我们已经在做的 GPU/DSP/WiFi 固件加载相同，指纹的片上比对与模板密封在 TZ 里的安全模型**完全不动**。
+* **命令集已逆出**（`fingerpr-command-report.md`）：`FF_CMD_TA_*` 37 个（含 `INIT_SPI/PROBE_CHIP_ID/CAPTURE_IMAGE/PRE_ENROLL/ENROLL/POST_ENROLL/AUTNENTICATE/GET_AUTHENTICATOR_ID/SET_KM_KEY/...`）、
+  `FF_CMD_SVC_*` 34 个、`CMD_TO_DEVICE_*` 13 个。**都是片上比对**（enroll/authenticate 在 TA 内完成，主机不碰指纹图）——正好配我们已备好的软件侧 HAT（见 #120 §3）。
+  ⚠️ 命令 id 的**精确数值**静态拿不到（switch 分发函数运行时注入）；报告按字符串连续排列推 enum 顺序，**需从 FocalTech 客户端驱动交叉验证**才能定死。
+
+### 3. 所以"做得差不多了"= 最难的未知已被解答并去风险，但离能用还有实打实的活
+剩下的（按顺序，都要人在场——见 §4 的风险）：
+1. **把 samcday 的 QSEECOM LOAD port 到我们的 mainline 7.2**。⚠️ 上游 qcom_scm 近期把 `__scm` 全局单例改成显式 handle（报告已标），port 时按新签名走。
+2. **首次在 gaokun3 上 LOAD `fingerprint` 并拿到合法 app_id** —— 第一次真发 LOAD SMC，**有硬挂风险**（§4）。成功即证明整条路通。
+3. **写 client driver**（`qcom_qseecom_fingerpr.c`）：先把命令 id 数值从 FocalTech 客户端驱动核死，再按 `INIT_SPI→PROBE_CHIP_ID→...→ENROLL/AUTNENTICATE` 驱动。
+4. **写 Android 指纹 HAL**：以 AOSP 虚拟 HAL 为骨架，SensorProps 设 STRONG，接 `ISharedSecret` 签 HAT（#120 §3 已论证本机全软件安全下可行）。
+
+### 4. ⚠️ 为什么不现在就动手（风险）
+* LOAD/SEND 是 **EL1 特权指令**，要么改内核、要么用一个最小内核模块转发 SMC。**发错参数的 SMC 可以让整机静默硬挂**
+  （与 CLAUDE.md 记的 `/dev/mem`/门控寄存器同类，报告里 MT6895 团队 "直接 ioctl 到 TEE 加载 TA → immediate hard reboot" 就是前车之鉴）。
+  ⇒ 按 CLAUDE.md 铁律：**这类实验必须有人在场能按电源键**，且要先在最小模块里做、参数逐字核对。
+* 这是**多次会话量级**的工程（内核 port + client driver + HAL），不是一把梭。
+* fingerpr.mbn 尚未取到本机（在公开 uup-drivers release 里，与固件同源）。
+
+### 5. 待办落到 TODO
+新增 **T3 指纹**（从"已知不支持"升级为"有明确路线、分 4 步、需人在场做 SMC 实验"）。三份逆向报告存本地（`docs/fingerprint/`，不入库专有细节，只留方法与结论指针）。
