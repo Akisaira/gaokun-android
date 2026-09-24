@@ -4,3 +4,5 @@ Gk3Backend? locateShellBackend() => null;
 
 /// http://localhost:xxxx/?scenario=factory
 String? requestedScenario() => Uri.base.queryParameters['scenario'];
+
+bool soakRequested() => Uri.base.queryParameters['soak'] == '1';

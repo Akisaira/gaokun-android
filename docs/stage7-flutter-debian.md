@@ -8,7 +8,14 @@
 > ★ 端到端测试第一次跑就抓到**双系统模式从来装不上**（§3.1）。
 > ⬜ M0（真机打一枪：Debian + mesa + cage + Flutter 能否出画面）要回家后做 ——
 > 本机当时在 `10.187.160.x`，设备在家里的 `192.168.10.x`。
-> ⬜ M2 Flutter 骨架（在 Mac 上，不依赖设备）。
+> ✅ **M2 Flutter 骨架完成**（2026-09-25）：13 屏对着真后端录的 fixture 在 Mac 上走通，
+> 测试 42/42（协议 17 · 流程 8 · 文案约定 2 · 出图 15），离线出图 19 张 —— 看图抓到
+> **占位符参数填反**（§4.1）。后端这轮又补了 `gk3_esp_info` / `gk3_release_info` / `gk3_net_release`
+> （网络安装接进同一条写盘路径），loop 端到端到 **55/55**。
+> ▶ M3 进行中。✅ **Linux arm64 构建成立**（Mac 上 arm64 容器原生构建，产物 22 MiB）；✅ **真程序在
+> headless cage 里跑起来**：无标题栏全屏、`wlr-randr` 设 2560×1600 缩放 2 生效、Impeller / Skia 都能出帧
+> （软件渲染下 61 fps、1 分钟 RSS 无单调增长）。抓到：**中文全是方块**（Flutter 不按字符回退系统字体，§5.1）。
+> ⬜ 剩 Debian 根文件系统（mmdebstrap）与会话服务。
 >
 > 前情：[`stage7-live-installer.md`](stage7-live-installer.md)（C + cairo 直画 DRM 的
 > 设计与 M0）、[`stage7-installer-roadmap.md`](stage7-installer-roadmap.md)（用户 9 条需求
@@ -57,8 +64,8 @@ scripts/live/installer-lib.sh    唯一的分区 / 写盘实现
 | M0 | Debian + mesa + cage + hello-world Flutter 在真机上出画面：方向、触摸、键盘、`chvt 2`、**10 分钟 RSS 曲线**、Impeller 与 Skia 各一遍 | 真机（U 盘，不碰内置盘） | ⬜ 要回家、要用户同意重启 |
 | M0.5 | 内核补 systemd 要的 config 并断言 | 构建机 | ⬜ 名字已从 Debian 6.12 源码核对（§3.6），要对真树再核 |
 | **M1** | **后端统一与补齐** | Mac + 容器 | **✅ 2026-09-24** |
-| M2 | Flutter 骨架 + fixture 后端 + golden 测试 | Mac | ⬜ |
-| M3 | Debian 构建链（mmdebstrap）+ 接真后端 | Mac 上的 arm64 容器 | ⬜ |
+| **M2** | **Flutter 骨架 + fixture 后端 + 出图** | Mac | **✅ 2026-09-25** |
+| M3 | Debian 构建链（mmdebstrap）+ 接真后端 | Mac 上的 arm64 容器 | ▶ Flutter 构建与 headless 渲染 ✅；根文件系统 ⬜ |
 | M4a | 装到**外接 USB 盘**并从它启动进 Android | 真机，零风险 | ⬜ |
 | M4b | 内置盘 | 真机，⚠️ **现在没有回落槽**（`_a` 不可启动，#122 §1） | ⬜ 需用户单独点头 |
 | M4.5 | 救援系统迁移（先并列、验过、再删 p3） | 真机 | ⬜ |
@@ -139,7 +146,74 @@ GB18030（老路由器的 GBK SSID）。密码长度必须 8–63（`wpa_supplic
 * 拒绝 BIOS 2.17 的理由改成"未验证"，**不再说"SPI/GPIO 不同"**（#120 §4：那份 DSDT_217
   是 SC8180X 的表）。`GK3_SKIP_BIOS_CHECK=1` 放行。
 
-## 4. 风险（按"会不会让方案作废"排序）
+## 4. M2：这一轮实测抓到的东西
+
+### 4.1 ★★ 占位符参数填反，测试全绿，看图才发现
+
+gen-l10n 生成的方法参数顺序 = 模板 ARB 里 `@元数据` 的顺序。我生成 ARB 时按字母序写元数据，
+于是 `modeWhyNoRoom(need, have)` 实际签名是 `(have, need)` —— 8 条多占位符文案里 **6 条填反**，
+界面上是"可用空间不足 **0 MiB**（现有最大的一块是 **21.2 GiB**）"、"创建 **/dev/nvme0n1p1** 的分区……
+EFI 分区 **80 GiB**"。流程测试全绿，因为断言写的是 `find.text(l.netConnected(a, b))` —— **测试与代码
+用同样错的顺序调同一个函数**，永远相等。
+
+修：元数据按出现顺序生成；`test/l10n_test.dart` 钉住这条约定；流程测试改为断言**渲染出来的文字**
+（`'EFI 分区 /dev/nvme0n1p1'`）。★ 教训：断言要落在用户看到的东西上，而不是落在"用同一个函数再算一遍"上。
+这也是离线出图不可省的理由 —— C 版 README 说它是"这个安装器能被开发出来的前提"，这一轮应验了。
+
+### 4.2 其它
+
+* **fixture 由真后端在容器里录**（`scripts/live/gen-fixtures.sh`），不手写。录的过程本身又抓到两个后端 bug：
+  `GK3_SDBOOT` 只在文件恰好叫 `systemd-bootaa64.efi` 时才生效；`gk3_apply`/`gk3_shrink` 把人看的话 echo 到 stdout。
+* **测试里 `rootBundle` 会跨测试卡死**：它缓存 `loadString` 的 Future，上一个测试没飞完的读取挂在那个
+  测试的 FakeAsync 区里永远完成不了。单独跑全过、一起跑 7 条挂 6 条。改为同步读盘的 `DiskBundle`。
+* **C 版文案里的 `\n` 是给固定宽度的 cairo 排版准备的**，Flutter 自动折行后叠上硬换行就成了"将为你启动\n系统，\n内核"。
+* 测试脚本自己的坑：`new_disk` 在 `$(…)` 里调、往数组里加的 loop 设备留在子 shell 里 ⇒ 一个都没解绑，
+  攒了 58 个把 colima 的 98G 盘写满（`gen-fixtures` 才因"No space left"失败）。改为按镜像文件 `losetup -j` 找。
+* zsh 里未加引号的 `$FILES` 不分词 —— 我的"扫一遍脚本"命令整串被当成一个文件名，却打印了"已无残留"。
+  又一次"判据看产物，不看输出"。
+
+## 5. M3：Linux 版第一次真跑
+
+`scripts/live/build-flutter.sh`（arm64 容器里 `flutter build linux --release`）→
+`scripts/live/test-render.sh`（运行时镜像里起 headless cage、截图、记 RSS）。
+
+### 5.1 ★★ 中文全是方块，离线出图发现不了
+
+运行时镜像装着 `fonts-wqy-microhei`，fontconfig 也按字符查得到它（`fc-match "sans-serif:charset=4e2d"`
+→ WenQuanYi Micro Hei），但 Flutter 没回退过去 —— 拉丁字母走 DejaVu 正常，**中文全是方块**。
+离线出图看不出来：出图时字体是测试里手动注册成 Roboto 的，走的根本不是这条回退路径。
+
+修：主题里**按名字**列回退字体（`fontFamilyFallback: [WenQuanYi Micro Hei, Noto Sans CJK SC, …]`，
+`lib/ui/theme.dart`）。重编后截图中文正常，与离线出图几乎逐像素一致。
+为什么按字符的系统回退不起作用 —— **没有查清**（可能与 `.ttc` 字体集合有关，没验证）。
+⚠️ C 版 README 警告过"写死字体名会在换字体包时静默变成方框"：所以只作回退，且 live 镜像构建时
+必须断言这个字体在。★ 教训：**离线出图验的是布局与文案，验不了真实 embedder 的字体路径**；
+`test-render.sh` 的截图是第二道门。
+
+### 5.2 渲染后端的开关
+
+* 3.47.2 在 Linux 上**默认 Impeller**（日志 `Using the Impeller rendering backend (OpenGLESSDF)`）。
+* ⚠️ **release 版不读 `FLUTTER_ENGINE_SWITCHES`**：`engine/src/flutter/shell/platform/common/engine_switches.cc:16-18`
+  是 `#ifndef FLUTTER_RELEASE`。容器里设了照样是 Impeller。
+* 改走 embedder 的公开 API `fl_dart_project_set_enable_impeller()`（`flutter_linux/fl_dart_project.h:164-170`），
+  runner 认 `GK3_RENDERER=skia`。
+
+| 后端（llvmpipe 软件渲染，2560×1600，60 秒浸泡） | 帧率 | 光栅化 p50 / p95 | RSS |
+|---|---|---|---|
+| Impeller（默认） | 61 fps | 2.2 / 2.4 ms | 418–451 MB，无单调增长 |
+| Skia（`GK3_RENDERER=skia`） | 61 fps | 1.5 / 1.6 ms | 377–411 MB，无单调增长 |
+
+⚠️ 这是**软件渲染下的基线**，不是结论：flutter/flutter#192603 的逐帧泄漏说的是 ARM GLES 驱动。
+真机 M0 用同一个浸泡页（`GK3_SOAK=1`）量至少 10 分钟。★ 浸泡页存在的理由：第一次量时界面停在欢迎页，
+Flutter 空闲不出帧，60 秒 RSS 一动不动 —— **那条曲线什么也没测**。
+
+### 5.3 cage 0.2.0
+
+* 默认**禁止切换 VT**，`-s` 才允许 —— 不加它命令行逃生口必然失效。
+* 没有旋转参数（计划里写的 `-r` 不存在）；但支持输出管理协议，`wlr-randr --custom-mode/--scale` 实测生效，
+  旋转走 `--transform`（真机上验）。
+
+## 6. 风险（按"会不会让方案作废"排序）
 
 1. 🔴 mesa/freedreno 在 Debian arm64 用户态不可用 → 回落 `FLUTTER_LINUX_RENDERER=software`
 2. 🔴 GTK embedder 在 ARM GLES + Wayland 上有已知逐帧泄漏
@@ -147,11 +221,14 @@ GB18030（老路由器的 GBK SSID）。密码长度必须 8–63（`wpa_supplic
    → M0 必须量 RSS 曲线，不是"看着能跑"
 3. 🟡 Impeller 在弱 GPU 上闪烁（[#192915](https://github.com/flutter/flutter/issues/192915)）→ M0 两条后端都测
 4. 🟡 体积、rescue 变大、Flutter 是本仓第一个要联网拉依赖才能构建的子项目
-5. 🟢 `chvt 2` 逃生口在 Wayland 下失效 → M0 顺带验
+5. 🟢 `chvt 2` 逃生口在 Wayland 下失效 → ✅ **已有答案（2026-09-25，读 cage 0.2.0 的 `-h`）**：cage
+   **默认禁止切换 VT**，要加 `-s` 才允许 —— 不加它，`chvt 2` 与 Ctrl+Alt+F2 必然失效。
+   会话服务里写死 `cage -s`。另：⚠️ 计划里写的"旋转交给 cage `-r`"**在 0.2.0 不存在**（没有旋转参数），
+   旋转和缩放都要在 cage 起来之后用 `wlr-randr --transform/--scale` 设。
 
 外部 issue 是别人项目的现状，不是本仓实测；M0 的实测推翻它们时以实测为准。
 
-## 5. 对外可见的变化（未推送）
+## 7. 对外可见的变化（未推送）
 
 * `docs/INSTALL.md`：命令行安装器现在需要一份仓库 checkout（它 source `scripts/live/`）；
   `.zst` 不用先解压；**从通用 Ubuntu/Debian live U 盘安装时没有救援系统了**

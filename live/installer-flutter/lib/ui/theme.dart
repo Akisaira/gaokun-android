@@ -43,6 +43,12 @@ ThemeData buildTheme() {
   );
   return ThemeData(
     useMaterial3: true,
+    // ⚠️★ 按名字列出中文回退字体。2026-09-25 在 cage 里跑真 Linux 版：镜像里装着
+    //   fonts-wqy-microhei、fontconfig 按字符也查得到它（fc-match "sans-serif:charset=4e2d"），
+    //   但 Flutter 没回退过去，中文全是方块 —— 离线出图发现不了（出图时字体是手动注册的）。
+    //   C 版 README 警告过"写死字体名会在换字体包时静默变成方框"：所以这里只作【回退】，
+    //   并且 live 镜像构建时断言这几个字体在（scripts/live/test-render.sh 的截图也要看）。
+    fontFamilyFallback: const ['WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'Noto Sans SC'],
     colorScheme: scheme,
     scaffoldBackgroundColor: C.bg,
     textTheme: t,

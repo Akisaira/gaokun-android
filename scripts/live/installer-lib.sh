@@ -517,7 +517,7 @@ gk3_apply() {
             got=$(sha256sum "$rel/$f" 2>/dev/null | cut -d' ' -f1)
             [ -n "$got" ] || got=$(shasum -a 256 "$rel/$f" | cut -d' ' -f1)
             [ "$got" = "$want" ] || { gk3_die "$f 的 sha256 与发版清单不符 —— 下载不完整或被改过（盘还没动过）"; return 1; }
-            echo "$f：sha256 与发版清单一致" >&2
+            echo "${f}：sha256 与发版清单一致" >&2
         done < "$rel/install-artifacts.sha256"
     elif [ "${super_src%.zst}" != "$super_src" ]; then
         gk3_prog 1 "试解 super.img.zst"
@@ -826,7 +826,7 @@ gk3__find_file() {
 #    而 .zst 要么走管道、要么先落一份临时文件 —— 12 GiB 的 tmpfs 我们没有。
 gk3__write_super() {
     local src=$1 dst=$2
-    if [ "${GK3_DRYRUN:-0}" = 1 ]; then echo "DRY: 展开 $src → $dst（gk3-unsparse.py）"; return 0; fi
+    if [ "${GK3_DRYRUN:-0}" = 1 ]; then echo "DRY: 展开 $src → ${dst}（gk3-unsparse.py）"; return 0; fi
     local us="$GK3_LIBDIR/gk3-unsparse.py"
     case "$src" in
         *.zst)
@@ -1261,7 +1261,7 @@ gk3_net_fetch() {
         gk3_prog $(( lo + span * 95 / 100 )) "校验 $name"
         local got; got=$(sha256sum "$dst" | cut -d' ' -f1)
         [ "$got" = "$want" ] || { gk3_die "$name 的 sha256 不符：$got != ${want}（下载不完整或被篡改；重跑会从断点续传）"; return 1; }
-        gk3_log "$name：sha256 校验通过"
+        gk3_log "${name}：sha256 校验通过"
     fi
     gk3_prog $(( lo + span )) "$name 下载完成"
 }

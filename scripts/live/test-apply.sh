@@ -184,7 +184,7 @@ sgdisk -o "$DA" >/dev/null                            # 一张空 GPT，"原来�
 BEFORE=$(fp "$DA")
 echo nope | DISK=$DA GK3_SKIP_PREFLIGHT=1 bash scripts/install-gaokun3.sh "$REL" >"$W/a0.log" 2>&1; rc=$?
 [ "$rc" != 0 ] && [ "$(fp "$DA")" = "$BEFORE" ] && grep -q 'gk3rescue' "$W/a0.log" \
-    && ok "不输 ERASE：退出码 $rc、盘上一个字节没变（且事先打印了含 gk3rescue 的新布局）" \
+    && ok "不输 ERASE：退出码 ${rc}、盘上一个字节没变（且事先打印了含 gk3rescue 的新布局）" \
     || { bad "不输 ERASE 时 rc=$rc 或盘被改了"; tail -5 "$W/a0.log"; }
 echo ERASE | DISK=$DA GK3_SKIP_PREFLIGHT=1 bash scripts/install-gaokun3.sh "$REL" >"$W/a1.log" 2>&1; rc=$?
 if [ "$rc" = 0 ]; then ok "输了 ERASE：装完（退出码 0）"; verify_install "$DA" yes
@@ -263,7 +263,7 @@ BEFORE=$(fp "$DB")
 OUT=$(gk3_apply --disk "$DB" --mode alongside --rescue no --release "$REL" \
           --region-start "$RS" --region-end "$RE" --esp "${DB}p1" 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'partlabel-conflict' && [ "$(fp "$DB")" = "$BEFORE" ] \
-    && ok "在已装过的盘上再装一次：partlabel-conflict 拒绝，盘没动" || bad "重复安装没被拦住（rc=$rc）"
+    && ok "在已装过的盘上再装一次：partlabel-conflict 拒绝，盘没动" || bad "重复安装没被拦住（rc=${rc}）"
 
 # ── C. 反例：都必须在动盘之前拒绝 ───────────────────────────────────────────
 echo "═══ C. 反例 ═══"
@@ -272,7 +272,7 @@ try() {   # $1=说明 $2=发布目录 $3=期望的报错片段
     local out rc; out=$(gk3_apply --disk "$DC" --mode wipe --rescue no --release "$2" 2>&1); rc=$?
     if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q "$3" && [ "$(fp "$DC")" = "$BEFORE" ]; then
         ok "$1：拒绝且盘没动（$(printf '%s\n' "$out" | grep '^!!' | tail -1 | cut -c4-)）"
-    else bad "$1：rc=$rc，或报错不对，或盘被改了"; printf '%s\n' "$out" | tail -4 | sed 's/^/      /'; fi
+    else bad "$1：rc=${rc}，或报错不对，或盘被改了"; printf '%s\n' "$out" | tail -4 | sed 's/^/      /'; fi
 }
 R1=$W/rel-trunc; mkdir "$R1"; cp "$REL/boot.img" "$R1/"
 head -c $(( $(stat -c%s "$REL/super.img.zst") * 2 / 3 )) "$REL/super.img.zst" > "$R1/super.img.zst"
@@ -298,7 +298,7 @@ tryb() {  # $1=说明 $2=--esp $3=期望的报错片段
         --region-start "$(gk3__f "$FE" start)" --region-end "$(gk3__f "$FE" end)" --esp "$2" 2>&1); rc=$?
     if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q "$3" && [ "$(fp "$DE")" = "$BEFORE_E" ]; then
         ok "$1：拒绝且盘没动（$(printf '%s\n' "$out" | grep '^!!' | tail -1 | cut -c4-)）"
-    else bad "$1：rc=$rc，或报错不对，或盘被改了"; printf '%s\n' "$out" | tail -3 | sed 's/^/      /'; fi
+    else bad "$1：rc=${rc}，或报错不对，或盘被改了"; printf '%s\n' "$out" | tail -3 | sed 's/^/      /'; fi
 }
 EI=$(gk3_esp_info "${DE}p1")
 [ "$(gk3__f "$EI" free_mib)" -lt "$(gk3__f "$EI" need_mib)" ] && printf '%s' "$EI" | grep -q 'windows=no' \
@@ -308,7 +308,7 @@ tryb "--esp 指向 NTFS 分区" "${DE}p2" "不是 FAT"
 tryb "--esp 指向不存在的节点" "${DE}p9" "要 --esp"
 OUT=$(GK3_DRYRUN=1 gk3_apply --disk "$DC" --mode wipe --rescue yes --release "$REL" 2>&1); rc=$?
 [ "$rc" = 0 ] && printf '%s' "$OUT" | grep -q '^DRY: sgdisk --zap-all' && [ "$(fp "$DC")" = "$BEFORE" ] \
-    && ok "dry-run：列出了 $(printf '%s\n' "$OUT" | grep -c '^DRY:') 条命令，盘一个字节没变" || bad "dry-run 不对（rc=$rc）"
+    && ok "dry-run：列出了 $(printf '%s\n' "$OUT" | grep -c '^DRY:') 条命令，盘一个字节没变" || bad "dry-run 不对（rc=${rc}）"
 
 # ── E. 网络安装 ────────────────────────────────────────────────────────────
 echo "═══ E. 网络安装：下载一整套发布文件，再走同一条写盘路径 ═══"
@@ -358,7 +358,7 @@ DL2=$W/dl2; mkdir -p "$DL2"; head -c $(( $(stat -c%s "$REL/super.img.zst") / 3 )
 : > "$W/srv-range.log"
 gk3_net_release http://127.0.0.1:18081/good/ "$DL2" >/dev/null 2>&1; rc=$?
 [ "$rc" = 0 ] && [ "$(sha "$DL2/super.img.zst")" = "$(sha "$REL/super.img.zst")" ] && grep -q '^/good/super.img.zst bytes=[1-9]' "$W/srv-range.log" \
-    && ok "断点续传：发了 $(grep '^/good/super.img.zst' "$W/srv-range.log" | cut -d' ' -f2)，续完 sha256 一致" || bad "续传不对（rc=$rc）：$(tr '\n' ' ' < "$W/srv-range.log")"
+    && ok "断点续传：发了 $(grep '^/good/super.img.zst' "$W/srv-range.log" | cut -d' ' -f2)，续完 sha256 一致" || bad "续传不对（rc=${rc}）：$(tr '\n' ' ' < "$W/srv-range.log")"
 # 服务器不支持 Range：半截文件必须被丢掉重下，而不是永远卡在 curl 的 33 上
 DL3=$W/dl3; mkdir -p "$DL3"; head -c 12345 "$REL/super.img.zst" > "$DL3/super.img.zst"
 gk3_net_release http://127.0.0.1:18082/good/ "$DL3" >/dev/null 2>"$W/e3.err"; rc=$?
@@ -366,7 +366,7 @@ gk3_net_release http://127.0.0.1:18082/good/ "$DL3" >/dev/null 2>"$W/e3.err"; rc
     && ok "服务器不支持续传：丢掉半截、从头下完，sha256 一致" || { bad "无 Range 服务器时 rc=$rc"; tail -3 "$W/e3.err"; }
 OUT=$(gk3_net_release http://127.0.0.1:18081/bad/ "$W/dl4" 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'boot.img 的 sha256 不符' \
-    && ok "服务器上的 boot.img 被改过：拒绝" || bad "被改过的文件居然通过了（rc=$rc）"
+    && ok "服务器上的 boot.img 被改过：拒绝" || bad "被改过的文件居然通过了（rc=${rc}）"
 kill $SRVPID1 $SRVPID2 2>/dev/null
 # 下载下来的目录交给 gk3_apply —— 网络安装与 U 盘安装是同一条写盘路径
 DN=$(new_disk n 40G); sgdisk -o "$DN" >/dev/null 2>&1

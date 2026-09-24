@@ -38,6 +38,15 @@ static void my_application_activate(GApplication* application) {
   }
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
+  // 渲染后端：3.47.2 在 Linux 上默认 Impeller。GK3_RENDERER=skia 关掉它。
+  // ⚠️ 不能用 flutter 自己的 FLUTTER_ENGINE_SWITCHES：release 版不读环境里的引擎开关
+  //    （engine/src/flutter/shell/platform/common/engine_switches.cc:16-18，#ifndef FLUTTER_RELEASE），
+  //    容器里实测设了也照样是 Impeller。这里走 embedder 的公开 API
+  //    （flutter_linux/fl_dart_project.h:164-170）。M0 要在真机上两条都测
+  //    （flutter/flutter#192915：Impeller 成为 Linux 默认后在弱 GPU 上闪烁）。
+  if (g_strcmp0(g_getenv("GK3_RENDERER"), "skia") == 0) {
+    fl_dart_project_set_enable_impeller(project, FALSE);
+  }
   fl_dart_project_set_dart_entrypoint_arguments(
       project, self->dart_entrypoint_arguments);
 

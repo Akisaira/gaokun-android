@@ -86,7 +86,23 @@ Flutter **3.47.2** stable / Dart 3.13.2（`pubspec.yaml` 的 `environment.flutte
 ⚠️ 这个版本上 Linux 默认走 Impeller，而 flutter/flutter#192915 报的正是"Impeller 成为 Linux 默认后
 在弱 GPU / 软件驱动上闪烁"—— 真机 M0 要把 `--no-enable-impeller`（Skia）也测一遍。
 
+## Linux arm64 版
+
+```sh
+bash scripts/live/build-flutter.sh                 # Mac 上的 arm64 容器里原生构建 → out/installer-flutter-linux-arm64/（22 MiB）
+bash scripts/live/test-render.sh 60                # headless cage 里真跑：截图 + RSS → out/render-test/
+SOAK=1 RENDERER=skia bash scripts/live/test-render.sh 600   # 浸泡：持续出帧，量帧率与 RSS
+```
+
+运行时开关（都是环境变量）：`GK3_FIXTURE=<场景>` 演示数据 · `GK3_SOAK=1` 浸泡页 ·
+`GK3_RENDERER=skia` 关 Impeller · `GK3_WINDOWED=1` 窗口模式 · `GK3_LIB=<路径>` 指定后端。
+
+⚠️ **中文字体**：Flutter 在 Linux 上**不按字符回退**系统字体（装了文泉驿、fontconfig 也查得到，中文照样是方块），
+主题里按名字列了回退字体。这一点离线出图验不出来 —— 改了字体相关的东西，看 `test-render.sh` 的截图。
+⚠️ release 版不读 `FLUTTER_ENGINE_SWITCHES`（引擎源码 `engine_switches.cc:16-18`），所以切后端用我们自己的 `GK3_RENDERER`。
+⚠️ cage 要带 `-s`，否则不能切 VT（命令行逃生口失效）。
+
 ## 还没做
 
-* Linux arm64 构建（M3：在 Mac 上的 arm64 Debian 容器里 `flutter build linux`）
-* 真机 M0：Debian + mesa + cage 能不能出画面、RSS 曲线、`chvt 2` 逃生口
+* Debian 根文件系统（mmdebstrap）与会话服务（cage -s + wlr-randr 设旋转/缩放）
+* 真机 M0：mesa/freedreno 能不能出画面、10 分钟浸泡的 RSS 曲线（两种后端）、`chvt 2` 逃生口
