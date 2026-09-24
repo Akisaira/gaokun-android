@@ -39,10 +39,19 @@ Android FingerprintService
 ## 2. 命令协议（⬜ 逆向中，`fp-cmd-protocol.md`）
 
 已知：命令名 `FF_CMD_TA_*`(37) / `FF_CMD_SVC_*`(34) / `CMD_TO_DEVICE_*`(13)；Windows 客户端观察到用
-`0x80xx` 号 + `{cmd(4B), req_len(4B), rsp_len(4B), payload}` 结构（报告 §7）。⬜ 待定死：
-- 请求 header 的确切布局（含 InvokeCommand 的 magic `0x1255`）、命令号映射（枚举序 vs 0x80xx）；
-- **安全的第一条只读命令**（版本/信息，不碰 SPI/存储）的确切字节 —— 这是下一个上机节点；
-- enroll/authenticate 触发的 **listener 请求/响应缓冲格式**（驱动的 `->service()` 要解析它）。
+`0x80xx` 号 + `{cmd(4B), req_len(4B), rsp_len(4B), payload}` 结构（报告 §7）。TA 发送封装函数
+`ff_trustlet_client_exchange_message`（别名 `TA_Commication`/`ff_trustlet_RWQSEE`）。
+⚠️ 2026-09-24 一次静态复核校正了"安全首发命令"的候选：Windows 的 `ff_sc_GetSCFirmwareVersion` /
+`ff_sc_check_health` 里的 **`sc` = sensor controller（传感器 MCU），走 SPI** —— 它们**不是** SPI-free，
+不能当第一条只读命令（要先 `INIT_SPI`）。⇒ 真正安全的第一条只能是 **`INIT_SPI` 之前的 TA 级命令**
+（`FF_CMD_TA_CREATE` / `FF_CMD_TA_INIT`，纯 TA、不碰传感器；是否碰安全存储待确认）。
+⬜ 仍待定死（focused RE，非一次能拆完）：
+- 请求 header 的确切布局（含 InvokeCommand 的 magic `0x1255` 与 `{cmd,req_len,rsp_len}` 两说要对齐）、
+  以及 `0x80xx` 与 `FF_CMD_TA_*` 枚举序的映射（0x8020≠ordinal 0x20，两套编号，需 TA 分发表）；
+- `CREATE`/`INIT` 的确切 cmd 号与字节 —— 定死它 = 能上机跑 M2；
+- enroll/authenticate 触发的 **listener 请求/响应缓冲格式**（驱动 `->service()` 要解析）。
+> 注：命令协议逆向是【多次会话量级】的独立子任务（TA 是优化过的 aarch64 secelf，分发表运行时注入），
+> 不宜边猜边发。M2 需要先把 CREATE/INIT 的确切字节定死，再上机（TA 仍常驻，不用重启）。
 
 ## 3. 驱动状态机（草案，待命令号落定）
 
