@@ -23,6 +23,9 @@
 #   . installer-lib.sh
 #   gk3_preflight                  # 这台机器能不能装（型号 / BIOS / Secure Boot / 工具）
 #   gk3_probe                      # 列出磁盘 / 分区 / 空闲区
+#   gk3_esp_info <分区>            # 现有 ESP 的剩余空间、上面有没有 Windows（双系统之前问）
+#   gk3_release_info [目录]        # 发布目录 / 安装 U 盘里带了什么（镜像、救援系统、版本）
+#   gk3_net_release <url> <目录>   # 网络安装：下载一整套发布文件并逐个校验
 #   gk3_plan  <参数…>              # 算出分区方案（纯计算，不碰磁盘）
 #   gk3_apply <参数…>              # 执行（唯一会写盘的函数）
 
@@ -458,10 +461,12 @@ gk3_apply() {
     [ -n "$rel" ] && [ -d "$rel" ] || { gk3_die "apply 要 --release <目录>"; return 1; }
 
     local DRY=${GK3_DRYRUN:-0}
+    # ⚠️ 回显走 stderr：stdout 只留给行记录（文件头的协议）。原先 "+ 命令" 与
+    #    各种说明都 echo 到 stdout —— 前端靠"长得不像记录"才没被它们骗过去。
     gk3__run() {
-        if [ "$DRY" = 1 ]; then echo "DRY: $*"; else
-            echo "+ $*"
-            "$@" || { gk3_die "失败：$*"; return 1; }
+        if [ "$DRY" = 1 ]; then echo "DRY: $*" >&2; else
+            echo "+ $*" >&2
+            "$@" >&2 || { gk3_die "失败：$*"; return 1; }
         fi
     }
 
@@ -474,9 +479,15 @@ gk3_apply() {
     else gk3_die "发布目录里既没有 super.img.zst 也没有 super.img"; return 1; fi
 
     local sdboot
-    sdboot=$(gk3__find_file systemd-bootaa64.efi "${GK3_SDBOOT:-}" /usr/share/gaokun3 "$rel" \
-             /usr/lib/systemd/boot/efi) \
-        || { gk3_die "找不到 systemd-bootaa64.efi（Debian：apt install systemd-boot-efi）"; return 1; }
+    if [ -n "${GK3_SDBOOT:-}" ]; then
+        # 显式指定的就用它，叫什么名字都行（原先按文件名找，于是这个开关只在文件
+        # 恰好叫 systemd-bootaa64.efi 时才生效 —— 录 fixture 时才发现）
+        [ -f "$GK3_SDBOOT" ] || { gk3_die "GK3_SDBOOT 指的文件不存在：$GK3_SDBOOT"; return 1; }
+        sdboot=$GK3_SDBOOT
+    else
+        sdboot=$(gk3__find_file systemd-bootaa64.efi /usr/share/gaokun3 "$rel" /usr/lib/systemd/boot/efi) \
+            || { gk3_die "找不到 systemd-bootaa64.efi（Debian：apt install systemd-boot-efi）"; return 1; }
+    fi
 
     local r_squash="" r_initrd=""
     if [ "$rescue" = yes ]; then
@@ -506,7 +517,7 @@ gk3_apply() {
             got=$(sha256sum "$rel/$f" 2>/dev/null | cut -d' ' -f1)
             [ -n "$got" ] || got=$(shasum -a 256 "$rel/$f" | cut -d' ' -f1)
             [ "$got" = "$want" ] || { gk3_die "$f 的 sha256 与发版清单不符 —— 下载不完整或被改过（盘还没动过）"; return 1; }
-            echo "$f：sha256 与发版清单一致"
+            echo "$f：sha256 与发版清单一致" >&2
         done < "$rel/install-artifacts.sha256"
     elif [ "${super_src%.zst}" != "$super_src" ]; then
         gk3_prog 1 "试解 super.img.zst"
@@ -548,7 +559,7 @@ gk3_apply() {
             if mount -o ro -t vfat "$esp" "$em" 2>/dev/null; then
                 fm=$(df -m "$em" | awk 'NR==2{print $4}')
                 umount "$em"; rmdir "$em" 2>/dev/null
-                echo "现有 ESP $esp 空闲 ${fm} MiB（需要 ${GK3_ESP_NEED_MIB}）"
+                echo "现有 ESP $esp 空闲 ${fm} MiB（需要 ${GK3_ESP_NEED_MIB}）" >&2
                 if [ "${fm:-0}" -lt "$GK3_ESP_NEED_MIB" ]; then
                     rm -rf "$parts"
                     gk3_die "ESP 空间不够：只有 ${fm} MiB，需要 ${GK3_ESP_NEED_MIB} MiB。请先在原系统里清理 EFI 分区（盘还没动过）"
@@ -603,9 +614,9 @@ gk3_apply() {
         [ -d "$bkdir" ] && [ -w "$bkdir" ] || bkdir=/tmp
         bk="$bkdir/gpt-backup-$(basename "$disk")-$(date +%Y%m%d-%H%M%S).bin"
         if sgdisk --backup="$bk" "$disk" >/dev/null 2>&1; then
-            echo "分区表已备份到 ${bk}（还原：sgdisk --load-backup=$bk ${disk}）"
+            echo "分区表已备份到 ${bk}（还原：sgdisk --load-backup=$bk ${disk}）" >&2
         else
-            echo "警告：分区表备份失败（继续，但出事就没有还原点了）"
+            echo "警告：分区表备份失败（继续，但出事就没有还原点了）" >&2
         fi
         sync
     fi
@@ -652,7 +663,7 @@ EOF
     if [ "$mode" = wipe ]; then
         gk3__run mkfs.vfat -F 32 -n ESP "$p_esp" || return 1
     else
-        echo "复用现有 ESP：${p_esp}（不格式化；空间与类型在动盘之前已验过）"
+        echo "复用现有 ESP：${p_esp}（不格式化；空间与类型在动盘之前已验过）" >&2
     fi
     gk3__run mkfs.ext4 -q -F -L metadata "$p_meta" || return 1
     gk3__run mkfs.ext4 -q -F -L userdata "$p_data" || return 1
@@ -697,7 +708,7 @@ EOF
             if [ -f "$mnt/$f" ] && [ ! -e "$mnt/$f.before-gaokun3" ] \
                && ! cmp -s "$mnt/$f" "$sdboot"; then
                 cp -p "$mnt/$f" "$mnt/$f.before-gaokun3"
-                echo "原有的 $f 已备份为 $f.before-gaokun3"
+                echo "原有的 $f 已备份为 $f.before-gaokun3" >&2
             fi
         done
         cp "$sdboot" "$mnt/EFI/BOOT/BOOTAA64.EFI"
@@ -765,7 +776,7 @@ RESC
         fi
         sync
     else
-        echo "DRY: 往 $p_esp 写 systemd-boot、两个 Android 启动项（options=$cmdline …）、内核/dtb/ramdisk"
+        echo "DRY: 往 $p_esp 写 systemd-boot、两个 Android 启动项（options=$cmdline …）、内核/dtb/ramdisk" >&2
     fi
     gk3__run umount "$mnt" || true
     rmdir "$mnt" 2>/dev/null || true
@@ -785,9 +796,9 @@ RESC
             local wconf
             if wconf=$(gk3__find_file wpa_supplicant.conf "$rel" /run/gaokun3 /media/gk3/gaokun3); then
                 install -Dm600 "$wconf" "$rmnt/gaokun3/wpa_supplicant.conf"
-                echo "救援系统的 WiFi 配置取自 $wconf"
+                echo "救援系统的 WiFi 配置取自 $wconf" >&2
             else
-                echo "警告：没有 WiFi 配置可带给救援系统 —— 它开机后连不上网，只能在机器旁操作"
+                echo "警告：没有 WiFi 配置可带给救援系统 —— 它开机后连不上网，只能在机器旁操作" >&2
             fi
             sync
         fi
@@ -805,8 +816,6 @@ gk3__find_file() {
     local name=$1 d; shift
     for d in "$@"; do
         [ -n "$d" ] || continue
-        # 允许直接给文件路径（GK3_SDBOOT 就是一个文件）
-        if [ -f "$d" ] && [ "$(basename "$d")" = "$name" ]; then echo "$d"; return 0; fi
         [ -f "$d/$name" ] && { echo "$d/$name"; return 0; }
     done
     return 1
@@ -835,7 +844,7 @@ gk3__write_super() {
             if head -c4 "$src" | od -An -tx1 | tr -d ' \n' | grep -qi '^3aff26ed$'; then
                 python3 "$us" --progress 30 40 "$dst" < "$src" || { gk3_die "super 展开失败"; return 1; }
             else
-                echo "super.img 不是 sparse 格式，直接写"
+                echo "super.img 不是 sparse 格式，直接写" >&2
                 dd if="$src" of="$dst" bs=4M conv=fsync status=none || { gk3_die "dd super 失败"; return 1; }
             fi ;;
     esac
@@ -848,7 +857,7 @@ gk3__write_super() {
         gk3_die "super 偏移 4096 处不是 LP geometry 魔数（读到 '${lp}'）—— 写进去的不是一份能用的 super"
         return 1
     fi
-    echo "super：LP geometry 魔数正确"
+    echo "super：LP geometry 魔数正确" >&2
 }
 
 # 救援系统的 cmdline：从 Android 那份（boot.img 里的 BOARD_KERNEL_CMDLINE）派生，
@@ -998,16 +1007,16 @@ gk3_shrink() {
     if [ -z "$pu" ] || [ -z "$pt" ]; then
         gk3_die "读不到分区 $num 的 GUID —— 不敢重建它"; return 1
     fi
-    echo "分区 $num 身份：PARTUUID=$pu 类型=$pt 名字=${pl:-(无)}"
+    echo "分区 $num 身份：PARTUUID=$pu 类型=$pt 名字=${pl:-(无)}" >&2
 
     gk3_prog 5 "备份分区表"
     mount -o remount,rw /media/gk3 2>/dev/null || true
     bk=/media/gk3/gaokun3/gpt-before-shrink-$(date +%Y%m%d-%H%M%S).bin
     [ -d /media/gk3/gaokun3 ] || bk=/tmp/gpt-before-shrink.bin
     if sgdisk --backup="$bk" "$disk" >/dev/null 2>&1; then
-        echo "分区表备份：${bk}（还原：sgdisk --load-backup=$bk ${disk}）"
+        echo "分区表备份：${bk}（还原：sgdisk --load-backup=$bk ${disk}）" >&2
     else
-        echo "警告：分区表备份失败"
+        echo "警告：分区表备份失败" >&2
     fi
 
     # ── 第 1 步：缩文件系统（演练 → 真做）───────────────────────────────
@@ -1060,7 +1069,7 @@ gk3_shrink() {
         gk3_die "PARTUUID 变了（$pu -> ${newpu}）—— Windows 会起不来"; return 1
     fi
     newmib=$(( $(blockdev --getsize64 "$part" 2>/dev/null || echo 0) / 1048576 ))
-    echo "分区 ${num}：${cur} MiB -> ${newmib} MiB（PARTUUID 未变）"
+    echo "分区 ${num}：${cur} MiB -> ${newmib} MiB（PARTUUID 未变）" >&2
     gk3_prog 100 "缩小完成"
     return 0
 }
@@ -1201,8 +1210,11 @@ gk3_net_status() {
 #    安装器只是"挑一个已经构建好的镜像下载"，不是在设备上组装。
 #    清单托管在 R2（和 OTA 用同一套布局）。
 #
-# 清单格式（一行一个变体，key=value）：
-#   VARIANT id=stock name=标准版 desc=... url=... size_mib=... sha256=...
+# 清单格式（一行一个变体，值按协议百分号编码）：
+#   VARIANT id=stock name=标准版 desc=... base=https://ota.072172.xyz/install/<VER>/ size_mib=...
+# ★ base= 指向一个【发布目录】，就是 release.sh 已经在传的那套 R2 布局
+#   install/<VER>/{boot.img, super.img.zst, install-artifacts.sha256}
+#   （scripts/release.sh:154-172）—— 不另打包，也就不会有第二份可能漂的东西。
 
 GK3_MANIFEST_URL=${GK3_MANIFEST_URL:-https://ota.072172.xyz/installer/variants.txt}
 
@@ -1214,31 +1226,112 @@ gk3_net_manifest() {
     printf '%s\n' "$out" | grep '^VARIANT ' || { gk3_die "清单里一个 VARIANT 都没有"; return 1; }
 }
 
-# 下载并校验。$1=url $2=目标文件 $3=期望 sha256（可空）
+# 下载并校验。$1=url $2=目标文件 $3=期望 sha256（可空）[$4=进度起点 $5=进度跨度]
+# （起点/跨度让调用方把这一个文件的 0–100% 映射到总进度里的一段）
 gk3_net_fetch() {
-    local url=$1 dst=$2 want=${3:-}
-    gk3_prog 0 "开始下载"
-    # ⚠️ 用 --continue-at 支持断点续传：这台机器的 WAN 只有 1–2 MB/s，
-    #    1.2 GB 要十几分钟，中途断一次全部重来是不可接受的。
-    curl -fL --retry 3 --retry-delay 2 --continue-at - -o "$dst" "$url" 2>&1 \
-        | tr '\r' '\n' | awk '/^ *[0-9]/{ if ($1+0 > 0) printf "PROGRESS %d 下载中 %s\n", $1, $1"%" }' >&2
-    # ⚠️★ 取 curl 自己的退出码，不看管道尾巴（CLAUDE.md 运维坑 1）。原先只判
-    #   [ -f "$dst" ] —— 断在 77% 的文件也"存在"，于是报下载完成。
-    local rc=${PIPESTATUS[0]}
+    local url=$1 dst=$2 want=${3:-} lo=${4:-0} span=${5:-100} name rc
+    name=$(basename "$dst")
+    gk3_prog "$lo" "开始下载 $name"
+    gk3__curl() {   # $1 = 续传参数（空 = 从头）
+        # ⚠️ 用 --continue-at 支持断点续传：这台机器的 WAN 只有 1–2 MB/s，
+        #    1.2 GB 要十几分钟，中途断一次全部重来是不可接受的。
+        curl -fL --retry 3 --retry-delay 2 ${1:+--continue-at "$1"} -o "$dst" "$url" 2>&1 \
+            | tr '\r' '\n' \
+            | awk -v lo="$lo" -v sp="$span" -v n="$name" \
+                '/^ *[0-9]/{ if ($1+0 > 0) { printf "PROGRESS %d 下载 %s（%d%%）\n", lo + $1*sp*90/10000, n, $1; fflush() } }' >&2
+        # ⚠️★ 取 curl 自己的退出码，不看管道尾巴（CLAUDE.md 运维坑 1）。原先只判
+        #   [ -f "$dst" ] —— 断在 77% 的文件也"存在"，于是报下载完成。
+        return "${PIPESTATUS[0]}"
+    }
+    gk3__curl -; rc=$?
+    if [ "$rc" = 33 ]; then
+        # 服务器不支持续传（HTTP Range）。原先会留着这个半截文件，以后每次重试都 33，
+        # 永远卡在这里 —— 只能删掉从头来。
+        gk3_log "服务器不支持断点续传，从头下载 $name"
+        rm -f "$dst"; gk3__curl ""; rc=$?
+    fi
     [ -f "$dst" ] || { gk3_die "下载失败（curl 退出码 ${rc}）"; return 1; }
     if [ "$rc" != 0 ]; then
         # 续传一个其实已经下完的文件时服务器回 416，curl 报错而文件是好的 ——
         # 有 sha256 就让校验来裁决，没有就只能按失败算
         [ -n "$want" ] || { gk3_die "下载失败（curl 退出码 ${rc}），且没有 sha256 可以核对"; return 1; }
-        echo "curl 退出码 ${rc}，交给 sha256 裁决"
+        gk3_log "curl 退出码 ${rc}，交给 sha256 裁决"
     fi
     if [ -n "$want" ]; then
-        gk3_prog 95 "校验 sha256"
+        gk3_prog $(( lo + span * 95 / 100 )) "校验 $name"
         local got; got=$(sha256sum "$dst" | cut -d' ' -f1)
-        [ "$got" = "$want" ] || { gk3_die "sha256 不符：$got != ${want}（下载不完整或被篡改；重跑会从断点续传）"; return 1; }
-        echo "sha256 校验通过"
+        [ "$got" = "$want" ] || { gk3_die "$name 的 sha256 不符：$got != ${want}（下载不完整或被篡改；重跑会从断点续传）"; return 1; }
+        gk3_log "$name：sha256 校验通过"
     fi
-    gk3_prog 100 "下载完成"
+    gk3_prog $(( lo + span )) "$name 下载完成"
+}
+
+# 下载一整套发布文件到 <目标目录>，逐个按 install-artifacts.sha256 校验。
+#   gk3_net_release <base-url> <目标目录>
+# 之后 gk3_apply --release <目标目录> 照常装 —— 网络安装和 U 盘安装走的是同一条写盘路径。
+# ⚠️ 1.2 GiB 的 super.img.zst 放 tmpfs（/run）没问题：本机 15.7 GiB 内存，而展开是
+#    流式写盘的（gk3-unsparse.py），不需要 12 GiB 的中间文件。
+# ⚠️ 校验清单与镜像来自同一台服务器 —— 它防的是下载不完整（本机 WAN 1–2 MB/s，
+#    断线是常态），不是防一台恶意的服务器；那一层靠 HTTPS。
+gk3_net_release() {
+    local base=${1%/} dst=$2 f want
+    [ -n "$base" ] && [ -n "$dst" ] || { gk3_die "用法：gk3_net_release <base-url> <目标目录>"; return 1; }
+    mkdir -p "$dst" || return 1
+    gk3_prog 0 "取校验清单"
+    curl -fsSL --retry 3 --max-time 60 -o "$dst/install-artifacts.sha256" "$base/install-artifacts.sha256" \
+        || { gk3_die "取不到校验清单：$base/install-artifacts.sha256"; return 1; }
+    # 先小后大：boot.img 失败的话，不必先等 1.2 GiB 下完才知道
+    for f in boot.img super.img.zst; do
+        want=$(awk -v n="$f" '{sub(/^\*/, "", $2)} $2==n{print $1}' "$dst/install-artifacts.sha256")
+        [ -n "$want" ] || { gk3_die "校验清单里没有 $f"; return 1; }
+        # 进度：boot.img 占 0–5%，super 占 5–100%
+        if [ "$f" = boot.img ]; then gk3_net_fetch "$base/$f" "$dst/$f" "$want" 0 5 || return 1
+        else                          gk3_net_fetch "$base/$f" "$dst/$f" "$want" 5 95 || return 1; fi
+    done
+    gk3_prog 100 "发布文件已就绪"
+    echo "RELEASE dir=$(gk3__enc "$dst") source=net"
+}
+
+# 看一个发布目录里有什么（默认：安装 U 盘上 build-usb.sh 放 payload 的位置）。
+#   RELEASE dir=… boot=yes|no super=zst|img|no sha256=yes|no rescue=yes|no version=… super_mib=…
+#   rescue=yes：rescue.squashfs 与 initramfs.img 都找得到（发布目录里，或启动介质上）
+#   version：从校验清单里那个 OTA zip 的名字取（crDroidAndroid-16.0-<日期>-gaokun3-v12.11）
+gk3_release_info() {
+    local d=${1:-/media/gk3/gaokun3/payload} boot=no super=no sha=no rescue=no ver="" smib=0
+    [ -f "$d/boot.img" ] && boot=yes
+    if   [ -f "$d/super.img.zst" ]; then super=zst; smib=$(( $(stat -c%s "$d/super.img.zst" 2>/dev/null || wc -c < "$d/super.img.zst") / 1048576 ))
+    elif [ -f "$d/super.img" ];     then super=img; smib=$(( $(stat -c%s "$d/super.img" 2>/dev/null || wc -c < "$d/super.img") / 1048576 )); fi
+    if [ -f "$d/install-artifacts.sha256" ]; then
+        sha=yes
+        ver=$(awk '{sub(/^\*/, "", $2)} $2 ~ /\.zip$/ {sub(/\.zip$/, "", $2); print $2; exit}' "$d/install-artifacts.sha256")
+    fi
+    gk3__find_file rescue.squashfs "$d" /media/gk3/gaokun3 >/dev/null \
+        && gk3__find_file initramfs.img "$d" /media/gk3/gaokun3 >/dev/null && rescue=yes
+    echo "RELEASE dir=$(gk3__enc "$d") boot=$boot super=$super sha256=$sha rescue=$rescue version=$(gk3__enc "${ver:-?}") super_mib=$smib"
+}
+
+# 看一个现有 ESP 的状况（只读挂载）。双系统之前界面要用它判断"装不装得下"，
+# 并且在用户往下走【之前】就写明原因 —— 而不是等 gk3_apply 在动盘前一刻才拒绝。
+#   ESP part=… size_mib=… free_mib=… need_mib=150 windows=yes|no gaokun3=yes|no mountable=yes|no
+#   windows=yes：EFI/Microsoft/Boot/bootmgfw.efi 在 —— 装完之后 systemd-boot 会把它列进菜单
+#   gaokun3=yes：上面已经有我们的启动项（重装 / 已经装过）
+# ★ Windows 默认建的 ESP 只有 100 MiB，放不下 GK3_ESP_NEED_MIB —— 这是双系统最常见的
+#   "装不了"，不是边角情况（scripts/live/test-apply.sh 的 C 组有这条）。
+gk3_esp_info() {
+    local part=$1 m free size win=no ours=no
+    [ -b "$part" ] || { gk3_die "不是块设备：$part"; return 1; }
+    size=$(( $(blockdev --getsize64 "$part" 2>/dev/null || echo 0) / 1048576 ))
+    m=$(mktemp -d)
+    if ! mount -o ro -t vfat "$part" "$m" 2>/dev/null; then
+        rmdir "$m"; echo "ESP part=$part size_mib=$size free_mib=0 need_mib=$GK3_ESP_NEED_MIB windows=no gaokun3=no mountable=no"
+        return 0
+    fi
+    free=$(df -m "$m" | awk 'NR==2{print $4}')
+    # vfat 挂载本来就不分大小写，不用自己列大小写组合
+    [ -f "$m/EFI/Microsoft/Boot/bootmgfw.efi" ] && win=yes
+    ls "$m"/loader/entries/*-android-*.conf >/dev/null 2>&1 && ours=yes
+    umount "$m"; rmdir "$m"
+    echo "ESP part=$part size_mib=$size free_mib=${free:-0} need_mib=$GK3_ESP_NEED_MIB windows=$win gaokun3=$ours mountable=yes"
 }
 
 # 一次问完整块盘上所有分区能不能缩。

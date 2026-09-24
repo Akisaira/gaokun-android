@@ -1,0 +1,4 @@
+O VARIANT id=stock name=标准版 desc=不带%20Google%20服务，不带%20root。最接近%20AOSP。 base=https://ota.072172.xyz/install/crDroidAndroid-16.0-20260916-gaokun3-v12.11/ size_mib=1245
+O VARIANT id=gapps name=带%20Google%20服务 desc=预装%20GApps。首次开机要登录%20Google%20账号并按%20docs/INSTALL.md%20做一次认证。 base=https://ota.072172.xyz/install/example-gapps/ size_mib=1611
+O VARIANT id=ksu name=带%20root（KernelSU） desc=内核内置%20KernelSU。适合要调试或改系统的人。 base=https://ota.072172.xyz/install/example-ksu/ size_mib=1252
+X 0

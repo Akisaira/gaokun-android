@@ -12,8 +12,9 @@ FROM debian@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a0045
 #   e2fsprogs dosfstools ntfs-3g        —— mkfs / resize / 造一个假 Windows 分区
 #   android-sdk-libsparse-utils         —— 真 simg2img/img2simg，拿来交叉比对
 #   zstd python3 mtools udev(udevadm)   —— 发版格式 / 解包器 / FAT / 等分区节点
+#   curl                                —— 网络安装（gk3_net_fetch / gk3_net_release）
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       gdisk fdisk parted e2fsprogs dosfstools ntfs-3g \
-      android-sdk-libsparse-utils zstd python3 mtools udev util-linux \
+      android-sdk-libsparse-utils zstd python3 mtools udev util-linux curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*

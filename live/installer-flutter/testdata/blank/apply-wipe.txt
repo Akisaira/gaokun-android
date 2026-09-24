@@ -1,0 +1,143 @@
+E PROGRESS 1 检查安装文件
+E PROGRESS 1 核对 sha256
+E boot.img：sha256 与发版清单一致
+E super.img.zst：sha256 与发版清单一致
+E   Image          15598080 字节
+E   ramdisk.img    13080354 字节
+E   gaokun3.dtb      173225 字节
+E   cmdline.txt         496 字节
+E PROGRESS 2 计算分区方案
+E 分区表已备份到 /media/gk3/gaokun3/gpt-backup-loop2-20260924-155750.bin（还原：sgdisk --load-backup=/media/gk3/gaokun3/gpt-backup-loop2-20260924-155750.bin /dev/nvme0n1）
+E PROGRESS 5 写分区表
+E + sgdisk --zap-all /dev/nvme0n1
+D 1006
+E GPT data structures destroyed! You may now partition the disk using fdisk or
+E other utilities.
+E + sgdisk -n 0:2048:616447 -t 0:ef00 -c 0:esp /dev/nvme0n1
+D 1016
+E Creating new GPT entries in memory.
+E The operation has completed successfully.
+E + sgdisk -n 0:616448:624639 -t 0:8300 -c 0:misc /dev/nvme0n1
+D 1011
+E The operation has completed successfully.
+E + sgdisk -n 0:624640:690175 -t 0:8300 -c 0:metadata /dev/nvme0n1
+D 1017
+E The operation has completed successfully.
+E + sgdisk -n 0:690176:821247 -t 0:8300 -c 0:boot_a /dev/nvme0n1
+D 1014
+E The operation has completed successfully.
+E + sgdisk -n 0:821248:952319 -t 0:8300 -c 0:boot_b /dev/nvme0n1
+D 1021
+E The operation has completed successfully.
+E + sgdisk -n 0:952320:26118143 -t 0:8300 -c 0:super /dev/nvme0n1
+D 1021
+E The operation has completed successfully.
+E + sgdisk -n 0:26118144:28215295 -t 0:8300 -c 0:gk3rescue /dev/nvme0n1
+D 1020
+E The operation has completed successfully.
+E + sgdisk -n 0:28215296:1000212479 -t 0:8300 -c 0:userdata /dev/nvme0n1
+D 1023
+E The operation has completed successfully.
+E + partprobe /dev/nvme0n1
+D 1500
+E PROGRESS 15 格式化
+D 97
+E + mkfs.vfat -F 32 -n ESP /dev/nvme0n1p1
+E mkfs.fat 4.2 (2021-01-31)
+E + mkfs.ext4 -q -F -L metadata /dev/nvme0n1p3
+E + mkfs.ext4 -q -F -L userdata /dev/nvme0n1p8
+E + dd if=/dev/zero of=/dev/nvme0n1p2 bs=1M count=4 conv=fsync status=none
+E + mkfs.ext4 -q -F -L gk3rescue /dev/nvme0n1p7
+E PROGRESS 30 写入 super
+E PROGRESS 30 写入 super（0 / 12288 MiB）
+E PROGRESS 31 写入 super（337 / 12288 MiB）
+E PROGRESS 32 写入 super（657 / 12288 MiB）
+E PROGRESS 33 写入 super（980 / 12288 MiB）
+E PROGRESS 34 写入 super（1236 / 12288 MiB）
+D 65
+E PROGRESS 35 写入 super（1556 / 12288 MiB）
+D 284
+E PROGRESS 36 写入 super（1876 / 12288 MiB）
+D 217
+E PROGRESS 37 写入 super（2196 / 12288 MiB）
+D 1500
+E PROGRESS 38 写入 super（2516 / 12288 MiB）
+E PROGRESS 39 写入 super（2772 / 12288 MiB）
+D 53
+E PROGRESS 40 写入 super（3092 / 12288 MiB）
+D 59
+E PROGRESS 41 写入 super（3412 / 12288 MiB）
+D 179
+E PROGRESS 42 写入 super（3732 / 12288 MiB）
+D 143
+E PROGRESS 43 写入 super（4000 / 12288 MiB）
+D 280
+E PROGRESS 44 写入 super（4336 / 12288 MiB）
+D 85
+E PROGRESS 45 写入 super（4656 / 12288 MiB）
+D 212
+E PROGRESS 46 写入 super（4976 / 12288 MiB）
+D 174
+E PROGRESS 47 写入 super（5232 / 12288 MiB）
+D 155
+E PROGRESS 48 写入 super（5552 / 12288 MiB）
+D 121
+E PROGRESS 49 写入 super（5872 / 12288 MiB）
+D 107
+E PROGRESS 50 写入 super（6192 / 12288 MiB）
+D 167
+E PROGRESS 51 写入 super（6512 / 12288 MiB）
+D 176
+E PROGRESS 52 写入 super（6768 / 12288 MiB）
+D 228
+E PROGRESS 53 写入 super（7088 / 12288 MiB）
+D 233
+E PROGRESS 54 写入 super（7408 / 12288 MiB）
+D 216
+E PROGRESS 55 写入 super（7728 / 12288 MiB）
+D 216
+E PROGRESS 56 写入 super（8048 / 12288 MiB）
+D 170
+E PROGRESS 57 写入 super（8304 / 12288 MiB）
+D 202
+E PROGRESS 58 写入 super（8624 / 12288 MiB）
+D 208
+E PROGRESS 59 写入 super（8944 / 12288 MiB）
+D 293
+E PROGRESS 60 写入 super（9272 / 12288 MiB）
+D 102
+E PROGRESS 61 写入 super（9528 / 12288 MiB）
+D 219
+E PROGRESS 62 写入 super（9848 / 12288 MiB）
+D 232
+E PROGRESS 63 写入 super（10168 / 12288 MiB）
+D 336
+E PROGRESS 64 写入 super（10488 / 12288 MiB）
+D 89
+E PROGRESS 65 写入 super（10808 / 12288 MiB）
+D 52
+E PROGRESS 66 写入 super（11064 / 12288 MiB）
+D 64
+E PROGRESS 67 写入 super（11384 / 12288 MiB）
+D 70
+E PROGRESS 68 写入 super（11704 / 12288 MiB）
+D 144
+E PROGRESS 69 写入 super（12024 / 12288 MiB）
+D 207
+E PROGRESS 70 写入 super（12288 / 12288 MiB）
+D 1348
+E gk3-unsparse: 3145728 块 × 4096 字节 = 12288 MiB，200 个块段
+E super：LP geometry 魔数正确
+E PROGRESS 70 写入 boot_a / boot_b
+E + dd if=/media/gk3/gaokun3/payload/boot.img of=/dev/nvme0n1p4 bs=4M conv=fsync status=none
+E + dd if=/media/gk3/gaokun3/payload/boot.img of=/dev/nvme0n1p5 bs=4M conv=fsync status=none
+E PROGRESS 80 安装引导链
+E + mount -t vfat /dev/nvme0n1p1 /tmp/tmp.fAsWfUTduO
+D 54
+E + umount /tmp/tmp.fAsWfUTduO
+E PROGRESS 92 写入救援系统
+E + mount /dev/nvme0n1p7 /tmp/tmp.TCwTqKzHzV
+E 警告：没有 WiFi 配置可带给救援系统 —— 它开机后连不上网，只能在机器旁操作
+E + umount /tmp/tmp.TCwTqKzHzV
+E PROGRESS 100 完成
+X 0

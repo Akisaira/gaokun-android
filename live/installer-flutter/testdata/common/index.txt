@@ -1,0 +1,11 @@
+# 与盘无关的调用。所有场景找不到时都回落到这里。
+# ⚠️ 标了「手写」的几条是容器里做不到的：不是这台机器（没有 DMI）、没有 wlan0、下载清单还不存在。
+#    它们照着真实输出的格式写：预检的值取自 docs/hw-inventory.md:33 的实测 dmesg。
+gk3_preflight                                                                  preflight-ok.txt   # 手写（容器不是 gaokun3）
+gk3_wifi_scan                                                                  wifi_scan.txt   # 录（真 gk3-wpa-scan.py，合成的 scan_results）
+gk3_wifi_connect *                                                             wifi_connect-ok.txt   # 手写（容器里没有 wlan0）
+gk3_net_status                                                                 net_status-off.txt   # 手写
+gk3_release_info                                                               release_info.txt   # 录
+#  release_info-none.txt：U 盘里没有镜像（界面测试用 overrides 选它）
+gk3_net_release *                                                              net_release.txt   # 录（本地服务器，内容是上面那份发布目录）
+gk3_net_manifest                                                               net_manifest.txt   # 手写（清单 URL 还不存在）

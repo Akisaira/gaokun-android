@@ -37,7 +37,12 @@ LOOPS=()
 cleanup() {
     local l m
     for m in $(findmnt -rno TARGET | grep "^$W" | sort -r); do umount "$m" 2>/dev/null; done
-    for l in "${LOOPS[@]}"; do losetup -d "$l" 2>/dev/null; done
+    # ⚠️★ 按背后的镜像文件找 loop，【不】靠 LOOPS 数组：new_disk 是在 $(…) 里调的，
+    #   它往 LOOPS 里加的东西留在子 shell 里 —— 2026-09-24 就这样漏了 58 个 loop，
+    #   每个攥着一个已删除的稀疏文件，把 colima 的 98G 盘写满。
+    for img in "$W"/*.img; do
+        for l in $(losetup -j "$img" 2>/dev/null | cut -d: -f1); do losetup -d "$l" 2>/dev/null; done
+    done
     rm -rf "$W"
 }
 trap cleanup EXIT
@@ -89,14 +94,16 @@ raw[4096:4100] = b"gDla"                      # 0x616c4467 小端
 for off in (1 << 20, 37 << 20, 200 << 20):
     raw[off:off + (2 << 20)] = os.urandom(2 << 20)
 open(os.path.join(exp, "super.raw"), "wb").write(raw)
-for n in ("rescue.squashfs", "initramfs.img", "systemd-bootaa64.efi", "recovery-ramdisk.img"):
-    open(os.path.join(rel if n != "systemd-bootaa64.efi" else exp, n), "wb").write(b"MZ" + os.urandom(65536))
+# systemd-boot 的假件故意【不】叫 systemd-bootaa64.efi：GK3_SDBOOT 这个覆盖开关曾经
+# 只在文件恰好叫这个名字时才生效（录 fixture 时才发现），这里把它钉住
+for n in ("rescue.squashfs", "initramfs.img", "fake-sdboot.efi", "recovery-ramdisk.img"):
+    open(os.path.join(rel if n != "fake-sdboot.efi" else exp, n), "wb").write(b"MZ" + os.urandom(65536))
 open(os.path.join(rel, "wpa_supplicant.conf"), "w").write('network={\n\tssid="test"\n\tpsk="12345678"\n}\n')
 PYEOF
 img2simg "$W/expect/super.raw" "$W/super.img" >/dev/null
 zstd -q -19 --long -f "$W/super.img" -o "$REL/super.img.zst"
 ( cd "$REL" && sha256sum boot.img super.img.zst > install-artifacts.sha256 )
-export GK3_SDBOOT=$W/expect/systemd-bootaa64.efi
+export GK3_SDBOOT=$W/expect/fake-sdboot.efi
 if [ -z "${GK3_TEST_BOOTIMG:-}" ]; then
     python3 scripts/live/gk3-bootimg.py "$REL/boot.img" "$W/got" 2>/dev/null
     for n in Image ramdisk.img gaokun3.dtb; do
@@ -235,6 +242,8 @@ same=1; for n in 2 3 4; do [ "$(sha "${DB}p$n")" = "${H[$n]}" ] || { same=0; bad
 same=1; for n in 1 2 3 4; do [ "$(sgdisk -i "$n" "$DB" 2>/dev/null | awk '/unique GUID/{print $4}')" = "${PU[$n]}" ] || same=0; done
 [ "$same" = 1 ] && ok "四个原有分区的 PARTUUID 都没变（Windows 的 BCD 靠它）" || bad "有 PARTUUID 变了"
 [ "$(blkid -o value -s UUID "${DB}p1")" = "$ESP_UUID" ] && ok "ESP 没被重新格式化（卷序列号 $ESP_UUID 未变）" || bad "ESP 被格式化了"
+EI=$(gk3_esp_info "${DB}p1")
+printf '%s' "$EI" | grep -q 'windows=yes gaokun3=yes' && ok "装完后 gk3_esp_info：$EI" || bad "gk3_esp_info 不对：$EI"
 m=$W/mnt-b; mkdir -p "$m"; mount -o ro "${DB}p1" "$m"
 [ "$(sha "$m/EFI/Microsoft/Boot/bootmgfw.efi")" = "$(sha "$W/bootmgfw.efi")" ] && ok "Windows 引导（EFI/Microsoft/Boot/bootmgfw.efi）还在、未变" || bad "Windows 引导被动了"
 [ "$(sha "$m/EFI/BOOT/BOOTAA64.EFI.before-gaokun3")" = "$(sha "$W/winfallback.efi")" ] \
@@ -291,6 +300,9 @@ tryb() {  # $1=说明 $2=--esp $3=期望的报错片段
         ok "$1：拒绝且盘没动（$(printf '%s\n' "$out" | grep '^!!' | tail -1 | cut -c4-)）"
     else bad "$1：rc=$rc，或报错不对，或盘被改了"; printf '%s\n' "$out" | tail -3 | sed 's/^/      /'; fi
 }
+EI=$(gk3_esp_info "${DE}p1")
+[ "$(gk3__f "$EI" free_mib)" -lt "$(gk3__f "$EI" need_mib)" ] && printf '%s' "$EI" | grep -q 'windows=no' \
+    && ok "gk3_esp_info 事先就报出来了：$EI" || bad "gk3_esp_info 不对：$EI"
 tryb "Windows 默认的 100 MiB ESP" "${DE}p1" "ESP 空间不够"
 tryb "--esp 指向 NTFS 分区" "${DE}p2" "不是 FAT"
 tryb "--esp 指向不存在的节点" "${DE}p9" "要 --esp"
@@ -298,6 +310,71 @@ OUT=$(GK3_DRYRUN=1 gk3_apply --disk "$DC" --mode wipe --rescue yes --release "$R
 [ "$rc" = 0 ] && printf '%s' "$OUT" | grep -q '^DRY: sgdisk --zap-all' && [ "$(fp "$DC")" = "$BEFORE" ] \
     && ok "dry-run：列出了 $(printf '%s\n' "$OUT" | grep -c '^DRY:') 条命令，盘一个字节没变" || bad "dry-run 不对（rc=$rc）"
 
+# ── E. 网络安装 ────────────────────────────────────────────────────────────
+echo "═══ E. 网络安装：下载一整套发布文件，再走同一条写盘路径 ═══"
+# 迷你 HTTP 服务器：range 模式支持 "Range: bytes=N-"（R2 支持；Python 自带的 http.server 不支持）
+cat > "$W/srv.py" <<'SRVEOF'
+import http.server, os, sys
+root, port, rng, log = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "range", sys.argv[4]
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        p = os.path.join(root, self.path.lstrip("/"))
+        if not os.path.isfile(p): self.send_error(404); return
+        data = open(p, "rb").read(); start = 0
+        r = self.headers.get("Range")
+        open(log, "a").write("%s %s\n" % (self.path, r or "-"))
+        if rng and r and r.startswith("bytes="):
+            start = int(r[6:].split("-")[0])
+            if start >= len(data): self.send_response(416); self.end_headers(); return
+            self.send_response(206); self.send_header("Content-Range", "bytes %d-%d/%d" % (start, len(data) - 1, len(data)))
+        else:
+            self.send_response(200)
+        self.send_header("Content-Length", str(len(data) - start)); self.end_headers()
+        try: self.wfile.write(data[start:])
+        except (BrokenPipeError, ConnectionResetError): pass   # curl 拿到 200 就放弃续传、主动断开
+http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+SRVEOF
+SRV=$W/srv; mkdir -p "$SRV/good" "$SRV/bad"
+cp "$REL/boot.img" "$REL/super.img.zst" "$REL/install-artifacts.sha256" "$SRV/good/"
+# 校验清单里再挂一个 OTA zip 的名字（发版的清单就是这样），好验 version= 能取出来
+echo "0000000000000000000000000000000000000000000000000000000000000000  crDroidAndroid-16.0-20260916-gaokun3-v12.11.zip" >> "$SRV/good/install-artifacts.sha256"
+cp "$SRV/good/"* "$SRV/bad/"; printf 'X' | dd of="$SRV/bad/boot.img" bs=1 seek=4096 conv=notrunc status=none
+python3 "$W/srv.py" "$SRV" 18081 range "$W/srv-range.log" & SRVPID1=$!
+python3 "$W/srv.py" "$SRV" 18082 norange "$W/srv-norange.log" & SRVPID2=$!
+sleep 1
+RI=$(gk3_release_info "$SRV/good")
+printf '%s' "$RI" | grep -q 'boot=yes super=zst sha256=yes' && printf '%s' "$RI" | grep -q 'version=crDroidAndroid-16.0-20260916-gaokun3-v12.11 ' \
+    && ok "gk3_release_info：$(printf '%s' "$RI" | cut -c1-120)" || bad "gk3_release_info 不对：$RI"
+DL=$W/dl; OUT=$(gk3_net_release http://127.0.0.1:18081/good/ "$DL" 2>"$W/e.err"); rc=$?
+same=1; for f in boot.img super.img.zst; do [ "$(sha "$DL/$f")" = "$(sha "$REL/$f")" ] || same=0; done
+[ "$rc" = 0 ] && [ "$same" = 1 ] && printf '%s' "$OUT" | grep -q '^RELEASE .*source=net' \
+    && ok "gk3_net_release：两个文件逐字节一致、打出 RELEASE 记录" || { bad "网络下载 rc=$rc"; tail -5 "$W/e.err"; }
+P=$(awk '$1=="PROGRESS"{print $2}' "$W/e.err" | tr '\n' ' ')
+printf '%s\n' $P | awk 'NR>1 && $1<prev{bad=1} {prev=$1} END{exit bad}' && [ "$(printf '%s\n' $P | tail -1)" = 100 ] \
+    && ok "进度单调、走到 100（$(printf '%s\n' $P | wc -l | tr -d ' ') 行）" || bad "进度不对：$P"
+# 断点续传：目标目录里先放半截 super，看它是不是真的发了 Range
+DL2=$W/dl2; mkdir -p "$DL2"; head -c $(( $(stat -c%s "$REL/super.img.zst") / 3 )) "$REL/super.img.zst" > "$DL2/super.img.zst"
+: > "$W/srv-range.log"
+gk3_net_release http://127.0.0.1:18081/good/ "$DL2" >/dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] && [ "$(sha "$DL2/super.img.zst")" = "$(sha "$REL/super.img.zst")" ] && grep -q '^/good/super.img.zst bytes=[1-9]' "$W/srv-range.log" \
+    && ok "断点续传：发了 $(grep '^/good/super.img.zst' "$W/srv-range.log" | cut -d' ' -f2)，续完 sha256 一致" || bad "续传不对（rc=$rc）：$(tr '\n' ' ' < "$W/srv-range.log")"
+# 服务器不支持 Range：半截文件必须被丢掉重下，而不是永远卡在 curl 的 33 上
+DL3=$W/dl3; mkdir -p "$DL3"; head -c 12345 "$REL/super.img.zst" > "$DL3/super.img.zst"
+gk3_net_release http://127.0.0.1:18082/good/ "$DL3" >/dev/null 2>"$W/e3.err"; rc=$?
+[ "$rc" = 0 ] && [ "$(sha "$DL3/super.img.zst")" = "$(sha "$REL/super.img.zst")" ] && grep -q '不支持断点续传' "$W/e3.err" \
+    && ok "服务器不支持续传：丢掉半截、从头下完，sha256 一致" || { bad "无 Range 服务器时 rc=$rc"; tail -3 "$W/e3.err"; }
+OUT=$(gk3_net_release http://127.0.0.1:18081/bad/ "$W/dl4" 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'boot.img 的 sha256 不符' \
+    && ok "服务器上的 boot.img 被改过：拒绝" || bad "被改过的文件居然通过了（rc=$rc）"
+kill $SRVPID1 $SRVPID2 2>/dev/null
+# 下载下来的目录交给 gk3_apply —— 网络安装与 U 盘安装是同一条写盘路径
+DN=$(new_disk n 40G); sgdisk -o "$DN" >/dev/null 2>&1
+gk3_apply --disk "$DN" --mode wipe --rescue no --release "$DL" >"$W/n.log" 2>&1; rc=$?
+[ "$rc" = 0 ] && [ "$(sha_head "$(gk3__bylabel "$DN" super)" "$RAWSZ")" = "$(sha "$W/expect/super.raw")" ] \
+    && ok "用下载下来的目录真装一遍：成功，super 逐字节正确" || { bad "网络安装的 apply 失败 rc=$rc"; tail -5 "$W/n.log"; }
+
 echo
 echo "═══ 通过 $PASS · 失败 $FAIL ═══"
 [ "$FAIL" -eq 0 ]
+

@@ -1,0 +1,7 @@
+E PROGRESS 20 正在连接 所选网络
+D 1200
+E PROGRESS 60 取 IP 地址
+D 900
+E PROGRESS 100 已连接
+O NET if=wlan0 ip=192.168.10.239 ssid=宿舍网-5G online=yes
+X 0
