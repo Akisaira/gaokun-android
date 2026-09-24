@@ -9790,3 +9790,42 @@ oneshot → `…-android-b.conf`（回读一致）→ 重启，**40 秒 `boot_co
 
 ### 5. 待办落到 TODO
 新增 **T3 指纹**（从"已知不支持"升级为"有明确路线、分 4 步、需人在场做 SMC 实验"）。三份逆向报告存本地（`docs/fingerprint/`，不入库专有细节，只留方法与结论指针）。
+
+## #124 指纹【动手第一步】：移植 QSEECOM LOAD 到 mainline 7.2，写好加载冒烟测试（2026-09-24）
+
+用户"开始吧"。本次做的是**零风险准备 + 内核侧移植**，编译通过；真发 LOAD SMC 的那一下留到用户在设备旁。
+
+### 1. fingerpr.mbn 已就位、已核对
+公开 `matebook-e-go/uup-drivers-sc8280xp` release 200.0.10.0 的 `QcTreeExtOem8280.cab` 里那份，
+sha256 `b081543c7b6ae4…`（与逆向报告一致）。解析确认是 **Qualcomm secelf**：ELF64 aarch64，8 个 program header，
+PH[0] 是 ELF 头占位（p_flags `0x07000000`）、PH[1] 是 hash segment（`0x02200000`，命中 `(flags&0x07000000)==0x02000000`）。
+已推到设备 `/data/local/tmp/fingerpr.mbn`（专有二进制，与其它 .mbn 同待遇，不入库）。
+
+### 2. 本机 QSEECOM 现状 = 只差 LOAD（实测，见 #123 §1）
+mainline 7.2 的 `qcom_scm.c` 已有 `qcom_scm_qseecom_app_get_id`(LOOKUP) + `app_send`，owner/svc/cmd 枚举齐全，
+`uefisecapp` 在本机 probe 成功 ⇒ 传输通。缺的只有 `APP_START`(LOAD) + `APP_SHUTDOWN` + listener 服务。
+
+### 3. ★★★ 确认了 <4GB 约束在本机是【真的】
+`qcom_tzmem` 走 `dma_alloc_coherent(qcom_tzmem_dev = scm->dev)`；`scm->dev` 没有显式 32 位 mask，
+其 DMA 能力来自 SoC 的 `dma-ranges = <0 0 0 0 0x10 0>`（40 位 / 64GB，`sc8280xp.dtsi:839`）。本机内存在 4GB 以上
+⇒ tzmem **可能分到 >4GB 的物理地址**。而 `APP_START` 把镜像物理地址当 **SMC32 裸参数**传，高 32 位会被截断
+⇒ TZ 收到错地址（轻则拒绝，重则整机静默挂死）。SDM670（<4GB 内存）天然满足，**上游参考实现没处理这条**。
+这正是逆向报告（`QcTrEE-load-reverse-report.md` §3）从 Windows `MmAllocateContiguousNodeMemory(HighestAcceptableAddress=0xffffffff)` 得到的同一结论。
+
+### 4. 内核移植（patch 0050，编译通过）
+移植自 Dawid Wróbel / samcday 的 QSEECOM transport（`samcday/linux` 分支 `codex/sargo-fingerprint-kernel11-baseline`）：
+* `qcom_scm.c`/`.h` 加 `qcom_scm_qseecom_app_load()`（SMC `0x32000101`，3 裸值参数）、`_app_shutdown()`、
+  listener 注册/注销/服务（TA enroll/authenticate 时回调普通世界读写安全存储，不应答会卡死 TZ）。
+* **适配 1**：`app_load` 允许 `mdt_len==0` —— 本机是单一 secelf，整文件一次性传、TZ 自解析 program header。
+* **适配 2**：`qcom_scm_qseecom_init()` 里 `dma_set_coherent_mask(scm->dev, DMA_BIT_MASK(32))`（第 3 节的约束）。
+* 两个 patch hunk 干净应用（offset 1 行），`drivers/firmware/qcom/qcom_scm.o` 编译通过。已进 `patches/` 与 `kernel-apply-patches.sh`。
+
+### 5. 加载冒烟测试模块（`tools/fingerprint-bringup/`）
+out-of-tree 模块 `qcom_qseecom_fptest.c`：insmod 只建 debugfs 触发文件、**不发任何 SMC**；写 `load` 才：
+读镜像 → tzmem 4MiB 对齐分配 → **安全阀：物理地址不整段落在 32 位内就拒发 LOAD** → `APP_START` → 打 `app_id` →
+`LOOKUP` 复核 → `APP_SHUTDOWN`。安全阀保证即使 mask 没生效也不会发出被截断的 SMC（宁可不测）。
+
+### 6. ⬜ 下一步（首个要在设备旁做的、有风险的一步）
+装带 0050 的内核（重启，仅 `_b` 可启动，需用户同意）→ 编 .ko → insmod → `echo load > …/trigger` → 看 dmesg。
+成功（`app_id`）= 整条路打通，再写正式 client driver + Android HAL（T6 的 ③④）。失败即在最小面上定位，不牵连别处。
+⚠️ 首次 LOAD 有整机硬挂风险（TZ 拒绝加载时行为未知），**必须有人在设备旁**。

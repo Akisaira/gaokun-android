@@ -149,6 +149,10 @@ KPATCHES=(
     #    ⚠️ 同号的前身（前 90 / 后 270，按 PR #6 描述）与目视结论相反，已作废 —— 构建机树上若还打着它，
     #    先 `git apply -R` 旧版（正文在 git 历史 cecb9ec 里）再打这一版。
     0049-arm64-dts-gaokun3-camera-rear-rotation-180-confirmed.patch
+    # ⚠️ 0050（#124，指纹）：QSEECOM APP_START/SHUTDOWN + listener，把 TZ 内存约束到 32 位。
+    #    只碰 drivers/firmware/qcom/qcom_scm.c 与其头文件（与相机/触摸/USB 补丁互不相干）。
+    #    编译通过；LOAD 未在硬件验证（首次发 LOAD SMC 需人在设备旁，有硬挂风险）。
+    0050-firmware-qcom-scm-qseecom-app-load-shutdown-listener.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
