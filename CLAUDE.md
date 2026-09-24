@@ -111,6 +111,7 @@
 | 硬件原始数据 | `docs/hw-inventory.md`、`docs/hw/`（转储） |
 | 发版说明 | `docs/relnotes/` |
 | 要投上游的补丁 | `docs/upstream/`（未发，等用户点头） |
+| **指纹（TA 已在本机加载成功，进行中）** | `docs/fingerprint-driver-design.md`（架构+决策+复现+里程碑）；案卷 #120/#123/#124/#125；工具 `tools/fingerprint-bringup/` |
 
 ⚠️ **冲突时的优先级**：实机实测 > `stage4-findings.md` 的案卷 > 本文件 > `project-log.md`。
 本仓的历史里有**大量被后来实测推翻的结论**，推翻过程是故意留着的 —— 但别把它们当现状。

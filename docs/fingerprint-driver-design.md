@@ -1,9 +1,25 @@
 # 指纹驱动设计（gaokun3 / FocalTech FTE7001）
 
-> 状态 2026-09-24：**TA 加载已在硬件验证**（#125，app_id=5/6），命令收发工具就绪（#125 续）。
-> 卡在命令帧格式（静态逆向中）。本文是架构与决策的主干，随进展更新。
-> 背景/证据：`docs/stage4-findings.md` #120（能不能）→#123（翻案）→#124（移植）→#125（上机成功）；
-> 逆向报告在 `docs/fingerprint/`（不入库）。
+> **现状（2026-09-24）**：走到里程碑 **M1（把厂商签名的指纹 TA 加载进 QSEE）已在硬件验证成功**，
+> 命令收发工具就位并上机跑通到"发送边界"。**M2（发第一条真命令）暂停**，卡在命令帧的精确逆向——
+> 那是块需要专门啃的硬骨头（见 §2）。本文是这项工作的完整记录 + 架构 + 复现步骤，接手从这里读起。
+> 一路证据：`docs/stage4-findings.md` #120（判定不可做）→ #123（翻案：其实可做）→ #124（内核移植）→
+> #125（上机 LOAD 成功）；Windows 侧逆向报告在 `docs/fingerprint/`（专有二进制的笔记，不入库）。
+
+## 背景：这颗传感器为什么不能按常规驱动
+
+* 型号 **FocalTech `FTE7001`**（`FTE7001` 是华为的 ACPI PNP ID；真实芯片是 FocalTech FT9769 模组 + FT9391 AFE，
+  电源键式小面阵）。部分机型是 Goodix `GDIX5125`，由 GPIO61/62 两个板级 strap 选型；本机实测是 FocalTech。
+* **取图、特征提取、模板库、比对全在 TrustZone 的一个高通签名可信应用里**（`fingerpr.mbn`，TA 名 `fingerprint`），
+  它经 **QSEE-SPI 直接持有传感器的 SPI 总线**。非安全世界（Windows/Linux）**拿不到这条 SPI**，
+  ACPI `\_SB.SPBA` 只暴露两根 GPIO（中断 181 / 复位 185），没有 SpiSerialBus（#120）。
+* 所以路线不是"写个 SPI 驱动读图"——那条 SPI 归 TZ，读不到；就算读到，MOC 小传感器的图质差、匹配也难。
+  **唯一可行的路线**是：用厂商自己的 QSEECOM SMC 把厂商自己签名的 TA 加载进 QSEE，让 TA 去驱动传感器、做比对，
+  普通世界只当"发命令 + 替 TA 搬运加密模板"的中间人。**这不改 TA、不绕安全启动，TZ 仍逐段验签**——
+  性质与我们已在做的 GPU/DSP/WiFi 固件加载相同。
+* 为什么以前判"不可做"（#120）又翻案（#123）：#120 只看到"上游 mainline 的 qcom_scm 只有 LOOKUP/SEND、没有 LOAD"，
+  漏了两点——指纹走的是**旧 QSEECOM**（不是新 QTEE），gaokun3 恰在它的 allowlist 里、本机 `uefisecapp` 已 probe
+  说明这条传输今天就通；而缺的 LOAD 已有人（samcday/Dawid）在别的 SoC 上真机验证过、可移植。
 
 ## 0. 一句话架构
 
@@ -94,3 +110,34 @@ GPIO185 复位可能由 TA 经 QSEE-GPIO 自己做（待确认）。届时加一
 - [ ] M5 enroll 落一枚模板
 - [ ] M6 client driver 成形（字符设备接口）
 - [ ] M7 Android 指纹 HAL，Settings 里能录/解锁
+
+## 8. 复现 M1（加载测试）
+
+前提：内核带 **patch 0050**（`patches/0050-firmware-qcom-scm-qseecom-app-load-shutdown-listener.patch`，
+已进 `scripts/kernel-apply-patches.sh`）。工具在 `tools/fingerprint-bringup/`。
+
+1. **构建**：内核树打满补丁链（含 0050）后 `make Image modules`；out-of-tree 编两个模块：
+   `make -C <kernel> M=<repo>/tools/fingerprint-bringup ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules`。
+2. **取 TA**：`fingerpr.mbn`（sha256 `b081543c7b6ae4…`）从公开 `uup-drivers-sc8280xp` release 的
+   `QcTreeExtOem8280.cab` 取（见 `device/huawei/gaokun3/firmware/README.md`），推到设备 `/data/local/tmp/`。
+3. **上机（⚠️ 需人在设备旁）**：无回退槽，用一次性启动项指向【单独的】新内核文件、不覆盖 `slot_b/Image`——
+   `bash scripts/boot-oneshot.sh <entry>` 起带 0050 的内核（起不来一次重启就回 stock，#125 记了做法）。
+4. **触发**：
+   ```
+   adb push qcom_qseecom_fptest.ko /data/local/tmp/
+   adb shell su -c 'insmod /data/local/tmp/qcom_qseecom_fptest.ko'
+   adb shell su -c 'echo load > /sys/kernel/debug/gaokun3_fptest/trigger'
+   adb shell su -c 'dmesg | grep fptest | tail'
+   ```
+   预期：`★★★ LOAD 成功！app_id=N`（实测 app_id=5，镜像落物理 `0xec000000`，无挂机）。
+   `qcom_qseecom_fpcmd.ko` 则是常驻版：`echo 1 > .../gaokun3_fpcmd/load` 后可 `echo <hex> > .../send_hex` 发命令。
+
+## 9. 设备与工作区现状（交接用）
+
+* **设备**：#125/后续测试后，若仍在 RAM 里的"fp 内核"（`#25`，= stock + 0050 休眠，经 oneshot 单独 `Image.fp` 启动），
+  **任意一次重启都自动回发布版内核 `1790206017`**；ESP 已复原（临时 `Image.fp` 与启动项已删）。
+  持久值：`persist.vendor.gaokun3.allow_suspend=0`（开发机不睡）。IP 静态 `192.168.10.239`。
+* **本地提交未推**：指纹整条线 #120→#125 + 设计文档 + 工具，均为本地提交（发版/推仓需用户点头）。
+* **构建机**：`az vm deallocate` 后用完即停，树在 `~/gk3-kernel`（已含 0050 的工作区改动，未提交，靠 `patches/` 复现）。
+* **下一步的入口**：M2 = 把 `FF_CMD_TA_CREATE`/`INIT` 的确切命令号与请求字节从 TA 分发表逆出来
+  （§2），然后 `send_hex` 发之、看响应。TA 分发函数运行时注入，静态难拆，是独立子任务。
