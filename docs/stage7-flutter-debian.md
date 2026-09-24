@@ -62,7 +62,7 @@ scripts/live/installer-lib.sh    唯一的分区 / 写盘实现
 | | 内容 | 在哪做 | 状态 |
 |---|---|---|---|
 | M0 | Debian + mesa + cage + hello-world Flutter 在真机上出画面：方向、触摸、键盘、`chvt 2`、**10 分钟 RSS 曲线**、Impeller 与 Skia 各一遍 | 真机（U 盘，不碰内置盘） | ⬜ 要回家、要用户同意重启 |
-| M0.5 | 内核补 systemd 要的 config 并断言 | 构建机 | ⬜ 名字已从 Debian 6.12 源码核对（§3.6），要对真树再核 |
+| M0.5 | 内核能不能跑 systemd | 离线 | ✅ **能**（2026-09-25，§5.3）—— 不挡 M0；`AUTOFS_FS=y` 下次编内核时顺带 |
 | **M1** | **后端统一与补齐** | Mac + 容器 | **✅ 2026-09-24** |
 | **M2** | **Flutter 骨架 + fixture 后端 + 出图** | Mac | **✅ 2026-09-25** |
 | M3 | Debian 构建链（mmdebstrap）+ 接真后端 | Mac 上的 arm64 容器 | ▶ Flutter 构建与 headless 渲染 ✅；根文件系统 ⬜ |
@@ -207,7 +207,23 @@ EFI 分区 **80 GiB**"。流程测试全绿，因为断言写的是 `find.text(l
 真机 M0 用同一个浸泡页（`GK3_SOAK=1`）量至少 10 分钟。★ 浸泡页存在的理由：第一次量时界面停在欢迎页，
 Flutter 空闲不出帧，60 秒 RSS 一动不动 —— **那条曲线什么也没测**。
 
-### 5.3 cage 0.2.0
+### 5.3 M0.5：现有内核能跑 systemd，不必先重编
+
+原计划要读设备上的 `/proc/config.gz`，设备不在身边。但内核开着 `CONFIG_IKCONFIG`，配置就嵌在镜像里 ——
+新工具 `scripts/extract-kconfig.py` 直接从发版的 `boot.img` / `prebuilt-boot/vmlinuz.efi` 抽出来（两处抽出的
+逐字节相同）。对照的是 **systemd v257 自己 README 的 REQUIREMENTS 一节**（Debian 13 带的就是 257），不凭记忆列。
+
+* **硬性要求全部满足**：`DEVTMPFS CGROUPS INOTIFY_USER SIGNALFD TIMERFD EPOLL UNIX SYSFS PROC_FS FHANDLE`，
+  以及实质必需的 `NET_NS USER_NS`；`DMIID=y`（预检读 `/sys/class/dmi/id` 在真机上成立）；UEFI 两项、
+  squashfs/overlay/ntfs3/loop 都在。
+* 不满足的 5 项逐条核过：`UEVENT_HELPER_PATH` —— `UEVENT_HELPER` 本身没开，等价于满足；
+  `FW_LOADER_USER_HELPER=y` 但 `…_FALLBACK` 没开，只在驱动显式要求时才走用户态（不动：Android 的 ueventd 可能依赖）；
+  `NET_SCH_FQ_CODEL=n` —— Debian 257 的 sysctl.d 根本没设 qdisc；`DMI_SYSFS=n` 只关 SMBIOS 凭据；
+  **`AUTOFS_FS=m`**（镜像不带模块 = 没有）→ Debian 的 `proc-sys-fs-binfmt_misc.automount` 会失败一次，
+  只是告警。下次编内核时在 `scripts/kernel-config-android.sh` 里改 `=y`（对 Android 惰性）。
+* ⚠️ 这是 **v0.6.2 发版内核**（`7.2.0-rc2-gaokun3`，#24）的配置。设备现在跑的候选版内核若改过 config 要再抽一次。
+
+### 5.4 cage 0.2.0
 
 * 默认**禁止切换 VT**，`-s` 才允许 —— 不加它命令行逃生口必然失效。
 * 没有旋转参数（计划里写的 `-r` 不存在）；但支持输出管理协议，`wlr-randr --custom-mode/--scale` 实测生效，
