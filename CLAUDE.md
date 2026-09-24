@@ -9,7 +9,10 @@
 2026-09-24 凌晨（用户睡觉、授权自主推进）：**PR #6 相机（AF / 朝向 / 崩溃）已接手修完并合并推送**（`9c79b78`）。
 2026-09-24 早上：**后摄朝向 180 经用户目视确认**（0049 前身写的 270 是错的，已改写，#119 §7）⇒ 测试版 `1790184271` 作废；
 重新构建的 **v0.6.3 候选版 `1790206017` 已装到 `_b` 并远程验收**（#122；待机默认改回 1＝S1，开发机持久 0 实测不睡）。
-新查出：NTP 在国内从没成功过（B22，已写未编）、SLPI 自愈后传感器全丢（B21）、指纹驱动不了（#120）、光感激活会让 SLPI 崩溃（#121）。
+新查出：NTP 在国内从没成功过（B22，已写未编）、SLPI 自愈后传感器全丢（B21）、光感激活会让 SLPI 崩溃（#121）。
+★★ **指纹翻案并上机成功**（#120→#123→#125）：用户提供 Windows 侧逆向报告 + 我实测本机 QSEECOM 通路已在跑 ⇒ 移植 QSEECOM LOAD（patch 0050），
+2026-09-24 **在本机把华为签名的指纹 TA `fingerprint` 加载进 QSEE 成功（app_id=5，无挂机）**，整条路打通；剩 client driver + Android HAL（T6）。
+⚠️ 设备当前跑的是 RAM 里的"fp 内核"（stock+0050 休眠，靠 oneshot 单独 Image.fp 启动、ESP 已复原）——**下次重启自动回 stock 内核 `1790206017`**。
 路由器（OpenWrt，`192.168.10.1`）加了静态租约：`00:03:7f:12:*:*` → `.239`（本机 MAC 只有后两字节每次开机变），设备侧的静态 IP 仍保留。
 新工具 `gaokun3-ncam-smoke`（应用视角的相机冒烟测试，设备上 `/data/local/tmp/`）。案卷 #119。
 2026-09-18：SELinux 第五轮（案卷 #117）—— 补了 7 处规则（触摸服务的域 / `/dev/dri` 目录 / ESP 块设备类型 / OTA postinstall / 温控 HAL 的 sysfs_thermal / audioroute 的 tinymix / hwc 的 uevent socket），自研属性改名 `persist.vendor.gaokun3.*` 且 **allow_suspend 默认值改成 0**（⚠️ 不只新装机：v0.6.2 老用户多半没设过这个属性，OTA 后也会落到 0、失去待机 —— 发版前要用户定，见 `docs/TODO.md` S1）。构建机编译验证通过；`-userdebug` 重编后**装机成功**（戳 `1789737346`，槽 `_a`，60 秒起来）：温控 HAL 的 35 条 denial 归零且 `dumpsys thermalservice` 报真温度、audioroute 的 7 条归零、`/dev/dri` 与 ESP 的标签实机确认、功能零回归。⚠️ 中途误用 `-user` 变体导致一次装机失败（#117 §15）。⬜ 新查出的 4 处规则（hwc 的 create/bind、同进程 HAL 库、mediaswcodec、wakeup genfscon）**已写未验**，下次构建一起。（每次开工时更新这一行）**
@@ -147,7 +150,7 @@ Android 相关知识。因此：
 | 存储 | NVMe（**不是 UFS**，不是手机那套分区布局） |
 | 引导 | **UEFI，不是 fastboot**。可关 Secure Boot。GRUB/systemd-boot 加载 |
 | 虚拟化 | KVM/EL2 可用 |
-| 部分可做 | 指纹（FocalTech FTE7001，中断 GPIO181 / 复位 GPIO185）：比对在 TrustZone 的签名 TA `fingerprint` 里，**路线已明确**——本机 QSEECOM 通路已在跑（uefisecapp probe 成功），缺的 LOAD 有 samcday 真机验证过的参考实现，见 #120/#123。TPM 不支持；深度休眠 (S4) 未测 |
+| 进行中 | 指纹（FocalTech FTE7001）：**2026-09-24 已在本机把签名 TA `fingerprint` 加载进 QSEE 成功（app_id=5，无挂机，#125）**，patch 0050 = QSEECOM LOAD/SHUTDOWN/listener + 32 位 TZ 内存约束。⬜ 剩 client driver（发 FF_CMD_TA_* 命令、enroll/auth 的安全存储 listener）+ Android HAL（见 TODO T6）。TPM 不支持；深度休眠 (S4) 未测 |
 | 待机 (s2idle) | ✅ **已修复**（M16，v0.3.0-alpha）。⚠️ 本表此前写着"挂得下去、醒不回来、内核/EC 缺陷"，**两句都错**：M15 证明复位发生在**挂起进入**而非唤醒，M16 查出真凶是我们 Stage 2 自己加的 `dr_mode="otg"`，与内核和 EC 都无关 |
 
 ## 关键约束（每次都要记住）

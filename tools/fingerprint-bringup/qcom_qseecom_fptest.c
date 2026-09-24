@@ -52,14 +52,23 @@ static int fp_do_load(void)
 	}
 	pr_info("fptest: 读入 %s，%zu 字节\n", FP_IMG_PATH, img_len);
 
-	stage_len = PAGE_ALIGN(img_len) + FP_IMG_ALIGN;
+	/*
+	 * TZ 要镜像落在 4 MiB 对齐的物理地址。参考实现用 img+4MiB 再找对齐子区，
+	 * 但那对 3.67MB 的镜像是 ~7.7MB ⇒ 单次连续分配到 order-11(8MB)，超过
+	 * MAX_PAGE_ORDER(4MB)、被 buddy 拒绝（实测 #124：page_alloc.c WARN + -ENOMEM）。
+	 * 本机镜像 <4MiB，直接分配【正好 4MiB 的整数倍】：order-10 的连续块可分（buddyinfo
+	 * 有），且 4MiB 分配天然 4MiB 对齐 ⇒ 池基址即对齐地址，不用额外 slack。
+	 * ⚠️ 镜像若将来 >4MiB，这条走不通，得改走 CMA（qcom_tzmem 侧）。
+	 */
+	stage_len = ALIGN(img_len, FP_IMG_ALIGN);
 	cfg.initial_size = stage_len;
 	cfg.max_size = stage_len;
 
 	pool = qcom_tzmem_pool_new(&cfg);
 	if (IS_ERR(pool)) {
 		ret = PTR_ERR(pool);
-		pr_err("fptest: tzmem 池创建失败: %d\n", ret);
+		pr_err("fptest: tzmem 池创建失败: %d（%zu 字节；>4MiB 会超 MAX_PAGE_ORDER）\n",
+		       ret, stage_len);
 		goto out_file;
 	}
 
@@ -71,8 +80,13 @@ static int fp_do_load(void)
 	}
 
 	stage_phys = qcom_tzmem_to_phys(stage);
-	img_phys = ALIGN(stage_phys, FP_IMG_ALIGN);
-	aligned = stage + (img_phys - stage_phys);
+	if (!IS_ALIGNED(stage_phys, FP_IMG_ALIGN)) {
+		pr_err("fptest: 池基址 %pa 未 4MiB 对齐，放弃（本机不该发生）\n", &stage_phys);
+		ret = -EINVAL;
+		goto out_stage;
+	}
+	img_phys = stage_phys;
+	aligned = stage;
 
 	/* ★ 安全阀：物理地址必须整段落在 32 位以内，否则拒发 LOAD。 */
 	if (upper_32_bits(img_phys) ||

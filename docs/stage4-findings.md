@@ -9829,3 +9829,40 @@ out-of-tree 模块 `qcom_qseecom_fptest.c`：insmod 只建 debugfs 触发文件�
 装带 0050 的内核（重启，仅 `_b` 可启动，需用户同意）→ 编 .ko → insmod → `echo load > …/trigger` → 看 dmesg。
 成功（`app_id`）= 整条路打通，再写正式 client driver + Android HAL（T6 的 ③④）。失败即在最小面上定位，不牵连别处。
 ⚠️ 首次 LOAD 有整机硬挂风险（TZ 拒绝加载时行为未知），**必须有人在设备旁**。
+
+## #125 ★★★★ 指纹 TA 在 gaokun3 上【加载成功】—— 整条路打通（2026-09-24）
+
+用户"上机呗"。带 patch 0050 的内核以**一次性启动项指向单独的 `Image.fp`**（不碰已知good的 `slot_b/Image`）
+启动成功（`#25`，34 秒起来，`_b`），boot 阶段 0050 的 32 位 mask 没报错。然后：
+
+```
+fptest: 读入 /data/local/tmp/fingerpr.mbn，3669575 字节
+fptest: 镜像就位于物理 0x00000000ec000000（4MiB 对齐、<4GB），准备 LOAD app 'fingerprint'
+fptest: ★★★ LOAD 成功！app_id=5
+fptest: app_shutdown(5) ok，已清理
+```
+
+**`qcom_scm_qseecom_app_load()` 返回 app_id=5** —— TZ 对这份华为签名的 secelf 验签通过、加载进了 QSEE。
+`app_shutdown(5)` 干净卸载。全程**无挂机**；事后加速度计 51 条读数正常、uefisecapp 在、dmesg 无 TZ/内核报错。
+⇒ **#120 的"现阶段驱动不了"彻底作废**：用厂商自己的 QSEECOM SMC 路径加载厂商自己签名的 TA 是可行的，
+片上比对与模板密封仍在 TZ，安全模型不动。这是整个指纹工作最难的未知，已被解答。
+
+### 关键点被实测验证
+* **32 位约束是真必需**：镜像落在 `0xec000000`（< 4GB）。若不加 patch 0050 的 `dma_set_coherent_mask(32)`，
+  本机（40 位 dma-ranges + >4GB 内存）会分到 >4GB、LOAD 的 SMC32 裸参数截断 —— 这次没发生正因为约束生效。
+* **一次踩坑（#124→本案修）**：初版把 staging 池设成 `img+4MiB`≈7.7MB ⇒ 单次连续分配到 order-11(8MB)、
+  超 `MAX_PAGE_ORDER`(4MB)、`-ENOMEM`（干净失败、非挂机）。镜像 <4MiB ⇒ 改成分配【正好 4MiB】(order-10，可分)、
+  天然 4MiB 对齐、不用 slack。⚠️ 镜像若 >4MiB 得改走 CMA。
+* **无回退槽下的安全上机法**：oneshot → 单独的 `Image.fp`，不覆盖 `slot_b/Image`；测完删 `Image.fp`+临时启动项、
+  ESP 复原、default 仍是 stock 内核 ⇒ 下次重启自动回 stock。设备当前跑的是 RAM 里的 fp 内核（= stock+0050 休眠）。
+
+### ⬜ 一个待查的小问题（不挡路）
+LOAD 成功后 `LOOKUP "fingerprint"` 返回 `-ENOENT`。app_id 直接来自 LOAD ⇒ 正式 driver 用它发命令即可，不依赖 LOOKUP。
+但说明 TA 在 TZ 里登记的名字可能不是 "fingerprint"（或 LOOKUP 语义不同）。写 client driver 时顺带查清。
+
+### 下一步（T6 ③④）
+1. **client driver**：LOAD 拿 app_id → 注册 listener（安全存储回调）→ 按 `FF_CMD_TA_*` 发命令
+   （`INIT_SPI → PROBE_CHIP_ID → INIT_DEVICE → …`）。命令 id 数值先从 FocalTech 客户端驱动核死
+   （`FtWbioDriverUmdf.dll` 只用 4 个 0x80xx，见报告），或按 secelf 里字符串顺序试。
+   ⚠️ enroll/authenticate 会触发 listener 回调读写安全存储 —— 那才是下一个"不应答会卡死 TZ"的风险点，需人在场。
+2. **Android 指纹 HAL**：AOSP 虚拟 HAL 骨架 + STRONG + ISharedSecret 签 HAT（#120 §3）。
