@@ -9697,3 +9697,44 @@ system_server 重新 linkToDeath 上新 HAL、登记 5 个传感器。⬜ 息屏
 2. 固件字符串显示华为版 tcs3701 驱动要读 9 个 registry 组，JSON 只给了 7 个（缺 `tcs3701.rgb.config`、
    `tcs3701_platform.rgb.fac_cal`）—— 缺组是不是崩溃原因，未验证。
 3. 找 psacal 要 Windows 生成的 `registry` + `sns_reg_version` 做 A/B。
+
+## #122 候选版 `1790206017` 装机验收（远程部分）；以及时钟：`time.android.com` 在国内不可达，NTP 从没成功过（2026-09-24）
+
+### 1. 装机
+用户说"你直接试着装机吧"。payload（sha `d2487f96…`）早已在设备上；`install-ota-local.sh --go`：
+`Update successfully applied`，`default` 掰回 `_a`；ESP 上 `slot_b` 的 dtb `8b390878…` / Image `9854daa3…` 核对无误；
+oneshot → `…-android-b.conf`（回读一致）→ 重启，**40 秒 `boot_completed=1`**。
+* 槽 `_b`、`ro.build.date.utc=1790206017`、`ro.build.characteristics=tablet`、内核 #24。
+* boot_control 在启动成功后自己把 `default` 改成了 `*-android-b.conf`；`snapshotctl dump` 报 `Update state: none`，
+  mapper 里只剩 `*_b`，**`bootctl is-slot-bootable 0` = 0** ⇒ 与 #118 §2 一样的处境、方向反过来：**现在只有 `_b` 能启动，`_a` 不再是回落**。
+* ⚠️ 我在 Mac 上看 `date` 算"开机多久"时，一度以为设备又自己重启了一次（`/proc/uptime` 只有 88 秒）——
+  是设备时钟比 Mac 慢了 41 分钟（见第 3 节），`persist.sys.boot.reason.history` 只有一条 `reboot,ota`。**比时间先对钟。**
+
+### 2. 验收清单（TODO 顶部）远程能做的部分
+| # | 项 | 结果 |
+|---|---|---|
+| 1 | 构建戳 / tablet | ✅ `1790206017` / `tablet` |
+| 2 | 设备树朝向 | ✅ 后摄 `00 00 00 b4`（180）、前摄 0；⬜ 前摄取景要人看 |
+| 3 | `gaokun3-ncam-smoke` | ✅ 后摄 145 个结果 0 失败（AF 序列 INACTIVE→ACTIVE_SCAN→FOCUSED_LOCKED，3 张 948x1280 JPEG 都转了 90°）；前摄 22 个结果 0 失败（720x1280）。这次是**镜像里的 HAL**（bind-mount 已随重启消失） |
+| 4 | 拔插 USB | ⬜ 要人。现状 role=device、UDC `configured` |
+| 5 | TCP 缓冲 | ✅ `TcpBufferSizes: 524288,1048576,8388608,262144,524288,4194304` |
+| 6 | denial 普查（uptime 561 s） | 182 条：`gaokun3_smmustall` 69、`gaokun3_hangdump` 42（两个已知结构性阻塞）、kernel 20（kdevtmpfs 删 dm 节点、kernel 读 BT 固件）、system_app/platform_app 各 11（RenderThread 读 `/vendor/lib64/libui.so`、`vendor_default_prop`、display-controller 的 uevent）、bootanim 9、cameraserver 8（`vendor_default_prop` / `vendor_minigbm_debug_prop`）、其余零星。⚠️ dmesg 从 7.9 s 起（环形缓冲冲掉了开头），不算完整普查 |
+| 7 | 域 / DSP | ✅ usbfollow 在 `u:r:gaokun3_usbrole:s0`；`gaokun3_rprockick` 25.2 s 起、36 ms 退出码 0、零 AVC；slpi/adsp/cdsp 都 running |
+| 8 | S1 | ✅ `persist.vendor.gaokun3.allow_suspend`=0（持久值）、`/vendor/build.prop` 里是 1；`wake_lock` = `gaokun3_nosuspend gaokun3_usbrole`（**两把都还握着** —— `=1` 触发器没把 nosuspend 放掉，比 device.mk 里写的预期更保守）；息屏 9 分钟 Wi-Fi adb 一直在、`suspend_stats/success`=0 |
+另：传感器 HAL 登记 5 个（accel / gyro + 3 个 AOSP 融合），全新开机没踩 #121 §3。
+
+### 3. ⚠️★ 时钟慢 41 分钟：NTP 服务器只有 `time.android.com`，在国内连不上
+* `sntp` 对 time.apple.com：Mac 误差 +0.19 s；设备比 Mac 慢 **41 分钟**。
+  `dumpsys time_detector`：`mLastAutoSystemClockTimeSet=null`（这次开机从没自动校时）；
+  `dumpsys network_time_update_service`：`mServerUris=[ntp://time.android.com]`、`refreshSuccessful=false`、`mLastSuccessfulNtpServerUri=null`。
+  上一次开机（9 小时）同样慢约 40 分钟 ⇒ 不是这一版才有。
+* 对照：`cmd network_time_update_service force_refresh` → **false**；
+  `settings put global ntp_server ntp.aliyun.com` 后再刷 → **true**，时钟当场与 Mac 对齐（`ntp.aliyun.com/203.107.6.88:123`，不确定度 25 ms）。
+  （Mac 上 sntp 三个服务器都通 —— Mac 挂着代理，`ntp.ntsc.ac.cn` 解析成 `198.18.0.96` 那种假 IP，**不能代表设备的网络**。）
+* 根因：AOSP 默认 `config_ntpServers` 只有 `ntp://time.android.com`（`frameworks/base/core/res/res/values/config.xml:2787`，构建机树）；
+  LineageOS 的中国服务器放在 `values-mcc460`（`vendor/lineage/overlay/common/frameworks/base/core/res/res/values-mcc460/config.xml:25`：
+  aliyun / tencent / ntsc），**要国内 SIM 才生效，本机没有基带**。
+* 修：设备 overlay 里加 `config_ntpServers` = time.android.com + 那三个（框架失败就试下一个、成功的置顶，
+  `core/java/android/util/NtpTrustedTime.java:350-366`；`ntp_server` 设置项优先于资源，`:647-653`）。**已写未编**（下一版）。
+  开发机上现在手动设着 `ntp_server=ntp.aliyun.com`；验证 overlay 时先 `settings delete global ntp_server`。
+* ⬜ 40 分钟的偏差最初从哪来（RTC？）没查；有 NTP 之后不重要。

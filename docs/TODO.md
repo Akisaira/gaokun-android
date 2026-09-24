@@ -24,7 +24,7 @@
 等用户点头的对外动作 **5** 条 · 明确搁置 **4** 条。下面按"下一步是什么"分组，
 详情见各自的条目。
 
-### ▶ 眼前的下一步：v0.6.3 候选版（2026-09-24 重新构建）装机验收
+### ▶ 眼前的下一步：v0.6.3 候选版 `1790206017` —— ✅ 已装（槽 `_b`，2026-09-24），远程验收过了 1/3/5/7/8，剩 2（前摄）/ 4（USB）要人（[#122](stage4-findings.md)）
 
 ⚠️ **测试版 `1790184271` 作废**：它的 dtb（`6b8c7dea…`）带着 0049 的前身（后摄 270），而用户目视确认的是 **180**（[#119 §7](stage4-findings.md)）。
 **候选版**（未发布；`lineage_gaokun3-bp4a-userdebug`）：构建戳 / incremental / payload sha 见下面「产物」一行（构建完填）。
@@ -43,14 +43,14 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 ⚠️ 设备上 09-18 的旧 payload 已改名为 `payload-1789737346.*`，免得误装旧版。
 
 **验收清单**（装好后逐条）：
-1. ☐ `getprop ro.build.date.utc` = 候选版的戳；`getprop ro.build.characteristics` = `tablet`（issue #5 请报告者测 QQ）
+1. ✅ `getprop ro.build.date.utc` = 候选版的戳；`getprop ro.build.characteristics` = `tablet`（issue #5 请报告者测 QQ）
 2. ☐ 解锁后开 Aperture：后摄取景仍是正的（dtb 与现在同一份，应当不变）、点按对焦能锁；**前摄看一次**（设备树 0，未目视）
-3. ☐ `adb shell /data/local/tmp/gaokun3-ncam-smoke`（已在设备上）后摄 / `front` 全过
+3. ✅ `adb shell /data/local/tmp/gaokun3-ncam-smoke`（已在设备上）后摄 / `front` 全过
 4. ☐ 拔插一次 USB 线：USB adb 能回来（0048 + follow）
-5. ☐ `dumpsys connectivity | grep TcpBufferSizes` 含 `8388608`；系统更新下载速度
-6. ☐ 开机 ≥8 分钟后 denial 普查（#117 §20 的办法，dmesg 要从 ~0 秒开始）
-7. ☐ `ps -AZ | grep -E "rprockick|usbrole"` 各自在自己的域；三颗 DSP running
-8. ☐ **S1**：`getprop persist.vendor.gaokun3.allow_suspend` = 0（开发机的持久值）且 `cat /sys/power/wake_lock` 含 `gaokun3_usbrole`；
+5. ✅ `dumpsys connectivity | grep TcpBufferSizes` 含 `8388608`；系统更新下载速度
+6. 🔄 开机 ≥8 分钟后 denial 普查（182 条，分布见 #122 §2；dmesg 开头被冲掉，不完整）（#117 §20 的办法，dmesg 要从 ~0 秒开始）
+7. ✅ `ps -AZ | grep -E "rprockick|usbrole"` 各自在自己的域；三颗 DSP running
+8. ✅ **S1**：`getprop persist.vendor.gaokun3.allow_suspend` = 0（开发机的持久值）且 `cat /sys/power/wake_lock` 含 `gaokun3_usbrole`；
    息屏 2 分钟后 Wi-Fi adb 仍在（= 没睡）。镜像默认值 `grep allow_suspend /vendor/build.prop` = 1
 都过 ⇒ 这一版就是 v0.6.3：`release.sh --no-build`（脚本现在会断言 allow_suspend 默认为 1）。发版要用户点头。
 ⚠️ **变体必须 `lineage_gaokun3-bp4a-userdebug`**（#117 §15）。
@@ -61,6 +61,7 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 |---|---|---|---|
 | **S1** ✅ | **待机默认值 1→0 会波及老用户**（2026-09-24 已改回 1，见下） | 用户 2026-09-23：这是 SELinux 那轮（属性改名）带出来的，不是为待机本身做的决定。09-18 为改名把 `persist.vendor.gaokun3.allow_suspend` 默认设成 0（`device.mk:526`），`device.mk` 注释只说"新装机默认不睡"。但 v0.6.2 的用户**绝大多数从没设过这个属性**（旧默认 1）⇒ OTA 一过、新名字取默认 0 ⇒ **所有老用户也会失去 s2idle**，README 的"待机 ✅"随之失真 | ✅ **用户 2026-09-23 定**：开发期保持 0，**正式版发布前改回 1**。✅ 2026-09-24 候选版起已改回 1（`device.mk` 的 `PRODUCT_VENDOR_PROPERTIES`），开发机已 `setprop … 0` 并核对落盘；✅ `release.sh` 断言发版的 `vendor/build.prop` 里是 1（`--stage-only` 不拦）。⬜ 装机验收清单第 8 条 |
 | **B21** 🆕 | **SLPI 崩溃自愈后系统传感器全丢**（2026-09-24，[#121 §3](stage4-findings.md)） | 自愈时 init 只重启一次 hexagonrpcd，而 SEE 要再重启一次才注册传感器 ⇒ accel 没了、自动旋转失效，直到重启 | 给 hexagonrpcd 的 rc 加"SLPI 回到 running 后再重启一次"（`on property` 盯不住 remoteproc 状态，多半要一个小守护或 uevent 触发），实测：让 SLPI 崩一次（激活光感就能复现）看 accel 能否自己回来 |
+| **B22** 🆕 | **时钟不校准：NTP 只有 `time.android.com`，国内连不上**（2026-09-24，[#122 §3](stage4-findings.md)） | 设备慢 41 分钟、这次开机从没自动校时；Lineage 的中国服务器只在 `values-mcc460`，本机无基带落不到 | ✅ overlay 加 `config_ntpServers`（time.android.com + aliyun / tencent / ntsc），**已写未编**。⬜ 下一版装上后 `settings delete global ntp_server` → `cmd network_time_update_service force_refresh` = true |
 | **T1** | **触摸** | ✅ v0.6.2 已发（跳点限速线、fuzz=0、按下 17 ms、面积轴、6 个驱动缺陷、可观测性，[#114](stage4-findings.md)–[#116](stage4-findings.md)）。剩：手掌碎成多触点（不影响点击，三种阈值法实测全否） | 下一版驱动做跨帧形态判据；轴已经有了，可以顺手写触摸 IDC（`touch.size.calibration`，本机现在 `ConfigurationFile: <none>`） |
 | **B15** ✅ | **全新安装丢触摸参数**（2026-09-23 已修） | ★ 实锤：`scripts/install-gaokun3.sh:251-257` 写死的 cmdline **没有** `himax_hx83121a_spi.disable_pressure=0`（`BoardConfig.mk:134` 有）⇒ 按 INSTALL.md 全新装 v0.6.2 的机器**没有触点面积轴**，直到第一次 OTA 的 postinstall 把 cmdline 同步过去 | ✅ `install-gaokun3.sh` 改为从 boot.img 头读 cmdline（`cmdline[512]@64 + extra_cmdline[1024]@608`，与 `bootimg_extract.cpp` 同一写法），读不到就拒装。拿 v0.6.2 发布的 `boot.img`（sha `975d7987…`）实测：解出的 cmdline 与 `BoardConfig.mk` **逐字相同**。`deploy-android.sh` 已归档。⬜ 剩 `scripts/live/installer-lib.sh:506` 那份（更旧，还缺 `boot_devices` / `init=/init`），随 B4 一起改 —— 它还假设发布目录有散装 `Image`/`dtb`/`ramdisk`，而发布只带 `boot.img` |
 | **T2** | **Google 未认证** | Play 商店报"设备未经 Play 保护机制认证" | 工具与文档已就位（`scripts/google/gsf-android-id.sh` + INSTALL.md）。**剩下的是用户动作**：拿 Android ID 去 google.com/android/uncertified 登记 |

@@ -152,4 +152,28 @@
     -->
     <bool name="config_showNavigationBar">true</bool>
 
+    <!--
+      ★ NTP 服务器（TODO B22，#122）。AOSP 默认只有 ntp://time.android.com
+      （core/res/res/values/config.xml:2787），它在国内不可达 —— 2026-09-24 设备上实测：
+        cmd network_time_update_service force_refresh      → false
+        settings put global ntp_server ntp.aliyun.com 后再刷 → true，时钟当场纠正 41 分钟
+      而 mLastAutoSystemClockTimeSet=null（这次开机从没同步成功过）。
+
+      LineageOS 其实给中国配了服务器，但放在 values-mcc460 里
+      （vendor/lineage/overlay/common/frameworks/base/core/res/res/values-mcc460/config.xml:25）
+      —— 要插着国内 SIM 才生效，本机没有基带，永远落不到那份。
+
+      框架按列表顺序挨个试、失败就试下一个，成功的那个下次排最前
+      （core/java/android/util/NtpTrustedTime.java:350-366），所以全球的放第一个、
+      国内三个（与 Lineage 那份相同）跟在后面：国外用户不受影响，国内用户第一次多等一个超时（5 s）。
+      ⚠️ 设置项 ntp_server 优先于这里（NtpTrustedTime.java:647-653）；开发机上手动设过的话，
+         验证这份覆盖前先 settings delete global ntp_server。
+    -->
+    <string-array translatable="false" name="config_ntpServers">
+        <item>ntp://time.android.com</item>
+        <item>ntp://ntp.aliyun.com</item>
+        <item>ntp://ntp.tencent.com</item>
+        <item>ntp://ntp.ntsc.ac.cn</item>
+    </string-array>
+
 </resources>
