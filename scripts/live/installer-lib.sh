@@ -1,17 +1,35 @@
 # gaokun3 安装器后端。被两个前端共用：
 #   * scripts/install-gaokun3.sh   命令行
-#   * live/installer/              图形安装器（LiveCD）
+#   * live/installer-flutter/      图形安装器（LiveCD）
 #
 # ★ 一套实现两个前端，是因为本仓反复吃过"两份拷贝各自漂移"的亏。
+#   ⚠️ 这句话写下之后很长时间里并不成立：install-gaokun3.sh 根本没 source 这个
+#      文件，两份实现各自漂了 —— 救援分区 24 GiB vs 1 GiB、loader.conf 的 default
+#      一个指救援一个指 Android、cmdline 一份从 boot.img 取一份手抄且已过时。
+#      2026-09-24 收拢：命令行版现在只是这个库外面的一层薄壳。
 #
 # 全部输出都是【面向机器的行记录】：`键=值` 一行一条，前缀标明类型。
-# 不用 JSON —— Alpine 基础系统里没有 jq，而 C 侧解析 key=value 比解析 JSON
-# 便宜得多。人看的信息一律走 stderr。
+# 人看的信息一律走 stderr；进度是 stderr 上的 `PROGRESS <百分比> <说明>`。
+#
+# ★ 值里不会有空格：自由文本字段（分区名、卷标、磁盘型号、SSID）一律经
+#   gk3__enc 做百分号编码（% → %25，空格 → %20，制表符 → %09）。
+#   原因：Windows 建的分区 PARTLABEL 全是 "Basic data partition"
+#   （docs/hw-inventory.md 第 8 节），而 PART 记录里 name= 和 fslabel=
+#   两个自由文本字段都夹在中间 —— "最后一个键吃到行尾"救不了两个。
+#   ⇒ 解析规则就一条：按空格切，每个值再做 %-解码。
+#
+# ⚠️ 需要 bash（PIPESTATUS、数组）。前端一律 `bash -c '. installer-lib.sh && …'`。
 #
 #   . installer-lib.sh
+#   gk3_preflight                  # 这台机器能不能装（型号 / BIOS / Secure Boot / 工具）
 #   gk3_probe                      # 列出磁盘 / 分区 / 空闲区
 #   gk3_plan  <参数…>              # 算出分区方案（纯计算，不碰磁盘）
-#   gk3_apply <方案文件> <发布目录> # 执行（唯一会写盘的函数）
+#   gk3_apply <参数…>              # 执行（唯一会写盘的函数）
+
+if [ -z "${BASH_VERSION:-}" ]; then
+    echo "!! installer-lib.sh 需要 bash" >&2
+    return 1 2>/dev/null || exit 1
+fi
 
 # ── 布局常量 ────────────────────────────────────────────────────────────────
 # 说明见 install-gaokun3.sh 顶部那段（为什么 esp 必须叫 esp、
@@ -29,16 +47,34 @@ GK3_USERDATA_MIN_MIB=8192
 # 双系统安装时，ESP 里至少要能放下我们的两个槽位（内核+ramdisk+dtb ×2）
 GK3_ESP_NEED_MIB=150
 
+# 这个库所在的目录。gk3-unsparse.py / gk3-bootimg.py / gk3-wpa-scan.py 跟它放在一起
+# （仓库里是 scripts/live/，live 镜像里是 /usr/share/gaokun3/）。
+GK3_LIBDIR=${GK3_LIBDIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
+
 gk3_log()  { echo "$*" >&2; }
 gk3_die()  { echo "!! $*" >&2; return 1; }
 gk3_prog() { echo "PROGRESS $1 $2" >&2; }   # $1=百分比 $2=说明
 
+# 协议的百分号编码（见文件头）。
+gk3__enc() { printf '%s' "$1" | sed -e 's/%/%25/g' -e 's/ /%20/g' -e "s/$(printf '\t')/%09/g"; }
+
+# 安装介质（/media/gk3，见 initramfs-init:119-120）所在的整块盘；不是从介质启动就是空串。
+gk3__medium_disk() {
+    local dev pk
+    dev=$(findmnt -no SOURCE /media/gk3 2>/dev/null || echo "")
+    [ -n "$dev" ] || return 0
+    pk=$(lsblk -no PKNAME "$dev" 2>/dev/null | head -1)
+    [ -n "$pk" ] && echo "/dev/$pk"
+    return 0
+}
+
 # ── 探测 ────────────────────────────────────────────────────────────────────
 # 输出：
-#   DISK path=/dev/nvme0n1 size_mib=488386 model=... removable=0
+#   DISK path=/dev/nvme0n1 size_mib=488386 model=... removable=0 tran=nvme|usb medium=no|yes
 #   PART path=/dev/nvme0n1p1 num=1 start=2048 end=616447 size_mib=300 \
-#        type=ef00 name=esp fs=vfat fslabel=... os=windows|linux|android|
+#        type=<GUID> name=esp fs=vfat fslabel=... os=windows|linux|android|
 #   FREE disk=/dev/nvme0n1 start=616448 end=… size_mib=…
+#   （model / name / fslabel 已百分号编码）
 gk3_probe() {
     local d
     for d in /sys/block/*; do
@@ -57,10 +93,17 @@ gk3_probe() {
         # 512 字节扇区 → MiB
         local size_mib=$(( sectors / 2048 ))
         [ "$size_mib" -ge 1024 ] || continue      # 小于 1 GiB 的不当安装目标
-        local model removable
-        model=$(cat "$d/device/model" 2>/dev/null | tr -d ' \n' || echo "?")
+        local model removable tran medium=no
+        # 型号去掉首尾空白（NVMe 的 model 属性右侧补空格补到 40 字节），中间的空格编码保留。
+        # 原先 tr -d ' ' 会把 "SAMSUNG MZ9L…" 挤成 "SAMSUNGMZ9L…"。
+        model=$(head -1 "$d/device/model" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
         removable=$(cat "$d/removable" 2>/dev/null || echo 0)
-        echo "DISK path=/dev/$name size_mib=$size_mib model=${model:-?} removable=$removable"
+        # tran=usb：界面据此标"外接盘"—— USB 硬盘盒的 removable 常常是 0，靠它认不出来
+        tran=$(lsblk -dno TRAN "/dev/$name" 2>/dev/null | head -1 | tr -d ' ')
+        # medium=yes：安装器就是从这块盘启动的。gk3_apply 的安全闸 1 会拒绝整盘清空它；
+        # 界面应当【一开始】就把它标出来，而不是等用户选完、确认完再报错。
+        [ "/dev/$name" = "$(gk3__medium_disk)" ] && medium=yes
+        echo "DISK path=/dev/$name size_mib=$size_mib model=$(gk3__enc "${model:-?}") removable=$removable tran=${tran:-?} medium=$medium"
         gk3__probe_parts "/dev/$name" "$sectors"
     done
 }
@@ -98,7 +141,7 @@ gk3__probe_parts() {
         # 实测发现的 —— 合成数据里没有这种小分区。
         echo "PART path=$part num=$num start=$start end=$end" \
              "size_mib=$(( (end - start + 1) / 2048 )) size_kib=$(( (end - start + 1) / 2 ))" \
-             "type=${ptype:-?} name=${pname:-} fs=${fstype:-} fslabel=${fslabel:-}" \
+             "type=${ptype:-?} name=$(gk3__enc "$pname") fs=${fstype:-} fslabel=$(gk3__enc "$fslabel")" \
              "os=$(gk3__guess_os "$part" "$ptype" "$pname" "$fstype")"
         cursor=$(( end + 1 ))
     done < "$tmp"
@@ -145,6 +188,79 @@ gk3_partpath() {
         *[0-9]) echo "$1p$2" ;;
         *)      echo "$1$2" ;;
     esac
+}
+
+# ── 预检 ────────────────────────────────────────────────────────────────────
+# 这台机器能不能装。一项一行：
+#   CHECK id=root       ok=yes|no
+#   CHECK id=uefi       ok=yes|no
+#   CHECK id=model      ok=yes|no|unknown value=GK-W7X
+#   CHECK id=bios       ok=yes|no|unknown value=2.16
+#   CHECK id=secureboot ok=yes|no|unknown value=disabled|enabled
+#   CHECK id=tools      ok=yes|no         missing=a,b
+# ok=no 的项前端必须拦住；unknown 只警告 —— 读不到 ≠ 不合格（例如内核没开 DMIID）。
+#
+# ★ 型号 / BIOS 的读取点：/sys/class/dmi/id/{product_name,bios_version}
+#   （drivers/firmware/dmi-id.c:42-47，要 CONFIG_DMIID，Kconfig 默认 y），
+#   读不到时退回内核启动日志里那行 "Hardware name: HUAWEI GK-W7X/GK-W7X-PCB, BIOS 2.16 …"
+#   （本机实测原文见 docs/hw-inventory.md:33）。
+# ★ BIOS 只认 2.16。⚠️ 拒绝 2.17 的理由【不是】"两版触摸的 SPI 总线和 GPIO 编号不同" ——
+#   那个说法比的那份 DSDT_217 其实是 8cx Gen 2（SC8180X）的表，不是本机的下一版
+#   （docs/stage4-findings.md #120 §4）。真实理由只是：上游触摸驱动按 2.16 开发，
+#   2.17 上没人验证过。所以界面上说"未验证"，别说"不兼容"。
+#   GK3_SKIP_BIOS_CHECK=1 可以放行（给知道自己在做什么的人），此时报 unknown；
+#   型号同理：GK3_SKIP_MODEL_CHECK=1（gaokun2 是另一台机器、另一套 EC 协议，别装）。
+# ★ Secure Boot：EFI 全局变量 SecureBoot，GUID 是 EFI_GLOBAL_VARIABLE_GUID
+#   8be4df61-93ca-11d2-aa0d-00e098032b8c（include/linux/efi.h 里的定义，
+#   Debian 6.12 头文件 :368）。efivarfs 的文件 = 4 字节属性 + 1 字节值。
+#   ⚠️ 从【我们的】live U 盘启动时这项必然是 disabled（内核没签名，开着就起不来），
+#      它真正拦的是"从通用的 Ubuntu/Debian live U 盘跑命令行版"那条路。
+gk3_preflight() {
+    local v f dmesg_hw=""
+    gk3__hwline() {
+        [ -n "$dmesg_hw" ] || dmesg_hw=$(dmesg 2>/dev/null | grep -m1 'Hardware name:' || true)
+        printf '%s' "$dmesg_hw"
+    }
+
+    [ "$(id -u)" = 0 ] && echo "CHECK id=root ok=yes" || echo "CHECK id=root ok=no"
+    [ -d /sys/firmware/efi ] && echo "CHECK id=uefi ok=yes" || echo "CHECK id=uefi ok=no"
+
+    v=$(cat /sys/class/dmi/id/product_name 2>/dev/null)
+    [ -n "$v" ] || v=$(gk3__hwline | sed -n 's/.*Hardware name: [^ ]* \([^/,]*\).*/\1/p')
+    if [ "${GK3_SKIP_MODEL_CHECK:-0}" = 1 ]; then
+        echo "CHECK id=model ok=unknown value=$(gk3__enc "${v:-?}") skipped=yes"
+    else case "$v" in
+        GK-W7X) echo "CHECK id=model ok=yes value=$v" ;;
+        "")     echo "CHECK id=model ok=unknown value=" ;;
+        *)      echo "CHECK id=model ok=no value=$(gk3__enc "$v")" ;;
+    esac; fi
+
+    v=$(cat /sys/class/dmi/id/bios_version 2>/dev/null)
+    [ -n "$v" ] || v=$(gk3__hwline | sed -n 's/.*, BIOS \([^ ]*\).*/\1/p')
+    if [ "${GK3_SKIP_BIOS_CHECK:-0}" = 1 ]; then
+        echo "CHECK id=bios ok=unknown value=$(gk3__enc "${v:-?}") skipped=yes"
+    else case "$v" in
+        2.16) echo "CHECK id=bios ok=yes value=$v" ;;
+        2.17) echo "CHECK id=bios ok=no value=$v why=bios-untested" ;;
+        "")   echo "CHECK id=bios ok=unknown value=" ;;
+        *)    echo "CHECK id=bios ok=unknown value=$(gk3__enc "$v") why=bios-untested" ;;
+    esac; fi
+
+    f=/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c
+    v=$(od -An -tu1 -j4 -N1 "$f" 2>/dev/null | tr -d ' ')
+    case "$v" in
+        0) echo "CHECK id=secureboot ok=yes value=disabled" ;;
+        1) echo "CHECK id=secureboot ok=no value=enabled" ;;
+        *) echo "CHECK id=secureboot ok=unknown value=" ;;
+    esac
+
+    local t missing=""
+    for t in sgdisk partprobe blkid lsblk findmnt mkfs.vfat mkfs.ext4 dd od zstd python3; do
+        command -v "$t" >/dev/null 2>&1 || missing="$missing,$t"
+    done
+    missing=${missing#,}
+    [ -z "$missing" ] && echo "CHECK id=tools ok=yes" || echo "CHECK id=tools ok=no missing=$missing"
+    return 0
 }
 
 # ── 方案计算 ────────────────────────────────────────────────────────────────
@@ -303,15 +419,28 @@ gk3__emit_part() {
 # 这是【唯一】会写盘的函数。
 #
 #   gk3_apply --disk X --mode wipe|alongside --rescue yes|no --release DIR \
-#             [--region-start S --region-end E --esp PATH]
+#             [--region-start S --region-end E --esp PATH] [--userdata-mib N]
+#
+# 发布目录 = GitHub Release / R2 的 install/<VER>/ 下载下来的那一份：
+#   boot.img                         必需
+#   super.img.zst 或 super.img       必需（前者是发版产物，后者是构建机 out/ 里的）
+#   recovery-ramdisk.img             可选（发版不带，见 docs/INSTALL.md）
+#   systemd-bootaa64.efi             可选（live 镜像自带 /usr/share/gaokun3/ 那份）
+#   rescue.squashfs + initramfs.img  --rescue yes 时必需；发布目录里没有就用
+#                                    启动介质上的（/media/gk3/gaokun3/，build-usb.sh 放的）
+#   wpa_supplicant.conf              可选，装进救援分区
 #
 # 进度打在 stderr：`PROGRESS <百分比> <说明>`，其余是日志。
 #
 # ⚠️★ GK3_DRYRUN=1 时【只打印不执行】。写这个开关不是为了方便 ——
 #   是因为这段代码一旦错了就是别人的一整块盘，而它没法在 CI 里跑。
 #   任何改动都应当先用 dry-run 看一遍要执行的命令序列。
+#
+# ⚠️★ 所有输入【在第一次写盘之前】验完。原先 systemd-boot 和散装内核文件的
+#   检查排在写完 super 之后 —— 缺一个就是分区表已改、super 已写、然后死在
+#   引导链那一步，留下一块半装的盘（本函数下面 ESP 那段的注释警告过同一件事）。
 gk3_apply() {
-    local disk="" mode=wipe rescue=no rel="" rstart="" rend="" esp=""
+    local disk="" mode=wipe rescue=no rel="" rstart="" rend="" esp="" ud_mib=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --disk) disk=$2; shift 2 ;;
@@ -321,6 +450,7 @@ gk3_apply() {
             --region-start) rstart=$2; shift 2 ;;
             --region-end) rend=$2; shift 2 ;;
             --esp) esp=$2; shift 2 ;;
+            --userdata-mib) ud_mib=$2; shift 2 ;;
             *) gk3_die "apply: 不认识的参数 $1"; return 1 ;;
         esac
     done
@@ -335,17 +465,110 @@ gk3_apply() {
         fi
     }
 
+    # ── 输入：全部在动盘之前验完 ─────────────────────────────────────────
+    gk3_prog 1 "检查安装文件"
+    [ -f "$rel/boot.img" ] || { gk3_die "发布目录里没有 boot.img"; return 1; }
+    local super_src
+    if   [ -f "$rel/super.img.zst" ]; then super_src=$rel/super.img.zst
+    elif [ -f "$rel/super.img" ];     then super_src=$rel/super.img
+    else gk3_die "发布目录里既没有 super.img.zst 也没有 super.img"; return 1; fi
+
+    local sdboot
+    sdboot=$(gk3__find_file systemd-bootaa64.efi "${GK3_SDBOOT:-}" /usr/share/gaokun3 "$rel" \
+             /usr/lib/systemd/boot/efi) \
+        || { gk3_die "找不到 systemd-bootaa64.efi（Debian：apt install systemd-boot-efi）"; return 1; }
+
+    local r_squash="" r_initrd=""
+    if [ "$rescue" = yes ]; then
+        r_squash=$(gk3__find_file rescue.squashfs "$rel" /media/gk3/gaokun3) \
+            || { gk3_die "选了装救援系统，但发布目录和启动介质上都没有 rescue.squashfs"; return 1; }
+        r_initrd=$(gk3__find_file initramfs.img "$rel" /media/gk3/gaokun3) \
+            || { gk3_die "选了装救援系统，但发布目录和启动介质上都没有 initramfs.img"; return 1; }
+    fi
+
+    local t
+    for t in sgdisk partprobe blkid lsblk mkfs.vfat mkfs.ext4 python3; do
+        command -v "$t" >/dev/null || { gk3_die "缺工具：$t"; return 1; }
+    done
+    case "$super_src" in *.zst) command -v zstd >/dev/null || { gk3_die "缺工具：zstd"; return 1; } ;; esac
+
+    # ★ 完整性也在动盘之前验。下载断在一半的 super.img.zst 能通过上面所有检查，
+    #   要到流式写盘写到一半才暴露 —— 那时分区表已经改了。有发版的校验清单
+    #   （install-artifacts.sha256，scripts/release.sh 生成）就逐个核；没有清单时
+    #   .zst 至少完整试解一遍（zstd -t，几秒钟）。
+    if [ -f "$rel/install-artifacts.sha256" ]; then
+        gk3_prog 1 "核对 sha256"
+        local want f got
+        while read -r want f; do
+            f=${f#\*}
+            [ -f "$rel/$f" ] || continue          # 清单里的 OTA zip 装机用不到，没下就算了
+            case "$f" in boot.img|super.img.zst|super.img) ;; *) continue ;; esac
+            got=$(sha256sum "$rel/$f" 2>/dev/null | cut -d' ' -f1)
+            [ -n "$got" ] || got=$(shasum -a 256 "$rel/$f" | cut -d' ' -f1)
+            [ "$got" = "$want" ] || { gk3_die "$f 的 sha256 与发版清单不符 —— 下载不完整或被改过（盘还没动过）"; return 1; }
+            echo "$f：sha256 与发版清单一致"
+        done < "$rel/install-artifacts.sha256"
+    elif [ "${super_src%.zst}" != "$super_src" ]; then
+        gk3_prog 1 "试解 super.img.zst"
+        zstd -tq --long=31 "$super_src" \
+            || { gk3_die "super.img.zst 不完整（zstd -t 没通过）—— 重新下载（盘还没动过）"; return 1; }
+    fi
+
+    # boot.img 当场拆开：拆不开说明镜像有问题 —— 而此刻盘还一个字节都没动。
+    # （拆包逻辑与设备侧 bootimg_extract.cpp 同源，见 gk3-bootimg.py 的文件头）
+    local parts; parts=$(mktemp -d)
+    python3 "$GK3_LIBDIR/gk3-bootimg.py" "$rel/boot.img" "$parts" \
+        || { rm -rf "$parts"; gk3_die "boot.img 拆不开 —— 盘还没动过"; return 1; }
+    # ★ cmdline 取自 boot.img（BOARD_KERNEL_CMDLINE），不在这里另抄一份：
+    #   这里原先手抄的那份缺 androidboot.boot_devices（首阶段 by-name 解析靠它）、
+    #   init=/init、himax disable_pressure=0 等（TODO B15）。
+    local cmdline; cmdline=$(tr -d '\r\n' < "$parts/cmdline.txt")
+
+    # ── 双系统：别人的 ESP 在动盘之前验完 ────────────────────────────────
+    # ⚠️★ 2026-09-24 loop 端到端测试抓到：这里原先在【写完分区表之后】才按
+    #   PARTLABEL 找名叫 "esp" 的分区 —— 而 Windows 的 ESP 叫 "EFI system partition"，
+    #   于是双系统模式在任何一台 Windows 机器上都必然失败，并留下一串建了一半的
+    #   分区。空间检查也排在分区表之后（下面格式化那段的注释说过为什么那样不行）。
+    #   双系统的 apply 此前从未真跑过：真盘上验过的只是 gk3_plan 的方案计算。
+    if [ "$mode" != wipe ]; then
+        [ -n "$esp" ] && [ -b "$esp" ] || { rm -rf "$parts"; gk3_die "双系统模式要 --esp <现有 ESP 的分区节点>，给的是 '${esp}'"; return 1; }
+        if [ "$DRY" != 1 ]; then
+            local etype efs
+            efs=$(blkid -o value -s TYPE "$esp" 2>/dev/null)
+            # ⚠️ 不用 lsblk -o PARTTYPE：它要 udev 数据库，没有 udev 时是空串（容器里实测）。
+            #    blkid -p 是 libblkid 直接读分区表，救援系统里也成立。
+            etype=$(blkid -p -o value -s PART_ENTRY_TYPE "$esp" 2>/dev/null | tr 'a-f' 'A-F')
+            [ "$efs" = vfat ] || { rm -rf "$parts"; gk3_die "$esp 不是 FAT 文件系统（是 '${efs}'）—— 不像一个 ESP"; return 1; }
+            [ "$etype" = C12A7328-F81F-11D2-BA4B-00A0C93EC93B ] \
+                || { rm -rf "$parts"; gk3_die "$esp 的分区类型不是 EFI System（是 '${etype}'）"; return 1; }
+            # ⚠️★ ② 真的去量它有多少空闲。原先只在 plan 里打一行 need_mib=150
+            #   却从不验证 —— 不够的话分区表已经改完、super 已经写完，然后死在
+            #   装引导链那一步，留下一块半装的盘。
+            local em fm; em=$(mktemp -d)
+            if mount -o ro -t vfat "$esp" "$em" 2>/dev/null; then
+                fm=$(df -m "$em" | awk 'NR==2{print $4}')
+                umount "$em"; rmdir "$em" 2>/dev/null
+                echo "现有 ESP $esp 空闲 ${fm} MiB（需要 ${GK3_ESP_NEED_MIB}）"
+                if [ "${fm:-0}" -lt "$GK3_ESP_NEED_MIB" ]; then
+                    rm -rf "$parts"
+                    gk3_die "ESP 空间不够：只有 ${fm} MiB，需要 ${GK3_ESP_NEED_MIB} MiB。请先在原系统里清理 EFI 分区（盘还没动过）"
+                    return 1
+                fi
+            else
+                rmdir "$em" 2>/dev/null; rm -rf "$parts"
+                gk3_die "挂不上现有 ESP $esp —— 不敢往一个读不了的 ESP 上装引导链（盘还没动过）"
+                return 1
+            fi
+        fi
+    fi
+
     # ── 安全闸 1：不能写自己正跑在上面的那块盘 ──────────────────────────
     # ⚠️ 安装器要么从 U 盘跑、要么从内置盘的救援分区跑。后者做整盘清空
     #    等于把自己脚下的地板锯掉 —— 而且是【跑到一半】才死，盘已经毁了。
-    local medium_dev medium_disk
-    medium_dev=$(findmnt -no SOURCE /media/gk3 2>/dev/null || echo "")
-    if [ -n "$medium_dev" ]; then
-        medium_disk=$(lsblk -no PKNAME "$medium_dev" 2>/dev/null | head -1)
-        [ -n "$medium_disk" ] && medium_disk=/dev/$medium_disk
-    fi
-    if [ "$mode" = wipe ] && [ -n "${medium_disk:-}" ] && [ "$medium_disk" = "$disk" ]; then
-        gk3_die "拒绝：安装介质（${medium_dev}）就在目标盘 $disk 上，整盘清空会锯掉自己脚下的地板"
+    local medium_disk; medium_disk=$(gk3__medium_disk)
+    if [ "$mode" = wipe ] && [ -n "$medium_disk" ] && [ "$medium_disk" = "$disk" ]; then
+        rm -rf "$parts"
+        gk3_die "拒绝：安装介质就在目标盘 $disk 上，整盘清空会锯掉自己脚下的地板"
         return 1
     fi
 
@@ -353,6 +576,7 @@ gk3_apply() {
     local mounted
     mounted=$(lsblk -nro MOUNTPOINT "$disk" 2>/dev/null | grep -v '^$' | tr '\n' ' ')
     if [ -n "$mounted" ] && [ "$mode" = wipe ]; then
+        rm -rf "$parts"
         gk3_die "拒绝：$disk 上还有挂载着的分区（${mounted}）"
         return 1
     fi
@@ -362,18 +586,21 @@ gk3_apply() {
     local plan
     plan=$(gk3_plan --disk "$disk" --mode "$mode" --rescue "$rescue" \
                     ${rstart:+--region-start "$rstart"} ${rend:+--region-end "$rend"} \
-                    ${esp:+--esp "$esp"}) || { echo "$plan"; return 1; }
-    printf '%s\n' "$plan" | grep -q '^PLANERR' && { printf '%s\n' "$plan" | grep '^PLANERR'; return 1; }
+                    ${esp:+--esp "$esp"} ${ud_mib:+--userdata-mib "$ud_mib"}) \
+        || { echo "$plan"; rm -rf "$parts"; return 1; }
+    if printf '%s\n' "$plan" | grep -q '^PLANERR'; then
+        printf '%s\n' "$plan" | grep '^PLANERR'; rm -rf "$parts"; return 1
+    fi
 
     # ── 建分区 ──────────────────────────────────────────────────────────
     # ⚠️★ ④ 动手之前先把分区表备份到介质上。出事能一条命令还原：
     #     sgdisk --load-backup=<文件> <盘>
     #   代价是几十 KB 和一秒钟；没有它的话，改错分区表就只能靠猜。
-    if [ "${GK3_DRYRUN:-0}" != 1 ]; then
+    if [ "$DRY" != 1 ]; then
         local bkdir bk
         bkdir=/media/gk3/gaokun3
         mount -o remount,rw /media/gk3 2>/dev/null || true
-        [ -d "$bkdir" ] || bkdir=/tmp
+        [ -d "$bkdir" ] && [ -w "$bkdir" ] || bkdir=/tmp
         bk="$bkdir/gpt-backup-$(basename "$disk")-$(date +%Y%m%d-%H%M%S).bin"
         if sgdisk --backup="$bk" "$disk" >/dev/null 2>&1; then
             echo "分区表已备份到 ${bk}（还原：sgdisk --load-backup=$bk ${disk}）"
@@ -407,7 +634,11 @@ EOF
     #   完全不可预料，而此时分区表已经写下去了，盘已经不是原来的盘。
     #   **宁可在这里停住，也不能带着空路径继续。**
     local p_esp p_meta p_data p_super p_boota p_bootb p_resc p_misc
-    p_esp=$(gk3__need_part "$disk" esp "$mode")     || return 1
+    if [ "$mode" = wipe ]; then
+        p_esp=$(gk3__need_part "$disk" esp "$mode") || return 1
+    else
+        p_esp=$esp    # 别人的 ESP：名字不归我们管（Windows 叫它 "EFI system partition"）
+    fi
     p_misc=$(gk3__need_part "$disk" misc "$mode")   || return 1
     p_meta=$(gk3__need_part "$disk" metadata "$mode")   || return 1
     p_data=$(gk3__need_part "$disk" userdata "$mode")   || return 1
@@ -421,53 +652,21 @@ EOF
     if [ "$mode" = wipe ]; then
         gk3__run mkfs.vfat -F 32 -n ESP "$p_esp" || return 1
     else
-        p_esp=$esp    # 复用现有 ESP，绝不格式化它
-        # ⚠️★ ② 真的去量它有多少空闲。原先只在 plan 里打一行 need_mib=150
-        #   却从不验证 —— 不够的话分区表已经改完、super 已经写完，然后死在
-        #   装引导链那一步，留下一块半装的盘。
-        if [ "${GK3_DRYRUN:-0}" != 1 ]; then
-            local em fm; em=$(mktemp -d)
-            if mount -t vfat "$p_esp" "$em" 2>/dev/null; then
-                fm=$(df -m "$em" | awk "NR==2{print \$4}")
-                umount "$em"; rmdir "$em" 2>/dev/null
-                echo "现有 ESP $p_esp 空闲 ${fm} MiB（需要 ${GK3_ESP_NEED_MIB}）"
-                if [ "${fm:-0}" -lt "$GK3_ESP_NEED_MIB" ]; then
-                    gk3_die "ESP 空间不够：只有 ${fm} MiB，需要 ${GK3_ESP_NEED_MIB} MiB。请先在原系统里清理 EFI 分区。"
-                    return 1
-                fi
-            else
-                rmdir "$em" 2>/dev/null
-                gk3_die "挂不上现有 ESP $p_esp —— 不敢往一个读不了的 ESP 上装引导链"
-                return 1
-            fi
-        fi
-        echo "复用现有 ESP：${p_esp}（不格式化）"
+        echo "复用现有 ESP：${p_esp}（不格式化；空间与类型在动盘之前已验过）"
     fi
     gk3__run mkfs.ext4 -q -F -L metadata "$p_meta" || return 1
     gk3__run mkfs.ext4 -q -F -L userdata "$p_data" || return 1
-    # misc 必须是全零：bootloader_control 的初始状态就是空
-    gk3__run dd if=/dev/zero of="$p_misc" bs=1M count=4 status=none || return 1
+    # misc 必须是全零：libboot_control 读到坏 CRC 才会初始化一份新的 bootloader_control
+    gk3__run dd if=/dev/zero of="$p_misc" bs=1M count="$GK3_MISC_MIB" conv=fsync status=none || return 1
     [ "$rescue" = yes ] && { gk3__run mkfs.ext4 -q -F -L gk3rescue "$p_resc" || return 1; }
 
-    # ── 写镜像 ──────────────────────────────────────────────────────────
-    gk3_prog 30 "展开并写入 super.img（约 12 GiB）"
-    [ -f "$rel/super.img" ] || { gk3_die "发布目录里没有 super.img"; return 1; }
-    # ⚠️ super.img 是 Android sparse 格式，直接 dd 会得到一个"校验和对得上
-    #    但没有 LP 元数据"的分区（stage2-findings 第 1 节踩过）。
-    if [ "$DRY" = 1 ]; then echo "DRY: simg2img $rel/super.img $p_super"
-    else
-        if head -c4 "$rel/super.img" | od -An -tx1 | tr -d ' \n' | grep -qi '3aff26ed'; then
-            simg2img "$rel/super.img" "$p_super" || { gk3_die "simg2img 失败"; return 1; }
-        else
-            echo "super.img 不是 sparse 格式，直接写"
-            dd if="$rel/super.img" of="$p_super" bs=4M status=none || return 1
-        fi
-    fi
+    # ── 写 super（30% → 70%，进度由 gk3-unsparse.py 按块推进）──────────
+    gk3_prog 30 "写入 super"
+    gk3__write_super "$super_src" "$p_super" || return 1
 
     gk3_prog 70 "写入 boot_a / boot_b"
-    [ -f "$rel/boot.img" ] || { gk3_die "发布目录里没有 boot.img"; return 1; }
-    gk3__run dd if="$rel/boot.img" of="$p_boota" bs=4M status=none || return 1
-    gk3__run dd if="$rel/boot.img" of="$p_bootb" bs=4M status=none || return 1
+    gk3__run dd if="$rel/boot.img" of="$p_boota" bs=4M conv=fsync status=none || return 1
+    gk3__run dd if="$rel/boot.img" of="$p_bootb" bs=4M conv=fsync status=none || return 1
 
     # ── 引导链 ──────────────────────────────────────────────────────────
     # ⚠️ 少了这一步，前面所有东西都写对了，机器照样起不来 —— 这台机器是 UEFI，
@@ -475,39 +674,74 @@ EOF
     #    （boot_a/boot_b 有内容是为了让 update_engine 的 A/B 流程完整。）
     gk3_prog 80 "安装引导链"
     local mid; mid=${GK3_MACHINE_ID:-$(cat /etc/machine-id 2>/dev/null || echo 8a29534fa802480d9fbb71aa18c01d7b)}
+    # ⚠️ 挂载点用 mktemp，不用 /mnt/esp —— CLAUDE.md 操作禁忌 4：共享的挂载点
+    #    会被另一个 shell 里"顺手看一眼"的人 umount 掉，于是这一步静默失败。
     local mnt; mnt=$(mktemp -d)
     gk3__run mount -t vfat "$p_esp" "$mnt" || return 1
 
-    local sdboot=${GK3_SDBOOT:-/usr/share/gaokun3/systemd-bootaa64.efi}
-    [ -f "$sdboot" ] || sdboot="$rel/systemd-bootaa64.efi"
-    [ -f "$sdboot" ] || { umount "$mnt"; gk3_die "找不到 systemd-bootaa64.efi"; return 1; }
-
-    # 内核/dtb/ramdisk 用【松散文件】，不从 boot.img 里拆 ——
-    # 救援系统里没有 Android 的 unpack_bootimg，而我们的发布本来就带这三个文件。
-    local f
-    for f in Image gaokun3.dtb ramdisk.img; do
-        [ -f "$rel/$f" ] || { umount "$mnt"; gk3_die "发布目录里缺 $f"; return 1; }
-    done
-
-    if [ "${GK3_DRYRUN:-0}" != 1 ]; then
-        mkdir -p "$mnt/EFI/BOOT" "$mnt/EFI/systemd" "$mnt/loader/entries"                  "$mnt/$mid/android/slot_a" "$mnt/$mid/android/slot_b" "$mnt/$mid/rescue"
+    if [ "$DRY" != 1 ]; then
+        mkdir -p "$mnt/EFI/BOOT" "$mnt/EFI/systemd" "$mnt/loader/entries" \
+                 "$mnt/$mid/android/slot_a" "$mnt/$mid/android/slot_b"
+        # --no-variables 那条路的等价物：固件实际走的是可移动介质回落路径
+        # EFI/BOOT/BOOTAA64.EFI（内核带 efi=noruntime，不指望 EFI 启动变量）
+        #
+        # ⚠️ 双系统时这个位置上原本是【别人的】回落引导（Windows 装机会放一份
+        #   bootmgfw.efi 的拷贝）。覆盖前留一份 —— 当年手工迁移就是这么做的
+        #   （scripts/archive/esp-migrate-to-internal.sh:120-128 的 .bak-windows）。
+        #   systemd-boot 会自己认出 EFI/Microsoft/Boot/bootmgfw.efi 并列进菜单，
+        #   所以 Windows 照样能进；留这一份是给"想把一切恢复原样"的人。
+        #   （FAT 不分大小写：EFI/Boot/bootaa64.efi 就是这个文件。）
+        #   只在第一次装时留：重装不能拿我们自己的 systemd-boot 把原件覆盖掉。
+        local f
+        for f in EFI/BOOT/BOOTAA64.EFI loader/loader.conf; do
+            if [ -f "$mnt/$f" ] && [ ! -e "$mnt/$f.before-gaokun3" ] \
+               && ! cmp -s "$mnt/$f" "$sdboot"; then
+                cp -p "$mnt/$f" "$mnt/$f.before-gaokun3"
+                echo "原有的 $f 已备份为 $f.before-gaokun3"
+            fi
+        done
         cp "$sdboot" "$mnt/EFI/BOOT/BOOTAA64.EFI"
         cp "$sdboot" "$mnt/EFI/systemd/systemd-bootaa64.efi"
         local slot
         for slot in a b; do
-            cp "$rel/Image" "$rel/gaokun3.dtb" "$rel/ramdisk.img" "$mnt/$mid/android/slot_$slot/"
+            cp "$parts/Image" "$parts/gaokun3.dtb" "$parts/ramdisk.img" "$mnt/$mid/android/slot_$slot/"
+            # 文件名是承重的：boot_control HAL 按 *-android-a.conf / *-android-b.conf
+            # 改写 loader.conf 的 default（EspSlot.cpp:41-43）；OTA postinstall 只改
+            # options 那一行、只往 slot_<后缀>/ 写这三个文件名。改一边就要改另一边。
             cat > "$mnt/loader/entries/$mid-android-$slot.conf" <<ENTRY
-title      Android (slot_$slot)
-version    android-$slot
-sort-key   android$slot
+title      crDroid 16.0 (gaokun3) — slot _$slot
+version    gaokun3-slot-$slot
+sort-key   zandroid$slot
+options    $cmdline androidboot.slot_suffix=_$slot
 linux      /$mid/android/slot_$slot/Image
 devicetree /$mid/android/slot_$slot/gaokun3.dtb
 initrd     /$mid/android/slot_$slot/ramdisk.img
-options    androidboot.slot_suffix=_$slot androidboot.hardware=gaokun3 androidboot.selinux=permissive androidboot.veritymode=disabled androidboot.verifiedbootstate=orange androidboot.flash.locked=0 clk_ignore_unused pd_ignore_unused arm64.nopauth iommu.passthrough=0 iommu.strict=0 efi=noruntime deferred_probe_timeout=10 firmware_class.path=/vendor/firmware/ fbcon=rotate:1 loglevel=4
 ENTRY
         done
+
+        # Android recovery：发版不带（docs/INSTALL.md），自己编了才有。
+        # ⚠️★ 启动项默认【不】建：2026-08-20 实测它在本机进复位循环且不留 panic 记录，
+        #   15 秒菜单里误选一次就得有人跑到机器旁按电源键。ramdisk 照样铺（无害）。
+        if [ -f "$rel/recovery-ramdisk.img" ]; then
+            for slot in a b; do
+                cp "$rel/recovery-ramdisk.img" "$mnt/$mid/android/slot_$slot/"
+                if [ "${GK3_ENABLE_RECOVERY_ENTRY:-0}" = 1 ]; then
+                    sed -e "s|^initrd .*|initrd     /$mid/android/slot_$slot/recovery-ramdisk.img|" \
+                        -e "s|^title .*|title      Recovery (gaokun3) — slot _$slot|" \
+                        -e "s|^version .*|version    gaokun3-recovery-$slot|" \
+                        -e "s|^sort-key .*|sort-key   zzrecovery$slot|" \
+                        "$mnt/loader/entries/$mid-android-$slot.conf" \
+                        > "$mnt/loader/entries/$mid-recovery-$slot.conf"
+                fi
+            done
+        fi
+
         # ★ 默认落点是 slot_a；救援系统装了的话它排在前面（sort-key linux1），
         #   但【不设成 default】—— 默认必须是能用的系统。
+        #   （命令行版原先把救援设成 default，理由是"默认落点要能远程接入"。
+        #    但 boot_control HAL 在 Android 第一次标记启动成功时就会把 default
+        #    改写成 *-android-<槽>.conf（EspSlot.cpp:120-172）—— 那个选择只活到
+        #    第一次开机，代价却是每个新用户第一次重启落进一个他不认识的系统。）
         cat > "$mnt/loader/loader.conf" <<LOADER
 timeout 15
 console-mode keep
@@ -515,44 +749,118 @@ editor no
 default *-android-a.conf
 LOADER
         if [ "$rescue" = yes ]; then
-            [ -f "$rel/initramfs.img" ] && cp "$rel/initramfs.img" "$mnt/$mid/rescue/initramfs.img"
-            cat > "$mnt/loader/entries/$mid-rescue-alpine.conf" <<RESC
-title      救援系统（Alpine，全内存）
-version    alpine-rescue
+            mkdir -p "$mnt/$mid/rescue"
+            cp "$r_initrd" "$mnt/$mid/rescue/initramfs.img"
+            # 救援系统与 Android 共用内核与 dtb（docs/stage7-live-installer.md §2.3），
+            # 只多一个 initramfs；cmdline 从 Android 那份派生（见 gk3__rescue_cmdline）
+            cat > "$mnt/loader/entries/$mid-rescue.conf" <<RESC
+title      救援系统（全内存）
+version    gaokun3-rescue
 sort-key   linux1
 linux      /$mid/android/slot_a/Image
 devicetree /$mid/android/slot_a/gaokun3.dtb
 initrd     /$mid/rescue/initramfs.img
-options    clk_ignore_unused pd_ignore_unused arm64.nopauth iommu.passthrough=0 iommu.strict=0 efi=noruntime fbcon=rotate:1 loglevel=4 panic=10 gk3.squash=/gaokun3/rescue.squashfs
+options    $(gk3__rescue_cmdline "$cmdline")
 RESC
         fi
         sync
     else
-        echo "DRY: 往 $p_esp 写 systemd-boot、两个 Android 启动项、内核/dtb/ramdisk"
+        echo "DRY: 往 $p_esp 写 systemd-boot、两个 Android 启动项（options=$cmdline …）、内核/dtb/ramdisk"
     fi
     gk3__run umount "$mnt" || true
     rmdir "$mnt" 2>/dev/null || true
 
     # ── 救援系统 ────────────────────────────────────────────────────────
-    if [ "$rescue" = yes ] && [ -f "$rel/rescue.squashfs" ]; then
+    if [ "$rescue" = yes ]; then
         gk3_prog 92 "写入救援系统"
         local rmnt; rmnt=$(mktemp -d)
         gk3__run mount "$p_resc" "$rmnt" || return 1
-        if [ "${GK3_DRYRUN:-0}" != 1 ]; then
+        if [ "$DRY" != 1 ]; then
             mkdir -p "$rmnt/gaokun3"
-            cp "$rel/rescue.squashfs" "$rmnt/gaokun3/rescue.squashfs"
+            cp "$r_squash" "$rmnt/gaokun3/rescue.squashfs"
             # ⚠️ WiFi 凭据【不打包进镜像】：安装器把用户当前用的那份复制过去，
             #    这样救援系统一开机就能连上同一个网。见 gk3-wifi 的注释。
-            [ -f "$rel/wpa_supplicant.conf" ] && {
-                install -Dm600 "$rel/wpa_supplicant.conf" "$rmnt/gaokun3/wpa_supplicant.conf"; }
+            #    来源按优先级：发布目录里放的 → 安装器里刚连上的（gk3_wifi_connect 写的）
+            #    → 做 U 盘时放在介质上的。
+            local wconf
+            if wconf=$(gk3__find_file wpa_supplicant.conf "$rel" /run/gaokun3 /media/gk3/gaokun3); then
+                install -Dm600 "$wconf" "$rmnt/gaokun3/wpa_supplicant.conf"
+                echo "救援系统的 WiFi 配置取自 $wconf"
+            else
+                echo "警告：没有 WiFi 配置可带给救援系统 —— 它开机后连不上网，只能在机器旁操作"
+            fi
             sync
         fi
         gk3__run umount "$rmnt" || true
         rmdir "$rmnt" 2>/dev/null || true
     fi
 
+    rm -rf "$parts"
     gk3_prog 100 "完成"
     return 0
+}
+
+# 在几个目录里按顺序找一个文件，找到就打印完整路径。空目录参数跳过。
+gk3__find_file() {
+    local name=$1 d; shift
+    for d in "$@"; do
+        [ -n "$d" ] || continue
+        # 允许直接给文件路径（GK3_SDBOOT 就是一个文件）
+        if [ -f "$d" ] && [ "$(basename "$d")" = "$name" ]; then echo "$d"; return 0; fi
+        [ -f "$d/$name" ] && { echo "$d/$name"; return 0; }
+    done
+    return 1
+}
+
+# 写 super。输入是 .zst（发版产物）或 super.img（sparse 或 raw）。
+# ⚠️ 不用 simg2img：它喂管道会失败（理由见 gk3-unsparse.py 文件头），
+#    而 .zst 要么走管道、要么先落一份临时文件 —— 12 GiB 的 tmpfs 我们没有。
+gk3__write_super() {
+    local src=$1 dst=$2
+    if [ "${GK3_DRYRUN:-0}" = 1 ]; then echo "DRY: 展开 $src → $dst（gk3-unsparse.py）"; return 0; fi
+    local us="$GK3_LIBDIR/gk3-unsparse.py"
+    case "$src" in
+        *.zst)
+            # ⚠️ 两段的退出码都要看（CLAUDE.md 运维坑 1：只看管道尾巴会漏）。
+            #    下载断在一半的 .zst → zstd 报错且提前 EOF → unsparse 也报错；
+            #    反过来 unsparse 先死时 zstd 会吃 SIGPIPE。
+            #    --long=31 只是放宽解压时允许的窗口上限，不多占内存（release.sh 用 -19 --long 压）。
+            zstd -dc --long=31 "$src" | python3 "$us" --progress 30 40 "$dst"
+            local -a rc=( "${PIPESTATUS[@]}" )
+            if [ "${rc[0]}" != 0 ] || [ "${rc[1]}" != 0 ]; then
+                gk3_die "super 写入失败（zstd=${rc[0]} gk3-unsparse=${rc[1]}）—— .zst 下载完整吗？"
+                return 1
+            fi ;;
+        *)
+            if head -c4 "$src" | od -An -tx1 | tr -d ' \n' | grep -qi '^3aff26ed$'; then
+                python3 "$us" --progress 30 40 "$dst" < "$src" || { gk3_die "super 展开失败"; return 1; }
+            else
+                echo "super.img 不是 sparse 格式，直接写"
+                dd if="$src" of="$dst" bs=4M conv=fsync status=none || { gk3_die "dd super 失败"; return 1; }
+            fi ;;
+    esac
+    # ★ 判格式不判校验和：偏移 4096 处必须是 LP geometry 魔数。
+    #   ⚠️ 命令行版一直有这道检查（install-gaokun3.sh 原 :131-132），这个库里漏了。
+    #      dd 了 sparse 镜像的 super "看着字节都对"却没有 LP 元数据，
+    #      Android 首阶段挂载失败后主动 reboot()，不留任何日志（docs/stage2-findings.md §1）。
+    local lp; lp=$(dd if="$dst" bs=1 skip=4096 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    if [ "$lp" != "67446c61" ]; then
+        gk3_die "super 偏移 4096 处不是 LP geometry 魔数（读到 '${lp}'）—— 写进去的不是一份能用的 super"
+        return 1
+    fi
+    echo "super：LP geometry 魔数正确"
+}
+
+# 救援系统的 cmdline：从 Android 那份（boot.img 里的 BOARD_KERNEL_CMDLINE）派生，
+# 去掉只给 Android 用的参数，再加上救援 initramfs 自己的。
+# ★ 不另抄一份：原先手抄的那份缺 usbhid.quirks（键盘盖）和 himax disable_pressure=0 ——
+#   和 Android 那份（TODO B15）是同一种漂移。
+gk3__rescue_cmdline() {
+    local keep
+    keep=$(printf '%s\n' "$1" | tr ' ' '\n' \
+           | grep -v -e '^androidboot\.' -e '^init=' -e '^firmware_class\.path=' -e '^$' \
+           | tr '\n' ' ')
+    echo "${keep}loglevel=4 panic=10 gk3.squash=/gaokun3/rescue.squashfs"
 }
 
 # 解析分区节点，解析不出来就直接失败。
@@ -790,45 +1098,61 @@ gk3_wifi_up() {
     done
 }
 
-# 扫描。输出：WIFI ssid=... signal=<dBm> secure=yes|no
-# ⚠️ SSID 里可能有空格，所以它放在【行尾】，解析时取 ssid= 之后的全部。
+# 扫描。输出（字段含义见 gk3-wpa-scan.py 的文件头），按信号从强到弱：
+#   WIFI signal=<dBm> secure=yes|no auth=open|owe|wep|psk|sae|eap ssid_hex=<原始字节> ssid=<已编码>
+# ★ 解析交给 gk3-wpa-scan.py：wpa_supplicant 把 32–126 以外的字节都转成 \xNN
+#   （中文 SSID 全是转义串），且 scan_results 是制表符分隔的 —— 原先的 awk 按
+#   任意空白切、再用单空格拼回，"My  Net" 会变成 "My Net"，于是连不上。
 gk3_wifi_scan() {
     gk3_wifi_up || return 1
     local ifc=$GK3_WIFI_IF
     wpa_cli -i "$ifc" -p "$GK3_WPA_CTRL" scan >/dev/null 2>&1
     sleep 3
     wpa_cli -i "$ifc" -p "$GK3_WPA_CTRL" scan_results 2>/dev/null \
-    | awk 'NR>1 && NF>=5 {
-        sig=$3; flags=$4;
-        ssid=""; for(i=5;i<=NF;i++) ssid=ssid (i>5?" ":"") $i;
-        if (ssid == "") next;
-        sec = (flags ~ /WPA|WEP/) ? "yes" : "no";
-        # 同名的只留信号最强的那个（2.4G/5G 双频会出现两条）
-        if (!(ssid in best) || sig > best[ssid]) { best[ssid]=sig; secure[ssid]=sec }
-      }
-      END { for (s in best) printf "WIFI signal=%s secure=%s ssid=%s\n", best[s], secure[s], s }' \
-    | sort -t= -k2 -rn
+        | python3 "$GK3_LIBDIR/gk3-wpa-scan.py"
 }
 
-# 连接。$1=SSID $2=密码（空 = 开放网络）
+# 连接。$1=SSID（或 hex:<gk3_wifi_scan 给的 ssid_hex>）$2=密码（空 = 开放网络）
+#
+# ★ 优先用 hex:<…>。wpa_supplicant 的网络配置里，不带引号的 SSID 就是十六进制
+#   （wpa-2.10 src/utils/common.c:679-686）—— 任意字节都不会被引号、空格、
+#   转义搞坏，中文 / GBK 编码的 SSID 也一样。
+# ★ 连上之后把这份配置写到 /run/gaokun3/wpa_supplicant.conf：gk3_apply 会把它
+#   装进救援分区，于是装好的救援系统一开机就能连上同一个网 —— 否则就是
+#   "救援起来了但网没起来 = 一台连不上的机器"（docs/stage7-live-installer.md:200-202）。
 gk3_wifi_connect() {
-    local ssid=$1 psk=${2:-}
+    local ssid=$1 psk=${2:-} ssid_cfg show
+    case "$ssid" in
+        hex:*) ssid_cfg=${ssid#hex:}
+               case "$ssid_cfg" in ''|*[!0-9a-fA-F]*) gk3_die "SSID 的十六进制写法不对：$ssid_cfg"; return 1 ;; esac
+               [ $(( ${#ssid_cfg} % 2 )) = 0 ] || { gk3_die "SSID 的十六进制长度是奇数"; return 1; }
+               show="所选网络" ;;
+        *)     ssid_cfg="\"$ssid\""; show=$ssid ;;
+    esac
+    # ⚠️ 长度不对时 wpa_supplicant 直接拒绝（wpa_supplicant/config.c:571，要 8–63 个字符）。
+    #    原先这里把 set_network 的返回值扔掉了，于是密码太短要白等 20 秒超时，
+    #    然后报"密码错？信号弱？"—— 一个本可以立刻说清楚的错误。
+    if [ -n "$psk" ] && { [ ${#psk} -lt 8 ] || [ ${#psk} -gt 63 ]; }; then
+        gk3_die "WiFi 密码要 8–63 个字符，这个是 ${#psk} 个"; return 1
+    fi
     gk3_wifi_up || return 1
     local ifc=$GK3_WIFI_IF W
     W="wpa_cli -i $ifc -p $GK3_WPA_CTRL"
     local id
     id=$($W add_network 2>/dev/null | tail -1)
     case "$id" in ''|*[!0-9]*) gk3_die "add_network 失败"; return 1 ;; esac
-    $W set_network "$id" ssid "\"$ssid\"" >/dev/null 2>&1
+    [ "$($W set_network "$id" ssid "$ssid_cfg" 2>/dev/null | tail -1)" = OK ] \
+        || { gk3_die "wpa_supplicant 不接受这个 SSID"; return 1; }
     if [ -n "$psk" ]; then
-        $W set_network "$id" psk "\"$psk\"" >/dev/null 2>&1
+        [ "$($W set_network "$id" psk "\"$psk\"" 2>/dev/null | tail -1)" = OK ] \
+            || { gk3_die "wpa_supplicant 不接受这个密码（含控制字符？）"; return 1; }
     else
         $W set_network "$id" key_mgmt NONE >/dev/null 2>&1
     fi
     $W enable_network "$id" >/dev/null 2>&1
     $W select_network "$id" >/dev/null 2>&1
 
-    gk3_prog 20 "正在连接 $ssid"
+    gk3_prog 20 "正在连接 $show"
     local i=0 st
     while [ "$i" -lt 40 ]; do
         st=$($W status 2>/dev/null | sed -n 's/^wpa_state=//p')
@@ -840,7 +1164,7 @@ gk3_wifi_connect() {
         esac
         i=$((i+1)); sleep 0.5
     done
-    [ "$st" = COMPLETED ] || { gk3_die "连不上 ${ssid}（密码错？信号弱？）"; return 1; }
+    [ "$st" = COMPLETED ] || { gk3_die "连不上 ${show}（密码错？信号弱？）"; return 1; }
 
     gk3_prog 60 "取 IP 地址"
     dhcpcd -n "$ifc" >/dev/null 2>&1 || dhcpcd "$ifc" >/dev/null 2>&1
@@ -851,6 +1175,15 @@ gk3_wifi_connect() {
     done
     ip -4 addr show "$ifc" 2>/dev/null | grep -q 'inet ' \
         || { gk3_die "连上了但没拿到 IP（DHCP 没响应？）"; return 1; }
+    # 存一份给 gk3_apply 装进救援分区（0600：里面是明文密码，和原先
+    # "把用户当前用的那份 wpa_supplicant.conf 复制过去"是同一个设计）
+    ( umask 077; mkdir -p /run/gaokun3
+      { echo "ctrl_interface=$GK3_WPA_CTRL"
+        echo "update_config=1"
+        echo "network={"
+        echo "	ssid=$ssid_cfg"
+        if [ -n "$psk" ]; then echo "	psk=\"$psk\""; else echo "	key_mgmt=NONE"; fi
+        echo "}"; } > /run/gaokun3/wpa_supplicant.conf ) 2>/dev/null || true
     gk3_prog 100 "已连接"
     gk3_net_status
 }
@@ -859,7 +1192,7 @@ gk3_net_status() {
     local ifc=$GK3_WIFI_IF ip4 ssid
     ip4=$(ip -4 addr show "$ifc" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -1)
     ssid=$(wpa_cli -i "$ifc" -p "$GK3_WPA_CTRL" status 2>/dev/null | sed -n 's/^ssid=//p')
-    echo "NET if=$ifc ip=${ip4:-none} ssid=${ssid:-none} online=$([ -n "$ip4" ] && echo yes || echo no)"
+    echo "NET if=$ifc ip=${ip4:-none} ssid=$(gk3__enc "${ssid:-none}") online=$([ -n "$ip4" ] && echo yes || echo no)"
 }
 
 # ── 网络安装 ────────────────────────────────────────────────────────────────
@@ -889,11 +1222,20 @@ gk3_net_fetch() {
     #    1.2 GB 要十几分钟，中途断一次全部重来是不可接受的。
     curl -fL --retry 3 --retry-delay 2 --continue-at - -o "$dst" "$url" 2>&1 \
         | tr '\r' '\n' | awk '/^ *[0-9]/{ if ($1+0 > 0) printf "PROGRESS %d 下载中 %s\n", $1, $1"%" }' >&2
-    [ -f "$dst" ] || { gk3_die "下载失败"; return 1; }
+    # ⚠️★ 取 curl 自己的退出码，不看管道尾巴（CLAUDE.md 运维坑 1）。原先只判
+    #   [ -f "$dst" ] —— 断在 77% 的文件也"存在"，于是报下载完成。
+    local rc=${PIPESTATUS[0]}
+    [ -f "$dst" ] || { gk3_die "下载失败（curl 退出码 ${rc}）"; return 1; }
+    if [ "$rc" != 0 ]; then
+        # 续传一个其实已经下完的文件时服务器回 416，curl 报错而文件是好的 ——
+        # 有 sha256 就让校验来裁决，没有就只能按失败算
+        [ -n "$want" ] || { gk3_die "下载失败（curl 退出码 ${rc}），且没有 sha256 可以核对"; return 1; }
+        echo "curl 退出码 ${rc}，交给 sha256 裁决"
+    fi
     if [ -n "$want" ]; then
         gk3_prog 95 "校验 sha256"
         local got; got=$(sha256sum "$dst" | cut -d' ' -f1)
-        [ "$got" = "$want" ] || { gk3_die "sha256 不符：$got != $want"; return 1; }
+        [ "$got" = "$want" ] || { gk3_die "sha256 不符：$got != ${want}（下载不完整或被篡改；重跑会从断点续传）"; return 1; }
         echo "sha256 校验通过"
     fi
     gk3_prog 100 "下载完成"

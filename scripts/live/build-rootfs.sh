@@ -262,7 +262,11 @@ fi
 # ---- 6b. 安装器后端 --------------------------------------------------------
 # 图形安装器与命令行安装器共用它。放进镜像，图形前端默认从这里加载。
 install -Dm644 "$LIVE/installer-lib.sh" "$ROOTFS/usr/share/gaokun3/installer-lib.sh"
-ok "带上了安装器后端 installer-lib.sh"
+# 库调用的三个辅助脚本必须放在它旁边（installer-lib.sh 里的 GK3_LIBDIR）
+for f in gk3-unsparse.py gk3-bootimg.py gk3-wpa-scan.py; do
+    install -Dm755 "$LIVE/$f" "$ROOTFS/usr/share/gaokun3/$f"
+done
+ok "带上了安装器后端 installer-lib.sh 与它的三个辅助脚本"
 
 # ---- 6c. 图形安装器（只有 live profile 需要）------------------------------
 # ★ 在 chroot 【里面】编，所以编出来的就是目标架构的二进制 —— 不需要
@@ -334,6 +338,10 @@ need_path /etc/runlevels/default/gk3-wifi
 need_path /etc/runlevels/default/gk3-sshd
 need_path /etc/runlevels/default/gk3-diag  # 没网时唯一的取证通路
 need_path /usr/share/gaokun3/installer-lib.sh
+need_path /usr/share/gaokun3/gk3-unsparse.py   # 没有它 super 写不进去（.zst 走管道）
+need_path /usr/share/gaokun3/gk3-bootimg.py
+need_path /usr/share/gaokun3/gk3-wpa-scan.py
+need_cmd  python3
 need_path /etc/runlevels/boot/localmount     # gk3-* 排在它后面；缺了会打乱顺序
 need_path /etc/runlevels/sysinit/devfs
 # ★ 断言两个服务【没有】硬依赖：`need` 一旦指向不存在的服务，

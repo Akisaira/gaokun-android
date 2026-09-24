@@ -63,7 +63,7 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 | **B21** 🆕 | **SLPI 崩溃自愈后系统传感器全丢**（2026-09-24，[#121 §3](stage4-findings.md)） | 自愈时 init 只重启一次 hexagonrpcd，而 SEE 要再重启一次才注册传感器 ⇒ accel 没了、自动旋转失效，直到重启 | 给 hexagonrpcd 的 rc 加"SLPI 回到 running 后再重启一次"（`on property` 盯不住 remoteproc 状态，多半要一个小守护或 uevent 触发），实测：让 SLPI 崩一次（激活光感就能复现）看 accel 能否自己回来 |
 | **B22** 🆕 | **时钟不校准：NTP 只有 `time.android.com`，国内连不上**（2026-09-24，[#122 §3](stage4-findings.md)） | 设备慢 41 分钟、这次开机从没自动校时；Lineage 的中国服务器只在 `values-mcc460`，本机无基带落不到 | ✅ overlay 加 `config_ntpServers`（time.android.com + aliyun / tencent / ntsc），**已写未编**。⬜ 下一版装上后 `settings delete global ntp_server` → `cmd network_time_update_service force_refresh` = true |
 | **T1** | **触摸** | ✅ v0.6.2 已发（跳点限速线、fuzz=0、按下 17 ms、面积轴、6 个驱动缺陷、可观测性，[#114](stage4-findings.md)–[#116](stage4-findings.md)）。剩：手掌碎成多触点（不影响点击，三种阈值法实测全否） | 下一版驱动做跨帧形态判据；轴已经有了，可以顺手写触摸 IDC（`touch.size.calibration`，本机现在 `ConfigurationFile: <none>`） |
-| **B15** ✅ | **全新安装丢触摸参数**（2026-09-23 已修） | ★ 实锤：`scripts/install-gaokun3.sh:251-257` 写死的 cmdline **没有** `himax_hx83121a_spi.disable_pressure=0`（`BoardConfig.mk:134` 有）⇒ 按 INSTALL.md 全新装 v0.6.2 的机器**没有触点面积轴**，直到第一次 OTA 的 postinstall 把 cmdline 同步过去 | ✅ `install-gaokun3.sh` 改为从 boot.img 头读 cmdline（`cmdline[512]@64 + extra_cmdline[1024]@608`，与 `bootimg_extract.cpp` 同一写法），读不到就拒装。拿 v0.6.2 发布的 `boot.img`（sha `975d7987…`）实测：解出的 cmdline 与 `BoardConfig.mk` **逐字相同**。`deploy-android.sh` 已归档。⬜ 剩 `scripts/live/installer-lib.sh:506` 那份（更旧，还缺 `boot_devices` / `init=/init`），随 B4 一起改 —— 它还假设发布目录有散装 `Image`/`dtb`/`ramdisk`，而发布只带 `boot.img` |
+| **B15** ✅ | **全新安装丢触摸参数**（2026-09-23 已修） | ★ 实锤：`scripts/install-gaokun3.sh:251-257` 写死的 cmdline **没有** `himax_hx83121a_spi.disable_pressure=0`（`BoardConfig.mk:134` 有）⇒ 按 INSTALL.md 全新装 v0.6.2 的机器**没有触点面积轴**，直到第一次 OTA 的 postinstall 把 cmdline 同步过去 | ✅ `install-gaokun3.sh` 改为从 boot.img 头读 cmdline（`cmdline[512]@64 + extra_cmdline[1024]@608`，与 `bootimg_extract.cpp` 同一写法），读不到就拒装。拿 v0.6.2 发布的 `boot.img`（sha `975d7987…`）实测：解出的 cmdline 与 `BoardConfig.mk` **逐字相同**。`deploy-android.sh` 已归档。✅ 2026-09-24 `installer-lib.sh` 那份也改了（随 B4 重启）：cmdline 与内核文件都从 boot.img 拆，命令行版改成 source 这个库，四份只剩 `BoardConfig.mk` 一份真相源（[stage7-flutter-debian.md](stage7-flutter-debian.md) §3.3） |
 | **T2** | **Google 未认证** | Play 商店报"设备未经 Play 保护机制认证" | 工具与文档已就位（`scripts/google/gsf-android-id.sh` + INSTALL.md）。**剩下的是用户动作**：拿 Android ID 去 google.com/android/uncertified 登记 |
 | **T6** 🆕 | **指纹（FocalTech FTE7001）** | 从"已知不支持"翻案（[#123](stage4-findings.md)，推翻 [#120](stage4-findings.md)）：比对在 TZ 的签名 TA `fingerprint`，走**旧 QSEECOM**（gaokun3 在 allowlist，本机 `qcom_qseecom`+`uefisecapp` 已 probe ⇒ LOOKUP/SEND 通路今天就在跑）。缺的只有 LOAD 动词，`SMC 0x32000101{0,img_len,phys<4GB}`，有 samcday 在 SDM670 真机验证过的参考实现 ✅ **①②已成（[#125](stage4-findings.md)，2026-09-24 上机）**：patch 0050（QSEECOM LOAD）+ 单一 secelf + 32 位约束，**LOAD `fingerprint` 成功、app_id=5、干净卸载、无挂机**——整条路打通，#120"驱动不了"作废。⬜ **③ client driver**（LOAD→listener→按 FF_CMD_TA_* 发命令；enroll/auth 的 listener 回调是下个风险点，需人在场）⬜ **④ Android 指纹 HAL**（虚拟 HAL 骨架+STRONG+ISharedSecret 签 HAT）（首次发 LOAD SMC 有硬挂风险）：① port samcday QSEECOM LOAD 到 mainline 7.2（适配单一 secelf + `DMA_BIT_MASK(32)`）② 首次 LOAD `fingerprint` 拿 app_id ③ 写 `qcom_qseecom_fingerpr.c`（命令 id 数值先从 FocalTech 客户端驱动核死）④ 写 Android 指纹 HAL（虚拟 HAL 骨架 + STRONG + ISharedSecret 签 HAT，#120 §3 已论证本机全软件安全下可行）。报告在 `docs/fingerprint/`（不入库） |
 | **T3** | **相机画质** | 暗光噪点、闪光白墙过曝 34%、偏绿（[#112](stage4-findings.md) §5）。降噪 + 预闪按亮度收敛 + 曝光回填**应已随 v0.6.2 进镜像**（见顶上"对账边界"），1:1 样片颗粒明显变细（#112） | 还没写的两条：闪光帧下发 `ExposureValue` 负补偿；libcamera AWB 剔饱和像素（值得投上游）。CCM 要色卡（用户提供）。手电筒亮度档位（`turnOnTorchWithStrengthLevel`） |
@@ -86,7 +86,7 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 | **B12** | 释放 R2 桶前要有国内可达的镜像 | GitHub 附件国内不可达。要用户定方案（Worker 反代 / 保留桶） |
 | **B16** 🔄 | 设备外网单连接慢 | **2026-09-24 定位并修**（[#119](stage4-findings.md) §3）：到海外 CDN 的 RTT ~294 ms，Android 默认 Wi-Fi TCP 接收上限 2 MB ⇒ 单连接 ~3.5 MB/s；临时改 8 MB 实测 9.1–9.8 MB/s（4 连接合计 12.6 MB/s，局域网 32 MB/s）。`rro/Gaokun3WifiOverlay` 进下一版镜像。⬜ 装机后核对 `TcpBufferSizes` |
 | **B3** | 自研 EFI 加载器 | A5 与"默认启动项永远留救援"都依赖它 |
-| **B7** | 用轻量系统替掉救援 Ubuntu（= B4） | 24.6 GiB 换成 55 MiB squashfs，⏸ 用户暂缓 |
+| **B7** | 用轻量系统替掉救援 Ubuntu（= B4） | 24.6 GiB 换成 squashfs；**2026-09-24 随 B4 重启**，改为 Debian 基底（见 B4） |
 | — | 相机零碎 | `patches/0022` 仍未在**健康**状态下验证 unbind/rebind；libcamera 生成源码仍靠手工，未改成 Soong `genrule`（`patches/libcamera/README.md:34`）；`kDarkLuma=50` 是启发式 |
 | **B18** 🔄 | init 泄漏 remoteproc 引用 | 已修（[#119](stage4-findings.md) §5）：`gaokun3-rproc-kick.sh` 只对不在运行的 DSP 写 start；新域 + usbrole 补 sysfs 规则，`selinux_policy` 通过。⬜ 随下一版镜像验证 |
 | **B19** 🆕 | 没有回落槽 | `_b` 不可启动（[#118](stage4-findings.md) §2）。出事只能靠救援系统；Virtual A/B 合并后 `-cow` 还在的原因未查 |
@@ -106,7 +106,7 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 
 ### ⏸ 明确搁置（记录理由，不是忘了）
 A2 硬件视频**编码**（查明后故意关闭）· ~~A3 自动亮度~~（**2026-09-23 解除搁置**，见第一梯队 A3）·
-A6b WPA3 issue #2（本地不复现，要报告者配合）· B4 LiveCD 图形安装器（用户暂缓）。
+A6b WPA3 issue #2（本地不复现，要报告者配合）· ~~B4 LiveCD 图形安装器~~（**2026-09-24 用户重启**，改 Flutter + Debian，见 B4）。
 
 ### ✅ 本次对账收口的（正文原写着 ⬜，其实早做完了）
 触摸脚本进镜像（T1a，v0.6.2）· 完整 ROM 构建（T1c，v0.6.2）· 指纹 incremental 不一致（T2，v0.6.2 为 `20260916145759`）·
@@ -922,7 +922,12 @@ mock 值恒定才没打到。**只换 HAL 不改阈值 = 开机几分钟自动�
 里面有 70 MB 的 `Persisted_Capsules.bin` 和 31 MB 的 `EFI/`
 （含已抹除的 Windows 整棵树）。要往 ESP 加东西，先腾地方。
 
-### B4. LiveCD 图形安装器 —— ⏸ **用户决定暂时搁置**（2026-08-23）
+### B4. LiveCD 图形安装器 —— ▶ **2026-09-24 重启：改 Flutter + Debian**
+⚠️ 下面「⏸ 搁置」那段是 2026-08-23 的状态，留作历史。**现状与里程碑见
+[stage7-flutter-debian.md](stage7-flutter-debian.md)**：M1 后端统一已完成（loop 端到端 46/46，
+抓到双系统模式从来装不上），下一步 M2 Flutter 骨架（Mac 上）与 M0 真机打一枪（要回家）。
+
+（原标题：⏸ **用户决定暂时搁置**（2026-08-23））
 接手说明见 [stage7-installer-roadmap.md](stage7-installer-roadmap.md) 末尾。
 
 **已验过**：后端 probe/plan/apply/shrink 全部端到端测过（apply 在 loop 设备上、

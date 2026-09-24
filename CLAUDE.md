@@ -111,6 +111,7 @@
 | 硬件原始数据 | `docs/hw-inventory.md`、`docs/hw/`（转储） |
 | 发版说明 | `docs/relnotes/` |
 | 要投上游的补丁 | `docs/upstream/`（未发，等用户点头） |
+| **图形安装器（Flutter + Debian，进行中）** | `docs/stage7-flutter-debian.md`（决定、里程碑、M1 实测）；后端 `scripts/live/installer-lib.sh` + `scripts/live/README.md` 的测试一节 |
 | **指纹（TA 已在本机加载成功，进行中）** | `docs/fingerprint-driver-design.md`（架构+决策+复现+里程碑）；案卷 #120/#123/#124/#125；工具 `tools/fingerprint-bringup/` |
 
 ⚠️ **冲突时的优先级**：实机实测 > `stage4-findings.md` 的案卷 > 本文件 > `project-log.md`。
@@ -246,7 +247,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 | **4** ✅ | 输入 / 音频 / WiFi / 电源 | **全部通过**：触摸（gpio174）、WiFi 免干预自动连、扬声器+耳机+双麦、蓝牙、待机。案卷 `docs/stage4-findings.md` |
 | **5** ✅ | GPU：freedreno + turnip 硬件 Vulkan | **全部通过**（2026-08-19）：SMMU fault 0，22 分钟浸泡零错误。案卷 `docs/stage5-freedreno.md` |
 | **6** | 转 crDroid 16.0 + 产品化 | 主体完成：OTA / root / SELinux 四步 / 传感器 / 硬解。案卷 `docs/stage6-crdroid.md` |
-| **7** | LiveCD 图形安装器 + 轻量救援系统 | M0 完成，⏸ 用户暂缓。`docs/stage7-live-installer.md` |
+| **7** | LiveCD 图形安装器 + 轻量救援系统 | ▶ **2026-09-24 重启，改 Flutter + Debian**：M1 后端统一完成（loop 端到端 46/46）。`docs/stage7-flutter-debian.md`（前情 `docs/stage7-live-installer.md`） |
 
 > ⚠️★ **本表编号一度与实际里程碑脱节**：原表写"5 = 游戏适配"，而实际
 > Stage 5 做的是 GPU、Stage 6/7 表里压根没有。**游戏适配已经达成**

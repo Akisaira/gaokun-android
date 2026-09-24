@@ -97,7 +97,45 @@ ath11k 固件 / OpenRC 的 runlevel 链接）。
   内建 ath11k 在 initramfs 阶段就 probe（t=1.19s，远早于 switch_root）却拿不到
   固件，所以固件必须打进 initramfs。这不是膨胀，是修复。
 * ⬜ 图形安装器（`live` profile）还没写
-* ⬜ `install-gaokun3.sh` 还是"清空整盘"一条路，未拆成可调用的库
+  ⚠️ 本行已过时：C 版图形安装器 2026-08 写过（`live/installer/`），
+  2026-09-24 决定改为 Flutter + Debian（`docs/stage7-flutter-debian.md`）。
+* ✅ ~~`install-gaokun3.sh` 还是"清空整盘"一条路，未拆成可调用的库~~
+  2026-09-24：命令行版改成 `installer-lib.sh` 外面的一层薄壳，见下一节。
+
+## 安装器后端（`installer-lib.sh`）与它的测试
+
+两个前端（`scripts/install-gaokun3.sh` 命令行、图形安装器）共用这一份实现。
+协议、每个函数的输入输出写在 `installer-lib.sh` 文件头。它调用三个小工具，
+与它放在同一目录（live 镜像里是 `/usr/share/gaokun3/`）：
+
+| 文件 | 做什么 | 为什么不用现成的 |
+|---|---|---|
+| `gk3-unsparse.py` | 把 sparse 镜像从 stdin **顺序**展开写到分区，边写边报进度 | `simg2img` 接受 `-` 但**喂管道会失败**（`sparse_read.cpp:103` 导入时要 lseek）——而发版产物是 `.zst`，不走管道就得先落一份 12 GiB 的临时文件 |
+| `gk3-bootimg.py` | 把 boot.img（v2）拆成 `Image` / `gaokun3.dtb` / `ramdisk.img` / `cmdline.txt` | systemd-boot 只认 ESP 上的普通文件；与设备侧 `bootimg_extract.cpp` 是同一件事的两个实现，必须逐字节相同 |
+| `gk3-wpa-scan.py` | 解析 `wpa_cli scan_results` | 中文 SSID 在里面全是 `\xNN` 转义，而且那是制表符分隔的 —— 原来的 awk 两样都处理错 |
+
+测试（全部绿了才动 `installer-lib.sh`）：
+
+```sh
+bash scripts/live/test-plan.sh          # 方案计算：不重叠、不越界（任何机器）
+bash scripts/live/test-unsparse.sh      # sparse 展开，含截断输入必须失败（任何机器）
+bash scripts/live/test-wpa-scan.sh      # 中文 / GBK / 空格 / 引号 SSID（任何机器）
+# 下面要 root + loop 设备：在 Linux 容器里跑（macOS 上先 colima start）
+bash scripts/live/test-in-container.sh scripts/live/test-unsparse.sh   # 多一轮与真 simg2img 交叉比对
+bash scripts/live/test-in-container.sh scripts/live/test-apply.sh      # 端到端真装：整盘 / 双系统 / 反例
+bash scripts/live/test-in-container.sh scripts/live/test-shrink.sh
+```
+
+`test-apply.sh` 在 loop 设备上把命令行版和 `gk3_apply` 各真装一遍，逐项核对
+（分区、super 逐字节、两个槽、启动项 options 与 boot.img 的 cmdline 一致、
+双系统时 Windows 那几个分区逐字节未变、PARTUUID 未变、ESP 没被格式化……），
+再验一组必须**在动盘之前**就拒绝的反例（截断的 .zst、sha256 不符、
+Windows 默认的 100 MiB ESP、在已装过的盘上再装一次）。
+`GK3_TEST_BOOTIMG=/repo/out/…/boot.img` 可以换成真发版的 boot.img。
+
+★ 它第一次跑就抓到：**双系统模式从来装不上**——`gk3_apply` 在写完分区表之后
+才按名字找 `esp`，而 Windows 的 ESP 叫 `EFI system partition`。真盘上验过的
+只是方案计算，双系统的 apply 此前从没真跑过。
 
 ## 这一轮踩到的坑（都值得记）
 

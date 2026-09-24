@@ -10,9 +10,10 @@
 | Requirement | Why |
 |---|---|
 | **Huawei MateBook E Go, GK-W7X** | The only model this has been built and tested on |
-| **BIOS 2.16** | **Do not upgrade to 2.17.** The touch SPI bus and GPIO numbering differ, and the upstream touch driver targets 2.16. Check in the firmware setup screen |
-| **Secure Boot disabled** | The kernel is unsigned |
+| **BIOS 2.16** | **Do not upgrade to 2.17.** The upstream touch driver was developed against 2.16, and 2.17 has never been verified on this machine. The installer checks and refuses 2.17 (override: `GK3_SKIP_BIOS_CHECK=1`). ⚠️ An earlier version of this page said 2.17 changes the touch SPI bus and GPIO numbering — that comparison was made against an 8cx Gen 2 (SC8180X) table, not this machine's next BIOS. The caution stands; that reason was wrong |
+| **Secure Boot disabled** | The kernel is unsigned. The installer checks this too |
 | An arm64 Linux live USB | Ubuntu/Debian arm64 desktop images work. This is the environment you run the installer from |
+| A checkout of this repository | The installer is `scripts/install-gaokun3.sh` plus the backend it sources from `scripts/live/`; a lone copy of the one file will not run |
 | A second machine with `adb` | For provisioning after first boot, and for everything afterwards |
 | The proprietary firmware for **your** device | See [Firmware](#firmware) |
 
@@ -30,20 +31,24 @@ Download from [Releases](../../releases) and unpack into one directory:
 | `recovery-ramdisk.img` | Android recovery. **No release ships this yet** — recovery is built but reset-loops on this machine, so it is deliberately not published. The installer accepts it if you build one yourself: it shares the kernel and DTB with the system, so only the ramdisk is needed, and it lands on the ESP for both slots. The boot menu entry is *not* created unless you set `ENABLE_RECOVERY_ENTRY=1` |
 | `crDroidAndroid-*.zip` | The OTA package. **Not needed to install** — this is what the updater consumes later |
 
-```sh
-zstd -d super.img.zst          # the installer also accepts the .zst directly
-sha256sum -c install-artifacts.sha256
-```
+Keep `super.img.zst` compressed — the installer streams it straight onto the
+disk, so there is no 12 GiB intermediate file. Keep `install-artifacts.sha256`
+next to it: the installer checks both images against it **before** touching
+the disk, so a download that stopped halfway is refused instead of leaving a
+half-written disk behind.
 
 ## 2. Boot the live USB and run the installer
 
 ```sh
-sudo apt install gdisk dosfstools android-sdk-libsparse-utils systemd-boot rsync zstd
-sudo ./install-gaokun3.sh /path/to/release-dir
+sudo apt install gdisk dosfstools e2fsprogs zstd python3 systemd-boot-efi git
+git clone https://github.com/vahiru/gaokun-android && cd gaokun-android
+sudo scripts/install-gaokun3.sh /path/to/release-dir
 ```
 
-It prints the partition table it is about to destroy and waits for you to type
-`ERASE`. Nothing is written before that.
+It checks the machine (model, BIOS, Secure Boot, tools), prints the partition
+table it is about to destroy and the layout it will create, and waits for you
+to type `ERASE`. Nothing is written before that. The target disk defaults to
+`/dev/nvme0n1`; set `DISK=` to install elsewhere.
 
 The script is short and commented; read it rather than trusting this page. In
 particular it explains **why** each partition exists, which is not obvious on a
@@ -58,31 +63,43 @@ What you end up with:
 | `metadata` | 32 MiB | Android metadata |
 | `super` | 12 GiB | The dynamic partitions, A/B |
 | `boot_a`, `boot_b` | 64 MiB each | Android boot images, A/B. These are what OTA updates; the ESP copies are unpacked from them |
-| `rescue` | 24 GiB | **A full Linux — this machine's recovery environment** |
+| `gk3rescue` | 1 GiB | *Optional* rescue system — see below |
 | `userdata` | rest | `/data` |
 
-### About that rescue partition
+### About the rescue system
 
-It is not optional padding. This machine has no recovery partition and no
-serial console, so an ordinary Linux install *is* the recovery environment: a
-system you can SSH into and repair from, with a full set of partitioning and
-filesystem tools.
+This machine has no working Android recovery and no serial console, so a
+small Linux you can boot from the menu and SSH into is how you repair it.
 
-**How you get back into it: the 15-second boot menu.** Every boot stops at
+It is a compressed image (squashfs) that runs entirely in RAM, on a 1 GiB
+partition, sharing the kernel with Android. The installer puts it in **only if
+it has the image**: `rescue.squashfs` and `initramfs.img` in the release
+directory, or when you are running from a gaokun3 live USB (which carries
+both). From a generic Ubuntu/Debian live USB with a release that does not ship
+them, you get Android only — your way back in is then that same live USB.
+
+> ⚠️ Changed on 2026-09-24. The installer used to create a 24 GiB `rescue`
+> partition and copy whatever live system you had booted into it. That is gone:
+> the installer and the graphical installer now share one implementation, and
+> the rescue system is the small in-RAM image. If you installed with the old
+> script, nothing changes on your machine.
+
+**How you get into it: the 15-second boot menu.** Every boot stops at
 systemd-boot's menu for 15 seconds; the rescue system is one entry there. If
 Android hangs, hold the power button, and pick the rescue entry when the menu
-comes up.
+comes up. It is never the default entry.
 
-> ⚠️ Do **not** expect the machine to fall back to rescue on its own. The
-> installer does write the rescue system as the default entry, but Android's
+> ⚠️ Do **not** expect the machine to fall back to rescue on its own. Android's
 > `boot_control` HAL rewrites `default` to the currently running slot on every
-> boot — by design, so that A/B slot switches survive. So after the first
-> successful Android boot, the default entry *is* Android. Recovering from a
-> hang means somebody picks the rescue entry from the menu. Earlier versions of
-> this document promised an automatic fallback; that promise was never true
-> after first boot, and it has been withdrawn rather than papered over.
+> boot — by design, so that A/B slot switches survive. Recovering from a hang
+> means somebody picks the rescue entry from the menu. Earlier versions of this
+> document promised an automatic fallback; that promise was never true after
+> first boot, and it has been withdrawn rather than papered over. (The old
+> script also made rescue the default entry at install time; that only ever
+> lasted until the first Android boot, so the installer now simply defaults
+> to Android.)
 
-To boot Android: choose it from the 15-second menu, or from the rescue system
+To boot Android from the rescue system without the menu:
 
 ```sh
 sudo bootctl set-oneshot <machine-id>-android-a.conf && sudo reboot

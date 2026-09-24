@@ -49,6 +49,12 @@ sfdisk
 #   后者会拖进 protobuf + abseil-cpp 整套（226 个包里一大半是它带的），
 #   而这个镜像的体积目标是 ≤120 MiB。
 android-tools-simg2img
+# ★ python3：installer-lib.sh 的三个辅助脚本（gk3-unsparse / gk3-bootimg / gk3-wpa-scan）。
+#   其中 gk3-unsparse 取代了 simg2img 在安装路径上的位置 —— simg2img 喂管道会失败，
+#   而发版的 super 是 .zst（scripts/live/README.md「安装器后端」一节）。
+#   ⚠️ 体积：约 +40 MiB，超了本镜像 ≤120 MiB 的目标。这是过渡：Stage 7 已决定
+#      换 Debian 基底（docs/stage7-flutter-debian.md），届时 python3 本来就在。
+python3
 zstd
 xz
 rsync
