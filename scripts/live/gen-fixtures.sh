@@ -80,6 +80,7 @@ rec() {
     [ -n "$real" ] || real=$(printf '%s' "$call" | sed "s#/dev/nvme0n1#$d#g")
     python3 scripts/live/record-fixture.py "$dir/$name" \
         --sub "${STICK}p=/dev/sda" --sub "$STICK=/dev/sda" --sub "$d=/dev/nvme0n1" \
+        --sub "gpt-backup-$(basename "$d")-=gpt-backup-nvme0n1-" \
         --sub "$REL=/media/gk3/gaokun3/payload" --sub "$W=/tmp" \
         -- bash -c ". scripts/live/installer-lib.sh && $real"
     printf '%-78s %s\n' "$call" "$name" >> "$dir/index.txt"
@@ -135,10 +136,17 @@ rec factory "$DF" esp_info.txt        "gk3_esp_info /dev/nvme0n1p1"
 rec factory "$DF" shrink_scan.txt     "gk3_shrink_scan /dev/nvme0n1"
 rec factory "$DF" plan-wipe-rescue.txt   "gk3_plan --disk /dev/nvme0n1 --mode wipe --rescue yes"
 rec factory "$DF" plan-wipe-norescue.txt "gk3_plan --disk /dev/nvme0n1 --mode wipe --rescue no"
+# 没有空闲区时界面用一个空区间问"双系统至少要多少"（lib/session.dart 的 _assessAlong）
+for r in yes no; do
+  rec factory "$DF" "plan-along-empty-$r.txt" \
+      "gk3_plan --disk /dev/nvme0n1 --mode alongside --rescue $r --region-start 0 --region-end 0 --esp /dev/nvme0n1p1"
+done
 # Data 336.6 GiB → 缩掉 80 GiB
 DATA_MIB=$(( $(blockdev --getsize64 "${DF}p4") / 1048576 )); TARGET=$(( DATA_MIB - 81920 ))
 rec factory "$DF" shrink.txt          "gk3_shrink /dev/nvme0n1p4 $TARGET"
 echo "gk3_shrink *                                                                   shrink.txt" >> "$OUT/factory/index.txt"
+# 场景切换：缩成功之后，接着按"缩完之后"那份（下面 windows-free 就是在同一块盘上缩完录的）回放
+echo "@next gk3_shrink windows-free" >> "$OUT/factory/index.txt"
 
 echo "═══ windows-free ═══"
 header windows-free "factory 上真跑了一次 gk3_shrink（Data 缩掉 80 GiB）之后 —— 走双系统"
@@ -173,7 +181,9 @@ echo "═══ android ═══"
 header android "blank 上真装了一遍之后（已经装过）—— 双系统应被 partlabel-conflict 拒绝"
 rec android "$DB" probe.txt       "gk3_probe" "$(probe_of "$DB")"
 rec android "$DB" esp_info.txt    "gk3_esp_info /dev/nvme0n1p1"
-rec android "$DB" plan-along.txt  "gk3_plan --disk /dev/nvme0n1 --mode alongside --rescue no --region-start 2048 --region-end 4096 --esp /dev/nvme0n1p1"
+for r in yes no; do
+  rec android "$DB" "plan-along-$r.txt" "gk3_plan --disk /dev/nvme0n1 --mode alongside --rescue $r --region-start 0 --region-end 0 --esp /dev/nvme0n1p1"
+done
 rec android "$DB" plan-wipe-rescue.txt "gk3_plan --disk /dev/nvme0n1 --mode wipe --rescue yes"
 
 echo "═══ common（与盘无关）═══"

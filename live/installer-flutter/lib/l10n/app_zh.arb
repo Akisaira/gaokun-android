@@ -1,0 +1,381 @@
+{
+  "@@locale": "zh",
+  "appTitle": "gaokun3 安装器",
+  "welcomeTitle": "让我们在这台电脑上安装 Android",
+  "welcomeSub": "HUAWEI MateBook E Go · Snapdragon 8cx Gen 3 (sc8280xp)",
+  "welcomeBody": "我们将把 Android 安装到你的内置固态硬盘上。\n在接下来的步骤中，你可以选择清除整个磁盘，或者保留现有系统，仅使用可用空间。",
+  "welcomeNote": "你的设备使用 UEFI 引导，而不是 fastboot。安装完成后，systemd-boot 将为你启动系统，内核和 ramdisk 会以普通文件的形式放置在 EFI 分区上。",
+  "btnStart": "开始使用",
+  "btnQuit": "退出到终端",
+  "btnBack": "返回",
+  "btnNext": "下一步",
+  "btnReboot": "立即重新启动",
+  "btnRetry": "重试",
+  "btnLanguage": "English",
+  "checkTitle": "先确认这台电脑能装",
+  "checkRunning": "正在检查……",
+  "checkModel": "机型",
+  "checkBios": "BIOS 版本",
+  "checkSecureboot": "安全启动",
+  "checkUefi": "UEFI 引导",
+  "checkRoot": "管理员权限",
+  "checkTools": "所需工具",
+  "checkModelBad": "这个安装器只适用于 MateBook E Go 2022（GK-W7X），这台报告的是 {value}。",
+  "@checkModelBad": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "checkBiosBad": "BIOS 是 {value}。上游触摸驱动是按 2.16 开发的，{value} 上还没有人验证过。",
+  "@checkBiosBad": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "checkSecurebootBad": "安全启动已开启。我们的内核没有签名，开着它装好也起不来 —— 请先在固件设置里关闭。",
+  "checkUefiBad": "这个系统不是以 UEFI 方式启动的。",
+  "checkRootBad": "安装器没有以 root 身份运行。",
+  "checkToolsBad": "缺少工具：{missing}",
+  "@checkToolsBad": {
+    "placeholders": {
+      "missing": {
+        "type": "String"
+      }
+    }
+  },
+  "checkUnknown": "无法确认 —— 将继续",
+  "checkBlocked": "上面有检查没有通过，现在不能安装。",
+  "diskTitle": "你想将 Android 安装在哪里？",
+  "diskSub": "选择一个磁盘以继续。",
+  "diskNone": "我们找不到可以安装的磁盘。请检查你的内置硬盘是否已被识别（可以在终端中运行 lsblk）。",
+  "diskInternal": "内置固态硬盘",
+  "diskExternal": "外接磁盘",
+  "diskMedium": "这是你正在使用的安装 U 盘，不能安装到它上面。",
+  "diskParts": "{count} 个分区",
+  "@diskParts": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "diskNoParts": "没有分区",
+  "diskFree": "可用 {size}",
+  "@diskFree": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "modeTitle": "你希望如何安装？",
+  "modeSub": "此选择将决定磁盘上现有内容的去留。请在继续之前仔细确认。",
+  "modeWipeTitle": "清除整个磁盘",
+  "modeWipeWarn": "此磁盘上的所有内容都将被删除，包括其他操作系统。",
+  "modeWipeBody": "这将为你提供最干净的分区布局，Android 将获得全部空间。如果这台电脑只用来运行 Android，我们建议选择此项。",
+  "modeAlongTitle": "保留现有系统",
+  "modeAlongOk": "我们只会使用可用空间，不会对你现有的分区进行任何更改。",
+  "modeAlongInfo": "可用空间：{free}\n我们将重用你现有的 EFI 分区：{esp}",
+  "@modeAlongInfo": {
+    "placeholders": {
+      "free": {
+        "type": "String"
+      },
+      "esp": {
+        "type": "String"
+      }
+    }
+  },
+  "modeWhyNoEsp": "此磁盘上没有 EFI 系统分区 —— 这意味着它上面没有可以保留的 UEFI 系统。",
+  "modeWhyNoRoom": "可用空间不足 {need}（现有最大的一块是 {have}）。可以缩小一个现有分区来腾出空间。",
+  "@modeWhyNoRoom": {
+    "placeholders": {
+      "need": {
+        "type": "String"
+      },
+      "have": {
+        "type": "String"
+      }
+    }
+  },
+  "modeWhyEspSmall": "你现有的 EFI 分区只剩 {free} MiB，而我们需要 {need} MiB。Windows 默认建的 EFI 分区只有 100 MiB，通常放不下。",
+  "@modeWhyEspSmall": {
+    "placeholders": {
+      "free": {
+        "type": "String"
+      },
+      "need": {
+        "type": "String"
+      }
+    }
+  },
+  "modeWhyInstalled": "这块盘上已经装过 Android（已有同名分区：{names}）。要重新安装，请选择清除整个磁盘。",
+  "@modeWhyInstalled": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "modeShrinkTitle": "缩小现有分区腾出空间",
+  "modeShrinkBody": "我们可以帮你缩小一个现有分区，把腾出来的空间给 Android。你的文件不会被删除。",
+  "shrinkTitle": "要缩小哪个分区？",
+  "shrinkSub": "我们只会调整分区的大小，不会删除里面的任何文件。开始之前，我们会先备份分区表。",
+  "shrinkNone": "这块磁盘上没有可以缩小的分区。只有 NTFS 和 ext 文件系统支持在不丢数据的前提下缩小。",
+  "shrinkRow": "{fs} · 当前 {cur} · 最小可缩到 {min}",
+  "@shrinkRow": {
+    "placeholders": {
+      "fs": {
+        "type": "String"
+      },
+      "cur": {
+        "type": "String"
+      },
+      "min": {
+        "type": "String"
+      }
+    }
+  },
+  "shrinkWhyDirty": "这个 NTFS 分区没有被干净地卸载。请回到 Windows，关闭“快速启动”并正常关机，然后再试一次。",
+  "shrinkWhyFs": "这种文件系统不支持在不丢数据的前提下缩小。",
+  "shrinkSizeHint": "缩小后的大小",
+  "shrinkFreed": "这会腾出大约 {size} 给 Android",
+  "@shrinkFreed": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "shrinkGo": "开始缩小",
+  "shrinkWarn": "这是整个安装过程中唯一会改动你现有数据的一步。请确认重要文件已经备份。",
+  "shrinkRunning": "正在缩小分区……",
+  "sourceTitle": "从哪里获取 Android？",
+  "sourceSub": "你可以使用安装 U 盘里自带的镜像，也可以从网络下载最新版本。",
+  "sourceUsbTitle": "使用 U 盘里的镜像",
+  "sourceUsbBody": "速度最快，不需要联网。这是我们推荐的方式。",
+  "sourceUsbMissing": "这个 U 盘里没有安装镜像。",
+  "sourceNetTitle": "从网络下载",
+  "sourceNetBody": "可以拿到最新版本，也可以选择不同的构建。这台设备的无线速度大约每秒 1–2 MB，1 GB 左右的镜像需要十几分钟。",
+  "netTitle": "连接到 Wi-Fi",
+  "netSub": "这台设备只有无线网卡。选择一个网络。",
+  "netScanning": "正在搜索附近的网络……",
+  "netNone": "没有搜索到任何网络。请确认无线开关已打开，然后重试。",
+  "netPassword": "网络密码",
+  "netConnect": "连接",
+  "netRescan": "重新搜索",
+  "netConnected": "已连接到 {ssid}（{ip}）",
+  "@netConnected": {
+    "placeholders": {
+      "ssid": {
+        "type": "String"
+      },
+      "ip": {
+        "type": "String"
+      }
+    }
+  },
+  "netConnecting": "正在连接 {ssid}……",
+  "@netConnecting": {
+    "placeholders": {
+      "ssid": {
+        "type": "String"
+      }
+    }
+  },
+  "netFailed": "连接失败。请检查密码是否正确，或者信号是否太弱。",
+  "netEnterprise": "企业网络（802.1X）暂不支持",
+  "netOpen": "开放网络",
+  "netPasswordLength": "WPA 密码要 8–63 个字符",
+  "netPasswordFor": "输入“{ssid}”的密码",
+  "@netPasswordFor": {
+    "placeholders": {
+      "ssid": {
+        "type": "String"
+      }
+    }
+  },
+  "netShowPassword": "显示密码",
+  "variantTitle": "选择一个版本",
+  "variantSub": "这些版本的区别在构建时就已经决定，安装之后无法互相切换。",
+  "variantFailed": "我们无法获取版本列表。请检查网络连接。",
+  "variantSize": "下载大小约 {size}",
+  "@variantSize": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "optsTitle": "快速设置",
+  "optsSub": "我们已经为你选择了推荐的设置。如果不确定，直接点击“下一步”即可。",
+  "optsRescueTitle": "同时安装救援系统",
+  "optsRescueBody": "这将占用 1 GiB 空间，其中包含一套在内存中运行的 Linux（带有 ssh 和分区工具）。当 Android 无法启动时，它是远程访问这台设备的唯一方式。我们强烈建议保留此项。",
+  "optsRescueMissing": "这个安装介质里没有救援系统镜像，这次不能装。",
+  "optsData": "/data 将获得所有剩余空间：大约 {size}",
+  "@optsData": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "optsDataFixed": "/data：{size}",
+  "@optsDataFixed": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "optsAdvanced": "自定义分区大小",
+  "advTitle": "分区大小",
+  "advSub": "这些是我们将要创建的分区。除非你清楚自己在做什么，否则建议保持默认值。",
+  "advReset": "恢复默认",
+  "advTotal": "已分配 {used}，共 {total}",
+  "@advTotal": {
+    "placeholders": {
+      "used": {
+        "type": "String"
+      },
+      "total": {
+        "type": "String"
+      }
+    }
+  },
+  "advUserdata": "/data（userdata）",
+  "advFixed": "固定大小（由系统决定）",
+  "confirmTitle": "在开始之前，请确认一下",
+  "confirmSub": "这是最后一步。在此之后，我们将开始对磁盘进行更改。",
+  "confirmWipeHead": "以下分区将全部被删除：",
+  "confirmNoParts": "（此磁盘上目前没有任何分区）",
+  "confirmMore": "…以及其余 {count} 个分区",
+  "@confirmMore": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "confirmAlongHead": "你现有的分区不会受到任何影响。我们只会使用可用空间。",
+  "confirmAlongBody": "我们将创建 {size} 的 Android 分区，并在你的 EFI 分区 {esp} 中添加启动项。",
+  "@confirmAlongBody": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      },
+      "esp": {
+        "type": "String"
+      }
+    }
+  },
+  "confirmWindowsKept": "Windows 仍然可以从开机菜单进入。",
+  "confirmRescue": "救援系统：{yesno}",
+  "@confirmRescue": {
+    "placeholders": {
+      "yesno": {
+        "type": "String"
+      }
+    }
+  },
+  "confirmNewLayout": "将要创建：",
+  "wordInstall": "安装",
+  "wordNoInstall": "不安装",
+  "confirmHoldIdle": "按住 2 秒以开始安装",
+  "confirmHoldBusy": "请继续按住…… {pct}%",
+  "@confirmHoldBusy": {
+    "placeholders": {
+      "pct": {
+        "type": "String"
+      }
+    }
+  },
+  "runTitle": "我们正在为你安装 Android",
+  "runSub": "这可能需要几分钟时间。请不要关闭电源。",
+  "runShowLog": "显示详细信息",
+  "runHideLog": "隐藏详细信息",
+  "doneTitle": "一切就绪！",
+  "doneBody": "请移除安装介质。重新启动后，你将进入 Android。",
+  "doneRescue": "我们还为你安装了救援系统：你可以在开机菜单中选择它。当 Android 无法启动时，它是远程访问这台设备的唯一方式。",
+  "failTitle": "哎呀，出错了",
+  "failSub": "你的磁盘可能处于未完成的中间状态。请不要立即重启回原系统 —— 我们建议先保存或拍下下方的日志。",
+  "failBackup": "改动之前，分区表已经备份。日志里有一行“还原：sgdisk --load-backup=…”，照着执行就能回到安装前的分区表。",
+  "errNoSpace": "空间不足：当前可用 {avail}，但我们至少需要 {need}",
+  "@errNoSpace": {
+    "placeholders": {
+      "avail": {
+        "type": "String"
+      },
+      "need": {
+        "type": "String"
+      }
+    }
+  },
+  "errPlan": "我们无法计算分区方案：{msg}",
+  "@errPlan": {
+    "placeholders": {
+      "msg": {
+        "type": "String"
+      }
+    }
+  },
+  "errMbr": "这块盘是 MBR 分区表。我们不会把它转换成 GPT —— 那会丢掉现有布局。",
+  "errUserdataSmall": "/data 至少要 {min}",
+  "@errUserdataSmall": {
+    "placeholders": {
+      "min": {
+        "type": "String"
+      }
+    }
+  },
+  "errUserdataBig": "/data 最多只能给 {max}",
+  "@errUserdataBig": {
+    "placeholders": {
+      "max": {
+        "type": "String"
+      }
+    }
+  },
+  "errBackend": "我们无法启动安装后端：{detail}",
+  "@errBackend": {
+    "placeholders": {
+      "detail": {
+        "type": "String"
+      }
+    }
+  },
+  "errExit": "未能完成（退出码 {code}）",
+  "@errExit": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "shellOpen": "打开终端",
+  "shellHint": "第二个虚拟终端上有一个 shell。按 Ctrl+Alt+F2 切换过去，按 Ctrl+Alt+F1 回到这里。里面有 sgdisk、parted、resize2fs 等工具。",
+  "fixtureBadge": "演示数据：{scenario}",
+  "@fixtureBadge": {
+    "placeholders": {
+      "scenario": {
+        "type": "String"
+      }
+    }
+  },
+  "stepPrep": "正在准备一些事情……",
+  "modeWhyEspOurs": "这个 EFI 分区上已经有 gaokun3 的启动项（另一处安装在用它）。再装一份会覆盖那边的启动项。",
+  "checkSecurebootOff": "已关闭",
+  "checkSecurebootOn": "已开启",
+  "modeWhyNoFree": "这块盘上没有空闲空间，而我们至少需要 {need}。可以缩小一个现有分区来腾出空间。",
+  "@modeWhyNoFree": {
+    "placeholders": {
+      "need": {
+        "type": "String"
+      }
+    }
+  }
+}
