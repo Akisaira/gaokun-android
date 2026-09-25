@@ -128,7 +128,9 @@ check|prepare)
     #    cage 的 EGL 起不来）。C 版画 dumb buffer 从不碰 GPU，所以以前从没缺过。第 6 步把本机 Android
     #    正在用的那三个拷到 p3。GPU 是 cage【第一次打开】时才加载，那时 p3 早已挂在 /media/gk3。
     #  * net.ifnames=0：Debian 的 systemd-udevd 把 wlan0 改名成 wlP6p1s0，gk3-wifi 只认 wlan0。
-    BASE="$BASE firmware_class.path=$FW_MEDIA net.ifnames=0"
+    # ★ 2026-09-25 16:40 之后构建的镜像两处都已正式修好（GPU 固件进了镜像、99-default.link 屏蔽了改名），
+    #   默认【不】再绕行 —— 验的就是镜像本身。拿旧镜像上机时 GK3_M0_WORKAROUNDS=1 打开。
+    [ "${GK3_M0_WORKAROUNDS:-0}" = 1 ] && BASE="$BASE firmware_class.path=$FW_MEDIA net.ifnames=0"
     say "5. 启动项（非默认；标题 ASCII —— 开机菜单由固件字体画）"
     echo "     options  $BASE"
     ENTRIES=(
@@ -154,10 +156,13 @@ check|prepare)
     want=$(shasum -a 256 "$LIVE/gaokun3-live.squashfs" | cut -d' ' -f1)
     got=$(S "sha256sum $P3M/gaokun3/$SQ_NAME" | cut -d' ' -f1)
     [ "$want" = "$got" ] && ok "live.squashfs sha256 一致（${want:0:16}…）" || die "live.squashfs 的 sha256 不对：$got"
-    # GPU 固件：从本机 Android 的 /vendor/firmware 原样拷（Android 上 freedreno/turnip 跑的就是这三个），设备上逐个比 sha256
-    S "for f in $GPU_FW; do mkdir -p \$(dirname $P3M/gaokun3/firmware/\$f) && cp /vendor/firmware/\$f $P3M/gaokun3/firmware/\$f || exit 1
-         [ \"\$(sha256sum < /vendor/firmware/\$f)\" = \"\$(sha256sum < $P3M/gaokun3/firmware/\$f)\" ] || exit 1; done" >/dev/null \
-        && ok "GPU 固件 3 个 → p3:/gaokun3/firmware/（取自 /vendor/firmware，sha256 一致）" || die "拷 GPU 固件失败"
+    # GPU 固件（只在 GK3_M0_WORKAROUNDS=1 时有用）：从本机 Android 的 /vendor/firmware 原样拷（Android 上 freedreno/turnip 跑的就是这三个），设备上逐个比 sha256
+    # ⚠️ 写成 if，别写成 [ … ] && … || die：开关关着时 [ ] 返回 1，会一路走到 die
+    if [ "${GK3_M0_WORKAROUNDS:-0}" = 1 ]; then
+        S "for f in $GPU_FW; do mkdir -p \$(dirname $P3M/gaokun3/firmware/\$f) && cp /vendor/firmware/\$f $P3M/gaokun3/firmware/\$f || exit 1
+             [ \"\$(sha256sum < /vendor/firmware/\$f)\" = \"\$(sha256sum < $P3M/gaokun3/firmware/\$f)\" ] || exit 1; done" >/dev/null \
+            && ok "GPU 固件 3 个 → p3:/gaokun3/firmware/（取自 /vendor/firmware，sha256 一致）" || die "拷 GPU 固件失败"
+    fi
     # 公钥：开发机专用的一对（out/m0/，不动 ~/.ssh）；p3 上已有 authorized_keys 就【追加】不覆盖
     [ -f "$M0/ssh_ed25519" ] || ssh-keygen -q -t ed25519 -N '' -C "gaokun3-m0@$(hostname -s)" -f "$M0/ssh_ed25519"
     adb -s "$SER" push "$M0/ssh_ed25519.pub" /data/local/tmp/gk3-m0.pub >/dev/null
