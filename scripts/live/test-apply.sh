@@ -416,6 +416,59 @@ gk3_apply --disk "$DR" --mode reinstall --rescue no --release "$REL" --esp "${DR
     && ok "分区表没变，p3 还挂着" || bad "真机布局：分区表变了或 p3 被动了"
 umount /media/gk3
 
+# ── G. 手动调整磁盘 ────────────────────────────────────────────────────────
+# 用户 2026-09-25："能给的都给" —— 删除 / 新建 / 格式化 / 缩小 / 扩大。每个操作都要守住：
+# ESP 不动、挂着的不动、越界的不做；删除不抹数据（分区表备份还原回去就在）；扩大保住 PARTUUID 与数据。
+echo "═══ G. 手动调整磁盘 ═══"
+DG=$(new_disk g 16G)
+sgdisk -o -n 1:2048:+300M -t 1:ef00 -c 1:"EFI system partition" -n 2:0:+3G -t 2:0700 -c 2:"Basic data partition" \
+       -n 3:0:+2G -t 3:8300 -c 3:linux "$DG" >/dev/null 2>&1
+partprobe "$DG" 2>/dev/null; udevadm settle 2>/dev/null; sleep 1
+mkfs.vfat -F 32 "${DG}p1" >/dev/null; mkntfs -Q -F -L Data "${DG}p2" >/dev/null 2>&1; mkfs.ext4 -q -F "${DG}p3"
+mg=$W/mnt-g; mkdir -p "$mg"
+ntfs-3g "${DG}p2" "$mg" && head -c 20971520 /dev/urandom > "$mg/win.bin" && NT_SHA=$(sha "$mg/win.bin") && umount "$mg"
+PU2=$(sgdisk -i 2 "$DG" | awk '/unique GUID/{print $4}')
+gfail() {   # $1=说明 $2=期望的报错片段 $3…=命令：必须失败、报对原因、分区表一个字节不变
+    local what=$1 want=$2; shift 2
+    local before out rc; before=$(sgdisk -p "$DG" | grep -v '^Disk identifier')
+    out=$("$@" 2>&1); rc=$?
+    if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q "$want" && [ "$(sgdisk -p "$DG" | grep -v '^Disk identifier')" = "$before" ]; then
+        ok "$what：拒绝且分区表没动"; else bad "$what：rc=$rc，或报错不对，或分区表变了"; printf '%s\n' "$out" | tail -2 | sed 's/^/      /'; fi
+}
+gfail "删 ESP" "EFI 系统分区" gk3_part_delete "${DG}p1"
+gfail "格式化 ESP" "EFI 系统分区" gk3_part_format "${DG}p1" ext4
+mount "${DG}p3" "$mg"; gfail "删挂着的分区" "正挂着" gk3_part_delete "${DG}p3"; umount "$mg"
+gk3_part_delete "${DG}p3" >"$W/g1.log" 2>&1 && ! [ -b "${DG}p3" ] && [ "$(sgdisk -i 2 "$DG" | awk '/unique GUID/{print $4}')" = "$PU2" ] \
+    && grep -q '^RESULT op=delete' "$W/g1.log" && ok "删 p3：分区没了，别的分区 PARTUUID 没变" || { bad "删 p3 不对"; tail -3 "$W/g1.log"; }
+ls /tmp/gpt-before-delete-"$(basename "$DG")"-*.bin >/dev/null 2>&1 && ok "删之前备份了分区表" || bad "删之前没备份分区表"
+FREEG=$(gk3__probe_parts "$DG" "$(blockdev --getsz "$DG")" | grep '^FREE ' | head -1); FS=$(gk3__f "$FREEG" start)
+gfail "新建时压到别的分区" "不在任何一段空闲区里" gk3_part_create --disk "$DG" --start 616448 --size-mib 1024 --fs ext4
+OUT=$(gk3_part_create --disk "$DG" --start "$FS" --size-mib 1024 --fs ext4 2>/dev/null); NP=$(printf '%s' "$OUT" | sed -n 's/^RESULT op=create part=\([^ ]*\).*/\1/p')
+[ -b "$NP" ] && [ "$(blkid -o value -s TYPE "$NP")" = ext4 ] && [ "$(( $(blockdev --getsize64 "$NP") >> 20 ))" = 1024 ] \
+    && [ $(( $(sgdisk -i "$(cat /sys/class/block/$(basename "$NP")/partition)" "$DG" | awk '/^First sector:/{print $3}') % 2048 )) = 0 ] \
+    && ok "在空闲区新建 1 GiB ext4：$NP（对齐 1 MiB）" || bad "新建分区不对：$OUT"
+gk3_part_format "$NP" vfat >/dev/null 2>&1 && [ "$(blkid -o value -s TYPE "$NP")" = vfat ] \
+    && sgdisk -i "$(cat /sys/class/block/$(basename "$NP")/partition)" "$DG" | grep -q 'EBD0A0A2' \
+    && ok "格式化成 FAT32：类型也跟着改成 Basic data" || bad "格式化不对"
+gk3_part_format "$NP" ext4 >/dev/null 2>&1; mount "$NP" "$mg" && head -c 10485760 /dev/urandom > "$mg/f.bin" && X_SHA=$(sha "$mg/f.bin") && umount "$mg"
+PUN=$(sgdisk -i "$(cat /sys/class/block/$(basename "$NP")/partition)" "$DG" | awk '/unique GUID/{print $4}')
+gk3_part_resize "$NP" 2048 >"$W/g2.log" 2>&1; rc=$?
+mount -o ro "$NP" "$mg"; SZ=$(df -m "$mg" | awk 'NR==2{print $2}'); GOT=$(sha "$mg/f.bin"); umount "$mg"
+[ "$rc" = 0 ] && [ "$(( $(blockdev --getsize64 "$NP") >> 20 ))" = 2048 ] && [ "$SZ" -gt 1900 ] && [ "$GOT" = "$X_SHA" ] \
+    && [ "$(sgdisk -i "$(cat /sys/class/block/$(basename "$NP")/partition)" "$DG" | awk '/unique GUID/{print $4}')" = "$PUN" ] \
+    && ok "扩大 ext4 1 → 2 GiB：分区与文件系统都变大（df ${SZ} MiB），文件没变，PARTUUID 没变" || { bad "扩大 ext4 不对（rc=$rc df=$SZ）"; tail -3 "$W/g2.log"; }
+gk3_part_resize "$NP" 1024 >"$W/g3.log" 2>&1 && [ "$(( $(blockdev --getsize64 "$NP") >> 20 ))" = 1024 ] \
+    && mount -o ro "$NP" "$mg" && [ "$(sha "$mg/f.bin")" = "$X_SHA" ] && umount "$mg" \
+    && ok "缩小 ext4 2 → 1 GiB（走 gk3_shrink）：文件没变" || { bad "缩小不对"; tail -3 "$W/g3.log"; umount "$mg" 2>/dev/null; }
+# NTFS 扩大：它后面紧挨着的是新建的那个分区 —— 先删掉，腾出紧挨的空闲
+gk3_part_delete "$NP" >/dev/null 2>&1
+gk3_part_resize "${DG}p2" 4096 >"$W/g4.log" 2>&1; rc=$?
+ntfs-3g -o ro "${DG}p2" "$mg" && GOT=$(sha "$mg/win.bin") && NSZ=$(df -m "$mg" | awk 'NR==2{print $2}') && umount "$mg"
+[ "$rc" = 0 ] && [ "$(( $(blockdev --getsize64 "${DG}p2") >> 20 ))" = 4096 ] && [ "$GOT" = "$NT_SHA" ] && [ "$NSZ" -gt 3900 ] \
+    && [ "$(sgdisk -i 2 "$DG" | awk '/unique GUID/{print $4}')" = "$PU2" ] \
+    && ok "扩大 NTFS 3 → 4 GiB：文件没变，PARTUUID 没变（Windows 的 BCD 靠它）" || { bad "扩大 NTFS 不对（rc=$rc df=$NSZ）"; tail -3 "$W/g4.log"; }
+gfail "扩到比后面的空闲还大" "紧挨着的空闲不够" gk3_part_resize "${DG}p2" 30000
+
 # ── E. 网络安装 ────────────────────────────────────────────────────────────
 echo "═══ E. 网络安装：下载一整套发布文件，再走同一条写盘路径 ═══"
 # 迷你 HTTP 服务器：range 模式支持 "Range: bytes=N-"（R2 支持；Python 自带的 http.server 不支持）

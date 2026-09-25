@@ -1470,3 +1470,195 @@ gk3_shrink_scan() {
         gk3_shrink_info "$part" || true
     done
 }
+
+# ── 手动调整磁盘（用户 2026-09-25："能给的都给"）─────────────────────────────
+# 参考别的安装器：Windows 安装程序在选盘页直接给 删除 / 格式化 / 新建 / 扩展，每一步立即生效；
+# Ubuntu（新的桌面安装器也是 Flutter 写的）在"安装类型"最后一项进手动分区。这里入口学 Ubuntu
+# （安装方式页最后一项"手动调整磁盘"），执行学 Windows：每个操作单独确认、立即执行 —— 攒到最后一起做，
+# 中途失败时留下的中间状态讲不清楚。
+#
+#   gk3_part_delete <分区>
+#   gk3_part_format <分区> ext4|vfat|ntfs
+#   gk3_part_create --disk D --start <扇区> --size-mib N --fs ext4|vfat|ntfs|none
+#   gk3_part_resize <分区> <目标 MiB>      变小走 gk3_shrink；变大 = 并进紧挨在后面的空闲
+# 成功时 stdout 一行 RESULT op=… part=…；失败走 gk3_die（盘没动过时会说）。
+#
+# ★ 共同的闸（gk3__edit_guard）：块设备；不是 ESP（删或格式化它，盘上所有系统都起不来 —— 要重建 ESP
+#   就用整盘清空）；没挂着（首先是安装器所在的那个分区）；动手之前把分区表备份到介质。
+# ★ 删除【不】抹文件系统签名：分区表备份还原回去，数据就还在（Windows 的删除也是这样）。
+GK3_ESP_GUID=C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+
+gk3__edit_guard() {    # $1=分区 → 设 GK3_E_DISK / GK3_E_NUM
+    local part=$1
+    [ -b "$part" ] || { gk3_die "不是块设备：$part"; return 1; }
+    if [ "$(blkid -p -o value -s PART_ENTRY_TYPE "$part" 2>/dev/null | tr 'a-f' 'A-F')" = "$GK3_ESP_GUID" ]; then
+        gk3_die "$part 是 EFI 系统分区：动它，盘上所有系统都起不来（要重建 ESP，用整盘清空）"; return 1
+    fi
+    if findmnt -rn -S "$part" >/dev/null 2>&1; then
+        gk3_die "$part 正挂着（安装器是不是就从它上面跑的？）—— 不动它"; return 1
+    fi
+    GK3_E_DISK=/dev/$(lsblk -no PKNAME "$part" 2>/dev/null | head -1)
+    GK3_E_NUM=$(cat "/sys/class/block/$(basename "$part")/partition" 2>/dev/null)
+    [ -b "$GK3_E_DISK" ] && [ -n "$GK3_E_NUM" ] || { gk3_die "认不出 $part 属于哪块盘的第几个分区"; return 1; }
+}
+
+gk3__gpt_backup() {    # $1=盘 $2=标签：备份到介质（出事一条命令还原），与 gk3_apply / gk3_shrink 同一个做法
+    local disk=$1 dir=/media/gk3/gaokun3 bk
+    mount -o remount,rw /media/gk3 2>/dev/null || true
+    [ -d "$dir" ] && [ -w "$dir" ] || dir=/tmp
+    bk="$dir/gpt-before-$2-$(basename "$disk")-$(date +%Y%m%d-%H%M%S).bin"
+    if sgdisk --backup="$bk" "$disk" >/dev/null 2>&1; then
+        echo "分区表备份：${bk}（还原：sgdisk --load-backup=$bk ${disk}）" >&2
+    else
+        echo "警告：分区表备份失败" >&2
+    fi
+}
+
+gk3__settle() { partprobe "$1" 2>/dev/null || true; command -v udevadm >/dev/null && udevadm settle --timeout=5 2>/dev/null; sleep 1; }
+
+gk3__wait_node() {     # 分区节点是异步出现的："还没出现"和"不存在"是两回事（gk3__need_part 的注释）
+    local i=0; while [ ! -b "$1" ] && [ $i -lt 50 ]; do sleep 0.2; i=$((i+1)); done; [ -b "$1" ]
+}
+
+gk3__mkfs() {          # $1=分区 $2=ext4|vfat|ntfs
+    case "$2" in
+        ext4) mkfs.ext4 -q -F "$1" ;;
+        vfat) mkfs.vfat -F 32 "$1" >/dev/null ;;
+        ntfs) mkntfs -Q -F "$1" >/dev/null 2>&1 ;;   # -Q 快速（不清零整个分区）
+        *) return 2 ;;
+    esac
+}
+
+# 分区类型跟着文件系统走：Windows 只认 Basic data，Linux 的认 Linux filesystem
+gk3__type_for_fs() { case "$1" in vfat|ntfs) echo 0700 ;; *) echo 8300 ;; esac; }
+
+gk3_part_delete() {
+    local part=$1
+    gk3__edit_guard "$part" || return 1
+    gk3_prog 10 "备份分区表"
+    gk3__gpt_backup "$GK3_E_DISK" delete
+    gk3_prog 50 "删除分区 $part"
+    sgdisk -d "$GK3_E_NUM" "$GK3_E_DISK" >/dev/null 2>&1 || { gk3_die "删分区项失败（分区表备份见上）"; return 1; }
+    gk3__settle "$GK3_E_DISK"
+    gk3_prog 100 "完成"
+    echo "RESULT op=delete part=$part"
+}
+
+gk3_part_format() {
+    local part=$1 fs=$2 tool
+    case "$fs" in ext4) tool=mkfs.ext4 ;; vfat) tool=mkfs.vfat ;; ntfs) tool=mkntfs ;; *) gk3_die "不支持的文件系统：$fs"; return 1 ;; esac
+    command -v "$tool" >/dev/null || { gk3_die "缺工具：$tool"; return 1; }
+    gk3__edit_guard "$part" || return 1
+    gk3_prog 20 "格式化 $part 为 $fs"
+    gk3__mkfs "$part" "$fs" || { gk3_die "格式化 $part 失败"; return 1; }
+    sgdisk -t "$GK3_E_NUM:$(gk3__type_for_fs "$fs")" "$GK3_E_DISK" >/dev/null 2>&1 || true
+    gk3__settle "$GK3_E_DISK"
+    gk3_prog 100 "完成"
+    echo "RESULT op=format part=$part fs=$fs"
+}
+
+gk3_part_create() {
+    local disk="" start="" mib="" fs=ext4 name
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --disk) disk=$2; shift 2 ;; --start) start=$2; shift 2 ;;
+            --size-mib) mib=$2; shift 2 ;; --fs) fs=$2; shift 2 ;;
+            *) gk3_die "create: 不认识的参数 $1"; return 1 ;;
+        esac
+    done
+    [ -b "$disk" ] && [ -n "$start" ] && [ -n "$mib" ] || { gk3_die "create 要 --disk --start --size-mib"; return 1; }
+    case "$fs" in ext4|vfat|ntfs|none) ;; *) gk3_die "不支持的文件系统：$fs"; return 1 ;; esac
+    # 起点对齐到 1 MiB；整段必须落在【某一段】空闲区里 —— 空闲区用 gk3_probe 同一套算法算，不另写一份
+    local st=$(( (start + 2047) / 2048 * 2048 )) en ok="" line a b
+    en=$(( st + mib * 2048 - 1 ))
+    while read -r line; do
+        [ -n "$line" ] || continue
+        a=$(gk3__f "$line" start); b=$(gk3__f "$line" end)
+        [ "$st" -ge "$a" ] && [ "$en" -le "$b" ] && ok=1
+    done <<EOF
+$(gk3__probe_parts "$disk" "$(cat "/sys/block/$(basename "$disk")/size" 2>/dev/null || echo 0)" | grep '^FREE ')
+EOF
+    [ -n "$ok" ] || { gk3_die "扇区 [$st, $en] 不在任何一段空闲区里 —— 会压到别的分区（盘没动过）"; return 1; }
+    case "$fs" in vfat|ntfs) name="Basic data partition" ;; *) name=linux ;; esac
+    gk3_prog 10 "备份分区表"
+    gk3__gpt_backup "$disk" create
+    gk3_prog 30 "新建分区（${mib} MiB）"
+    sgdisk -n "0:$st:$en" -t "0:$(gk3__type_for_fs "$fs")" -c "0:$name" "$disk" >/dev/null 2>&1 || { gk3_die "sgdisk 建分区失败"; return 1; }
+    gk3__settle "$disk"
+    # sgdisk -n 0 自己挑编号：按起始扇区找回来
+    local num part
+    num=$(sgdisk -p "$disk" 2>/dev/null | awk -v s="$st" '/^ *[0-9]+ /{ if ($2 == s) print $1 }')
+    part=$(gk3_partpath "$disk" "$num")
+    [ -n "$num" ] && gk3__wait_node "$part" || { gk3_die "新分区的节点没出现（$part）"; return 1; }
+    if [ "$fs" != none ]; then
+        gk3_prog 60 "格式化为 $fs"
+        gk3__mkfs "$part" "$fs" || { gk3_die "格式化新分区 $part 失败（分区已建好）"; return 1; }
+    fi
+    gk3_prog 100 "完成"
+    echo "RESULT op=create part=$part fs=$fs size_mib=$mib"
+}
+
+gk3_part_resize() {
+    local part=$1 target=$2 cur
+    [ -b "$part" ] || { gk3_die "不是块设备：$part"; return 1; }
+    cur=$(( $(blockdev --getsize64 "$part" 2>/dev/null || echo 0) / 1048576 ))
+    if [ "$target" -lt "$cur" ]; then
+        gk3__edit_guard "$part" || return 1
+        gk3_shrink "$part" "$target" || return 1
+        echo "RESULT op=shrink part=$part size_mib=$target"; return 0
+    fi
+    [ "$target" -gt "$cur" ] || { gk3_die "目标大小与现在一样（${cur} MiB）"; return 1; }
+    gk3__grow "$part" "$target"
+}
+
+# 扩大：先扩分区项（同一个起点、同一个 PARTUUID / 名字 / 类型 —— 与 gk3_shrink 同一种重建），再扩文件系统。
+# 只能并进【紧挨在后面】的空闲：要把前面的空间也并进来就得挪数据，那是另一个量级的风险，不做。
+gk3__grow() {
+    local part=$1 target=$2 fs disk num st en pu pl pt next last lim newend rc
+    gk3__edit_guard "$part" || return 1
+    disk=$GK3_E_DISK; num=$GK3_E_NUM
+    fs=$(blkid -o value -s TYPE "$part" 2>/dev/null)
+    case "$fs" in
+        ext2|ext3|ext4) command -v resize2fs >/dev/null || { gk3_die "缺工具：resize2fs"; return 1; } ;;
+        ntfs) command -v ntfsresize >/dev/null || { gk3_die "缺工具：ntfsresize"; return 1; } ;;
+        *) gk3_die "不支持扩大 ${fs:-没有文件系统的分区}（只支持 ext 与 NTFS）"; return 1 ;;
+    esac
+    st=$(sgdisk -i "$num" "$disk" 2>/dev/null | awk '/^First sector:/{print $3}')
+    en=$(sgdisk -i "$num" "$disk" 2>/dev/null | awk '/^Last sector:/{print $3}')
+    pu=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition unique GUID:' | awk '{print $4}')
+    pl=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition name:' | cut -d"'" -f2)
+    pt=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition GUID code:' | awk '{print $4}')
+    [ -n "$st" ] && [ -n "$pu" ] && [ -n "$pt" ] || { gk3_die "读不到分区 $num 的起点 / GUID —— 不敢重建它"; return 1; }
+    next=$(sgdisk -p "$disk" 2>/dev/null | awk -v e="$en" '/^ *[0-9]+ /{ if ($2 > e && (n == "" || $2 < n)) n = $2 } END { print n }')
+    last=$(sgdisk -p "$disk" 2>/dev/null | sed -n 's/.*last usable sector is \([0-9]*\).*/\1/p')
+    lim=$(( ${next:-$(( last + 1 ))} - 1 ))
+    newend=$(( st + target * 2048 - 1 ))
+    if [ "$newend" -gt "$lim" ]; then
+        gk3_die "后面紧挨着的空闲不够：最多能扩到 $(( (lim - st + 1) / 2048 )) MiB（盘没动过）"; return 1
+    fi
+    if [ "$fs" = ntfs ]; then
+        # 与缩小同一条纪律：脏卷（Windows 快速启动 / 休眠）不碰 —— ntfsresize --info 先问一遍
+        ntfsresize --info --force "$part" >/dev/null 2>&1 || { gk3_die "ntfsresize 检查没通过（卷脏？回 Windows 关掉快速启动、正常关机）—— 盘没动过"; return 1; }
+    fi
+    gk3_prog 10 "备份分区表"
+    gk3__gpt_backup "$disk" grow
+    gk3_prog 30 "扩大分区项"
+    sgdisk -d "$num" "$disk" >/dev/null 2>&1 || { gk3_die "删旧分区项失败"; return 1; }
+    sgdisk -n "$num:$st:$newend" -t "$num:$pt" -u "$num:$pu" "$disk" >/dev/null 2>&1 \
+        || { gk3_die "重建分区项失败 —— 用上面的分区表备份还原"; return 1; }
+    [ -n "$pl" ] && sgdisk -c "$num:$pl" "$disk" >/dev/null 2>&1
+    gk3__settle "$disk"
+    gk3__wait_node "$part" || { gk3_die "分区节点没回来（$part）"; return 1; }
+    gk3_prog 60 "扩大文件系统"
+    case "$fs" in
+        ntfs) printf 'y\n' | ntfsresize --force --force "$part" >/dev/null 2>&1 || { gk3_die "扩大 NTFS 失败（分区项已扩大，文件系统还是原来的大小，数据完好）"; return 1; } ;;
+        *)
+            e2fsck -fp "$part" >/dev/null 2>&1; rc=$?
+            [ "$rc" -lt 4 ] || { gk3_die "e2fsck 报错（${rc}），不敢扩"; return 1; }
+            resize2fs "$part" >/dev/null 2>&1 || { gk3_die "resize2fs 失败（分区项已扩大，文件系统还是原来的大小，数据完好）"; return 1; } ;;
+    esac
+    [ "$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition unique GUID:' | awk '{print $4}')" = "$pu" ] \
+        || { gk3_die "PARTUUID 变了 —— Windows 会起不来"; return 1; }
+    gk3_prog 100 "完成"
+    echo "RESULT op=grow part=$part size_mib=$target"
+}
