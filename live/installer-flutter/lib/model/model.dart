@@ -210,9 +210,13 @@ class Variant {
         name = r['name'],
         desc = r['desc'],
         base = r['base'],
-        sizeMib = r.intOf('size_mib');
+        sizeMib = r.intOf('size_mib'),
+        latest = r.yes('latest');
   final String id, name, desc, base;
   final int sizeMib;
+
+  /// 从 OTA 清单推出来的"最新发布"（变体清单还没发布时，gk3__ota_variant）
+  final bool latest;
 }
 
 /// MiB → 给人看的大小：100 GiB 以下保留一位小数（"21.2 GiB"），整数不显示 ".0"

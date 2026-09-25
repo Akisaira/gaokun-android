@@ -261,6 +261,9 @@ class _VariantPageState extends State<VariantPage> {
       child: s.variantsError != null
           ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(l.variantFailed, style: tt.bodyLarge!.copyWith(color: context.cs.error)),
+              // 后端说的具体原因（2026-09-25 真机：清单 404，原先只有一句"请检查网络连接"，把人往错的方向引）
+              const SizedBox(height: 8),
+              Text(s.variantsError!, style: tt.bodyMedium),
               const SizedBox(height: 16),
               Btn(l.btnRetry, kind: BtnKind.secondary, onPressed: s.fetchVariants),
             ])
@@ -273,7 +276,7 @@ class _VariantPageState extends State<VariantPage> {
                     final v = vs[i];
                     return ChoiceCard(
                       title: v.name,
-                      body: '${v.desc}\n${l.variantSize(fmtMib(v.sizeMib))}',
+                      body: '${v.desc.isEmpty && v.latest ? l.variantLatest : v.desc}\n${l.variantSize(fmtMib(v.sizeMib))}',
                       selected: identical(s.variant, v),
                       onTap: () => s.setVariant(v),
                     );

@@ -1341,13 +1341,43 @@ gk3_net_status() {
 #   （scripts/release.sh:154-172）—— 不另打包，也就不会有第二份可能漂的东西。
 
 GK3_MANIFEST_URL=${GK3_MANIFEST_URL:-https://ota.072172.xyz/installer/variants.txt}
+# 设备"系统更新"读的那份（release.sh 每次发版都更新它）—— 变体清单取不到时从它推出"最新发布"
+GK3_OTA_JSON_URL=${GK3_OTA_JSON_URL:-https://ota.072172.xyz/ota/gaokun3.json}
 
+# ⚠️★ 2026-09-25 真机：variants.txt 还【没发布过】（要等发版流程生成它，404）—— 网络安装在版本页必然
+#    "无法获取版本列表"。退回 OTA 清单：它一定在（设备天天读），且安装文件就在同一个桶的
+#    install/<zip 名去掉 .zip>/（release.sh 同一次上传，scripts/release.sh:154-172）。
 gk3_net_manifest() {
-    local url=${1:-$GK3_MANIFEST_URL}
+    local url=${1:-$GK3_MANIFEST_URL} out
     command -v curl >/dev/null || { gk3_die "没有 curl"; return 1; }
-    local out
-    out=$(curl -fsSL --max-time 30 "$url" 2>/dev/null) || { gk3_die "取不到清单：$url"; return 1; }
-    printf '%s\n' "$out" | grep '^VARIANT ' || { gk3_die "清单里一个 VARIANT 都没有"; return 1; }
+    if out=$(curl -fsSL --max-time 30 "$url" 2>/dev/null) && printf '%s\n' "$out" | grep -q '^VARIANT '; then
+        printf '%s\n' "$out" | grep '^VARIANT '; return 0
+    fi
+    echo "变体清单取不到（${url}）—— 退回 OTA 清单 $GK3_OTA_JSON_URL" >&2
+    gk3__ota_variant || { gk3_die "取不到版本列表：变体清单（${url}）与 OTA 清单（${GK3_OTA_JSON_URL}）都不可用"; return 1; }
+}
+
+# 从 OTA 清单推出一个变体（latest=yes）：名字取版本号，大小用 HEAD 量（安装文件的 Content-Length 之和）
+gk3__ota_variant() {
+    local js line name ver host base size=0 f n
+    js=$(curl -fsSL --max-time 30 "$GK3_OTA_JSON_URL" 2>/dev/null) || { echo "OTA 清单取不到" >&2; return 1; }
+    # ⚠️ 用 | 分隔：版本号可能是空的，按空格 read 会让后面的字段整体串位
+    line=$(printf '%s' "$js" | python3 -c 'import json, sys, urllib.parse as u
+r = json.load(sys.stdin)["response"][0]; d = u.urlsplit(r["download"])
+print("|".join([r["filename"].removesuffix(".zip"), str(r.get("version", "")), d.scheme + "://" + d.netloc]))' 2>/dev/null) \
+        || { echo "OTA 清单解析不了" >&2; return 1; }
+    IFS='|' read -r name ver host <<EOF
+$line
+EOF
+    [ -n "$name" ] && [ -n "$host" ] || { echo "OTA 清单里没有最新版本" >&2; return 1; }
+    base=$host/install/$name/
+    curl -fsI --max-time 30 "${base}install-artifacts.sha256" >/dev/null 2>&1 \
+        || { echo "最新版本 $name 在 $base 下没有安装文件" >&2; return 1; }
+    for f in boot.img super.img.zst; do
+        n=$(curl -fsI --max-time 30 "$base$f" 2>/dev/null | tr -d '\r' | awk 'tolower($1) == "content-length:" {print $2}' | tail -1)
+        size=$(( size + ${n:-0} ))
+    done
+    echo "VARIANT id=latest name=$(gk3__enc "crDroid ${ver:-$name}") desc= base=$base size_mib=$(( size / 1048576 )) latest=yes"
 }
 
 # 下载并校验。$1=url $2=目标文件 $3=期望 sha256（可空）[$4=进度起点 $5=进度跨度]

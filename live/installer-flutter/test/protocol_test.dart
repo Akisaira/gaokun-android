@@ -114,6 +114,13 @@ void main() {
       expect(live.can, isFalse);
       expect(live.why, 'mounted');
     });
+    test('版本列表：变体清单 404 时退回 OTA 清单的"最新发布"（真实输出）', () async {
+      final vs = (await b('blank', {'gk3_net_manifest': 'net_manifest-latest.txt'}).run('gk3_net_manifest')).ofType('VARIANT').map(Variant.new).toList();
+      expect(vs.single.latest, isTrue);
+      expect(vs.single.name, 'crDroid 12.11');
+      expect(vs.single.base, 'https://ota.072172.xyz/install/crDroidAndroid-16.0-20260916-gaokun3-v12.11/');
+      expect(vs.single.sizeMib, 1247);
+    });
     test('overrides：换一份预检（BIOS 2.17 放行，安全启动拦住）', () async {
       final checks = (await b('blank', {'gk3_preflight': 'preflight-secureboot.txt'}).run('gk3_preflight'))
           .ofType('CHECK').map(Check.new).toList();

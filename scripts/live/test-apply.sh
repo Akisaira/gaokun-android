@@ -477,6 +477,10 @@ import http.server, os, sys
 root, port, rng, log = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "range", sys.argv[4]
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
+    def do_HEAD(self):   # gk3__ota_variant 用 HEAD 量安装文件的大小（R2 支持）
+        p = os.path.join(root, self.path.lstrip("/"))
+        if not os.path.isfile(p): self.send_error(404); return
+        self.send_response(200); self.send_header("Content-Length", str(os.path.getsize(p))); self.end_headers()
     def do_GET(self):
         p = os.path.join(root, self.path.lstrip("/"))
         if not os.path.isfile(p): self.send_error(404); return
@@ -526,6 +530,19 @@ gk3_net_release http://127.0.0.1:18082/good/ "$DL3" >/dev/null 2>"$W/e3.err"; rc
 OUT=$(gk3_net_release http://127.0.0.1:18081/bad/ "$W/dl4" 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'boot.img 的 sha256 不符' \
     && ok "服务器上的 boot.img 被改过：拒绝" || bad "被改过的文件居然通过了（rc=${rc}）"
+# 版本列表：variants.txt 还没发布（真机上 404）→ 退回 OTA 清单，推出"最新发布"，base 指向 install/<zip 名>/
+ZN=crDroidAndroid-16.0-20260916-gaokun3-v12.11
+mkdir -p "$SRV/ota" "$SRV/install/$ZN"; cp "$SRV/good/"* "$SRV/install/$ZN/"
+printf '{"response":[{"filename":"%s.zip","download":"http://127.0.0.1:18081/builds/%s.zip","version":"12.11"}]}' "$ZN" "$ZN" > "$SRV/ota/gaokun3.json"
+VM=$(GK3_MANIFEST_URL=http://127.0.0.1:18081/installer/variants.txt GK3_OTA_JSON_URL=http://127.0.0.1:18081/ota/gaokun3.json gk3_net_manifest 2>"$W/vm.err"); rc=$?
+WANT_MIB=$(( ( $(stat -c%s "$REL/boot.img") + $(stat -c%s "$REL/super.img.zst") ) / 1048576 ))
+[ "$rc" = 0 ] && printf '%s' "$VM" | grep -q "^VARIANT id=latest name=crDroid%2012.11 .*base=http://127.0.0.1:18081/install/$ZN/ size_mib=$WANT_MIB latest=yes" \
+    && ok "版本清单 404 → 退回 OTA 清单：最新发布 v12.11，base 与大小（${WANT_MIB} MiB）都对" || { bad "OTA 退回不对（rc=$rc）：$VM"; tail -3 "$W/vm.err"; }
+BASE=$(printf '%s' "$VM" | sed -n 's/.* base=\([^ ]*\).*/\1/p'); DL5=$W/dl5
+gk3_net_release "$BASE" "$DL5" >/dev/null 2>&1 && [ "$(sha "$DL5/super.img.zst")" = "$(sha "$REL/super.img.zst")" ] \
+    && ok "推出来的 base 能直接交给 gk3_net_release 下载（sha256 一致）" || bad "推出来的 base 下载不了"
+OUT=$(GK3_MANIFEST_URL=http://127.0.0.1:18081/nope GK3_OTA_JSON_URL=http://127.0.0.1:18081/nope2 gk3_net_manifest 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '都不可用' && ok "两份清单都取不到：报出两个地址" || bad "两份都取不到时报错不对：$OUT"
 kill $SRVPID1 $SRVPID2 2>/dev/null
 # 下载下来的目录交给 gk3_apply —— 网络安装与 U 盘安装是同一条写盘路径
 DN=$(new_disk n 40G); sgdisk -o "$DN" >/dev/null 2>&1

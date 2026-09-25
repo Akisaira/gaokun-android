@@ -327,6 +327,12 @@ O VARIANT id=ksu name=带%20root（KernelSU） desc=内核内置%20KernelSU。�
 X 0
 EOF
 printf '%-78s %s\n' "gk3_net_manifest" "net_manifest.txt   # 手写（清单 URL 还不存在）" >> "$C/index.txt"
+# 手写：变体清单 404 时退回 OTA 清单推出来的那一项 —— 原样取自 2026-09-25 对真实 ota.072172.xyz 跑 gk3_net_manifest 的输出
+cat > "$C/net_manifest-latest.txt" <<'EOF'
+E 变体清单取不到（https://ota.072172.xyz/installer/variants.txt）—— 退回 OTA 清单 https://ota.072172.xyz/ota/gaokun3.json
+O VARIANT id=latest name=crDroid%2012.11 desc= base=https://ota.072172.xyz/install/crDroidAndroid-16.0-20260916-gaokun3-v12.11/ size_mib=1247 latest=yes
+X 0
+EOF
 
 # 录：手动调整磁盘的四个操作（用户 2026-09-25）—— 在另一块出厂布局的盘上真做一遍。放 common/（任何场景都能用），
 # 界面按 '<函数> *' 取；做完之后界面会重新探测，拿到的仍是各场景自己那份 probe（测试只核对发出去的调用）
