@@ -31,7 +31,16 @@ REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 LIVE=$REPO/scripts/live
 
 PROFILE=rescue
-OUT= ; SSH_KEY= ; WIFI_CONF= ; INSTALLER= ; KEEP=
+OUT= ; SSH_KEY= ; WIFI_CONF= ; INSTALLER= ; KEEP= ; FIRMWARE=
+# GPU（Adreno 690）要的三个固件。zap shader 的名字取自 dtb（gpu@3d00000/zap-shader/firmware-name）。
+# ★ 为什么要单独给：zap shader 是华为专有的（HUAWEI/gaokun3/ 路径），不在 Debian 的固件包里；
+#   Android 那边也是从设备树的 firmware/ 目录装进 vendor 的（device/huawei/gaokun3/device.mk 的"固件双路安装"）。
+# ⚠️ M0 第一轮（2026-09-25）镜像里没有它们：a660_sqe.fw 加载 -2 → freedreno 建不了 pipe → cage 的 EGL 起不来
+#    —— C 版安装器画 dumb buffer、从不碰 GPU，所以 live 以前从没缺过这几个。
+# ⚠️★ 再分发：zap shader 是华为专有固件，本仓的规矩是【不可公开再分发】（.gitignore 的固件一节、
+#    device/huawei/gaokun3/firmware/README.md）。现在造的都是私人镜像，所以 live 暂定"必须给 --firmware"；
+#    【公开发布 live 镜像之前】要用户定：镜像里带不带它（docs/TODO.md 的 B23）。
+GPU_FW="qcom/a660_sqe.fw qcom/a660_gmu.bin qcom/sc8280xp/HUAWEI/gaokun3/qcdxkmsuc8280.mbn"
 die() { echo "!! $*" >&2; exit 1; }
 say() { echo; echo "══ $*"; }
 ok()  { echo "   ✓ $*"; }
@@ -43,6 +52,7 @@ while [ $# -gt 0 ]; do
         --ssh-key)   SSH_KEY=$2; shift 2 ;;
         --wifi-conf) WIFI_CONF=$2; shift 2 ;;
         --installer) INSTALLER=$2; shift 2 ;;
+        --firmware)  FIRMWARE=$2; shift 2 ;;   # 形如 /vendor/firmware 的目录（adb pull /vendor/firmware <目录>）
         --keep)      KEEP=1; shift ;;
         *) die "不认识的参数：$1" ;;
     esac
@@ -57,6 +67,8 @@ done
 if [ "$PROFILE" = live ]; then
     INSTALLER=${INSTALLER:-$REPO/out/installer-flutter-linux-arm64}
     [ -x "$INSTALLER/gk3_installer" ] || die "live 要图形安装器：$INSTALLER/gk3_installer 不在（先跑 scripts/live/build-flutter.sh）"
+    # 先查、后花二十分钟构建：没有 GPU 固件的 live 镜像开机就是黑屏
+    for f in $GPU_FW; do [ -f "$FIRMWARE/$f" ] || die "live 要 GPU 固件：--firmware <目录> 里缺 ${f}（从设备取：adb pull /vendor/firmware <目录>）"; done
 fi
 
 WORK=${GK3_WORK:-/build/work-$PROFILE}
@@ -98,6 +110,10 @@ ch() { chroot "$ROOTFS" "$@"; }
 say "2. 配置"
 cp -a "$LIVE/overlay-common"/. "$ROOTFS"/; ok "铺了 overlay-common"
 [ "$PROFILE" = live ] && { cp -a "$LIVE/overlay-live"/. "$ROOTFS"/; ok "铺了 overlay-live"; }
+if [ -n "$FIRMWARE" ]; then
+    for f in $GPU_FW; do [ -f "$FIRMWARE/$f" ] && install -Dm644 "$FIRMWARE/$f" "$ROOTFS/usr/lib/firmware/$f"; done
+    ok "GPU 固件（来自 ${FIRMWARE}）"
+fi
 HOST=gaokun3-$PROFILE
 echo "$HOST" > "$ROOTFS/etc/hostname"
 printf '127.0.0.1\tlocalhost\n127.0.1.1\t%s\n::1\t\tlocalhost ip6-localhost ip6-loopback\n' "$HOST" > "$ROOTFS/etc/hosts"
@@ -202,6 +218,7 @@ for f in amss.bin board-2.bin m3.bin; do need_glob "/usr/lib/firmware/ath11k/WCN
 if [ "$PROFILE" = live ]; then
     need_path /usr/bin/gk3-installer
     need_path /usr/bin/gk3-installer-session
+    for f in $GPU_FW; do need_path "/usr/lib/firmware/$f"; done
     need_cmd cage; need_cmd wlr-randr; need_cmd seatd; need_cmd grim
     # ★ 那根线：二进制在镜像里不等于它会跑（Alpine 版第一次停在 login 提示符）
     for u in gk3-installer.service seatd.service getty@tty2.service; do need_enabled "$u"; done

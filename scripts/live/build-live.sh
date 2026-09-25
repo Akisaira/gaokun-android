@@ -3,12 +3,15 @@
 # build-rootfs.sh → build-initramfs.sh → 拆 boot.img → build-usb.sh。
 #
 #   bash scripts/live/build-flutter.sh                 # 先有图形安装器（live 要）
-#   bash scripts/live/build-live.sh --boot-img out/test-bootimg/boot.img [--m0]
+#   bash scripts/live/build-live.sh --boot-img out/test-bootimg/boot.img --firmware out/vendor-firmware [--m0]
 #   bash scripts/live/build-live.sh --release <发布目录> --payload      # 带上安装载荷
 #   bash scripts/live/build-live.sh --profile rescue --boot-img … --ssh-key ~/.ssh/id_ed25519.pub
 #
 #   --boot-img  内核 / dtb / 内核参数的来源：live 与 Android 共用同一个内核
 #               （docs/stage7-live-installer.md §2.3）。给 --release 时默认用里面的 boot.img
+#   --firmware  GPU 固件的来源，形如 /vendor/firmware 的目录：adb pull /vendor/firmware out/vendor-firmware
+#               live 必需（cage 要 GPU；zap shader 是华为专有的，Debian 的固件包里没有 —— 见 build-rootfs.sh 的 GPU_FW）
+#               ⚠️ 带了它的镜像【不能公开发布】，除非用户定了再分发的做法（docs/TODO.md 的 B23）
 #   --payload   把 --release 目录整个放进 U 盘（/gaokun3/payload/），装机就不用联网
 #   --m0        多放几个启动项给真机 M0 用（见下面 M0_ENTRIES）
 #   --with-rescue  live U 盘上另带一份 rescue profile（约 104 MiB），装机时装进救援分区的是它 ——
@@ -23,7 +26,7 @@ REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 die() { echo "✗ $*" >&2; exit 1; }
 say() { echo; echo "══ $*"; }
 
-PROFILE=live; REL=; BOOTIMG=; PAYLOAD=; M0=; SSH_KEY=; WIFI=; WITH_RESCUE=
+PROFILE=live; REL=; BOOTIMG=; PAYLOAD=; M0=; SSH_KEY=; WIFI=; WITH_RESCUE=; FW=
 while [ $# -gt 0 ]; do
     case "$1" in
         --profile)   PROFILE=$2; shift 2 ;;
@@ -34,6 +37,7 @@ while [ $# -gt 0 ]; do
         --with-rescue) WITH_RESCUE=1; shift ;;
         --ssh-key)   SSH_KEY=$2; shift 2 ;;
         --wifi-conf) WIFI=$2; shift 2 ;;
+        --firmware)  FW=$2; shift 2 ;;
         *) die "不认识的参数：$1" ;;
     esac
 done
@@ -52,6 +56,10 @@ MOUNTS=(-v "$REPO:/repo:ro" -v "$REPO/out/live:/outlive" -v "$(abs "$BOOTIMG"):/
 [ -n "$PAYLOAD" ] && MOUNTS+=(-v "$(cd "$REL" && pwd):/in/payload:ro")
 [ -n "$SSH_KEY" ] && MOUNTS+=(-v "$(abs "$SSH_KEY"):/in/ssh.pub:ro")
 [ -n "$WIFI" ] && MOUNTS+=(-v "$(abs "$WIFI"):/in/wpa.conf:ro")
+if [ "$PROFILE" = live ]; then
+    [ -n "$FW" ] && [ -d "$FW" ] || die "live 要 --firmware <目录>（GPU 固件；adb pull /vendor/firmware out/vendor-firmware）"
+fi
+[ -n "$FW" ] && MOUNTS+=(-v "$(cd "$FW" && pwd):/in/firmware:ro")
 mkdir -p "$REPO/out/live"
 
 H=$(shasum -a 256 "$REPO/scripts/live/live-build.Dockerfile" 2>/dev/null || sha256sum "$REPO/scripts/live/live-build.Dockerfile")
@@ -77,14 +85,14 @@ ENTRIES_FILE=$REPO/out/live/.entries
 
 say "在容器里构建（${PROFILE}）"
 docker run --rm --privileged "${MOUNTS[@]}" \
-    -e PROFILE="$PROFILE" -e PAYLOAD="$PAYLOAD" -e HAVE_KEY="$SSH_KEY" -e HAVE_WIFI="$WIFI" -e WITH_RESCUE="$WITH_RESCUE" \
+    -e PROFILE="$PROFILE" -e PAYLOAD="$PAYLOAD" -e HAVE_KEY="$SSH_KEY" -e HAVE_WIFI="$WIFI" -e WITH_RESCUE="$WITH_RESCUE" -e HAVE_FW="$FW" \
     "$TAG" bash -euo pipefail -c '
     O=/build/out; mkdir -p $O /build/boot
     # 仓库只读挂进来；构建脚本按自己所在目录找 overlay 与清单，所以拷一份可写的
     cp -a /repo/scripts /build/scripts
     mkdir -p /build/out-installer && [ "$PROFILE" = rescue ] || cp -a /repo/out/installer-flutter-linux-arm64/. /build/out-installer/
     bash /build/scripts/live/build-rootfs.sh --profile "$PROFILE" --out $O --installer /build/out-installer \
-        ${HAVE_KEY:+--ssh-key /in/ssh.pub} ${HAVE_WIFI:+--wifi-conf /in/wpa.conf}
+        ${HAVE_KEY:+--ssh-key /in/ssh.pub} ${HAVE_WIFI:+--wifi-conf /in/wpa.conf} ${HAVE_FW:+--firmware /in/firmware}
     RSQ=
     if [ -n "$WITH_RESCUE" ] && [ "$PROFILE" = live ]; then
         GK3_WORK=/build/work-rescue bash /build/scripts/live/build-rootfs.sh --profile rescue --out /build/out-rescue \

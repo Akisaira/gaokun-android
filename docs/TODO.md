@@ -86,6 +86,7 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 | **B12** | 释放 R2 桶前要有国内可达的镜像 | GitHub 附件国内不可达。要用户定方案（Worker 反代 / 保留桶） |
 | **B16** 🔄 | 设备外网单连接慢 | **2026-09-24 定位并修**（[#119](stage4-findings.md) §3）：到海外 CDN 的 RTT ~294 ms，Android 默认 Wi-Fi TCP 接收上限 2 MB ⇒ 单连接 ~3.5 MB/s；临时改 8 MB 实测 9.1–9.8 MB/s（4 连接合计 12.6 MB/s，局域网 32 MB/s）。`rro/Gaokun3WifiOverlay` 进下一版镜像。⬜ 装机后核对 `TcpBufferSizes` |
 | **B3** | 自研 EFI 加载器 | A5 与"默认启动项永远留救援"都依赖它 |
+| **B23** 🆕 | **公开的 live 镜像带不带华为专有的 GPU zap shader**（2026-09-25，M0 第一轮查出，[stage7-flutter-debian.md](stage7-flutter-debian.md) §5.7） | cage/Flutter 要 GPU，GPU 要 `qcdxkmsuc8280.mbn`，而它按本仓规矩【不可公开再分发】（`.gitignore` 固件一节）—— 但已发布的 Android ROM 的 vendor 里就带着它 | **要用户定**：①镜像里带（与 ROM 同待遇）②只放介质上（像 WiFi 凭据那样，`firmware_class.path=/media/gk3/gaokun3/firmware`，M0 就是这么跑的）③公开镜像走软件渲染。现在造的都是私人镜像，`build-live.sh` 暂定 live 必须给 `--firmware` |
 | **B7** | 用轻量系统替掉救援 Ubuntu（= B4） | 24.6 GiB 换成 squashfs；**2026-09-24 随 B4 重启**，改为 Debian 基底（见 B4） |
 | — | 相机零碎 | `patches/0022` 仍未在**健康**状态下验证 unbind/rebind；libcamera 生成源码仍靠手工，未改成 Soong `genrule`（`patches/libcamera/README.md:34`）；`kDarkLuma=50` 是启发式 |
 | **B18** 🔄 | init 泄漏 remoteproc 引用 | 已修（[#119](stage4-findings.md) §5）：`gaokun3-rproc-kick.sh` 只对不在运行的 DSP 写 start；新域 + usbrole 补 sysfs 规则，`selinux_policy` 通过。⬜ 随下一版镜像验证 |
