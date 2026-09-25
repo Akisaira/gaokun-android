@@ -25,8 +25,8 @@ testdata/      fixture：真后端在容器里录的输出（见下）
 ## 在 Mac 上开发（不需要设备，也不需要 Xcode）
 
 ```sh
-flutter test                              # 全部：协议 17 · 流程 8 · 文案约定 2 · 出图 15
-python3 tool/fetch-test-font.py           # 第一次：取出图用的中文字体（与设备上同一个）
+python3 tool/fetch-fonts.py               # 第一次：取打包进应用的 Roboto 与 Noto Sans CJK SC（连着设备，或 --from <目录>）
+flutter test                              # 全部：协议 · 流程 · 文案约定 · 出图
 flutter test test/shots_test.dart         # 出图 → test/shots/*.png（C 版 make shots 的等价物）
 flutter run -d chrome --web-browser-flag=--window-size=1280,800   # 交互预览，默认场景 windows-free
 #   换场景：地址栏加 ?scenario=factory | windows-free | blank | android
@@ -35,6 +35,18 @@ flutter run -d chrome --web-browser-flag=--window-size=1280,800   # 交互预览
 ★ 出图不是可有可无的：这一轮的**占位符参数填反**（"可用空间不足 0 MiB（最大的一块是 21.2 GiB）"、
 "创建 /dev/nvme0n1p1 的分区…EFI 分区 80 GiB"）测试全绿，是看图才发现的 —— 测试和代码用了同样错的顺序。
 改界面之后**看一遍图**。
+
+### 界面：Material Design 3（用户 2026-09-25）
+
+* 颜色只用 MD3 的角色：`ColorScheme.fromSeed`（种子沿用 C 版的强调蓝）；MD3 没有的"成功 / 警告"是
+  `Gk3Colors`（`lib/ui/theme.dart`），按 MD3 自定义颜色的做法先向主色调和、再生成四件套。**不写死颜色。**
+* 大屏布局：左侧不可点的步骤栏（MD3 导航抽屉的样子，当前项是 secondary-container 胶囊）+ 右侧内容；
+  底栏"返回"是 text button、"下一步"是 filled button；可选卡片未选是描边卡、选中是 secondary-container + 单选指示；
+  危险操作用 error 角色（整盘清空、按住 2 秒）。
+* 字体打包进应用（pubspec 的 `fonts`）：拉丁 Roboto、中文 Noto Sans CJK SC，都是可变字重 ——
+  ⚠️ Flutter 不会把 `fontWeight` 映射到 wght 轴，`buildTheme()` 给每个样式补了 `FontVariation`，
+  漏了的话标题和正文一样粗。
+* 尺寸：MD3 的 type scale 原样用；按钮 56、列表项 ≥ 72（MD3 的下限 48 dp，本机 ≈ 37 逻辑像素，见 `kTouch` 的注释）。
 
 ### fixture 从哪来
 

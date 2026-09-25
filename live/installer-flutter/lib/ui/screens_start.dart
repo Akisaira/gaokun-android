@@ -54,6 +54,7 @@ class _WelcomePageState extends State<WelcomePage> {
     final s = context.session, l = context.l, tt = Theme.of(context).textTheme;
     final checks = s.checks;
     return StepPage(
+      step: Gk3Step.welcome,
       title: l.welcomeTitle,
       subtitle: l.welcomeSub,
       bottom: Row(children: [
@@ -71,7 +72,7 @@ class _WelcomePageState extends State<WelcomePage> {
             const SizedBox(height: 24),
             Container(
               padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(color: C.surf, borderRadius: BorderRadius.circular(16)),
+              decoration: BoxDecoration(color: context.cs.surfaceContainerLow, borderRadius: BorderRadius.circular(16)),
               child: Text(l.welcomeNote, style: tt.bodyMedium),
             ),
           ]),
@@ -81,7 +82,7 @@ class _WelcomePageState extends State<WelcomePage> {
           flex: 4,
           child: Container(
             padding: const EdgeInsets.all(22),
-            decoration: BoxDecoration(color: C.surf, borderRadius: BorderRadius.circular(20), border: Border.all(color: s.blocked ? C.danger : C.line)),
+            decoration: BoxDecoration(color: context.cs.surfaceContainerLow, borderRadius: BorderRadius.circular(20), border: Border.all(color: s.blocked ? context.cs.error : context.cs.outlineVariant)),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(l.checkTitle, style: tt.titleMedium),
               const SizedBox(height: 14),
@@ -97,7 +98,7 @@ class _WelcomePageState extends State<WelcomePage> {
                     failText: _failText(c),
                     unknownText: l.checkUnknown,
                   ),
-                if (s.blocked) ...[const SizedBox(height: 10), Text(l.checkBlocked, style: tt.bodyLarge!.copyWith(color: C.danger))],
+                if (s.blocked) ...[const SizedBox(height: 10), Text(l.checkBlocked, style: tt.bodyLarge!.copyWith(color: context.cs.error))],
               ],
             ]),
           ),
@@ -117,9 +118,9 @@ class _CheckRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
     final (icon, color) = switch (check.state) {
-      CheckState.ok => (Icons.check_circle, C.ok),
-      CheckState.fail => (Icons.cancel, C.danger),
-      CheckState.unknown => (Icons.help, C.warn),
+      CheckState.ok => (Icons.check_circle, context.gk.success),
+      CheckState.fail => (Icons.cancel, context.cs.error),
+      CheckState.unknown => (Icons.help, context.gk.warning),
     };
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
@@ -132,7 +133,7 @@ class _CheckRow extends StatelessWidget {
               Text(name, style: tt.bodyLarge),
               if (shown.isNotEmpty) ...[const SizedBox(width: 10), Text(shown, style: tt.bodyMedium)],
             ]),
-            if (check.state == CheckState.fail && failText != null) Text(failText!, style: tt.bodyMedium!.copyWith(color: C.danger)),
+            if (check.state == CheckState.fail && failText != null) Text(failText!, style: tt.bodyMedium!.copyWith(color: context.cs.error)),
             if (check.state == CheckState.unknown) Text(unknownText, style: tt.bodySmall),
           ]),
         ),
@@ -204,6 +205,7 @@ class _DiskPageState extends State<DiskPage> {
       );
     }
     return StepPage(
+      step: Gk3Step.disk,
       title: l.diskTitle,
       subtitle: l.diskSub,
       onBack: () => Navigator.pop(context),
@@ -263,9 +265,11 @@ class _ModePageState extends State<ModePage> {
     final a = s.along;
     final reason = _alongReason(a);
     if (s.assessing || s.disk == null) {
-      return StepPage(title: l.modeTitle, subtitle: l.modeSub, child: const Center(child: CircularProgressIndicator()));
+      return StepPage(
+      step: Gk3Step.mode,title: l.modeTitle, subtitle: l.modeSub, child: const Center(child: CircularProgressIndicator()));
     }
     return StepPage(
+      step: Gk3Step.mode,
       title: l.modeTitle,
       subtitle: l.modeSub,
       onBack: () => Navigator.pop(context),
@@ -383,11 +387,12 @@ class _ShrinkPageState extends State<ShrinkPage> {
     final labels = {for (final p in s.disk?.parts ?? <Part>[]) p.path: p.label};
     if (_running) {
       return StepPage(
+      step: Gk3Step.mode,
         title: l.shrinkRunning,
         subtitle: l.shrinkWarn,
         bottom: const SizedBox(height: kTouch),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          LinearProgressIndicator(value: _pct / 100, minHeight: 14, borderRadius: BorderRadius.circular(7)),
+          LinearProgressIndicator(value: _pct / 100, minHeight: 8),
           const SizedBox(height: 16),
           Expanded(child: LogView(_log)),
         ]),
@@ -395,16 +400,18 @@ class _ShrinkPageState extends State<ShrinkPage> {
     }
     final p = _pick;
     return StepPage(
+      step: Gk3Step.mode,
       title: l.shrinkTitle,
       subtitle: l.shrinkSub,
       onBack: () => Navigator.pop(context),
       bottom: p == null
           ? null
           : Row(children: [
-              Btn(l.btnBack, kind: BtnKind.secondary, icon: Icons.arrow_back, onPressed: () => Navigator.pop(context)),
+              Btn(l.btnBack, kind: BtnKind.text, icon: Icons.arrow_back, onPressed: () => Navigator.pop(context)),
               const SizedBox(width: 24),
               Expanded(
-                child: HoldToConfirm(idle: '${l.shrinkGo} · ${l.confirmHoldIdle}', busy: (x) => l.confirmHoldBusy('$x'), onConfirmed: _go),
+                // 不用 confirmHoldIdle（"按住 2 秒以开始安装"）：这一步是缩分区，不是开始安装
+                child: HoldToConfirm(idle: '${l.shrinkGo} · ${l.holdIdle}', busy: (x) => l.confirmHoldBusy('$x'), onConfirmed: _go),
               ),
             ]),
       child: list.isEmpty
@@ -440,10 +447,10 @@ class _ShrinkPageState extends State<ShrinkPage> {
                       max: (p.curMib - 1024).toDouble(),
                       onChanged: (v) => setState(() => _target = (v / 1024).round() * 1024.0),
                     ),
-                    Text(l.shrinkFreed(fmtMib(p.curMib - _target.round())), style: tt.bodyLarge!.copyWith(color: C.ok)),
+                    Text(l.shrinkFreed(fmtMib(p.curMib - _target.round())), style: tt.bodyLarge!.copyWith(color: context.gk.success)),
                     const SizedBox(height: 18),
-                    Text(l.shrinkWarn, style: tt.bodyMedium!.copyWith(color: C.warn)),
-                    if (_error != null) ...[const SizedBox(height: 12), Text(_error!, style: tt.bodyMedium!.copyWith(color: C.danger))],
+                    Text(l.shrinkWarn, style: tt.bodyMedium!.copyWith(color: context.gk.warning)),
+                    if (_error != null) ...[const SizedBox(height: 12), Text(_error!, style: tt.bodyMedium!.copyWith(color: context.cs.error))],
                   ]),
                 ),
               ],

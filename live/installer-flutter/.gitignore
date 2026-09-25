@@ -50,6 +50,8 @@ app.*.map.json
 # ── gaokun3 ──
 # gen-l10n 的产物：每次 pub get / build 都会从 lib/l10n/*.arb 重新生成，入库只会漂
 /lib/l10n/app_localizations*.dart
-# 离线出图（tool/shots.sh）与出图用的字体：按需生成、按 sha256 下载，不入库
+# 离线出图（flutter test test/shots_test.dart）：按需生成，不入库
 /test/shots/
-/test/fonts/
+# 打包进应用的字体（tool/fetch-fonts.py 取，sha256 钉在脚本里；许可证说明 assets/fonts/README.md 入库）
+/assets/fonts/*.otf
+/assets/fonts/*.ttf

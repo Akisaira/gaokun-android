@@ -33,6 +33,11 @@ if ! docker image inspect "$TAG" >/dev/null 2>&1; then
     docker rm gk3-flutter-prep >/dev/null
 fi
 
+# MD3 的两个字体打包进应用（live/installer-flutter/lib/ui/theme.dart）；文件不入库，先取
+for f in Roboto-VF.ttf NotoSansSC-VF.otf; do
+    [ -f "$REPO/live/installer-flutter/assets/fonts/$f" ] \
+        || die "缺字体 assets/fonts/${f}（cd live/installer-flutter && python3 tool/fetch-fonts.py —— 要连着设备，或 --from <目录>）"
+done
 say "flutter build linux --release"
 rm -rf "$OUT"; mkdir -p "$OUT"
 docker run --rm -v "$REPO/live/installer-flutter:/src:ro" -v "$OUT:/out" "$TAG" bash -euo pipefail -c '
@@ -44,6 +49,10 @@ docker run --rm -v "$REPO/live/installer-flutter:/src:ro" -v "$OUT:/out" "$TAG" 
 '
 # 判据看产物，不看退出码（CLAUDE.md 运维坑 1）
 [ -x "$OUT/gk3_installer" ] || die "没有产物 $OUT/gk3_installer"
+# 字体真的进了产物（中文方块那次的教训：界面用哪个字体，要在产物里看得见）
+for f in Roboto-VF.ttf NotoSansSC-VF.otf; do
+    [ -s "$OUT/data/flutter_assets/assets/fonts/$f" ] || die "产物里没有字体 $f"
+done
 file "$OUT/gk3_installer" 2>/dev/null | grep -q 'ARM aarch64' || echo "  ⚠️ 没法确认是 aarch64（没有 file 命令？）"
 say "产物"
 du -sh "$OUT"; ( cd "$OUT" && find . -maxdepth 2 -type f -size +1M -exec du -h {} + | sort -rh )

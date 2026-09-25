@@ -1,73 +1,131 @@
 import 'package:flutter/material.dart';
+import 'package:material_color_utilities/material_color_utilities.dart';
 
-/// 配色取自 C 版（live/installer/gk3-installer.c:35-44），一个都没改
-abstract final class C {
-  static const bg = Color(0xFF101418);
-  static const surf = Color(0xFF1A2029);
-  static const surf2 = Color(0xFF232B36);
-  static const line = Color(0xFF343E4B);
-  static const text = Color(0xFFE8EEF5);
-  static const muted = Color(0xFF8B99A8);
-  static const accent = Color(0xFF4DA3FF);
-  static const danger = Color(0xFFFF6B5E);
-  static const ok = Color(0xFF5AD19A);
-  static const dim = Color(0xFF4D5766);
-  static const warn = Color(0xFFF2C14E);
-}
+/// Material Design 3（用户 2026-09-25："一点也不 material design，要更符合 MD3"）。
+///
+/// * 颜色：一个种子色（沿用 C 版的强调蓝）→ `ColorScheme.fromSeed` 生成整套 MD3 角色；
+///   界面里只用角色（primary / secondaryContainer / surfaceContainerLow / error …），不写死颜色。
+/// * 字体：MD3 的两套 —— 拉丁 Roboto、中文 Noto Sans CJK SC，都【打包进应用】
+///   （pubspec 的 fonts；tool/fetch-fonts.py 取）。不再靠系统字体回退：2026-09-25 真机上
+///   中文全是方块，就是 fontconfig 查得到、Flutter 却没回退过去。
+/// * 字号：MD3 的 type scale 原样用（Flutter 的 M3 默认值）。
+const kSeed = Color(0xFF4DA3FF);
 
-/// ★ 触摸目标最小 88 逻辑像素（C 版 README 的界面决定）："这机器没有鼠标，手指的实际
-///   接触面积远大于设计稿上看着的那点。"逻辑坐标固定 1280×800（见 app.dart 的 LogicalCanvas）。
-const double kTouch = 88;
+/// 中文按这个顺序回退：打包的那份在前；后两个只在"没取字体就构建"时兜底（有它们总比方块好）
+const kFontFallback = ['Noto Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei'];
+
+/// ★ 触摸目标。MD3 的下限是 48 dp；本机面板 266 mm 宽（wlr-randr 实测）、画布 1280 逻辑像素
+///   ⇒ 1 逻辑像素 ≈ 0.208 mm ≈ 1.31 dp，48 dp ≈ 37 逻辑像素。按钮取 MD3（2025）的中号 56，
+///   列表项 ≥ 72，都在下限的 1.5 倍以上。C 版定的 88（"手指的实际接触面积远大于设计稿"）
+///   是 MD3 下限的 2.4 倍 —— 按 MD3 收回来。
+const double kTouch = 56;
 
 /// 逻辑画布。面板物理 1600×2560 竖屏、平板横用；旋转交给 cage，缩放在这里做。
 const Size kCanvas = Size(1280, 800);
 
-ThemeData buildTheme() {
-  final scheme = const ColorScheme.dark(
-    surface: C.bg,
-    primary: C.accent,
-    onPrimary: C.bg,
-    secondary: C.ok,
-    error: C.danger,
-    onSurface: C.text,
-    outline: C.line,
+/// MD3 没有"成功 / 警告"这两个角色。按 MD3 的自定义颜色做法：先向主色调和（Blend.harmonize，
+/// 色相往主色靠一点，免得跳出整套配色），再用同一套算法生成四件套（颜色 / 其上 / 容器 / 容器之上）。
+@immutable
+class Gk3Colors extends ThemeExtension<Gk3Colors> {
+  const Gk3Colors({
+    required this.success,
+    required this.onSuccess,
+    required this.successContainer,
+    required this.onSuccessContainer,
+    required this.warning,
+    required this.onWarning,
+    required this.warningContainer,
+    required this.onWarningContainer,
+  });
+
+  factory Gk3Colors.from(ColorScheme cs) {
+    ColorScheme tone(Color c) => ColorScheme.fromSeed(
+          seedColor: Color(Blend.harmonize(c.toARGB32(), cs.primary.toARGB32())),
+          brightness: cs.brightness,
+        );
+    final s = tone(const Color(0xFF3DBE7A)), w = tone(const Color(0xFFF2B33D));
+    return Gk3Colors(
+      success: s.primary,
+      onSuccess: s.onPrimary,
+      successContainer: s.primaryContainer,
+      onSuccessContainer: s.onPrimaryContainer,
+      warning: w.primary,
+      onWarning: w.onPrimary,
+      warningContainer: w.primaryContainer,
+      onWarningContainer: w.onPrimaryContainer,
+    );
+  }
+
+  final Color success, onSuccess, successContainer, onSuccessContainer;
+  final Color warning, onWarning, warningContainer, onWarningContainer;
+
+  @override
+  Gk3Colors copyWith() => this;
+
+  @override
+  Gk3Colors lerp(Gk3Colors? other, double t) => t < 0.5 || other == null ? this : other;
+}
+
+extension ThemeX on BuildContext {
+  ColorScheme get cs => Theme.of(this).colorScheme;
+  TextTheme get tt => Theme.of(this).textTheme;
+  Gk3Colors get gk => Theme.of(this).extension<Gk3Colors>()!;
+}
+
+ThemeData buildTheme({Brightness brightness = Brightness.dark}) {
+  final cs = ColorScheme.fromSeed(seedColor: kSeed, brightness: brightness, dynamicSchemeVariant: DynamicSchemeVariant.tonalSpot);
+  final base = ThemeData(useMaterial3: true, colorScheme: cs, fontFamily: 'Roboto', fontFamilyFallback: kFontFallback);
+
+  // ★ 两个字体都是可变字重（wght 轴）。Flutter 不会自己把 fontWeight 映射到轴上 ——
+  //   不给 FontVariation 的话，标题的 500 与正文的 400 渲染成同一个粗细，MD3 的层次就没了。
+  TextStyle? w(TextStyle? s) => s?.copyWith(fontVariations: [FontVariation.weight((s.fontWeight ?? FontWeight.w400).value.toDouble())]);
+  final t0 = base.textTheme;
+  final t = t0.copyWith(
+    displayLarge: w(t0.displayLarge),
+    displayMedium: w(t0.displayMedium),
+    displaySmall: w(t0.displaySmall),
+    headlineLarge: w(t0.headlineLarge),
+    headlineMedium: w(t0.headlineMedium),
+    headlineSmall: w(t0.headlineSmall),
+    titleLarge: w(t0.titleLarge),
+    titleMedium: w(t0.titleMedium),
+    titleSmall: w(t0.titleSmall),
+    bodyLarge: w(t0.bodyLarge),
+    // 本界面里 bodyMedium / bodySmall 一律用作说明文字 —— MD3 的说明文字是 on-surface-variant
+    bodyMedium: w(t0.bodyMedium)!.copyWith(color: cs.onSurfaceVariant),
+    bodySmall: w(t0.bodySmall)!.copyWith(color: cs.onSurfaceVariant),
+    labelLarge: w(t0.labelLarge),
+    labelMedium: w(t0.labelMedium),
+    labelSmall: w(t0.labelSmall),
   );
-  const t = TextTheme(
-    headlineMedium: TextStyle(fontSize: 34, fontWeight: FontWeight.w700, color: C.text, height: 1.25),
-    titleLarge: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: C.text, height: 1.3),
-    titleMedium: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: C.text, height: 1.3),
-    bodyLarge: TextStyle(fontSize: 17, color: C.text, height: 1.5),
-    bodyMedium: TextStyle(fontSize: 15, color: C.muted, height: 1.5),
-    labelLarge: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, height: 1.2),
-    bodySmall: TextStyle(fontSize: 13, color: C.muted, height: 1.4),
+
+  // MD3（2025）中号按钮：高 56、胶囊形、title-medium 的字
+  final btn = ButtonStyle(
+    minimumSize: const WidgetStatePropertyAll(Size(64, kTouch)),
+    padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 24)),
+    textStyle: WidgetStatePropertyAll(t.titleMedium),
+    iconSize: const WidgetStatePropertyAll(22),
+    shape: const WidgetStatePropertyAll(StadiumBorder()),
   );
-  return ThemeData(
-    useMaterial3: true,
-    // ⚠️★ 按名字列出中文回退字体。2026-09-25 在 cage 里跑真 Linux 版：镜像里装着
-    //   fonts-wqy-microhei、fontconfig 按字符也查得到它（fc-match "sans-serif:charset=4e2d"），
-    //   但 Flutter 没回退过去，中文全是方块 —— 离线出图发现不了（出图时字体是手动注册的）。
-    //   C 版 README 警告过"写死字体名会在换字体包时静默变成方框"：所以这里只作【回退】，
-    //   并且 live 镜像构建时断言这几个字体在（scripts/live/test-render.sh 的截图也要看）。
-    fontFamilyFallback: const ['WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'Noto Sans SC'],
-    colorScheme: scheme,
-    scaffoldBackgroundColor: C.bg,
+  return base.copyWith(
     textTheme: t,
-    // ★ 焦点框只在用过键盘之后才出现（roadmap 第 1 步的要求）——Flutter 的
-    //   FocusManager.highlightMode 自己就是这么切的，这里只需要让焦点框醒目
-    focusColor: C.accent.withValues(alpha: 0.28),
-    splashFactory: InkRipple.splashFactory,
-    switchTheme: SwitchThemeData(
-      thumbColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? C.bg : C.muted),
-      trackColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? C.accent : C.surf2),
+    extensions: [Gk3Colors.from(cs)],
+    filledButtonTheme: FilledButtonThemeData(style: btn),
+    outlinedButtonTheme: OutlinedButtonThemeData(style: btn),
+    textButtonTheme: TextButtonThemeData(style: btn),
+    cardTheme: CardThemeData(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     ),
-    sliderTheme: const SliderThemeData(
-      activeTrackColor: C.accent,
-      inactiveTrackColor: C.surf2,
-      thumbColor: C.accent,
-      trackHeight: 8,
-      thumbShape: RoundSliderThumbShape(enabledThumbRadius: 16),
-      overlayShape: RoundSliderOverlayShape(overlayRadius: 36),
-    ),
-    progressIndicatorTheme: const ProgressIndicatorThemeData(color: C.accent, linearTrackColor: C.surf2),
+    // 2024 版 MD3 的进度条 / 滑块（圆头、轨道与指示之间留缝）。year2023 标着"弃用"，但它的说明
+    // 就是"设成 false 来启用 2024 版外观"—— 等它默认成 false 之后删掉这两行
+    // ignore: deprecated_member_use
+    progressIndicatorTheme: const ProgressIndicatorThemeData(year2023: false),
+    // ignore: deprecated_member_use
+    sliderTheme: const SliderThemeData(year2023: false),
+    inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
+    dividerTheme: DividerThemeData(color: cs.outlineVariant, space: 24),
   );
 }

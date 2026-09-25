@@ -41,6 +41,7 @@
 |---|---|---|
 | 5 | **LiveCD 的初衷之一是免 U 盘安装，并且要支持双系统** | "介质与目标同盘"成为正经流程：live 从内置盘的某个分区起来、装进同一块盘的空闲区。原先内置盘一旦是介质就整盘禁用 —— 改成**只禁整盘清空、介质分区不可缩，双系统放行**（§5.8）。新用户手上是 Windows，所以还缺"在 Windows 里把 live 放上内置盘"那一半（§5.8，⬜ 方案待定） |
 | 6 | **去掉 BIOS 版本限制**：有人验证过，不依赖 BIOS 版本 | 预检只报版本号、永远 ok（bug 报告要它）；`GK3_SKIP_BIOS_CHECK` 删掉；界面、命令行版、INSTALL.md 同步 |
+| 7 | **界面改成 Material Design 3**（"一点也不 material design"） | 颜色只用 MD3 的角色（`ColorScheme.fromSeed`，成功 / 警告按 MD3 自定义颜色调和）；大屏布局 = 左侧步骤栏 + 内容；MD3 按钮 / 可选卡片 / 描边输入框 / 2024 版进度条。字体 Roboto + Noto Sans CJK SC **打包进应用**（不再靠 fontconfig 回退 —— 真机中文方块那次的根治），可变字重要显式给 `FontVariation`。触摸目标按 MD3 下限（48 dp ≈ 本机 37 逻辑像素）收到 56 / 72，不再是 C 版的 88。Linux 版 53 MiB（字体占 31 MiB） |
 
 **为什么是 Debian 而不是留在 Alpine**：Flutter 官方引擎只有 glibc 版，Alpine 是 musl。
 选了 Flutter 就必须离开 Alpine。原设计选 Alpine 的理由是体积（"Debian minbase

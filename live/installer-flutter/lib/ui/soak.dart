@@ -77,14 +77,14 @@ class _SoakPageState extends State<SoakPage> with SingleTickerProviderStateMixin
           const SizedBox(height: 40),
           AnimatedBuilder(
             animation: _a,
-            builder: (_, _) => LinearProgressIndicator(value: _a.value, minHeight: 18, borderRadius: BorderRadius.circular(9)),
+            builder: (_, _) => LinearProgressIndicator(value: _a.value, minHeight: 8),
           ),
           const SizedBox(height: 40),
-          const Row(children: [
-            SizedBox.square(dimension: 96, child: CircularProgressIndicator(strokeWidth: 10)),
-            SizedBox(width: 40),
+          Row(children: [
+            const SizedBox.square(dimension: 96, child: CircularProgressIndicator(strokeWidth: 10)),
+            const SizedBox(width: 40),
             // 一段会变的中文：字形缓存也跟着每帧被用到
-            Expanded(child: Text('让我们在这台电脑上安装 Android —— 这一页每一帧都在重画。', style: TextStyle(fontSize: 28, color: C.text))),
+            Expanded(child: Text('让我们在这台电脑上安装 Android —— 这一页每一帧都在重画。', style: context.tt.headlineSmall)),
           ]),
           const Spacer(),
           Text('${PlatformDispatcher.instance.views.first.physicalSize}', style: tt.bodySmall),

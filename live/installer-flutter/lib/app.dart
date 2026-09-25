@@ -85,7 +85,7 @@ class LogicalCanvas extends StatelessWidget {
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     return ColoredBox(
-      color: C.bg,
+      color: Theme.of(context).colorScheme.surface,
       child: Center(
         child: FittedBox(
           child: SizedBox.fromSize(
@@ -109,12 +109,13 @@ class _DemoBadge extends StatelessWidget {
   final String scenario;
   @override
   Widget build(BuildContext context) => IgnorePointer(
+        // MD3 的小标签（tertiary-container，8 dp 圆角 —— 与 chip 同一个形状）
         child: Material(
-          type: MaterialType.transparency,
-          child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(color: C.warn.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(99)),
-          child: Text(L10n.of(context).fixtureBadge(scenario), style: const TextStyle(color: C.warn, fontSize: 13, fontWeight: FontWeight.w600)),
+          color: context.cs.tertiaryContainer,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Text(L10n.of(context).fixtureBadge(scenario), style: context.tt.labelLarge!.copyWith(color: context.cs.onTertiaryContainer)),
           ),
         ),
       );

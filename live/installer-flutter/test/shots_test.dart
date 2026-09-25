@@ -1,6 +1,6 @@
 // 离线出图：每一屏、每个关键状态渲染成 1280×800 的 PNG（与真机上的逻辑画布同尺寸）。
 //
-//   python3 tool/fetch-test-font.py     # 第一次：取中文字体（与设备上同一个）
+//   python3 tool/fetch-fonts.py         # 第一次：取打包进应用的两个字体（与设备上同一份）
 //   flutter test test/shots_test.dart   # → test/shots/*.png
 //
 // ★ 这是 C 版 `make shots` 的等价物，也是本仓那条铁律："目标机器同时是作者的日用平板，
@@ -16,7 +16,14 @@ import 'package:gk3_installer/app.dart';
 
 import 'helpers.dart';
 
-const _font = 'test/fonts/wqy-microhei.ttc';
+// 打包进应用的那两个字体（pubspec 的 fonts；python3 tool/fetch-fonts.py 取）。
+// 测试里不会自动加载 pubspec 声明的字体，这里按同样的族名注册 —— 出的图与设备上同一份字形。
+const _fonts = {
+  'Roboto': 'assets/fonts/Roboto-VF.ttf',
+  'Noto Sans SC': 'assets/fonts/NotoSansSC-VF.otf',
+  // 日志区的 monospace：设备上是系统的等宽字体，出图时用 Noto 顶上（不然是方块）
+  'monospace': 'assets/fonts/NotoSansSC-VF.otf',
+};
 
 Future<void> shot(WidgetTester t, String name) async {
   await settle(t, 6);
@@ -24,14 +31,12 @@ Future<void> shot(WidgetTester t, String name) async {
 }
 
 void main() {
-  final haveFont = File(_font).existsSync();
+  final haveFont = _fonts.values.every((f) => File(f).existsSync());
   setUpAll(() async {
     if (!haveFont) return;
     autoUpdateGoldenFiles = true;
-    final bytes = ByteData.sublistView(File(_font).readAsBytesSync());
-    // 测试里 Material 的默认字体族是 Roboto；把文泉驿注册成它，日志区的 monospace 也用它
-    for (final fam in ['Roboto', 'monospace']) {
-      await (FontLoader(fam)..addFont(Future.value(bytes))).load();
+    for (final MapEntry(key: fam, value: f) in _fonts.entries) {
+      await (FontLoader(fam)..addFont(Future.value(ByteData.sublistView(File(f).readAsBytesSync())))).load();
     }
     // 图标：不加载就全是空心方块。字体在 Flutter SDK 里（flutter test 会设 FLUTTER_ROOT）
     final icons = File('${Platform.environment['FLUTTER_ROOT']}/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf');

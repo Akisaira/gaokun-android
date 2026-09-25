@@ -40,30 +40,40 @@ class _SoftKeyboardState extends State<SoftKeyboard> {
     c.value = TextEditingValue(text: c.text.replaceRange(start, sel.end, ''), selection: TextSelection.collapsed(offset: start));
   }
 
-  Widget _key(String label, VoidCallback onTap, {int flex = 1, bool accent = false, IconData? icon}) => Expanded(
-        flex: flex,
-        child: Padding(
-          // ★ 键帽 80 高 + 上下各 4 的缝 = 每个键的可点区域 88（kTouch）
-          padding: const EdgeInsets.all(4),
-          child: Material(
-            color: accent ? C.accent : C.surf2,
+  /// MD3 风格的键帽（Gboard 的做法）：字母键 surface-container-highest、功能键 secondary-container、
+  /// 回车 primary；按下 Shift 时它变 primary-container。
+  Widget _key(String label, VoidCallback onTap, {int flex = 1, bool accent = false, bool fn = false, IconData? icon}) {
+    final cs = context.cs;
+    final (bg, fg) = accent
+        ? (cs.primary, cs.onPrimary)
+        : fn
+            ? (cs.secondaryContainer, cs.onSecondaryContainer)
+            : (cs.surfaceContainerHighest, cs.onSurface);
+    return Expanded(
+      flex: flex,
+      child: Padding(
+        // ★ 键帽 48 高 + 上下各 4 的缝 = 每个键的可点区域 56（kTouch，MD3 下限 48 dp ≈ 37 逻辑像素）
+        padding: const EdgeInsets.all(4),
+        child: Material(
+          color: bg,
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
             borderRadius: BorderRadius.circular(12),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(12),
-              canRequestFocus: false, // 焦点留在输入框里，实体键盘照常能打
-              onTap: onTap,
-              child: SizedBox(
-                height: kTouch - 8,
-                child: Center(
-                  child: icon != null
-                      ? Icon(icon, color: accent ? C.bg : C.text, size: 28)
-                      : Text(label, style: TextStyle(fontSize: 24, color: accent ? C.bg : C.text, fontWeight: FontWeight.w500)),
-                ),
+            canRequestFocus: false, // 焦点留在输入框里，实体键盘照常能打
+            onTap: onTap,
+            child: SizedBox(
+              height: kTouch - 8,
+              child: Center(
+                child: icon != null
+                    ? Icon(icon, color: fg, size: 24)
+                    : Text(label, style: context.tt.titleLarge!.copyWith(color: fg)),
               ),
             ),
           ),
         ),
-      );
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -80,12 +90,12 @@ class _SoftKeyboardState extends State<SoftKeyboard> {
         if (_symbols)
           const Spacer(flex: 3)
         else
-          _key('', () => setState(() => _shift = !_shift), flex: 3, accent: _shift, icon: Icons.arrow_upward),
+          _key('', () => setState(() => _shift = !_shift), flex: 3, fn: true, accent: _shift, icon: Icons.arrow_upward),
         for (final ch in rows[2].split('')) _key(cap(ch), () => _type(cap(ch)), flex: 2),
-        _key('', _back, flex: 3, icon: Icons.backspace_outlined),
+        _key('', _back, flex: 3, fn: true, icon: Icons.backspace_outlined),
       ]),
       Row(children: [
-        _key(_symbols ? 'abc' : '123', () => setState(() => _symbols = !_symbols), flex: 3),
+        _key(_symbols ? 'abc' : '123', () => setState(() => _symbols = !_symbols), flex: 3, fn: true),
         _key('', () => _type(' '), flex: 10, icon: Icons.space_bar),
         _key('.', () => _type('.'), flex: 2),
         _key('', widget.onDone ?? () {}, flex: 3, accent: true, icon: Icons.keyboard_return),

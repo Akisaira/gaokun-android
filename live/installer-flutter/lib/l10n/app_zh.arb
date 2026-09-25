@@ -1,6 +1,14 @@
 {
   "@@locale": "zh",
   "appTitle": "gaokun3 安装器",
+  "railSub": "Android 安装器",
+  "railWelcome": "欢迎",
+  "railDisk": "磁盘",
+  "railMode": "安装方式",
+  "railSource": "系统来源",
+  "railOpts": "选项",
+  "railConfirm": "确认",
+  "railInstall": "安装",
   "welcomeTitle": "让我们在这台电脑上安装 Android",
   "welcomeSub": "HUAWEI MateBook E Go · Snapdragon 8cx Gen 3 (sc8280xp)",
   "welcomeBody": "我们将把 Android 安装到你的内置固态硬盘上。\n在接下来的步骤中，你可以选择清除整个磁盘，或者保留现有系统，仅使用可用空间。",
@@ -281,6 +289,7 @@
   "wordInstall": "安装",
   "wordNoInstall": "不安装",
   "confirmHoldIdle": "按住 2 秒以开始安装",
+  "holdIdle": "按住 2 秒",
   "confirmHoldBusy": "请继续按住…… {pct}%",
   "@confirmHoldBusy": {
     "placeholders": {

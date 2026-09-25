@@ -16,6 +16,8 @@ dependencies:
   flutter_localizations:
     sdk: flutter
   intl: any          # 版本跟 flutter_localizations 走（它钉死了 intl）
+  # MD3 自定义颜色的调和（Blend.harmonize）。flutter SDK 自己就依赖它并钉死了版本，这里跟着走
+  material_color_utilities: any
 
 dev_dependencies:
   flutter_test:
@@ -34,3 +36,11 @@ flutter:
     - testdata/windows-live/
     - testdata/blank/
     - testdata/android/
+  # ★ MD3 的两套字体打包进应用（lib/ui/theme.dart 的说明）。文件不入库：python3 tool/fetch-fonts.py
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: assets/fonts/Roboto-VF.ttf
+    - family: Noto Sans SC
+      fonts:
+        - asset: assets/fonts/NotoSansSC-VF.otf

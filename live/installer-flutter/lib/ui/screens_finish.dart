@@ -37,6 +37,7 @@ class _OptsPageState extends State<OptsPage> {
             ? planErrorText(context, p)
             : (s.userdataMib == null ? l.optsData(fmtMib(p.userdataMib)) : l.optsDataFixed(fmtMib(p.userdataMib)));
     return StepPage(
+      step: Gk3Step.opts,
       title: l.optsTitle,
       subtitle: l.optsSub,
       onBack: () => Navigator.pop(context),
@@ -52,7 +53,7 @@ class _OptsPageState extends State<OptsPage> {
           onTap: s.rescueAvailable ? () => s.setRescue(!s.rescue) : null,
         ),
         const SizedBox(height: 20),
-        Text(dataLine, style: tt.titleMedium!.copyWith(color: p != null && !p.ok ? C.danger : C.text)),
+        Text(dataLine, style: tt.titleMedium!.copyWith(color: p != null && !p.ok ? context.cs.error : context.cs.onSurface)),
       ]),
     );
   }
@@ -100,6 +101,7 @@ class _AdvPageState extends State<AdvPage> {
     const min = 8192; // 滑块下限的显示值；真正的下限由 gk3_plan 判（PLANERR userdata-too-small）
     final cur = _v ?? (p?.userdataMib ?? max).toDouble();
     return StepPage(
+      step: Gk3Step.opts,
       title: l.advTitle,
       subtitle: l.advSub,
       onBack: () => Navigator.pop(context),
@@ -117,7 +119,7 @@ class _AdvPageState extends State<AdvPage> {
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Row(children: [
                   SizedBox(width: 180, child: Text(part.name == 'userdata' ? l.advUserdata : part.name, style: tt.bodyLarge)),
-                  Text(fmtMib(part.sizeMib), style: tt.bodyLarge!.copyWith(color: part.name == 'userdata' ? C.accent : C.muted)),
+                  Text(fmtMib(part.sizeMib), style: tt.bodyLarge!.copyWith(color: part.name == 'userdata' ? context.cs.primary : context.cs.onSurfaceVariant)),
                   if (part.name != 'userdata') ...[const SizedBox(width: 12), Text(l.advFixed, style: tt.bodySmall)],
                 ]),
               ),
@@ -144,7 +146,7 @@ class _AdvPageState extends State<AdvPage> {
               // ★ "已分配 / 共"读 PLANSUM 的 fixed_mib 与 avail_mib —— C 版这里是
               //   plan_userdata_mib + 13776 的硬编码（roadmap 欠账第 4 条）
               Text(l.advTotal(fmtMib(p.fixedMib + p.userdataMib), fmtMib(p.availMib)), style: tt.bodyLarge),
-            if (p != null && !p.ok) Text(planErrorText(context, p), style: tt.bodyLarge!.copyWith(color: C.danger)),
+            if (p != null && !p.ok) Text(planErrorText(context, p), style: tt.bodyLarge!.copyWith(color: context.cs.error)),
           ]),
         ),
       ]),
@@ -166,10 +168,11 @@ class ConfirmPage extends StatelessWidget {
     // 将被删除的东西要全列出来；9 行以内不折叠（第一版折叠到 6 行，藏掉的正好是 WinRE）
     const show = 9;
     return StepPage(
+      step: Gk3Step.confirm,
       title: l.confirmTitle,
       subtitle: l.confirmSub,
       bottom: Row(children: [
-        Btn(l.btnBack, kind: BtnKind.secondary, icon: Icons.arrow_back, onPressed: () => Navigator.pop(context)),
+        Btn(l.btnBack, kind: BtnKind.text, icon: Icons.arrow_back, onPressed: () => Navigator.pop(context)),
         const SizedBox(width: 24),
         Expanded(
           child: HoldToConfirm(
@@ -187,7 +190,7 @@ class ConfirmPage extends StatelessWidget {
             DiskBar(disk: d, highlightFree: a is AlongOk && !wipe ? a.region : null),
             const SizedBox(height: 18),
             if (wipe) ...[
-              Text(l.confirmWipeHead, style: tt.titleMedium!.copyWith(color: C.danger)),
+              Text(l.confirmWipeHead, style: tt.titleMedium!.copyWith(color: context.cs.error)),
               const SizedBox(height: 8),
               if (d.parts.isEmpty) Text(l.confirmNoParts, style: tt.bodyMedium),
               // ★ 必须把将被销毁的东西逐条列出来（stage7-live-installer.md §3 的界面流程）
@@ -195,7 +198,7 @@ class ConfirmPage extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 3),
                   child: Row(children: [
-                    Container(width: 12, height: 12, decoration: BoxDecoration(color: DiskBar.colorOf(part.os), shape: BoxShape.circle)),
+                    Container(width: 12, height: 12, decoration: BoxDecoration(color: DiskBar.colorOf(context, part.os), shape: BoxShape.circle)),
                     const SizedBox(width: 10),
                     SizedBox(width: 90, child: Text(part.path.split('/').last, style: tt.bodyMedium)),
                     Expanded(child: Text('${part.label}${part.fs.isNotEmpty ? '  (${part.fs})' : ''}', style: tt.bodyLarge)),
@@ -204,7 +207,7 @@ class ConfirmPage extends StatelessWidget {
                 ),
               if (d.parts.length > show) Text(l.confirmMore('${d.parts.length - show}'), style: tt.bodyMedium),
             ] else ...[
-              Text(l.confirmAlongHead, style: tt.titleMedium!.copyWith(color: C.ok)),
+              Text(l.confirmAlongHead, style: tt.titleMedium!.copyWith(color: context.gk.success)),
               const SizedBox(height: 8),
               Text(l.confirmAlongBody(fmtMib(p.totalNewMib), a is AlongOk ? a.esp.path : '?'), style: tt.bodyLarge),
               if (a is AlongOk && a.windows) ...[const SizedBox(height: 6), Text(l.confirmWindowsKept, style: tt.bodyLarge)],
@@ -216,7 +219,7 @@ class ConfirmPage extends StatelessWidget {
           width: 380,
           child: Container(
             padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(color: C.surf, borderRadius: BorderRadius.circular(18)),
+            decoration: BoxDecoration(color: context.cs.surfaceContainerLow, borderRadius: BorderRadius.circular(18)),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(l.confirmNewLayout, style: tt.titleMedium),
               const SizedBox(height: 8),
@@ -225,7 +228,7 @@ class ConfirmPage extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(vertical: 2),
                   child: Row(children: [Expanded(child: Text(part.name, style: tt.bodyLarge)), Text(fmtMib(part.sizeMib), style: tt.bodyMedium)]),
                 ),
-              const Divider(color: C.line, height: 24),
+              const Divider(height: 24),
               Text(l.confirmRescue(s.rescue && s.rescueAvailable ? l.wordInstall : l.wordNoInstall), style: tt.bodyLarge),
               if (s.source == Source.net && s.variant != null) Text(s.variant!.name, style: tt.bodyLarge),
             ]),
@@ -301,6 +304,7 @@ class _RunPageState extends State<RunPage> {
     return PopScope(
       canPop: false, // 装到一半不许返回
       child: StepPage(
+      step: Gk3Step.install,
         title: l.runTitle,
         subtitle: l.runSub,
         bottom: Row(children: [
@@ -313,7 +317,7 @@ class _RunPageState extends State<RunPage> {
             Text('$_pct%', style: tt.headlineMedium),
           ]),
           const SizedBox(height: 16),
-          LinearProgressIndicator(value: _pct / 100, minHeight: 18, borderRadius: BorderRadius.circular(9)),
+          LinearProgressIndicator(value: _pct / 100, minHeight: 8),
           const SizedBox(height: 24),
           if (_showLog) Expanded(child: LogView(_log, controller: _scroll)),
         ]),
@@ -330,10 +334,16 @@ class DonePage extends StatelessWidget {
     return PopScope(
       canPop: false,
       child: StepPage(
+      step: Gk3Step.install,
         title: l.doneTitle,
         bottom: Row(children: [const Spacer(), Btn(l.btnReboot, icon: Icons.restart_alt, autofocus: true, onPressed: s.backend.reboot)]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Icon(Icons.check_circle, size: 88, color: C.ok),
+          Container(
+            width: 96,
+            height: 96,
+            decoration: BoxDecoration(color: context.gk.successContainer, shape: BoxShape.circle),
+            child: Icon(Icons.check, size: 56, color: context.gk.onSuccessContainer),
+          ),
           const SizedBox(height: 24),
           Text(l.doneBody, style: tt.bodyLarge),
           if (s.rescue && s.rescueAvailable) ...[const SizedBox(height: 16), Text(l.doneRescue, style: tt.bodyLarge)],
@@ -355,6 +365,7 @@ class FailPage extends StatelessWidget {
     return PopScope(
       canPop: false,
       child: StepPage(
+      step: Gk3Step.install,
         title: l.failTitle,
         subtitle: l.failSub,
         bottom: Row(children: [
@@ -363,7 +374,7 @@ class FailPage extends StatelessWidget {
           Expanded(child: Text(l.shellHint, style: tt.bodySmall)),
         ]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text(err.startsWith('!! ') ? err.substring(3) : err, style: tt.titleMedium!.copyWith(color: C.danger)),
+          Text(err.startsWith('!! ') ? err.substring(3) : err, style: tt.titleMedium!.copyWith(color: context.cs.error)),
           if (backedUp) ...[const SizedBox(height: 8), Text(l.failBackup, style: tt.bodyMedium)],
           const SizedBox(height: 14),
           Expanded(child: LogView(log)),

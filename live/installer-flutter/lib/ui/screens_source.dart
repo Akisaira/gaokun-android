@@ -23,6 +23,7 @@ class SourcePage extends StatelessWidget {
       WidgetsBinding.instance.addPostFrameCallback((_) => s.setSource(Source.net));
     }
     return StepPage(
+      step: Gk3Step.source,
       title: l.sourceTitle,
       subtitle: l.sourceSub,
       onBack: () => Navigator.pop(context),
@@ -88,6 +89,7 @@ class _NetPageState extends State<NetPage> {
     final aps = s.aps;
     final net = s.net;
     return StepPage(
+      step: Gk3Step.source,
       title: l.netTitle,
       subtitle: l.netSub,
       onBack: () => Navigator.pop(context),
@@ -96,9 +98,9 @@ class _NetPageState extends State<NetPage> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         if (s.online && net != null) ...[
           Row(children: [
-            const Icon(Icons.wifi, color: C.ok),
+            Icon(Icons.wifi, color: context.gk.success),
             const SizedBox(width: 10),
-            Text(l.netConnected(net['ssid'], net['ip']), style: tt.bodyLarge!.copyWith(color: C.ok)),
+            Text(l.netConnected(net['ssid'], net['ip']), style: tt.bodyLarge!.copyWith(color: context.gk.success)),
           ]),
           const SizedBox(height: 16),
         ],
@@ -107,11 +109,9 @@ class _NetPageState extends State<NetPage> {
               ? Row(children: [const CircularProgressIndicator(), const SizedBox(width: 16), Text(l.netScanning, style: tt.bodyLarge)])
               : (aps == null || aps.isEmpty)
                   ? Text(l.netNone, style: tt.bodyLarge)
-                  : GridView.count(
-                      crossAxisCount: 2,
-                      mainAxisSpacing: 12,
-                      crossAxisSpacing: 12,
-                      childAspectRatio: 5.2,
+                  : GridView(
+                      // 固定行高而不是宽高比：卡片里最多两行（标题 + 说明 / 不支持的原因）
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 12, crossAxisSpacing: 12, mainAxisExtent: 100),
                       children: [
                         for (final ap in aps)
                           ChoiceCard(
@@ -119,11 +119,7 @@ class _NetPageState extends State<NetPage> {
                             body: ap.supported ? (ap.secure ? null : l.netOpen) : null,
                             reason: ap.supported ? null : l.netEnterprise,
                             selected: s.online && net?['ssid'] == ap.ssid,
-                            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                              if (ap.secure) const Icon(Icons.lock, size: 18, color: C.muted),
-                              const SizedBox(width: 6),
-                              SignalBars(ap.bars),
-                            ]),
+                            trailing: SignalBars(ap.bars, secure: ap.secure),
                             onTap: () => _pick(ap),
                           ),
                       ],
@@ -194,43 +190,39 @@ class _PasswordPageState extends State<PasswordPage> {
   Widget build(BuildContext context) {
     final l = context.l, tt = Theme.of(context).textTheme;
     return StepPage(
+      step: Gk3Step.source,
       title: widget.open ? l.netConnecting(widget.ap.ssid) : l.netPasswordFor(widget.ap.ssid),
       onBack: _busy ? null : () => Navigator.pop(context),
       nextLabel: l.netConnect,
       onNext: _lengthOk && !_busy ? _connect : null,
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         if (!widget.open)
-          Row(children: [
-            Expanded(
-              child: TextField(
-                controller: _pw,
-                focusNode: _focus,
-                autofocus: true,
-                obscureText: !_show,
-                enabled: !_busy,
-                style: const TextStyle(fontSize: 24, color: C.text),
-                onSubmitted: (_) => _connect(),
-                decoration: InputDecoration(
-                  hintText: l.netPassword,
-                  filled: true,
-                  fillColor: C.surf,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 22),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: C.line)),
-                  helperText: _pw.text.isNotEmpty && !_lengthOk ? l.netPasswordLength : null,
-                  helperStyle: const TextStyle(color: C.warn, fontSize: 14),
-                ),
+          TextField(
+            controller: _pw,
+            focusNode: _focus,
+            autofocus: true,
+            obscureText: !_show,
+            enabled: !_busy,
+            style: tt.titleLarge,
+            onSubmitted: (_) => _connect(),
+            decoration: InputDecoration(
+              labelText: l.netPassword,
+              prefixIcon: const Icon(Icons.key_outlined),
+              suffixIcon: IconButton(
+                tooltip: l.netShowPassword,
+                icon: Icon(_show ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                onPressed: () => setState(() => _show = !_show),
               ),
+              // 长度不对是 MD3 的"错误"状态：框变 error 色、下面一行说明
+              errorText: _pw.text.isNotEmpty && !_lengthOk ? l.netPasswordLength : null,
             ),
-            const SizedBox(width: 12),
-            Btn(l.netShowPassword,
-                kind: BtnKind.secondary, icon: _show ? Icons.visibility_off : Icons.visibility, onPressed: () => setState(() => _show = !_show)),
-          ]),
+          ),
         const SizedBox(height: 12),
         if (_busy) ...[
-          LinearProgressIndicator(value: _pct / 100, minHeight: 10, borderRadius: BorderRadius.circular(5)),
+          LinearProgressIndicator(value: _pct / 100, minHeight: 8),
           const SizedBox(height: 12),
         ],
-        if (_error != null) Text(_error!, style: tt.bodyLarge!.copyWith(color: C.danger)),
+        if (_error != null) Text(_error!, style: tt.bodyLarge!.copyWith(color: context.cs.error)),
         const Spacer(),
         if (!widget.open) SoftKeyboard(controller: _pw, onDone: _connect),
       ]),
@@ -261,13 +253,14 @@ class _VariantPageState extends State<VariantPage> {
     final s = context.session, l = context.l, tt = Theme.of(context).textTheme;
     final vs = s.variants;
     return StepPage(
+      step: Gk3Step.source,
       title: l.variantTitle,
       subtitle: l.variantSub,
       onBack: () => Navigator.pop(context),
       onNext: s.variant == null ? null : () => go(context, const OptsPage()),
       child: s.variantsError != null
           ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(l.variantFailed, style: tt.bodyLarge!.copyWith(color: C.danger)),
+              Text(l.variantFailed, style: tt.bodyLarge!.copyWith(color: context.cs.error)),
               const SizedBox(height: 16),
               Btn(l.btnRetry, kind: BtnKind.secondary, onPressed: s.fetchVariants),
             ])
