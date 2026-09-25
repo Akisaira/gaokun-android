@@ -357,6 +357,43 @@ findmnt -rn -S "${DD}p4" -T /media/gk3 >/dev/null && [ "$(sha /media/gk3/gaokun3
     && ok "介质分区：还挂着、live.squashfs 内容未变、PARTUUID 未变" || bad "介质分区被动了"
 umount /media/gk3
 
+# ── F. 重新安装 ────────────────────────────────────────────────────────────
+# 用户 2026-09-25：盘上已经有我们的 Android 时，整盘清空（免 U 盘时会锯掉安装器）和双系统（会建出
+# 第二套同名分区）都走不通。重新安装 = 不改分区表、复用现有分区：写新系统，默认格式化 /data。
+echo "═══ F. 重新安装：复用 A 节装好的那块盘 ═══"
+ESPA=$(gk3__bylabel "$DA" esp); UDA=$(gk3__bylabel "$DA" userdata)
+mk=$W/mnt-f; mkdir -p "$mk"
+mount "$UDA" "$mk" && echo "用户的数据" > "$mk/marker.txt" && umount "$mk"
+# 故意写坏：重装之后必须又对了（证明真的重写了，而不是"本来就对"）
+head -c 1048576 /dev/urandom | dd of="$(gk3__bylabel "$DA" boot_a)" conv=notrunc status=none
+head -c 1048576 /dev/urandom | dd of="$(gk3__bylabel "$DA" super)" bs=1M seek=0 conv=notrunc status=none
+# ESP 只留约 100 MiB 空闲：比新装要求的 150 少 —— 已经装过的机器上就是这种情况（我们的文件占着地方）
+mount "$ESPA" "$mk"; FREEA=$(df -m "$mk" | awk 'NR==2{print $4}')
+dd if=/dev/zero of="$mk/filler.bin" bs=1M count=$(( FREEA - 100 )) status=none; sync; umount "$mk"
+BEFORE_F=$(sgdisk -p "$DA" | grep -v '^Disk identifier')
+P=$(gk3_plan --disk "$DA" --mode reinstall --rescue yes --esp "$ESPA" --keep-data yes)
+printf '%s\n' "$P" | grep -q '^PLAN op=reuse name=userdata .*action=keep' && printf '%s\n' "$P" | grep -q '^PLAN op=reuse name=super .*action=write' \
+    && [ "$(printf '%s\n' "$P" | grep -c '^PLAN op=reuse')" = 7 ] && ! printf '%s\n' "$P" | grep -q '^PLAN op=mkpart' \
+    && ok "gk3_plan reinstall：7 个分区全是 reuse（userdata=keep、super=write），没有 mkpart" || { bad "reinstall 方案不对"; printf '%s\n' "$P" | sed 's/^/      /'; }
+gk3_apply --disk "$DA" --mode reinstall --rescue yes --release "$REL" --esp "$ESPA" --keep-data yes >"$W/f1.log" 2>&1; rc=$?
+if [ "$rc" = 0 ]; then ok "保留数据的重新安装：完成（ESP 只剩约 100 MiB 也放行）"; verify_install "$DA" yes "$ESPA"
+else bad "保留数据的重新安装失败 rc=$rc"; tail -15 "$W/f1.log" | sed 's/^/      /'; fi
+[ "$(sgdisk -p "$DA" | grep -v '^Disk identifier')" = "$BEFORE_F" ] && ok "分区表逐字节没变（不改分区表）" || bad "分区表变了"
+mount -o ro "$UDA" "$mk" && { [ "$(cat "$mk/marker.txt" 2>/dev/null)" = "用户的数据" ] && ok "保留数据：userdata 里的文件还在" || bad "保留数据却丢了文件"; umount "$mk"; }
+gk3_apply --disk "$DA" --mode reinstall --rescue yes --release "$REL" --esp "$ESPA" >"$W/f2.log" 2>&1; rc=$?
+[ "$rc" = 0 ] && ok "默认（清除数据）的重新安装：完成" || { bad "清除数据的重新安装失败 rc=$rc"; tail -10 "$W/f2.log" | sed 's/^/      /'; }
+mount -o ro "$UDA" "$mk" && { [ ! -e "$mk/marker.txt" ] && ok "默认清除数据：userdata 被格式化了" || bad "说好清除数据，文件还在"; umount "$mk"; }
+# 反例：目标分区挂着（安装器要是从它上面跑的，写它就是锯地板）→ 动盘之前拒绝
+mount -o ro "$UDA" "$mk"; SB=$(sha_head "$(gk3__bylabel "$DA" boot_a)" 1048576)
+OUT=$(gk3_apply --disk "$DA" --mode reinstall --rescue yes --release "$REL" --esp "$ESPA" 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '还挂着' && [ "$(sha_head "$(gk3__bylabel "$DA" boot_a)" 1048576)" = "$SB" ] \
+    && ok "目标分区挂着：拒绝，boot_a 没被碰" || bad "挂着的分区没被拦住（rc=${rc}）"
+umount "$mk"
+OUT=$(gk3_plan --disk "$DC" --mode reinstall --rescue no --esp /dev/null 2>&1)
+printf '%s' "$OUT" | grep -q '^PLANERR msg=reinstall-missing names=misc,metadata,boot_a,boot_b,super,userdata' \
+    && ok "不是一套完整的安装：PLANERR 列出缺的分区" || bad "缺分区没被报出来：$OUT"
+mount "$ESPA" "$mk" && rm -f "$mk/filler.bin" && umount "$mk"
+
 # ── E. 网络安装 ────────────────────────────────────────────────────────────
 echo "═══ E. 网络安装：下载一整套发布文件，再走同一条写盘路径 ═══"
 # 迷你 HTTP 服务器：range 模式支持 "Range: bytes=N-"（R2 支持；Python 自带的 http.server 不支持）

@@ -22,7 +22,7 @@ class _OptsPageState extends State<OptsPage> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final s = context.session;
-      if (!s.rescueAvailable) s.rescue = false;
+      if (!s.rescueUsable) s.rescue = false;
       s.setRescue(s.rescue);
     });
   }
@@ -31,29 +31,45 @@ class _OptsPageState extends State<OptsPage> {
   Widget build(BuildContext context) {
     final s = context.session, l = context.l, tt = Theme.of(context).textTheme;
     final p = s.plan;
+    final re = s.mode == Mode.reinstall;
     final dataLine = p == null || s.planning
         ? '…'
         : !p.ok
             ? planErrorText(context, p)
-            : (s.userdataMib == null ? l.optsData(fmtMib(p.userdataMib)) : l.optsDataFixed(fmtMib(p.userdataMib)));
+            : re
+                ? (p.keepData ? l.optsDataKept(fmtMib(p.userdataMib)) : l.optsDataWiped(fmtMib(p.userdataMib)))
+                : (s.userdataMib == null ? l.optsData(fmtMib(p.userdataMib)) : l.optsDataFixed(fmtMib(p.userdataMib)));
+    // 重新安装且清数据：这一行是"要丢东西"的提醒，用 error 色
+    final dataBad = p != null && (!p.ok || (re && !p.keepData));
     return StepPage(
       step: Gk3Step.opts,
       title: l.optsTitle,
       subtitle: l.optsSub,
       onBack: () => Navigator.pop(context),
-      bottomLeft: Btn(l.optsAdvanced, kind: BtnKind.secondary, icon: Icons.tune, onPressed: p?.ok == true ? () => go(context, const AdvPage()) : null),
+      // 重新安装不改分区表：分区大小没得调
+      bottomLeft: re ? null : Btn(l.optsAdvanced, kind: BtnKind.secondary, icon: Icons.tune, onPressed: p?.ok == true ? () => go(context, const AdvPage()) : null),
       onNext: p?.ok == true && !s.planning ? () => go(context, const ConfirmPage()) : null,
       child: ListView(children: [
+        if (re) ...[
+          ChoiceCard(
+            icon: Icons.folder_open,
+            title: l.optsKeepTitle,
+            body: l.optsKeepBody,
+            trailing: Switch(value: s.keepData, onChanged: s.setKeepData),
+            onTap: () => s.setKeepData(!s.keepData),
+          ),
+          const SizedBox(height: 14),
+        ],
         ChoiceCard(
           icon: Icons.health_and_safety,
           title: l.optsRescueTitle,
           body: l.optsRescueBody,
-          reason: s.rescueAvailable ? null : l.optsRescueMissing,
-          trailing: Switch(value: s.rescue && s.rescueAvailable, onChanged: s.rescueAvailable ? s.setRescue : null),
-          onTap: s.rescueAvailable ? () => s.setRescue(!s.rescue) : null,
+          reason: !s.rescueAvailable ? l.optsRescueMissing : (s.rescueUsable ? null : l.optsRescueNoPart),
+          trailing: Switch(value: s.rescue && s.rescueUsable, onChanged: s.rescueUsable ? s.setRescue : null),
+          onTap: s.rescueUsable ? () => s.setRescue(!s.rescue) : null,
         ),
         const SizedBox(height: 20),
-        Text(dataLine, style: tt.titleMedium!.copyWith(color: p != null && !p.ok ? context.cs.error : context.cs.onSurface)),
+        Text(dataLine, style: tt.titleMedium!.copyWith(color: dataBad ? context.cs.error : context.cs.onSurface)),
       ]),
     );
   }
@@ -70,7 +86,10 @@ String planErrorText(BuildContext context, Plan p) {
     'userdata-too-big' => l.errUserdataBig(fmtMib(e.intOf('max_mib'))),
     'mbr-disk' => l.errMbr,
     'partlabel-conflict' => l.modeWhyInstalled(e['names'].replaceAll(',', ', ')),
-    'alongside-needs-existing-esp' => l.modeWhyNoEsp,
+    'alongside-needs-existing-esp' || 'reinstall-needs-esp' => l.modeWhyNoEsp,
+    'reinstall-missing' => l.errReinstallMissing(e['names'].replaceAll(',', ', ')),
+    'reinstall-duplicate' => l.errReinstallDup(e['names'].replaceAll(',', ', ')),
+    'reinstall-part-small' => l.errReinstallSmall(e['name'], fmtMib(e.intOf('have_mib')), fmtMib(e.intOf('need_mib'))),
     final m => l.errPlan(m),
   };
 }
@@ -164,6 +183,7 @@ class ConfirmPage extends StatelessWidget {
     final s = context.session, l = context.l, tt = Theme.of(context).textTheme;
     final d = s.disk!, p = s.plan!;
     final wipe = s.mode == Mode.wipe;
+    final re = s.mode == Mode.reinstall;
     final a = s.along;
     // 将被删除的东西要全列出来；9 行以内不折叠（第一版折叠到 6 行，藏掉的正好是 WinRE）
     const show = 9;
@@ -206,6 +226,23 @@ class ConfirmPage extends StatelessWidget {
                   ]),
                 ),
               if (d.parts.length > show) Text(l.confirmMore('${d.parts.length - show}'), style: tt.bodyMedium),
+            ] else if (re) ...[
+              // 重新安装：逐个列出要重写的分区与做什么 —— 格式化的那几个（数据会没）用 error 色
+              Text(l.confirmReinstallHead, style: tt.titleMedium!.copyWith(color: p.keepData ? context.cs.onSurface : context.cs.error)),
+              const SizedBox(height: 8),
+              for (final r in p.reuse)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(children: [
+                    SizedBox(width: 90, child: Text(r.path.split('/').last, style: tt.bodyMedium)),
+                    Expanded(child: Text(r.name, style: tt.bodyLarge)),
+                    Text(
+                      switch (r.action) { 'format' => l.actFormat, 'keep' => l.actKeep, _ => l.actWrite },
+                      style: tt.bodyLarge!.copyWith(color: r.action == 'format' ? context.cs.error : context.cs.onSurfaceVariant),
+                    ),
+                    SizedBox(width: 90, child: Text(fmtMib(r.sizeMib), style: tt.bodyMedium, textAlign: TextAlign.end)),
+                  ]),
+                ),
             ] else ...[
               Text(l.confirmAlongHead, style: tt.titleMedium!.copyWith(color: context.gk.success)),
               const SizedBox(height: 8),
@@ -219,9 +256,9 @@ class ConfirmPage extends StatelessWidget {
           width: 380,
           child: Container(
             padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(color: context.cs.surfaceContainerLow, borderRadius: BorderRadius.circular(18)),
+            decoration: BoxDecoration(color: context.cs.surfaceContainerHigh, borderRadius: BorderRadius.circular(16)),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(l.confirmNewLayout, style: tt.titleMedium),
+              Text(re ? l.confirmReinstallRight : l.confirmNewLayout, style: tt.titleMedium),
               const SizedBox(height: 8),
               for (final part in p.parts)
                 Padding(
@@ -229,7 +266,7 @@ class ConfirmPage extends StatelessWidget {
                   child: Row(children: [Expanded(child: Text(part.name, style: tt.bodyLarge)), Text(fmtMib(part.sizeMib), style: tt.bodyMedium)]),
                 ),
               const Divider(height: 24),
-              Text(l.confirmRescue(s.rescue && s.rescueAvailable ? l.wordInstall : l.wordNoInstall), style: tt.bodyLarge),
+              Text(l.confirmRescue(s.rescue && s.rescueUsable ? l.wordInstall : l.wordNoInstall), style: tt.bodyLarge),
               if (s.source == Source.net && s.variant != null) Text(s.variant!.name, style: tt.bodyLarge),
             ]),
           ),
@@ -346,7 +383,7 @@ class DonePage extends StatelessWidget {
           ),
           const SizedBox(height: 24),
           Text(l.doneBody, style: tt.bodyLarge),
-          if (s.rescue && s.rescueAvailable) ...[const SizedBox(height: 16), Text(l.doneRescue, style: tt.bodyLarge)],
+          if (s.rescue && s.rescueUsable) ...[const SizedBox(height: 16), Text(l.doneRescue, style: tt.bodyLarge)],
         ]),
       ),
     );

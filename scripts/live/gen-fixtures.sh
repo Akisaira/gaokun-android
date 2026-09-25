@@ -16,7 +16,7 @@
 #   factory       出厂布局（docs/hw-inventory.md 第 8 节），整盘都是 Windows，没有空闲区
 #   windows-free  factory 上【真跑一次 gk3_shrink】把 Data 缩掉 80 GiB 之后 → 走双系统
 #   blank         一块空盘 → 走整盘
-#   android       blank 上真装一遍之后（"已经装过"：双系统应被 partlabel-conflict 拒绝）
+#   android       blank 上真装一遍之后（"已经装过"：双系统应被 partlabel-conflict 拒绝；重新安装可行）
 #   windows-live  免 U 盘装双系统（用户 2026-09-25）：出厂盘缩出空闲区 + 一个放 live 的 FAT32 分区，
 #                 安装器就从这块盘上跑（介质与目标同盘）—— 整盘清空要被拦、双系统要放行、介质分区不可缩
 set -u
@@ -224,6 +224,15 @@ for r in yes no; do
   rec android "$DB" "plan-along-$r.txt" "gk3_plan --disk /dev/nvme0n1 --mode alongside --rescue $r --region-start 0 --region-end 0 --esp /dev/nvme0n1p1"
 done
 rec android "$DB" plan-wipe-rescue.txt "gk3_plan --disk /dev/nvme0n1 --mode wipe --rescue yes"
+# 重新安装（用户 2026-09-25）：界面会发的四种组合（救援装不装 × 数据留不留），最后真装一遍
+for r in yes no; do for k in no yes; do
+  rec android "$DB" "plan-reinstall-rescue-$r-keep-$k.txt" \
+      "gk3_plan --disk /dev/nvme0n1 --mode reinstall --rescue $r --esp /dev/nvme0n1p1 --keep-data $k"
+done; done
+rec android "$DB" apply-reinstall.txt \
+    "gk3_apply --release /media/gk3/gaokun3/payload --disk /dev/nvme0n1 --mode reinstall --rescue yes --esp /dev/nvme0n1p1 --keep-data no" \
+    "gk3_apply --release $REL --disk $DB --mode reinstall --rescue yes --esp ${DB}p1 --keep-data no"
+echo "gk3_apply *                                                                    apply-reinstall.txt" >> "$OUT/android/index.txt"
 
 echo "═══ common（与盘无关）═══"
 C=$OUT/common; mkdir -p "$C"; rm -f "$C"/*.txt

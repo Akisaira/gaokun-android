@@ -10,7 +10,8 @@ import 'backend/backend.dart';
 import 'backend/protocol.dart';
 import 'model/model.dart';
 
-enum Mode { wipe, alongside }
+/// reinstall：盘上已经有我们的 Android 时，复用现有分区重新安装（用户 2026-09-25）
+enum Mode { wipe, alongside, reinstall }
 
 enum Source { usb, net }
 
@@ -102,6 +103,10 @@ class Session extends ChangeNotifier {
 
   Disk? disk;
   Along? along;
+
+  /// 重新安装的可行性：盘上有我们的分区时才问（null = 这块盘上没有我们的 Android，不出这一项）。
+  /// 用 gk3_plan --mode reinstall 问，不在界面里自己判 —— 缺哪个分区、哪个太小都是它报的
+  Plan? reinstall;
   EspInfo? espInfo;
   List<Shrinkable>? shrinkables;
   bool assessing = false;
@@ -113,11 +118,15 @@ class Session extends ChangeNotifier {
     plan = null;
     userdataMib = null;
     along = null;
+    reinstall = null;
     espInfo = null;
     shrinkables = null;
     assessing = true;
     _changed();
     along = await _assessAlong(d);
+    if (d.parts.any((p) => const {'super', 'userdata', 'boot_a', 'boot_b'}.contains(p.name))) {
+      reinstall = Plan(await backend.run('gk3_plan', _reinstallArgs(d, keep: false)));
+    }
     // 双系统因为空间不够走不通时，才需要知道能不能缩
     if (along is AlongNoRoom) {
       shrinkables = (await backend.run('gk3_shrink_scan', [d.path])).ofType('SHRINK').map(Shrinkable.new).toList();
@@ -175,6 +184,24 @@ class Session extends ChangeNotifier {
 
   bool get rescueAvailable => usbRelease?.rescue ?? false;
 
+  /// 重新安装时 /data 留不留。默认清除（用户 2026-09-25 定的）：换到更旧的版本时，留下的数据可能起不来
+  bool keepData = false;
+
+  /// 重新安装只重写【已有的】救援分区；没有这个分区就不装（不改分区表）
+  bool get _diskHasRescue => disk?.parts.any((p) => p.name == 'gk3rescue') ?? false;
+  bool get rescueUsable => rescueAvailable && (mode != Mode.reinstall || _diskHasRescue);
+
+  List<String> _reinstallArgs(Disk d, {required bool keep}) => [
+        '--disk', d.path, '--mode', 'reinstall',
+        '--rescue', rescue && rescueAvailable && d.parts.any((p) => p.name == 'gk3rescue') ? 'yes' : 'no',
+        '--esp', d.esp?.path ?? '', '--keep-data', keep ? 'yes' : 'no',
+      ];
+
+  Future<void> setKeepData(bool v) async {
+    keepData = v;
+    await computePlan();
+  }
+
   void setMode(Mode m) {
     mode = m;
     plan = null;
@@ -183,6 +210,7 @@ class Session extends ChangeNotifier {
 
   List<String> _planArgs() {
     final d = disk!;
+    if (mode == Mode.reinstall) return _reinstallArgs(d, keep: keepData);
     final a = ['--disk', d.path, '--mode', mode == Mode.wipe ? 'wipe' : 'alongside', '--rescue', rescue && rescueAvailable ? 'yes' : 'no'];
     final al = along;
     if (mode == Mode.alongside && al is AlongOk) {

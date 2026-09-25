@@ -146,14 +146,30 @@ class PlanPart {
   final int start, end, sizeMib;
 }
 
+/// 重新安装时复用的一个现有分区（gk3_plan --mode reinstall 的 PLAN op=reuse）
+class PlanReuse {
+  PlanReuse(Gk3Record r)
+      : name = r['name'],
+        path = r['path'],
+        sizeMib = r.intOf('size_mib'),
+        action = r['action'];
+  final String name, path;
+  final int sizeMib;
+
+  /// write = 写入新系统，format = 格式化（数据清掉），keep = 原样保留
+  final String action;
+}
+
 /// gk3_plan 的结果：要么 parts + summary，要么 error
 class Plan {
   Plan(CallResult r)
       : parts = [for (final p in r.ofType('PLAN').where((p) => p['op'] == 'mkpart')) PlanPart(p)],
+        reuse = [for (final p in r.ofType('PLAN').where((p) => p['op'] == 'reuse')) PlanReuse(p)],
         wipe = r.ofType('PLAN').any((p) => p['op'] == 'wipe'),
         summary = r.first('PLANSUM'),
         error = r.first('PLANERR') ?? (r.ok ? null : Gk3Record('PLANERR', {'msg': r.error ?? 'exit-${r.exitCode}'}));
   final List<PlanPart> parts;
+  final List<PlanReuse> reuse;
   final bool wipe;
   final Gk3Record? summary, error;
 
@@ -162,6 +178,7 @@ class Plan {
   int get availMib => summary?.intOf('avail_mib') ?? 0;
   int get fixedMib => summary?.intOf('fixed_mib') ?? 0;
   int get totalNewMib => parts.fold(0, (a, p) => a + p.sizeMib);
+  bool get keepData => summary?.yes('keep_data') ?? false;
 }
 
 class Ap {

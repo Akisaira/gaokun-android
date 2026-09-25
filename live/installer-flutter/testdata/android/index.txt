@@ -8,3 +8,9 @@ gk3_esp_info /dev/nvme0n1p1                                                    e
 gk3_plan --disk /dev/nvme0n1 --mode alongside --rescue yes --region-start 0 --region-end 0 --esp /dev/nvme0n1p1 plan-along-yes.txt
 gk3_plan --disk /dev/nvme0n1 --mode alongside --rescue no --region-start 0 --region-end 0 --esp /dev/nvme0n1p1 plan-along-no.txt
 gk3_plan --disk /dev/nvme0n1 --mode wipe --rescue yes                          plan-wipe-rescue.txt
+gk3_plan --disk /dev/nvme0n1 --mode reinstall --rescue yes --esp /dev/nvme0n1p1 --keep-data no plan-reinstall-rescue-yes-keep-no.txt
+gk3_plan --disk /dev/nvme0n1 --mode reinstall --rescue yes --esp /dev/nvme0n1p1 --keep-data yes plan-reinstall-rescue-yes-keep-yes.txt
+gk3_plan --disk /dev/nvme0n1 --mode reinstall --rescue no --esp /dev/nvme0n1p1 --keep-data no plan-reinstall-rescue-no-keep-no.txt
+gk3_plan --disk /dev/nvme0n1 --mode reinstall --rescue no --esp /dev/nvme0n1p1 --keep-data yes plan-reinstall-rescue-no-keep-yes.txt
+gk3_apply --release /media/gk3/gaokun3/payload --disk /dev/nvme0n1 --mode reinstall --rescue yes --esp /dev/nvme0n1p1 --keep-data no apply-reinstall.txt
+gk3_apply *                                                                    apply-reinstall.txt

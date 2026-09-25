@@ -49,6 +49,8 @@ GK3_USERDATA_MIN_MIB=8192
 
 # 双系统安装时，ESP 里至少要能放下我们的两个槽位（内核+ramdisk+dtb ×2）
 GK3_ESP_NEED_MIB=150
+# 重新安装时 ESP 上我们的文件是【覆盖】不是新增：只给内核 / ramdisk 变大留余量
+GK3_ESP_REINSTALL_NEED_MIB=16
 
 # 这个库所在的目录。gk3-unsparse.py / gk3-bootimg.py / gk3-wpa-scan.py 跟它放在一起
 # （仓库里是 scripts/live/，live 镜像里是 /usr/share/gaokun3/）。
@@ -263,14 +265,16 @@ gk3_preflight() {
 # ── 方案计算 ────────────────────────────────────────────────────────────────
 # 纯计算，不碰磁盘 —— 所以可以在任何机器上跑、可以单元测。
 #
-#   gk3_plan --disk /dev/nvme0n1 --mode wipe|alongside --rescue yes|no \
-#            [--region-start S --region-end E] [--esp PATH] [--userdata-mib N]
+#   gk3_plan --disk /dev/nvme0n1 --mode wipe|alongside|reinstall --rescue yes|no \
+#            [--region-start S --region-end E] [--esp PATH] [--userdata-mib N] [--keep-data yes|no]
 #
 # 输出（顺序即执行顺序）：
 #   PLAN op=wipe    disk=...
 #   PLAN op=mkpart  num=0 name=super start=... end=... type=... size_mib=...
 #   PLAN op=useesp  path=/dev/nvme0n1p1
-#   PLANSUM total_mib=... userdata_mib=... rescue=yes|no mode=...
+#   PLAN op=reuse   name=super path=/dev/nvme0n1p6 num=6 start=... end=... size_mib=... action=write|format|keep
+#                   （只有 reinstall：不改分区表，逐个复用盘上现有的分区）
+#   PLANSUM total_mib=... userdata_mib=... rescue=yes|no mode=... [keep_data=yes|no]
 # 失败：
 #   PLANERR msg=...
 #
@@ -281,10 +285,11 @@ GK3_TYPE_ESP=ef00
 GK3_TYPE_DATA=8300
 
 gk3_plan() {
-    local disk="" mode="wipe" rescue="no" rstart="" rend="" esp="" ud_mib=""
+    local disk="" mode="wipe" rescue="no" rstart="" rend="" esp="" ud_mib="" keep="no"
     while [ $# -gt 0 ]; do
         case "$1" in
             --disk) disk=$2; shift 2 ;;
+            --keep-data) keep=$2; shift 2 ;;
             --mode) mode=$2; shift 2 ;;
             --rescue) rescue=$2; shift 2 ;;
             --region-start) rstart=$2; shift 2 ;;
@@ -296,6 +301,9 @@ gk3_plan() {
         esac
     done
     [ -n "$disk" ] || { echo "PLANERR msg=no-disk"; return 1; }
+    if [ "$mode" = reinstall ]; then
+        gk3__plan_reinstall "$disk" "$rescue" "$keep" "$esp"; return $?
+    fi
 
     # ⚠️★ ① 分区名查重。Android 的 first-stage mount 走 by-name/super，那是
     #   ueventd 按 PARTLABEL 建的符号链接 —— 重名时哪个赢【不确定】。在一块
@@ -397,6 +405,55 @@ gk3_plan() {
     echo "PLANSUM mode=$mode rescue=$rescue avail_mib=$avail_mib fixed_mib=$fixed userdata_mib=$userdata_mib"
 }
 
+# 重新安装（用户 2026-09-25）：盘上已经有我们的 Android 时，另外两种方式都走不通 ——
+# 整盘清空会锯掉安装器自己（免 U 盘时它就在这块盘上），双系统会建出第二套同名分区。
+# 这里不改分区表，按 PARTLABEL 认出现有的每个分区，逐个决定：写新系统 / 格式化 / 保留。
+# ★ 每个名字必须【恰好一个】：零个 = 不是一套完整的安装；两个 = 不知道写哪个
+#   （by-name 链接重名时哪个赢不确定，见上面分区名查重的注释）。
+# ⚠️ 纯计算，不碰盘；目标分区挂没挂着、是不是安装器所在的分区，由 gk3_apply 在动盘之前查。
+gk3__plan_reinstall() {
+    local disk=$1 rescue=$2 keep=$3 esp=$4
+    command -v sgdisk >/dev/null || { echo "PLANERR msg=no-sgdisk"; return 1; }
+    [ -n "$esp" ] || { echo "PLANERR msg=reinstall-needs-esp"; return 1; }
+    local table="" n nm
+    for n in $(sgdisk -p "$disk" 2>/dev/null | awk '/^ *[0-9]+ /{print $1}'); do
+        nm=$(sgdisk -i "$n" "$disk" 2>/dev/null | grep "^Partition name:" | cut -d"'" -f2)
+        table="$table$nm $n
+"
+    done
+    local want="misc metadata boot_a boot_b super userdata" miss="" dup="" c
+    [ "$rescue" = yes ] && want="$want gk3rescue"
+    for nm in $want; do
+        c=$(printf '%s' "$table" | awk -v x="$nm" '$1 == x' | wc -l | tr -d ' ')
+        [ "$c" = 0 ] && miss="$miss $nm"
+        [ "$c" -gt 1 ] && dup="$dup $nm"
+    done
+    [ -z "$dup" ] || { echo "PLANERR msg=reinstall-duplicate names=$(echo $dup | tr ' ' ',')"; return 1; }
+    [ -z "$miss" ] || { echo "PLANERR msg=reinstall-missing names=$(echo $miss | tr ' ' ',')"; return 1; }
+
+    echo "PLAN op=useesp path=$esp need_mib=$GK3_ESP_REINSTALL_NEED_MIB"
+    local st en mib act min fixed=0 ud=0
+    for nm in $want; do
+        n=$(printf '%s' "$table" | awk -v x="$nm" '$1 == x {print $2}')
+        st=$(sgdisk -i "$n" "$disk" 2>/dev/null | awk '/^First sector:/{print $3}')
+        en=$(sgdisk -i "$n" "$disk" 2>/dev/null | awk '/^Last sector:/{print $3}')
+        mib=$(( (en - st + 1) / 2048 ))
+        case "$nm" in
+            super) min=$GK3_SUPER_MIB; act=write ;;
+            boot_a|boot_b) min=$GK3_BOOT_MIB; act=write ;;
+            misc) min=1; act=write ;;
+            gk3rescue) min=$GK3_RESCUE_MIB; act=write ;;
+            metadata) min=$GK3_METADATA_MIB; [ "$keep" = yes ] && act=keep || act=format ;;
+            userdata) min=$GK3_USERDATA_MIN_MIB; [ "$keep" = yes ] && act=keep || act=format ;;
+        esac
+        # 新系统要装得下：super / boot 比这一版要的小，写到一半才会发现
+        [ "$mib" -ge "$min" ] || { echo "PLANERR msg=reinstall-part-small name=$nm have_mib=$mib need_mib=$min"; return 1; }
+        echo "PLAN op=reuse name=$nm path=$(gk3_partpath "$disk" "$n") num=$n start=$st end=$en size_mib=$mib action=$act"
+        if [ "$nm" = userdata ]; then ud=$mib; else fixed=$(( fixed + mib )); fi
+    done
+    echo "PLANSUM mode=reinstall rescue=$rescue keep_data=$keep avail_mib=$(( fixed + ud )) fixed_mib=$fixed userdata_mib=$ud"
+}
+
 # 打印一条 mkpart 记录，并把游标 GK3_CUR 推到下一个 1 MiB 边界。
 #
 # ⚠️★ 第一版是"回显新游标"，调用方写 `cur=$(gk3__emit_part …)` ——
@@ -415,8 +472,10 @@ gk3__emit_part() {
 # ── 执行 ────────────────────────────────────────────────────────────────────
 # 这是【唯一】会写盘的函数。
 #
-#   gk3_apply --disk X --mode wipe|alongside --rescue yes|no --release DIR \
-#             [--region-start S --region-end E --esp PATH] [--userdata-mib N]
+#   gk3_apply --disk X --mode wipe|alongside|reinstall --rescue yes|no --release DIR \
+#             [--region-start S --region-end E --esp PATH] [--userdata-mib N] [--keep-data yes|no]
+#   reinstall：不改分区表，复用盘上现有的那套分区（gk3__plan_reinstall）；--keep-data yes 不格式化
+#   userdata / metadata（默认格式化 —— 跨版本降级时保留的数据可能起不来）
 #
 # 发布目录 = GitHub Release / R2 的 install/<VER>/ 下载下来的那一份：
 #   boot.img                         必需
@@ -437,10 +496,11 @@ gk3__emit_part() {
 #   检查排在写完 super 之后 —— 缺一个就是分区表已改、super 已写、然后死在
 #   引导链那一步，留下一块半装的盘（本函数下面 ESP 那段的注释警告过同一件事）。
 gk3_apply() {
-    local disk="" mode=wipe rescue=no rel="" rstart="" rend="" esp="" ud_mib=""
+    local disk="" mode=wipe rescue=no rel="" rstart="" rend="" esp="" ud_mib="" keep=no
     while [ $# -gt 0 ]; do
         case "$1" in
             --disk) disk=$2; shift 2 ;;
+            --keep-data) keep=$2; shift 2 ;;
             --mode) mode=$2; shift 2 ;;
             --rescue) rescue=$2; shift 2 ;;
             --release) rel=$2; shift 2 ;;
@@ -557,10 +617,13 @@ gk3_apply() {
             if mount -o ro -t vfat "$esp" "$em" 2>/dev/null; then
                 fm=$(df -m "$em" | awk 'NR==2{print $4}')
                 umount "$em"; rmdir "$em" 2>/dev/null
-                echo "现有 ESP $esp 空闲 ${fm} MiB（需要 ${GK3_ESP_NEED_MIB}）" >&2
-                if [ "${fm:-0}" -lt "$GK3_ESP_NEED_MIB" ]; then
+                # 重新安装是【覆盖】ESP 上我们自己的文件，不是新增 —— 按 150 MiB 要求的话，一台已经装过的
+                # 机器（我们的文件占了一百多 MiB）会被误判成"空间不够"
+                local eneed=$GK3_ESP_NEED_MIB; [ "$mode" = reinstall ] && eneed=$GK3_ESP_REINSTALL_NEED_MIB
+                echo "现有 ESP $esp 空闲 ${fm} MiB（需要 ${eneed}）" >&2
+                if [ "${fm:-0}" -lt "$eneed" ]; then
                     rm -rf "$parts"
-                    gk3_die "ESP 空间不够：只有 ${fm} MiB，需要 ${GK3_ESP_NEED_MIB} MiB。请先在原系统里清理 EFI 分区（盘还没动过）"
+                    gk3_die "ESP 空间不够：只有 ${fm} MiB，需要 ${eneed} MiB。请先在原系统里清理 EFI 分区（盘还没动过）"
                     return 1
                 fi
             else
@@ -595,7 +658,7 @@ gk3_apply() {
     # ── 方案 ────────────────────────────────────────────────────────────
     gk3_prog 2 "计算分区方案"
     local plan
-    plan=$(gk3_plan --disk "$disk" --mode "$mode" --rescue "$rescue" \
+    plan=$(gk3_plan --disk "$disk" --mode "$mode" --rescue "$rescue" --keep-data "$keep" \
                     ${rstart:+--region-start "$rstart"} ${rend:+--region-end "$rend"} \
                     ${esp:+--esp "$esp"} ${ud_mib:+--userdata-mib "$ud_mib"}) \
         || { echo "$plan"; rm -rf "$parts"; return 1; }
@@ -603,11 +666,26 @@ gk3_apply() {
         printf '%s\n' "$plan" | grep '^PLANERR'; rm -rf "$parts"; return 1
     fi
 
+    # ── 安全闸 3（重新安装）：要写的分区一个都不能挂着 ─────────────────────
+    # 首先是安装器自己所在的那个（免 U 盘时它就在这块盘上）。整盘清空有安全闸 1，双系统只碰空闲区；
+    # 重新安装却是往【已有】分区里写 —— 所以逐个查。
+    if [ "$mode" = reinstall ]; then
+        local rp busy=""
+        for rp in $(printf '%s\n' "$plan" | grep '^PLAN op=reuse' | sed 's/.* path=\([^ ]*\).*/\1/'); do
+            findmnt -rn -S "$rp" >/dev/null 2>&1 && busy="$busy $rp"
+        done
+        if [ -n "$busy" ]; then
+            rm -rf "$parts"
+            gk3_die "拒绝：要重写的分区还挂着（${busy# }）—— 安装器是不是就从它上面跑的？"
+            return 1
+        fi
+    fi
+
     # ── 建分区 ──────────────────────────────────────────────────────────
     # ⚠️★ ④ 动手之前先把分区表备份到介质上。出事能一条命令还原：
     #     sgdisk --load-backup=<文件> <盘>
     #   代价是几十 KB 和一秒钟；没有它的话，改错分区表就只能靠猜。
-    if [ "$DRY" != 1 ]; then
+    if [ "$DRY" != 1 ] && [ "$mode" != reinstall ]; then
         local bkdir bk
         bkdir=/media/gk3/gaokun3
         mount -o remount,rw /media/gk3 2>/dev/null || true
@@ -621,6 +699,9 @@ gk3_apply() {
         sync
     fi
 
+    if [ "$mode" = reinstall ]; then
+        echo "重新安装：不改分区表，复用现有的 $(printf '%s\n' "$plan" | grep -c '^PLAN op=reuse') 个分区" >&2
+    else
     gk3_prog 5 "写分区表"
     if printf '%s\n' "$plan" | grep -q '^PLAN op=wipe'; then
         gk3__run sgdisk --zap-all "$disk" || return 1
@@ -636,6 +717,7 @@ $(printf '%s\n' "$plan")
 EOF
     gk3__run partprobe "$disk" || true
     [ "$DRY" = 1 ] || sleep 2
+    fi
 
     # ── 格式化 ──────────────────────────────────────────────────────────
     gk3_prog 15 "格式化"
@@ -665,8 +747,12 @@ EOF
     else
         echo "复用现有 ESP：${p_esp}（不格式化；空间与类型在动盘之前已验过）" >&2
     fi
-    gk3__run mkfs.ext4 -q -F -L metadata "$p_meta" || return 1
-    gk3__run mkfs.ext4 -q -F -L userdata "$p_data" || return 1
+    if [ "$mode" = reinstall ] && [ "$keep" = yes ]; then
+        echo "保留用户数据：userdata（${p_data}）与 metadata（${p_meta}）不格式化" >&2
+    else
+        gk3__run mkfs.ext4 -q -F -L metadata "$p_meta" || return 1
+        gk3__run mkfs.ext4 -q -F -L userdata "$p_data" || return 1
+    fi
     # misc 必须是全零：libboot_control 读到坏 CRC 才会初始化一份新的 bootloader_control
     gk3__run dd if=/dev/zero of="$p_misc" bs=1M count="$GK3_MISC_MIB" conv=fsync status=none || return 1
     [ "$rescue" = yes ] && { gk3__run mkfs.ext4 -q -F -L gk3rescue "$p_resc" || return 1; }

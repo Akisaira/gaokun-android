@@ -174,6 +174,17 @@ void main() {
     await shot(t, '14-confirm-wipe');
   }, skip: !haveFont);
 
+  testWidgets('15b 确认：重新安装（默认清除数据）', (t) async {
+    await pumpApp(t, 'android');
+    await toMode(t);
+    await tap(t, find.text(l.modeReinstallTitle));
+    await next(t);
+    await next(t);
+    await next(t);
+    await waitFor(t, find.text(l.confirmReinstallHead));
+    await shot(t, '15b-confirm-reinstall');
+  }, skip: !haveFont);
+
   testWidgets('15 确认：双系统', (t) async {
     await pumpApp(t, 'windows-free');
     await toMode(t);

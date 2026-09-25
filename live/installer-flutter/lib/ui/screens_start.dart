@@ -5,6 +5,7 @@ import '../app.dart';
 import '../backend/protocol.dart';
 import '../model/model.dart';
 import '../session.dart';
+import 'screens_finish.dart';
 import 'screens_source.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -223,7 +224,7 @@ class ModePage extends StatefulWidget {
   State<ModePage> createState() => _ModePageState();
 }
 
-enum _Pick { wipe, along, shrink }
+enum _Pick { wipe, along, shrink, reinstall }
 
 class _ModePageState extends State<ModePage> {
   _Pick? _pick;
@@ -252,6 +253,9 @@ class _ModePageState extends State<ModePage> {
       case _Pick.along:
         s.setMode(Mode.alongside);
         go(context, const SourcePage());
+      case _Pick.reinstall:
+        s.setMode(Mode.reinstall);
+        go(context, const SourcePage());
       case _Pick.shrink:
         await go(context, const ShrinkPage());
         // 缩完回来：assess 已经重跑过，双系统多半可行了 —— 替用户选上
@@ -274,8 +278,23 @@ class _ModePageState extends State<ModePage> {
       subtitle: l.modeSub,
       onBack: () => Navigator.pop(context),
       onNext: _pick == null ? null : _next,
-      nextDanger: _pick == _Pick.wipe,
+      // 重新安装默认也会清掉 /data —— 和整盘清空一样用 error 色的"下一步"
+      nextDanger: _pick == _Pick.wipe || _pick == _Pick.reinstall,
       child: ListView(children: [
+        // ★ 盘上已经有我们的 Android 时，另外两项多半都走不通（整盘清空会锯掉从这块盘跑的安装器、
+        //   双系统会建出第二套同名分区）—— 所以重新安装排最前面
+        if (s.reinstall case final r?) ...[
+          ChoiceCard(
+            icon: Icons.system_update_alt,
+            title: l.modeReinstallTitle,
+            warn: l.modeReinstallWarn,
+            body: l.modeReinstallBody,
+            reason: r.ok ? null : planErrorText(context, r),
+            selected: _pick == _Pick.reinstall,
+            onTap: () => setState(() => _pick = _Pick.reinstall),
+          ),
+          const SizedBox(height: 14),
+        ],
         ChoiceCard(
           icon: Icons.delete_forever,
           danger: true,

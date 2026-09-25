@@ -95,6 +95,27 @@
   },
   "modeWhyNoEsp": "此磁盘上没有 EFI 系统分区 —— 这意味着它上面没有可以保留的 UEFI 系统。",
   "modeWhyMedium": "安装器正从这块盘上运行 —— 清除整个磁盘会把安装器自己也删掉。请选“保留现有系统”。",
+  "modeReinstallTitle": "重新安装 Android",
+  "modeReinstallWarn": "默认会清除 /data 上的所有数据（下一步可以选择保留）。",
+  "modeReinstallBody": "保留现有的分区布局，重新写入系统（super、boot）。适合修复系统或更换版本。",
+  "errReinstallMissing": "这块盘上的 Android 分区不完整（缺少：{names}），无法重新安装。",
+  "@errReinstallMissing": {"placeholders": {"names": {"type": "String"}}},
+  "errReinstallDup": "有重名的分区（{names}），无法确定该写哪一个。",
+  "@errReinstallDup": {"placeholders": {"names": {"type": "String"}}},
+  "errReinstallSmall": "分区 {name} 太小（{have}，至少要 {need}）。",
+  "@errReinstallSmall": {"placeholders": {"name": {"type": "String"}, "have": {"type": "String"}, "need": {"type": "String"}}},
+  "optsKeepTitle": "保留用户数据",
+  "optsKeepBody": "不格式化 /data 与 metadata。换到更旧的版本时，保留的数据可能导致无法开机。",
+  "optsDataWiped": "/data 将被清空（{size}）",
+  "@optsDataWiped": {"placeholders": {"size": {"type": "String"}}},
+  "optsDataKept": "/data 保留（{size}）",
+  "@optsDataKept": {"placeholders": {"size": {"type": "String"}}},
+  "optsRescueNoPart": "这块盘上没有救援分区。重新安装不改分区表，所以这次装不了救援系统。",
+  "confirmReinstallHead": "以下分区将被重写：",
+  "confirmReinstallRight": "分区表不变",
+  "actWrite": "写入新系统",
+  "actFormat": "格式化",
+  "actKeep": "保留",
   "modeWhyNoRoom": "可用空间不足 {need}（现有最大的一块是 {have}）。可以缩小一个现有分区来腾出空间。",
   "@modeWhyNoRoom": {
     "placeholders": {
@@ -117,7 +138,7 @@
       }
     }
   },
-  "modeWhyInstalled": "这块盘上已经装过 Android（已有同名分区：{names}）。要重新安装，请选择清除整个磁盘。",
+  "modeWhyInstalled": "这块盘上已经装过 Android（已有同名分区：{names}）。要重新安装，请选上面的“重新安装 Android”。",
   "@modeWhyInstalled": {
     "placeholders": {
       "names": {

@@ -121,6 +121,48 @@ void main() {
     expect(find.text(l.modeAlongOk), findsNothing);
   });
 
+  testWidgets('android（已经装过）→ 重新安装：默认清除数据，确认页逐个列出，apply 走 reinstall', (t) async {
+    final rec = await pumpApp(t, 'android');
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await see(t, find.text(l.modeReinstallTitle));
+    await tap(t, find.text(l.modeReinstallTitle));
+    await next(t); // 来源
+    await next(t); // → 选项
+    await see(t, find.text(l.optsKeepTitle));
+    expect(find.text(l.optsAdvanced), findsNothing);   // 不改分区表：没有分区大小可调
+    await see(t, find.textContaining('/data 将被清空'));
+    await next(t);
+    await see(t, find.text(l.confirmReinstallHead));
+    await see(t, find.text(l.actFormat), findsNWidgets(2));   // userdata、metadata
+    await see(t, find.text(l.actWrite), findsNWidgets(5));    // misc、boot_a、boot_b、super、gk3rescue
+    await hold(t, l.confirmHoldIdle);
+    await see(t, find.text(l.doneTitle));
+    final a = rec.last('gk3_apply')!.join(' ');
+    expect(a, contains('--mode reinstall'));
+    expect(a, contains('--keep-data no'));
+    expect(a, contains('--esp /dev/nvme0n1p1'));
+    expect(a, isNot(contains('--region-start')));
+  });
+
+  testWidgets('重新安装 + 保留数据：确认页写"保留"，apply 带 --keep-data yes', (t) async {
+    final rec = await pumpApp(t, 'android');
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await tap(t, find.text(l.modeReinstallTitle));
+    await next(t);
+    await next(t);
+    await tap(t, find.text(l.optsKeepTitle));
+    await see(t, find.textContaining('/data 保留'));
+    await next(t);
+    await see(t, find.text(l.actKeep), findsNWidgets(2));
+    await hold(t, l.confirmHoldIdle);
+    await see(t, find.text(l.doneTitle));
+    expect(rec.last('gk3_apply')!.join(' '), contains('--keep-data yes'));
+  });
+
   testWidgets('预检：BIOS 2.17 不再拦（2026-09-25）；安全启动开着 → 拦住', (t) async {
     await pumpApp(t, 'blank', overrides: {'gk3_preflight': 'preflight-secureboot.txt'});
     await see(t, find.text(l.checkBlocked));
