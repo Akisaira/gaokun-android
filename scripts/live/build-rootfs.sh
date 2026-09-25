@@ -188,6 +188,10 @@ if in_ch 'grep -qE "^(Requires|BindsTo|Requisite)=" /etc/systemd/system/gk3-wifi
     echo "   ✗ gk3-wifi.service 里有硬依赖"; BAD=1; else ok "gk3-wifi 只做排序依赖，没有硬依赖"; fi
 if in_ch 'grep -q "^root::" /etc/shadow'; then ok "root 账户未锁定"; else echo "   ✗ root 账户是锁定的 —— ssh 公钥登录会被直接拒绝"; BAD=1; fi
 if [ -n "$SSH_KEY" ]; then need_path /root/.ssh/authorized_keys; else ok "没装公钥（live 镜像本该如此）"; fi
+# 网卡名回到 wlan0：屏蔽 systemd 的可预测命名（M0 第一轮实测被改成 wlP6p1s0，gk3-wifi 因此判"没有网卡"）。
+# 查的是文档里的那种写法（指向 /dev/null 的链接）；overlay 里它是个符号链接，铺的时候要原样保留
+if in_ch '[ "$(readlink /etc/systemd/network/99-default.link)" = /dev/null ]'; then ok "可预测网卡命名已屏蔽（99-default.link → /dev/null）"
+else echo "   ✗ /etc/systemd/network/99-default.link 不是指向 /dev/null 的链接 —— 无线网卡会被改名"; BAD=1; fi
 # 单元里 Exec* 指向的自家脚本必须可执行 —— ssh 的 ExecStartPre 失败 = sshd 起不来 = 一台连不上的机器
 for f in gk3-ssh-keys gk3-wifi gk3-diag; do
     if in_ch "[ -x /usr/lib/gaokun3/$f ]"; then ok "/usr/lib/gaokun3/$f 可执行"; else echo "   ✗ /usr/lib/gaokun3/$f 不可执行"; BAD=1; fi

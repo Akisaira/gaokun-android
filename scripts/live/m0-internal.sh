@@ -28,6 +28,9 @@ M0=$REPO/out/m0
 ESPM=/mnt/gaokun3_m0_esp
 P3M=/mnt/gaokun3_m0_p3
 SQ_NAME=live.squashfs
+FW_MEDIA=/media/gk3/gaokun3/firmware        # live 里看到的路径；p3 上是 /gaokun3/firmware
+# GPU 要的三个（zap shader 的名字取自 dtb：/proc/device-tree/soc@0/gpu@3d00000/zap-shader/firmware-name）
+GPU_FW="qcom/a660_sqe.fw qcom/a660_gmu.bin qcom/sc8280xp/HUAWEI/gaokun3/qcdxkmsuc8280.mbn"
 S() { adb -s "$SER" shell "$@" | tr -d '\r'; }
 die() { echo "✗ $*" >&2; exit 1; }
 say() { echo; echo "══ $*"; }
@@ -119,6 +122,13 @@ check|prepare)
     # （ext4 即使只读挂载也可能回放日志，扫描所有分区不如直接指定）
     . "$REPO/scripts/live/installer-lib.sh"
     BASE=$(gk3__rescue_cmdline "$OPTS_B" | sed "s#gk3.squash=[^ ]*#gk3.squash=/gaokun3/$SQ_NAME gk3.dev=/dev/$KNAME#")
+    # ⚠️ M0 第一轮（2026-09-25 14:56）实测出的两处绕行 —— 镜像里的正式修法要重建，而这台 Mac 换网后连不上
+    #    deb.debian.org；这两条在镜像修好之后是冗余但无害的：
+    #  * firmware_class.path：镜像里【没有 GPU 固件】（a660_sqe.fw 加载 -2 → freedreno 建不了 pipe →
+    #    cage 的 EGL 起不来）。C 版画 dumb buffer 从不碰 GPU，所以以前从没缺过。第 6 步把本机 Android
+    #    正在用的那三个拷到 p3。GPU 是 cage【第一次打开】时才加载，那时 p3 早已挂在 /media/gk3。
+    #  * net.ifnames=0：Debian 的 systemd-udevd 把 wlan0 改名成 wlP6p1s0，gk3-wifi 只认 wlan0。
+    BASE="$BASE firmware_class.path=$FW_MEDIA net.ifnames=0"
     say "5. 启动项（非默认；标题 ASCII —— 开机菜单由固件字体画）"
     echo "     options  $BASE"
     ENTRIES=(
@@ -144,6 +154,10 @@ check|prepare)
     want=$(shasum -a 256 "$LIVE/gaokun3-live.squashfs" | cut -d' ' -f1)
     got=$(S "sha256sum $P3M/gaokun3/$SQ_NAME" | cut -d' ' -f1)
     [ "$want" = "$got" ] && ok "live.squashfs sha256 一致（${want:0:16}…）" || die "live.squashfs 的 sha256 不对：$got"
+    # GPU 固件：从本机 Android 的 /vendor/firmware 原样拷（Android 上 freedreno/turnip 跑的就是这三个），设备上逐个比 sha256
+    S "for f in $GPU_FW; do mkdir -p \$(dirname $P3M/gaokun3/firmware/\$f) && cp /vendor/firmware/\$f $P3M/gaokun3/firmware/\$f || exit 1
+         [ \"\$(sha256sum < /vendor/firmware/\$f)\" = \"\$(sha256sum < $P3M/gaokun3/firmware/\$f)\" ] || exit 1; done" >/dev/null \
+        && ok "GPU 固件 3 个 → p3:/gaokun3/firmware/（取自 /vendor/firmware，sha256 一致）" || die "拷 GPU 固件失败"
     # 公钥：开发机专用的一对（out/m0/，不动 ~/.ssh）；p3 上已有 authorized_keys 就【追加】不覆盖
     [ -f "$M0/ssh_ed25519" ] || ssh-keygen -q -t ed25519 -N '' -C "gaokun3-m0@$(hostname -s)" -f "$M0/ssh_ed25519"
     adb -s "$SER" push "$M0/ssh_ed25519.pub" /data/local/tmp/gk3-m0.pub >/dev/null
@@ -202,7 +216,8 @@ remove)
     ok "ESP：删了 gaokun3-m0*.conf 与 $MID/live/"
     PART=$(find_part | tail -1)
     [ -n "$PART" ] && S "mkdir -p $P3M; mount -t ext4 $PART $P3M && rm -f $P3M/gaokun3/$SQ_NAME; sync; umount $P3M" >/dev/null \
-        && ok "p3：删了 gaokun3/${SQ_NAME}（diag/ 与 authorized_keys 留着）"
+        && S "mkdir -p $P3M; mount -t ext4 $PART $P3M && rm -rf $P3M/gaokun3/firmware; sync; umount $P3M" >/dev/null \
+        && ok "p3：删了 gaokun3/$SQ_NAME 与 gaokun3/firmware/（diag/ 与 authorized_keys 留着）"
     ;;
 *) die "用法：$0 check|prepare|logs|remove" ;;
 esac

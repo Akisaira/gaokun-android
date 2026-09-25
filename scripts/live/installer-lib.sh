@@ -1102,12 +1102,23 @@ gk3_shrink() {
 # 连接状态、密码错、DHCP 有没有拿到地址，wpa_supplicant 都已经知道了，
 # 自己再实现一遍只会实现出一个不一致的版本。
 
-GK3_WIFI_IF=${GK3_WIFI_IF:-wlan0}
 GK3_WPA_CTRL=/run/wpa_supplicant
+
+# 无线网卡的名字。给了 GK3_WIFI_IF 就用它；否则 wlan0 —— live/rescue 镜像屏蔽了 systemd 的可预测命名
+# （overlay 的 /etc/systemd/network/99-default.link → /dev/null）；再否则认第一块有 wireless/ 的网卡。
+# ⚠️ 不能写死 wlan0：M0 第一轮（2026-09-25）Debian 的 systemd-udevd 把它改名成了 wlP6p1s0，
+#    于是 gk3-wifi 以为 ath11k 没起来。每次调用现查（网卡可能在 source 之后才出现，比如重绑之后）。
+gk3__wifi_if() {
+    local n
+    [ -n "${GK3_WIFI_IF:-}" ] && { echo "$GK3_WIFI_IF"; return; }
+    [ -e /sys/class/net/wlan0 ] && { echo wlan0; return; }
+    for n in /sys/class/net/*; do [ -d "$n/wireless" ] && { echo "${n##*/}"; return; }; done
+    echo wlan0
+}
 
 # 确保 wlan0 起来、wpa_supplicant 在跑且带控制接口。
 gk3_wifi_up() {
-    local ifc=$GK3_WIFI_IF
+    local ifc; ifc=$(gk3__wifi_if)
     if [ ! -e "/sys/class/net/$ifc" ]; then
         gk3_die "没有 $ifc —— ath11k 没起来（看 dmesg | grep ath11k）"; return 1
     fi
@@ -1133,7 +1144,7 @@ gk3_wifi_up() {
 #   任意空白切、再用单空格拼回，"My  Net" 会变成 "My Net"，于是连不上。
 gk3_wifi_scan() {
     gk3_wifi_up || return 1
-    local ifc=$GK3_WIFI_IF
+    local ifc; ifc=$(gk3__wifi_if)
     wpa_cli -i "$ifc" -p "$GK3_WPA_CTRL" scan >/dev/null 2>&1
     sleep 3
     wpa_cli -i "$ifc" -p "$GK3_WPA_CTRL" scan_results 2>/dev/null \
@@ -1164,7 +1175,7 @@ gk3_wifi_connect() {
         gk3_die "WiFi 密码要 8–63 个字符，这个是 ${#psk} 个"; return 1
     fi
     gk3_wifi_up || return 1
-    local ifc=$GK3_WIFI_IF W
+    local ifc W; ifc=$(gk3__wifi_if)
     W="wpa_cli -i $ifc -p $GK3_WPA_CTRL"
     local id
     id=$($W add_network 2>/dev/null | tail -1)
@@ -1217,7 +1228,7 @@ gk3_wifi_connect() {
 }
 
 gk3_net_status() {
-    local ifc=$GK3_WIFI_IF ip4 ssid
+    local ifc ip4 ssid; ifc=$(gk3__wifi_if)
     ip4=$(ip -4 addr show "$ifc" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -1)
     ssid=$(wpa_cli -i "$ifc" -p "$GK3_WPA_CTRL" status 2>/dev/null | sed -n 's/^ssid=//p')
     echo "NET if=$ifc ip=${ip4:-none} ssid=$(gk3__enc "${ssid:-none}") online=$([ -n "$ip4" ] && echo yes || echo no)"

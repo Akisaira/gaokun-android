@@ -14,7 +14,8 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/lib/gaokun3/gk3-wifi
-ExecStop=-/bin/sh -c 'dhcpcd -k wlan0; kill $(cat /run/wpa_supplicant.pid 2>/dev/null) 2>/dev/null; true'
+# dhcpcd -k 不带网卡名 = 放掉它管的全部（网卡名不写死，见 gk3-wifi）
+ExecStop=-/bin/sh -c 'dhcpcd -k; kill $(cat /run/wpa_supplicant.pid 2>/dev/null) 2>/dev/null; true'
 
 [Install]
 WantedBy=multi-user.target

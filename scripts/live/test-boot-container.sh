@@ -35,6 +35,10 @@ if [ -n "${GK3_TEST_OVERLAY:-}" ]; then
     case "$(basename "$SQ")" in *live*) ods+=("$REPO/scripts/live/overlay-live") ;; esac
     for od in "${ods[@]}"; do docker cp "$od/." "$c:/"; done
     docker commit "$c" "$NAME:latest" >/dev/null; docker rm "$c" >/dev/null
+    # docker cp 带进来的是 Mac 上的属主（uid 501）；产物里是 root —— 改回来，别让测试与产物在这一点上不同
+    paths=$(for od in "${ods[@]}"; do (cd "$od" && find . -mindepth 1 | sed 's#^\.##'); done)
+    docker run --name "$NAME-own" -i "$NAME:latest" sh -c 'xargs chown -h 0:0' <<< "$paths"
+    docker commit "$NAME-own" "$NAME:latest" >/dev/null; docker rm "$NAME-own" >/dev/null
 fi
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 # 假的启动介质，挂到 /media/gk3：放一把公钥，属主与权限照【内置盘 p3 的实况】造 —— 根目录属 uid 1001、

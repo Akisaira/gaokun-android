@@ -22,7 +22,8 @@ F=$OUT/boot-$(date +%Y%m%d-%H%M%S).log
     systemctl status --no-pager -l gk3-wifi ssh gk3-installer seatd avahi-daemon 2>&1 | head -80
     echo; echo "=== 挂载 ==="; findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>&1 | head -40
     echo; echo "=== 网络接口 ==="; ip -br addr 2>&1; ip route 2>&1
-    echo; echo "=== 无线 ==="; iw dev 2>&1 | head -20; iw dev wlan0 link 2>&1
+    echo; echo "=== 无线 ==="; iw dev 2>&1 | head -20
+        for n in /sys/class/net/*; do [ -d "$n/wireless" ] && { echo "--- ${n##*/}"; iw dev "${n##*/}" link 2>&1; }; done
     echo; echo "=== wpa_supplicant 配置来源 ==="
     for f in /media/gk3/gaokun3/wpa_supplicant.conf /etc/wpa_supplicant/wpa_supplicant.conf; do
         [ -f "$f" ] && echo "  有: $f" || echo "  无: $f"
