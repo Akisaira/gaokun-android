@@ -7,7 +7,11 @@
 #   docs/stage7-live-installer.md 的原话："这一条比这次修好的那个 bug 值钱。"
 MEDIA=/media/gk3
 OUT=$MEDIA/gaokun3/diag
-# 介质是只读挂的（initramfs 那边就是 -o ro）。临时改成读写，写完改回去。
+# 介质是只读挂的（initramfs 那边就是 -o ro）。临时改成读写，写完改回去 ——
+# ⚠️ 但只在【本来是只读】时改回去：安装器会话（gk3-installer-session）也把它改成读写、并一直开着
+#    installer.log 与浸泡日志。在它之后改回只读，最好的情况是 EBUSY 失败（有文件开着写），
+#    差一点就是浸泡日志从第 45 秒起全部 EROFS —— M0 要的恰恰是那条 10 分钟曲线。
+WAS=$(awk -v m="$MEDIA" '$2 == m { split($4, o, ","); r = o[1] } END { print r }' /proc/mounts)
 mount -o remount,rw "$MEDIA" 2>/dev/null || { echo "介质挂不成读写，跳过（U 盘写保护？）"; exit 0; }
 mkdir -p "$OUT" 2>/dev/null
 F=$OUT/boot-$(date +%Y%m%d-%H%M%S).log
@@ -47,5 +51,5 @@ if command -v grim >/dev/null && [ -S /run/gk3-installer/wayland-0 ]; then
     XDG_RUNTIME_DIR=/run/gk3-installer WAYLAND_DISPLAY=wayland-0 grim "${F%.log}.png" 2>/dev/null
 fi
 sync
-mount -o remount,ro "$MEDIA" 2>/dev/null
+[ "$WAS" = ro ] && mount -o remount,ro "$MEDIA" 2>/dev/null
 echo "诊断已写到 $F"

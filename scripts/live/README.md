@@ -36,6 +36,10 @@ bash scripts/live/build-live.sh --profile rescue --boot-img <boot.img> --ssh-key
 浸泡测试（每 5 秒把 RSS 记到 U 盘的 `gaokun3/diag/soak-*.log`）、反方向旋转。
 启动证据一律写回 U 盘的 `gaokun3/diag/`（`gk3-diag`，开机 45 秒后）。
 
+**没有 U 盘时**：`m0-internal.sh check|prepare|logs|remove` 把同一套 squashfs 与 initramfs 放到内置盘
+（squashfs 进救援 Ubuntu 的 p3，initramfs 进 ESP），写同样 5 个**非默认**启动项，再用 `boot-oneshot.sh`
+一次性启动进去。`prepare` 不重启、不改 default。见 `docs/stage7-flutter-debian.md` §5.6b。
+
 ## 几条不显然的设计
 
 ### 与 Android 共用同一个内核

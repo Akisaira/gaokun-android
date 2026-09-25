@@ -290,6 +290,40 @@ sudo dd if=out/live/gaokun3-live.img of=/dev/rdiskN bs=4m && sync            # �
 dmesg（含 msm/adreno 的行）、失败的单元、还有**一张屏幕截图**写到 U 盘的 `gaokun3/diag/`。
 U 盘拔下来插回 Mac 就能读。⚠️ 槽 `_a` 现在不可启动（#122 §1），U 盘起不来时拔掉即回到 `_b`。
 
+#### 5.6b 没有 U 盘：放在内置盘上，一次性启动进去（2026-09-25）
+
+用户手边没 U 盘。Alpine 版 M0 走的就是这条路（`docs/stage7-live-installer.md:204-224`）：squashfs 放在
+**救援 Ubuntu 的 p3** 上、ESP 上一个非默认启动项、一条 `LoaderEntryOneShot` 进去。脚本
+`scripts/live/m0-internal.sh` 把它做成了四步，**前两步不重启**：
+
+```sh
+bash scripts/live/m0-internal.sh check      # 只读：按内容找 p3、量 ESP 与 p3 空间、抽 slot_b 内核的 .config 核 systemd 要求、看 WiFi 配置在不在
+bash scripts/live/m0-internal.sh prepare    # squashfs → p3:/gaokun3/live.squashfs，initramfs → ESP:<mid>/live/，写 5 个启动项，sha256 逐个核
+bash scripts/boot-oneshot.sh gaokun3-m0.conf && adb -s gaokun3 reboot     # ⚠️ 要你在场并同意
+bash scripts/live/m0-internal.sh logs       # 回到 Android 后取 p3:/gaokun3/diag/ → out/m0/diag/
+bash scripts/live/m0-internal.sh remove     # 撤掉启动项、initramfs、live.squashfs
+```
+
+和 U 盘那条路的区别：
+* **启动项复用 slot_b 的内核与 dtb**（`<mid>/android/slot_b/`），只多一个 initramfs。内核参数从 slot_b
+  的启动项派生（它由 OTA postinstall 从 boot.img 同步），过滤规则与装机时的救援条目是同一个函数。
+* **`gk3.dev=/dev/nvme0n1pN` 指定分区**，不让 initramfs 去扫内置盘上的每个分区（ext4 即使只读挂载也可能
+  回放日志）。initramfs 为此改成**等设备节点出现**（最多 15 秒）—— NVMe 的分区节点是异步冒出来的，
+  拿不到就判"不存在"会让 live 在一块好好的盘上起不来；不指定时的扫描也改成最多重扫 5 遍。
+* **比 U 盘好的一点：能远程。** p3 上有 WiFi 配置的话 live 起来就连网；`prepare` 把一对开发机专用的钥匙
+  （`out/m0/ssh_ed25519`，不动 `~/.ssh`）的公钥**追加**进 `p3:/gaokun3/authorized_keys`，于是浸泡数据可以
+  `ssh -i out/m0/ssh_ed25519 root@<ip>` 实时看。人只需要看屏幕、摸触摸。
+* **装不坏内置盘**：live 是从 nvme0n1 上的分区起来的，`gk3_probe` 把整块内置盘标成 `medium=yes`，界面禁用它，
+  `gk3_apply` 的安全闸也拒绝整盘清空介质所在的盘。
+* 启动项文件名是 `gaokun3-m0*.conf`，**不能**匹配 boot_control HAL 的 `*-android-*.conf`
+  （`device/huawei/gaokun3/boot_control/EspSlot.cpp:42` 写 default、`:60` 认 ESP）；default 不动。
+* ⚠️ 没有回落槽（`_a` 不可启动）不影响这条路：它**不碰任何 Android 分区**。live 起不来时 initramfs 60 秒后
+  自己重启（或长按电源键），一次性启动已经被消费掉，回到 default 的 `_b`。
+
+顺带修的一处：`gk3-diag` 写完诊断会把介质改回只读，而安装器会话把它改成读写、并一直开着 installer.log 与
+浸泡日志。在它之后改回只读，好的情况是 EBUSY 失败，差一点就是**浸泡日志从第 45 秒起全部 EROFS** ——
+M0 要的恰恰是那条 10 分钟曲线。现在只在它本来是只读时才改回去。
+
 ## 6. 风险（按"会不会让方案作废"排序）
 
 1. 🔴 mesa/freedreno 在 Debian arm64 用户态不可用 → 回落 `FLUTTER_LINUX_RENDERER=software`
