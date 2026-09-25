@@ -378,7 +378,10 @@ gk3-diag 按时把日志写回 p3。**但 cage 起不来**：
 **Windows 那一侧**（新用户手上是 Windows，不是 Android —— Android 侧已有 `m0-internal.sh` 那条路）。
 ✅ 用户 2026-09-25 选定 PowerShell 脚本，**已写**：`scripts/windows/`（`gaokun3-setup.cmd/.ps1`、打包 `build-bundle.sh`
 由 `build-live.sh` 调用 → `out/live/gaokun3-windows{,.zip}`，312 MiB）。纯逻辑有单元测试（`test-setup.sh`）；
-⚠️ **Windows 专有的步骤没在真机上跑过**，风险清单见 `scripts/windows/README.md`。做法：
+✅ **2026-09-25 在 Parallels 的 Windows 11 ARM 虚拟机（用户那台的克隆）里整条跑通**：压缩、建 GK3LIVE、ESP、
+bcdedit 一次性启动 → 重启真的进了 systemd-boot 菜单（安装器默认、Windows 自动列出）→ 重置回 Windows、一次性项已清 →
+`-Uninstall` 后分区 / ESP / 固件启动项与安装前完全一致；`-UseFallbackPath` 的原件逐字节还原。剩华为固件认不认 BootNext、
+BitLocker 恢复密钥两项要真机（`scripts/windows/README.md`）。做法：
 1. 预检：型号 GK-W7X、Secure Boot 已关（`Confirm-SecureBootUEFI`）
 2. **让 Windows 自己缩 D:（出厂有独立的 Data 分区，336.6 GiB）**（`Resize-Partition`，即"压缩卷"）。理由：它能处理 BitLocker/设备加密、脏卷、
    不可移动文件 —— `ntfsresize` 对 BitLocker 卷**完全无能为力**，而 Windows 11 在这类机器上可能默认开着设备加密

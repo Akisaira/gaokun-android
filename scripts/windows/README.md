@@ -32,6 +32,27 @@ bash scripts/windows/test-setup.sh
   CRLF；`.cmd` 只用 ASCII。`build-bundle.sh` 与 `test-setup.ps1` 都会核对。
 * **不用 PowerShell 7 的语法**（`?:`、`??`、`&&`、`?.`）—— Windows 自带的是 5.1。`test-setup.ps1` 按语法树查。
 
+## ✅ Parallels 虚拟机实测（2026-09-25）
+
+用户那台 Windows 11 ARM 虚拟机（25H2，10.0.26200，中文）的**克隆**上跑的，原机没动，测完克隆已删。
+克隆里关掉安全启动、从 C: 切出一个 60 GiB 的 NTFS "Data" 卷（虚拟机里 D: 是光驱，所以是 E:）当出厂的 D:。
+辅助脚本在 `vmtest/`（`prlctl exec <vm> powershell -File \\Mac\<共享>\….ps1`；以 SYSTEM 身份跑，日志写成 UTF-8）。
+
+| 验了什么 | 结果 |
+|---|---|
+| 中文输出（BOM）、预检、安装包 sha256 校验 | ✅ |
+| Data 太小时**动盘之前**就拒绝（40 GiB 缩不出 24 + 4 GiB 再留 10 GiB） | ✅ |
+| 压缩 E:（60 → 32 GiB）、GK3LIVE 紧接其后（偏移 = E: 末尾）、再往后正好 24 GiB 空闲 | ✅ |
+| ESP 写入、`bcdedit /copy {bootmgr}` + `displayorder` + `bootsequence` | ✅ |
+| **重启 → 固件认了"只下一次"**，systemd-boot 菜单：gaokun3 installer（默认）/ **Windows 11（自动认出）** / … | ✅（Parallels 的固件，不是华为的） |
+| 重置 → 直接回 Windows，`bootsequence` 已被固件清掉，默认项没动 | ✅ |
+| `-Uninstall`：分区（偏移 / 大小 / GUID）、ESP 文件、固件启动项与安装前**完全一致**，E: 扩回 60 GiB，数据文件完好 | ✅（第一轮留下空的 `loader\entries`，已修，第二轮干净） |
+| `-UseFallbackPath`：原件留 `.before-gaokun3`、撤销后 `bootaa64.efi` 逐字节还原 | ✅ |
+
+两处只属于虚拟机的现象：systemd-boot 的倒计时在 Parallels 的 ARM 固件里**不走、也收不到按键**（真机上 15 秒倒计时每天在用，不受影响）；
+我们的内核在虚拟机里起不来（它是给 sc8280xp 编的，一个核空转）—— 所以"从安装器到装完"那一段只能在真机上验。
+Windows 的分区序号（`PartitionNumber`）在撤销后变了（中间重启过），但它的引导按 GUID / 偏移找分区，不看序号。
+
 ## ⚠️ 还没验证的（按风险排）
 
 这些脚本是在**没有 Windows 的机器上**写的（唯一一台的 Windows 已在 2026-08-20 抹掉）。纯逻辑有单元测试，
@@ -39,10 +60,8 @@ bash scripts/windows/test-setup.sh
 
 1. **BitLocker / 设备加密**：改了启动方式之后，Windows 下次开机可能要恢复密钥。脚本在 BitLocker 开着时
    要用户先确认拿得到恢复密钥 —— 但会不会触发、触发几次，没实测过。
-2. **华为固件认不认 `bootsequence`**（UEFI 的 BootNext）。不认的话会直接进 Windows，脚本提示改用 `-UseFallbackPath`。
-3. `Resize-Partition` / `New-Partition -Offset` / `Format-Volume -FileSystem FAT32` / `mountvol /S` 的实际行为。
-4. `Get-NetConnectionProfile` 的网络名与 `netsh` 导出的配置名是否一致（不一致时带不上 WiFi，安装器里再连即可）。
-
-先在 Mac 上用 UTM 跑 Windows 11 ARM 虚拟机能验 3、4 与 bcdedit 的流程（验不了 1、2 —— 那是这台机器的固件）。
+2. **华为固件认不认 `bootsequence`**（UEFI 的 BootNext）。Parallels 的固件认；华为的没验。不认的话会直接进 Windows，脚本提示改用 `-UseFallbackPath`。
+3. ~~`Resize-Partition` / `New-Partition -Offset` / `Format-Volume -FileSystem FAT32` / `mountvol /S`~~ ✅ 虚拟机里验过（上表）。
+4. `Get-NetConnectionProfile` 的网络名与 `netsh` 导出的配置名是否一致（虚拟机没有 WiFi，验不了；不一致时带不上 WiFi，安装器里再连即可）。
 
 ⚠️ 安装包里的 squashfs 带着华为专有的 GPU zap shader —— **不能公开发布**，除非用户定了 `docs/TODO.md` 的 B23。

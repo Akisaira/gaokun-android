@@ -235,7 +235,13 @@ function Invoke-Uninstall {
         }
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$esp\EFI\gaokun3", "$esp\loader\entries\gaokun3-live.conf"
         if (-not $android) {
-            if ($state -and $state.loaderConfCreated) { Remove-Item -Force -ErrorAction SilentlyContinue "$esp\loader\loader.conf" }
+            if ($state -and $state.loaderConfCreated) {
+                Remove-Item -Force -ErrorAction SilentlyContinue "$esp\loader\loader.conf"
+                # loader\ 是我们建的：空了就一起删（2026-09-25 虚拟机实测，原先会留下空的 loader\entries）
+                foreach ($d in "$esp\loader\entries", "$esp\loader") {
+                    if ((Test-Path $d) -and -not (Get-ChildItem -Force $d)) { Remove-Item -Force $d }
+                }
+            }
             $bak = "$esp\EFI\Boot\bootaa64.efi.before-gaokun3"
             if ($state -and $state.fallback -and (Test-Path $bak)) {
                 Copy-Item -Force $bak "$esp\EFI\Boot\bootaa64.efi"; Remove-Item -Force $bak
