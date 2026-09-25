@@ -358,7 +358,7 @@ gk3-diag 按时把日志写回 p3。**但 cage 起不来**：
 * **cage + Flutter（Impeller，OpenGLES）在真机 GPU 上出画面**：欢迎页、中文字形正常（截图由 gk3-diag 用 grim 抓，
   `out/m0/diag/boot-20260925-074703.png`）；wlr-randr `transform 270 scale 2` 生效，DSI-1 跑 1600×2560@120
 * 网卡名回到 `wlan0`，wpa_supplicant 起来了（周围没有配置里的网络，一直等载波 —— 预期内）
-* ⬜ 物理方向、触摸落点、键盘、tty2 逃生口要用户目视；浸泡与 Skia 两项没跑
+* ✅ **用户目视：方向对、触摸准**（`transform 270` 当初是推理出来的，现在是实测）。⬜ 键盘、tty2 逃生口没专门试；浸泡与 Skia 两项没跑
 
 正式修法已进构建脚本（**未重建**，换网后 deb.debian.org 不通）：`build-live.sh --firmware`（华为 zap shader 的
 再分发问题见 TODO B23）、overlay 屏蔽可预测命名（`99-default.link → /dev/null`）、网卡名不再写死。

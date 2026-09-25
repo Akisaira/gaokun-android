@@ -12,6 +12,8 @@
 #   --firmware  GPU 固件的来源，形如 /vendor/firmware 的目录：adb pull /vendor/firmware out/vendor-firmware
 #               live 必需（cage 要 GPU；zap shader 是华为专有的，Debian 的固件包里没有 —— 见 build-rootfs.sh 的 GPU_FW）
 #               ⚠️ 带了它的镜像【不能公开发布】，除非用户定了再分发的做法（docs/TODO.md 的 B23）
+#   换源：GK3_DEBIAN_MIRROR=http://mirrors.ustc.edu.cn/debian bash scripts/live/build-live.sh …
+#               （2026-09-25：换网之后 colima 里连 deb.debian.org 卡死，中科大镜像 0.3 秒；透传进容器给 build-rootfs.sh）
 #   --payload   把 --release 目录整个放进 U 盘（/gaokun3/payload/），装机就不用联网
 #   --m0        多放几个启动项给真机 M0 用（见下面 M0_ENTRIES）
 #   --with-rescue  live U 盘上另带一份 rescue profile（约 104 MiB），装机时装进救援分区的是它 ——
@@ -86,6 +88,7 @@ ENTRIES_FILE=$REPO/out/live/.entries
 say "在容器里构建（${PROFILE}）"
 docker run --rm --privileged "${MOUNTS[@]}" \
     -e PROFILE="$PROFILE" -e PAYLOAD="$PAYLOAD" -e HAVE_KEY="$SSH_KEY" -e HAVE_WIFI="$WIFI" -e WITH_RESCUE="$WITH_RESCUE" -e HAVE_FW="$FW" \
+    ${GK3_DEBIAN_MIRROR:+-e GK3_DEBIAN_MIRROR="$GK3_DEBIAN_MIRROR"} ${GK3_SNAPSHOT:+-e GK3_SNAPSHOT="$GK3_SNAPSHOT"} \
     "$TAG" bash -euo pipefail -c '
     O=/build/out; mkdir -p $O /build/boot
     # 仓库只读挂进来；构建脚本按自己所在目录找 overlay 与清单，所以拷一份可写的
