@@ -10,7 +10,7 @@
 | Requirement | Why |
 |---|---|
 | **Huawei MateBook E Go, GK-W7X** | The only model this has been built and tested on |
-| **BIOS 2.16** | **Do not upgrade to 2.17.** The upstream touch driver was developed against 2.16, and 2.17 has never been verified on this machine. The installer checks and refuses 2.17 (override: `GK3_SKIP_BIOS_CHECK=1`). ⚠️ An earlier version of this page said 2.17 changes the touch SPI bus and GPIO numbering — that comparison was made against an 8cx Gen 2 (SC8180X) table, not this machine's next BIOS. The caution stands; that reason was wrong |
+| Any BIOS version | Earlier versions of this page required 2.16 and refused 2.17. That restriction has been lifted (2026-09-25): it has been verified not to depend on the BIOS version. The installer still reports the version it sees, because a bug report needs it |
 | **Secure Boot disabled** | The kernel is unsigned. The installer checks this too |
 | An arm64 Linux live USB | Ubuntu/Debian arm64 desktop images work. This is the environment you run the installer from |
 | A checkout of this repository | The installer is `scripts/install-gaokun3.sh` plus the backend it sources from `scripts/live/`; a lone copy of the one file will not run |
@@ -45,7 +45,7 @@ git clone https://github.com/vahiru/gaokun-android && cd gaokun-android
 sudo scripts/install-gaokun3.sh /path/to/release-dir
 ```
 
-It checks the machine (model, BIOS, Secure Boot, tools), prints the partition
+It checks the machine (model, Secure Boot, tools; the BIOS version is reported, not checked), prints the partition
 table it is about to destroy and the layout it will create, and waits for you
 to type `ERASE`. Nothing is written before that. The target disk defaults to
 `/dev/nvme0n1`; set `DISK=` to install elsewhere.

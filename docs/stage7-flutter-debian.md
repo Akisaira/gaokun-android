@@ -35,6 +35,13 @@
 | 3 | rescue 与 live **统一 Debian** | rescue 从 55 MiB 涨到 Debian 量级（预计 150–250 MiB），1 GiB 分区够 |
 | 4 | live 镜像预算 **~800 MiB**（不含 payload） | 原目标 ≤400 MiB |
 
+**用户 2026-09-25 追加的两条**（M0 第二轮之后）：
+
+| # | 要求 | 影响 |
+|---|---|---|
+| 5 | **LiveCD 的初衷之一是免 U 盘安装，并且要支持双系统** | "介质与目标同盘"成为正经流程：live 从内置盘的某个分区起来、装进同一块盘的空闲区。原先内置盘一旦是介质就整盘禁用 —— 改成**只禁整盘清空、介质分区不可缩，双系统放行**（§5.8）。新用户手上是 Windows，所以还缺"在 Windows 里把 live 放上内置盘"那一半（§5.8，⬜ 方案待定） |
+| 6 | **去掉 BIOS 版本限制**：有人验证过，不依赖 BIOS 版本 | 预检只报版本号、永远 ok（bug 报告要它）；`GK3_SKIP_BIOS_CHECK` 删掉；界面、命令行版、INSTALL.md 同步 |
+
 **为什么是 Debian 而不是留在 Alpine**：Flutter 官方引擎只有 glibc 版，Alpine 是 musl。
 选了 Flutter 就必须离开 Alpine。原设计选 Alpine 的理由是体积（"Debian minbase
 光 rootfs 就 120 MiB"），这条已由决定 4 放宽。
@@ -332,6 +339,59 @@ bash scripts/live/m0-internal.sh remove     # 撤掉启动项、initramfs、live
 顺带修的一处：`gk3-diag` 写完诊断会把介质改回只读，而安装器会话把它改成读写、并一直开着 installer.log 与
 浸泡日志。在它之后改回只读，好的情况是 EBUSY 失败，差一点就是**浸泡日志从第 45 秒起全部 EROFS** ——
 M0 要的恰恰是那条 10 分钟曲线。现在只在它本来是只读时才改回去。
+
+### 5.7 M0 上机（2026-09-25，内置盘 + oneshot，两轮）
+
+**第一轮（14:56）**：live 起来了 —— initramfs 按 `gk3.dev` 在 `nvme0n1p3` 上找到 squashfs，systemd 起来、
+失败的单元只有 gk3-wifi；触摸（Himax）与键盘（HID 12d1:10b8）都认到，DSI-1 connected（1600×2560）；
+gk3-diag 按时把日志写回 p3。**但 cage 起不来**：
+* `Direct firmware load for qcom/a660_sqe.fw failed with error -2` → Mesa `fd_pipe_new2: allocation failed` →
+  EGL 建不了 DRI2 screen。**镜像里没有 GPU 固件**。C 版画 dumb buffer、从不碰 GPU，所以 live 以前从没缺过它；
+  体检也没查（现在查了：`build-rootfs.sh` 的 `GPU_FW`）。计划里排第一的风险"freedreno 在 Debian 用户态不可用"
+  **不是**这次的原因。
+* systemd-udevd 把 `wlan0` 改名成 `wlP6p1s0`，gk3-wifi 只认 `wlan0` ⇒ 判"没网卡"去重绑（重绑本身无害，
+  但它按厂商号把 NVMe 的根端口 `0002:00:00.0` 也列了进去 —— 写进 `ath11k_pci/unbind` 对它是空操作，改成只认网络控制器）。
+
+**第二轮（15:45，不重建镜像）**：启动项加 `firmware_class.path=/media/gk3/gaokun3/firmware`（把本机 Android
+`/vendor/firmware` 的三个 GPU 固件拷到 p3）与 `net.ifnames=0`：
+* `loaded qcom/a660_sqe.fw from new location`（t=3.1 s）、`a660_gmu.bin` 同 —— GPU 起来了
+* **cage + Flutter（Impeller，OpenGLES）在真机 GPU 上出画面**：欢迎页、中文字形正常（截图由 gk3-diag 用 grim 抓，
+  `out/m0/diag/boot-20260925-074703.png`）；wlr-randr `transform 270 scale 2` 生效，DSI-1 跑 1600×2560@120
+* 网卡名回到 `wlan0`，wpa_supplicant 起来了（周围没有配置里的网络，一直等载波 —— 预期内）
+* ⬜ 物理方向、触摸落点、键盘、tty2 逃生口要用户目视；浸泡与 Skia 两项没跑
+
+正式修法已进构建脚本（**未重建**，换网后 deb.debian.org 不通）：`build-live.sh --firmware`（华为 zap shader 的
+再分发问题见 TODO B23）、overlay 屏蔽可预测命名（`99-default.link → /dev/null`）、网卡名不再写死。
+
+### 5.8 免 U 盘装双系统（用户 2026-09-25 的要求 5）
+
+**已做（离线验过）**：
+* `gk3_probe` 的 PART 记录多一个 `medium=yes|no`，标出安装器所在的分区
+* `gk3_shrink_info` 对挂着的分区一律 `can=no why=mounted`（首先是介质分区）；`gk3_shrink` 自己也拒绝
+* `gk3_apply` 的安全闸只拦整盘清空；双系统只往空闲区建分区，**介质与目标同盘时照常放行**
+* 界面：U 盘介质照旧禁用；内置盘介质**可选**，带一句"只能装在空闲空间里"；选方式页整盘清空禁用并写明原因；
+  缩分区页介质分区列出但不可缩
+* 测试：`test-apply.sh` 新增 D 节（介质与目标同盘：探测标记、不可缩、整盘拒绝、双系统装完且介质分区内容与
+  PARTUUID 未变，15 项）→ 71/71；fixture 新场景 `windows-live`（出厂盘缩出 80 GiB + 4 GiB 的 GK3LIVE），
+  Flutter 46/46，新截图 `03b` / `04b`
+
+**⬜ 还缺：Windows 那一侧**（新用户手上是 Windows，不是 Android —— Android 侧已有 `m0-internal.sh` 那条路）。
+**提议**（未做，要用户定）：一个在 Windows 里以管理员身份运行的 PowerShell 引导脚本：
+1. 预检：型号 GK-W7X、Secure Boot 已关（`Confirm-SecureBootUEFI`）
+2. **让 Windows 自己缩 D:（出厂有独立的 Data 分区，336.6 GiB）**（`Resize-Partition`，即"压缩卷"）。理由：它能处理 BitLocker/设备加密、脏卷、
+   不可移动文件 —— `ntfsresize` 对 BitLocker 卷**完全无能为力**，而 Windows 11 在这类机器上可能默认开着设备加密
+   （⚠️ 本机出厂是否开着，我不确定，需要验证）。live 里的 `gk3_shrink` 留给从 U 盘启动的人
+3. 在缩出来的空间开头建一个 FAT32 小分区（GK3LIVE，2–4 GiB）放 `live.squashfs`（可选再放载荷）。
+   不放 ESP：出厂 ESP 300 MiB、只剩约 188 MiB（`hw-inventory.md` 第 8ter 节）；不放 C:：可能被 BitLocker 加密
+4. ESP 上放 systemd-boot + 内核 + dtb + initramfs + 一个启动项（`\EFI\gaokun3\`）。⚠️ 空间紧：出厂 ESP 空闲
+   188 MiB，双系统时 Android 要 `GK3_ESP_NEED_MIB`=150，live 的内核 + initramfs 约 20 MiB，合计约 170 MiB
+5. 一次性启动：`bcdedit /copy {bootmgr}` 建固件启动项指向 systemd-boot，`bcdedit /set {fwbootmgr} bootsequence`
+   只下一次走它 —— 装失败 / 不想装，重启就回 Windows
+6. 安装器起来后走双系统（本节上半部分已经支持）；GK3LIVE 装完可以留作救援分区
+
+⚠️ **验证难题**：唯一一台机器的 Windows 已在 2026-08-20 抹掉，没有 Windows 可测。可选：Mac 上用 UTM 跑
+Windows 11 ARM 虚拟机验 PowerShell 与 bcdedit 的流程（验不了华为固件对 `bootsequence` 的处理），或找有 Windows
+的用户试。
 
 ## 6. 风险（按"会不会让方案作废"排序）
 

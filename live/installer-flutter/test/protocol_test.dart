@@ -105,10 +105,20 @@ void main() {
       expect(aps.any((a) => a.ssid == '隔壁 的 网'), isTrue);
       expect(aps.firstWhere((a) => a.ssid == 'eduroam').supported, isFalse);
     });
-    test('overrides：换一份预检（BIOS 2.17）', () async {
-      final checks = (await b('blank', {'gk3_preflight': 'preflight-bios217.txt'}).run('gk3_preflight'))
+    test('windows-live：介质在内置盘上 —— 盘与分区都标 medium，介质分区不可缩（why=mounted）', () async {
+      final disks = Disk.fromProbe(await b('windows-live').run('gk3_probe'));
+      expect(disks.single.medium, isTrue);
+      expect(disks.single.external, isFalse);
+      final sh = (await b('windows-live').run('gk3_shrink_scan', ['/dev/nvme0n1'])).ofType('SHRINK').map(Shrinkable.new).toList();
+      final live = sh.firstWhere((x) => x.part == '/dev/nvme0n1p8');
+      expect(live.can, isFalse);
+      expect(live.why, 'mounted');
+    });
+    test('overrides：换一份预检（BIOS 2.17 放行，安全启动拦住）', () async {
+      final checks = (await b('blank', {'gk3_preflight': 'preflight-secureboot.txt'}).run('gk3_preflight'))
           .ofType('CHECK').map(Check.new).toList();
-      expect(checks.firstWhere((c) => c.id == 'bios').state, CheckState.fail);
+      expect(checks.firstWhere((c) => c.id == 'bios').state, CheckState.ok);
+      expect(checks.firstWhere((c) => c.id == 'secureboot').state, CheckState.fail);
     });
     test('@next：factory 上缩完分区，接着按 windows-free 回放（有 80 GiB 空闲了）', () async {
       final bk = b('factory');

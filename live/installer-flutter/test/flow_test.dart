@@ -40,6 +40,35 @@ void main() {
     expect(a, contains('--release /media/gk3/gaokun3/payload'));
   });
 
+  testWidgets('windows-live（免 U 盘装双系统）：安装器跑在内置盘上 → 盘可选、整盘清空禁用、双系统一路装完', (t) async {
+    final rec = await pumpApp(t, 'windows-live');
+    await tap(t, find.text(l.btnStart));
+    await see(t, find.text(l.diskTitle));
+    // 没有 U 盘；内置盘就是介质 —— 不禁用，只提示"只能装在空闲空间里"
+    expect(find.text(l.diskMedium), findsNothing);
+    await see(t, find.text(l.diskMediumInternal));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await see(t, find.text(l.modeTitle));
+    await see(t, find.text(l.modeWhyMedium));
+    // 点"清除整个磁盘"没反应：下一步仍是灰的
+    await tap(t, find.text(l.modeWipeTitle));
+    expect(find.ancestor(of: find.text(l.btnNext), matching: find.byWidgetPredicate((w) => w is ButtonStyleButton && w.onPressed != null)), findsNothing);
+    await see(t, find.text(l.modeAlongOk));
+    await tap(t, find.text(l.modeAlongTitle));
+    await next(t);
+    await next(t); // 来源
+    await next(t); // 选项
+    await see(t, find.text(l.confirmAlongHead));
+    await see(t, find.text(l.confirmWindowsKept));
+    await hold(t, l.confirmHoldIdle);
+    await see(t, find.text(l.doneTitle));
+    final a = rec.last('gk3_apply')!.join(' ');
+    expect(a, contains('--mode alongside'));
+    expect(a, contains('--region-start 798885888 --region-end 958269439'));   // GK3LIVE 之后那段空闲
+    expect(a, contains('--esp /dev/nvme0n1p1'));
+  });
+
   testWidgets('factory：没有空闲区 → 双系统禁用并报"至少要多少"（后端报的数）→ 缩分区 → 双系统可选', (t) async {
     await pumpApp(t, 'factory');
     await tap(t, find.text(l.btnStart));
@@ -85,10 +114,10 @@ void main() {
     expect(find.text(l.modeAlongOk), findsNothing);
   });
 
-  testWidgets('预检：BIOS 2.17 与安全启动 → 拦住；说"没有验证过"，不说"不兼容"', (t) async {
-    await pumpApp(t, 'blank', overrides: {'gk3_preflight': 'preflight-bios217.txt'});
+  testWidgets('预检：BIOS 2.17 不再拦（2026-09-25）；安全启动开着 → 拦住', (t) async {
+    await pumpApp(t, 'blank', overrides: {'gk3_preflight': 'preflight-secureboot.txt'});
     await see(t, find.text(l.checkBlocked));
-    await see(t, find.text(l.checkBiosBad('2.17')));
+    await see(t, find.text('2.17'));   // 版本号照样显示（bug 报告要它），但不是失败项
     await see(t, find.text(l.checkSecurebootBad));
     final btn = t.widget<ButtonStyleButton>(find.ancestor(of: find.text(l.btnStart), matching: find.byWidgetPredicate((w) => w is ButtonStyleButton)).first);
     expect(btn.onPressed, isNull);

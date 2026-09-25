@@ -17,6 +17,8 @@
 #   windows-free  factory 上【真跑一次 gk3_shrink】把 Data 缩掉 80 GiB 之后 → 走双系统
 #   blank         一块空盘 → 走整盘
 #   android       blank 上真装一遍之后（"已经装过"：双系统应被 partlabel-conflict 拒绝）
+#   windows-live  免 U 盘装双系统（用户 2026-09-25）：出厂盘缩出空闲区 + 一个放 live 的 FAT32 分区，
+#                 安装器就从这块盘上跑（介质与目标同盘）—— 整盘清空要被拦、双系统要放行、介质分区不可缩
 set -u
 cd "$(dirname "$0")/../.."
 [ "$(id -u)" = 0 ] || { echo "要 root（用 scripts/live/test-in-container.sh 跑）"; exit 2; }
@@ -87,8 +89,9 @@ rec() {
 }
 # 探测只留这块盘和 U 盘（容器里还看得见 colima 虚拟机自己的 vda 与别的 loop），
 # 并把 loop 报不出来的两个字段按真机填上：内置盘 tran=nvme，U 盘 tran=usb removable=1
-probe_of() {
-    printf '%s' "gk3_probe | awk -v d='$1' -v u='$STICK' '
+probe_of() {   # $2=nostick：这个场景里没有 U 盘（免 U 盘安装）
+    local u=$STICK; [ "${2:-}" = nostick ] && u=/nonexistent
+    printf '%s' "gk3_probe | awk -v d='$1' -v u='$u' '
       (\$1==\"DISK\" && \$2==\"path=\"d) { sub(/tran=[^ ]*/, \"tran=nvme\"); print; next }
       (\$1==\"DISK\" && \$2==\"path=\"u) { sub(/tran=[^ ]*/, \"tran=usb\"); sub(/removable=0/, \"removable=1\"); print; next }
       (\$1==\"PART\" && (index(\$2, \"path=\"d\"p\")==1 || index(\$2, \"path=\"u\"p\")==1)) { print; next }
@@ -103,33 +106,38 @@ header() {   # $1=场景 $2=说明
       echo "# 格式：<界面发出的调用>  <文件>。找不到精确匹配时用 '<函数> *' 那一行。"; } > "$OUT/$1/index.txt"
 }
 
+# 出厂布局（docs/hw-inventory.md 第 8 节）：factory 与 windows-live 两个场景各造一块
+make_factory() {
+    local DF=$1 TOT LAST E7 S7 E6 S6 E5 S5 n
+    TOT=$(blockdev --getsz "$DF"); LAST=$(( TOT - 34 ))
+    E7=$LAST;                       S7=$(( (E7 - 2097152 + 1) / 2048 * 2048 ))
+    E6=$(( S7 - 1 ));               S6=$(( (E6 - 18 * 2097152 + 1) / 2048 * 2048 ))
+    E5=$(( S6 - 1 ));               S5=$(( (E5 - 2097152 + 1) / 2048 * 2048 ))
+    sgdisk -o \
+      -n 1:2048:+300M -t 1:ef00 -c 1:"EFI system partition" \
+      -n 2:0:+16M     -t 2:0c01 -c 2:"Microsoft reserved partition" \
+      -n 3:0:+120G    -t 3:0700 -c 3:"Basic data partition" \
+      -n 4:0:$(( S5 - 1 )) -t 4:0700 -c 4:"Basic data partition" \
+      -n 5:$S5:$E5 -t 5:0700 -c 5:"Basic data partition" \
+      -n 6:$S6:$E6 -t 6:0700 -c 6:"Basic data partition" \
+      -n 7:$S7:$E7 -t 7:2700 -c 7:"Basic data partition" "$DF" >/dev/null 2>&1
+    settle "$DF"
+    mkfs.vfat -F 32 -n SYSTEM "${DF}p1" >/dev/null; mkfs.vfat -F 32 -n WINPE "${DF}p5" >/dev/null
+    mkntfs -Q -F -L Windows "${DF}p3" >/dev/null 2>&1; mkntfs -Q -F -L Data   "${DF}p4" >/dev/null 2>&1
+    mkntfs -Q -F -L Onekey  "${DF}p6" >/dev/null 2>&1; mkntfs -Q -F -L WinRE  "${DF}p7" >/dev/null 2>&1
+    # ESP 里放 Windows 的引导件与一块"固件胶囊"，占到接近出厂的用量（hw-inventory.md 第 8ter 节：188 MiB 空闲）
+    mmd -i "${DF}p1" ::/EFI ::/EFI/Microsoft ::/EFI/Microsoft/Boot ::/EFI/Boot
+    head -c 1572864  /dev/urandom > "$W/f1"; mcopy -i "${DF}p1" "$W/f1" ::/EFI/Microsoft/Boot/bootmgfw.efi
+    head -c 29360128 /dev/urandom > "$W/f2"; mcopy -i "${DF}p1" "$W/f2" ::/EFI/Microsoft/Boot/BCD-and-fonts.bin
+    head -c 1572864  /dev/urandom > "$W/f3"; mcopy -i "${DF}p1" "$W/f3" ::/EFI/Boot/bootaa64.efi
+    head -c 73400320 /dev/urandom > "$W/f4"; mcopy -i "${DF}p1" "$W/f4" ::/Persisted_Capsules.bin
+    # NTFS 里放一点真数据，好让"最小能缩到多少"不是 0（mount 走 ntfs-3g）
+    for n in 3 4; do mkdir -p "$W/n$n"; ntfs-3g "${DF}p$n" "$W/n$n" 2>/dev/null \
+        && dd if=/dev/zero of="$W/n$n/data.bin" bs=1M count=$(( n == 3 ? 1024 : 2048 )) status=none; umount "$W/n$n" 2>/dev/null; done
+}
+
 echo "═══ factory ═══"
-DF=$(new_disk factory 488386M)
-TOT=$(blockdev --getsz "$DF"); LAST=$(( TOT - 34 ))
-E7=$LAST;                       S7=$(( (E7 - 2097152 + 1) / 2048 * 2048 ))
-E6=$(( S7 - 1 ));               S6=$(( (E6 - 18 * 2097152 + 1) / 2048 * 2048 ))
-E5=$(( S6 - 1 ));               S5=$(( (E5 - 2097152 + 1) / 2048 * 2048 ))
-sgdisk -o \
-  -n 1:2048:+300M -t 1:ef00 -c 1:"EFI system partition" \
-  -n 2:0:+16M     -t 2:0c01 -c 2:"Microsoft reserved partition" \
-  -n 3:0:+120G    -t 3:0700 -c 3:"Basic data partition" \
-  -n 4:0:$(( S5 - 1 )) -t 4:0700 -c 4:"Basic data partition" \
-  -n 5:$S5:$E5 -t 5:0700 -c 5:"Basic data partition" \
-  -n 6:$S6:$E6 -t 6:0700 -c 6:"Basic data partition" \
-  -n 7:$S7:$E7 -t 7:2700 -c 7:"Basic data partition" "$DF" >/dev/null 2>&1
-settle "$DF"
-mkfs.vfat -F 32 -n SYSTEM "${DF}p1" >/dev/null; mkfs.vfat -F 32 -n WINPE "${DF}p5" >/dev/null
-mkntfs -Q -F -L Windows "${DF}p3" >/dev/null 2>&1; mkntfs -Q -F -L Data   "${DF}p4" >/dev/null 2>&1
-mkntfs -Q -F -L Onekey  "${DF}p6" >/dev/null 2>&1; mkntfs -Q -F -L WinRE  "${DF}p7" >/dev/null 2>&1
-# ESP 里放 Windows 的引导件与一块"固件胶囊"，占到接近出厂的用量（hw-inventory.md 第 8ter 节：188 MiB 空闲）
-mmd -i "${DF}p1" ::/EFI ::/EFI/Microsoft ::/EFI/Microsoft/Boot ::/EFI/Boot
-head -c 1572864  /dev/urandom > "$W/f1"; mcopy -i "${DF}p1" "$W/f1" ::/EFI/Microsoft/Boot/bootmgfw.efi
-head -c 29360128 /dev/urandom > "$W/f2"; mcopy -i "${DF}p1" "$W/f2" ::/EFI/Microsoft/Boot/BCD-and-fonts.bin
-head -c 1572864  /dev/urandom > "$W/f3"; mcopy -i "${DF}p1" "$W/f3" ::/EFI/Boot/bootaa64.efi
-head -c 73400320 /dev/urandom > "$W/f4"; mcopy -i "${DF}p1" "$W/f4" ::/Persisted_Capsules.bin
-# NTFS 里放一点真数据，好让"最小能缩到多少"不是 0（mount 走 ntfs-3g）
-for n in 3 4; do mkdir -p "$W/n$n"; ntfs-3g "${DF}p$n" "$W/n$n" 2>/dev/null \
-    && dd if=/dev/zero of="$W/n$n/data.bin" bs=1M count=$(( n == 3 ? 1024 : 2048 )) status=none; umount "$W/n$n" 2>/dev/null; done
+DF=$(new_disk factory 488386M); make_factory "$DF"
 header factory "出厂布局（docs/hw-inventory.md 第 8 节），整盘都是 Windows，没有空闲区"
 rec factory "$DF" probe.txt           "gk3_probe" "$(probe_of "$DF")"
 rec factory "$DF" esp_info.txt        "gk3_esp_info /dev/nvme0n1p1"
@@ -164,6 +172,37 @@ rec windows-free "$DF" apply-along.txt \
     "gk3_apply --disk /dev/nvme0n1 --mode alongside --rescue yes --release /media/gk3/gaokun3/payload --region-start $RS --region-end $RE --esp /dev/nvme0n1p1" \
     "gk3_apply --disk $DF --mode alongside --rescue yes --release $REL --region-start $RS --region-end $RE --esp ${DF}p1"
 echo "gk3_apply *                                                                    apply-along.txt" >> "$OUT/windows-free/index.txt"
+
+echo "═══ windows-live ═══"
+# 免 U 盘装双系统的目标流程：Windows 里先"压缩卷"缩出空闲区、再在空闲区开头建一个 FAT32 小分区放 live，
+# 下次开机从它起安装器。这里用 gk3_shrink 代替 Windows 的压缩卷（容器里没有 Windows），其余照实造。
+# ⚠️ Windows 那一侧的引导程序还没做（要用户定方案），这个分区的大小与卷标是按设想写的：4 GiB、GK3LIVE。
+DL=$(new_disk winlive 488386M); make_factory "$DL"
+DATA_MIB=$(( $(blockdev --getsize64 "${DL}p4") / 1048576 ))
+gk3_shrink "${DL}p4" $(( DATA_MIB - 81920 )) >/dev/null 2>&1 || { echo "windows-live：缩 Data 失败"; exit 1; }
+settle "$DL"
+LF=$(bash -c ". scripts/live/installer-lib.sh && $(probe_of "$DL" nostick)" | grep '^FREE ' | sort -t= -k5 -n | tail -1)
+LS=$(gk3__f "$LF" start)
+sgdisk -n 8:"$LS":+4G -t 8:0700 -c 8:"Basic data partition" "$DL" >/dev/null 2>&1; settle "$DL"
+mkfs.vfat -F 32 -n GK3LIVE "${DL}p8" >/dev/null
+umount /media/gk3 && mount "${DL}p8" /media/gk3 && mkdir -p /media/gk3/gaokun3
+for n in rescue.squashfs initramfs.img live.squashfs; do head -c 65536 /dev/urandom > "/media/gk3/gaokun3/$n"; done
+header windows-live "免 U 盘装双系统：Windows 缩出 80 GiB 空闲 + 4 GiB 的 GK3LIVE（FAT32）放 live，安装器就从这块盘上跑"
+rec windows-live "$DL" probe.txt       "gk3_probe" "$(probe_of "$DL" nostick)"
+rec windows-live "$DL" esp_info.txt    "gk3_esp_info /dev/nvme0n1p1"
+rec windows-live "$DL" shrink_scan.txt "gk3_shrink_scan /dev/nvme0n1"
+LF=$(bash -c ". scripts/live/installer-lib.sh && $(probe_of "$DL" nostick)" | grep '^FREE ' | sort -t= -k5 -n | tail -1)
+RS=$(gk3__f "$LF" start); RE=$(gk3__f "$LF" end)
+for r in yes no; do
+  rec windows-live "$DL" "plan-along-rescue-$r.txt" \
+      "gk3_plan --disk /dev/nvme0n1 --mode alongside --rescue $r --region-start $RS --region-end $RE --esp /dev/nvme0n1p1"
+done
+rec windows-live "$DL" plan-wipe-rescue.txt "gk3_plan --disk /dev/nvme0n1 --mode wipe --rescue yes"
+rec windows-live "$DL" apply-along.txt \
+    "gk3_apply --disk /dev/nvme0n1 --mode alongside --rescue yes --release /media/gk3/gaokun3/payload --region-start $RS --region-end $RE --esp /dev/nvme0n1p1" \
+    "gk3_apply --disk $DL --mode alongside --rescue yes --release $REL --region-start $RS --region-end $RE --esp ${DL}p1"
+echo "gk3_apply *                                                                    apply-along.txt" >> "$OUT/windows-live/index.txt"
+umount /media/gk3 && mount "${STICK}p1" /media/gk3
 
 echo "═══ blank ═══"
 DB=$(new_disk blank 488386M); sgdisk -o "$DB" >/dev/null 2>&1; settle "$DB"
@@ -201,11 +240,12 @@ O CHECK id=secureboot ok=yes value=disabled
 O CHECK id=tools ok=yes
 X 0
 EOF
-cat > "$C/preflight-bios217.txt" <<'EOF'
+# BIOS 2.17 照样 ok=yes（不再限制 BIOS 版本，2026-09-25）；拦住它的是安全启动
+cat > "$C/preflight-secureboot.txt" <<'EOF'
 O CHECK id=root ok=yes
 O CHECK id=uefi ok=yes
 O CHECK id=model ok=yes value=GK-W7X
-O CHECK id=bios ok=no value=2.17 why=bios-untested
+O CHECK id=bios ok=yes value=2.17
 O CHECK id=secureboot ok=no value=enabled
 O CHECK id=tools ok=yes
 X 0

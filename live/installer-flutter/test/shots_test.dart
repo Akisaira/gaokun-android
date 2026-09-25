@@ -58,8 +58,8 @@ void main() {
     await shot(t, '01-welcome');
   }, skip: !haveFont);
 
-  testWidgets('02 欢迎 / 预检拦住（BIOS 2.17 + 安全启动）', (t) async {
-    await pumpApp(t, 'blank', overrides: {'gk3_preflight': 'preflight-bios217.txt'});
+  testWidgets('02 欢迎 / 预检拦住（安全启动；BIOS 2.17 放行）', (t) async {
+    await pumpApp(t, 'blank', overrides: {'gk3_preflight': 'preflight-secureboot.txt'});
     await waitFor(t, find.text(l.checkBlocked));
     await shot(t, '02-welcome-blocked');
   }, skip: !haveFont);
@@ -69,6 +69,20 @@ void main() {
     await toDisk(t);
     await tap(t, find.textContaining('/dev/nvme0n1'));
     await shot(t, '03-disk');
+  }, skip: !haveFont);
+
+  testWidgets('03b 选盘（免 U 盘：安装器跑在内置盘上，可选、带提示）', (t) async {
+    await pumpApp(t, 'windows-live');
+    await toDisk(t);
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await shot(t, '03b-disk-internal-medium');
+  }, skip: !haveFont);
+
+  testWidgets('04b 方式（免 U 盘：整盘清空禁用，双系统可行）', (t) async {
+    await pumpApp(t, 'windows-live');
+    await toMode(t);
+    await tap(t, find.text(l.modeAlongTitle));
+    await shot(t, '04b-mode-internal-medium');
   }, skip: !haveFont);
 
   testWidgets('04 方式：出厂布局，没有空闲区 → 可以缩分区', (t) async {

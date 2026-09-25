@@ -41,7 +41,6 @@ class _WelcomePageState extends State<WelcomePage> {
     final l = context.l;
     return switch (c.id) {
       'model' => l.checkModelBad(c.value),
-      'bios' => l.checkBiosBad(c.value),
       'secureboot' => l.checkSecurebootBad,
       'uefi' => l.checkUefiBad,
       'root' => l.checkRootBad,
@@ -175,8 +174,11 @@ class _DiskPageState extends State<DiskPage> {
     } else if (disks.isEmpty) {
       body = Text(l.diskNone, style: tt.bodyLarge);
     } else {
-      // 安装 U 盘排最后、禁用但写明原因（C 版是直接不显示 —— 用户会以为盘没识别）
-      final sorted = [...disks]..sort((a, b) => (a.medium ? 1 : 0) - (b.medium ? 1 : 0));
+      // 安装 U 盘排最后、禁用但写明原因（C 版是直接不显示 —— 用户会以为盘没识别）。
+      // ★ 安装器跑在【内置盘】上时（免 U 盘安装）那块盘照样能选：只是不能整盘清空（选方式那一页拦），
+      //   双系统照常 —— 那正是免 U 盘装双系统的目标流程（用户 2026-09-25）。
+      bool blocked(Disk d) => d.medium && d.external;
+      final sorted = [...disks]..sort((a, b) => (blocked(a) ? 1 : 0) - (blocked(b) ? 1 : 0));
       body = ListView.separated(
         itemCount: sorted.length,
         separatorBuilder: (_, _) => const SizedBox(height: 14),
@@ -192,7 +194,8 @@ class _DiskPageState extends State<DiskPage> {
               d.parts.isEmpty ? l.diskNoParts : l.diskParts('${d.parts.length}'),
               if (free != null) l.diskFree(fmtMib(free.sizeMib)),
             ].join('   ·   '),
-            reason: d.medium ? l.diskMedium : null,
+            reason: blocked(d) ? l.diskMedium : null,
+            note: d.medium && !d.external ? l.diskMediumInternal : null,
             selected: identical(_picked, d),
             onTap: () => setState(() => _picked = d),
             extra: DiskBar(disk: d),
@@ -275,6 +278,7 @@ class _ModePageState extends State<ModePage> {
           title: l.modeWipeTitle,
           warn: l.modeWipeWarn,
           body: l.modeWipeBody,
+          reason: s.disk!.medium ? l.modeWhyMedium : null,
           selected: _pick == _Pick.wipe,
           onTap: () => setState(() => _pick = _Pick.wipe),
         ),
@@ -368,7 +372,7 @@ class _ShrinkPageState extends State<ShrinkPage> {
   String? _why(Shrinkable s) {
     final l = context.l;
     if (s.can) return null;
-    return switch (s.why) { 'ntfs-dirty' => l.shrinkWhyDirty, _ => l.shrinkWhyFs };
+    return switch (s.why) { 'ntfs-dirty' => l.shrinkWhyDirty, 'mounted' => l.shrinkWhyMounted, _ => l.shrinkWhyFs };
   }
 
   @override

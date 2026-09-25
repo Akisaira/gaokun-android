@@ -145,7 +145,7 @@ Android 相关知识。因此：
 | SoC | Qualcomm Snapdragon 8cx Gen 3 / **SC8280XP** |
 | 设备代号 | gaokun3（8cx Gen 3 机型）；gaokun2 是另一套 EC 协议 |
 | 型号 | **HUAWEI GK-W7X，SKU C233，2022 款，CSOT 面板，触摸固件 `41 07`** |
-| BIOS | **2.16**（2023-01-31）⚠️ **不要升级到 2.17** —— 上游触摸驱动是按 2.16 开发的（reset=99 / IRQ=175 / 12 MHz）。⚠️ 2026-09-24 查出：此前的理由"两版触摸 SPI 总线和 GPIO 编号完全不同"比的那份 `DSDT_217` 表头是 `QCOMM SDM8180` —— **是 8cx Gen 2 的表，不是本机的下一版**（#120 §4）。"别升"作为谨慎做法保留，理由待重写 |
+| BIOS | 本机 **2.16**（2023-01-31）。★ **2026-09-25 用户：已有人验证过，不依赖 BIOS 版本** ⇒ 安装器去掉了 BIOS 限制（预检只报版本号）。此前"不要升级到 2.17"的说法作废；它的老理由"两版触摸 SPI 总线和 GPIO 编号完全不同"本来就比错了表（那份 `DSDT_217` 是 8cx Gen 2 的，#120 §4） |
 | GPU | **Adreno 690** —— mesa freedreno + turnip，主线支持成熟 |
 | 屏幕 | **Himax HX83121A / ppc357db11 WQXGA**，MIPI-DSI。**与三星 Galaxy Tab S7 FE 同款面板** |
 | WiFi/BT | WCN6855 —— ath11k + hci_qca，主线驱动 |

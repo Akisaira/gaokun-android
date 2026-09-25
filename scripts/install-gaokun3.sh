@@ -102,9 +102,6 @@ Refusing to continue. What the failures mean:
   uefi        boot the live USB in UEFI mode
   model       this installer is for the MateBook E Go 2022 (GK-W7X) only
               (override: GK3_SKIP_MODEL_CHECK=1)
-  bios        only BIOS 2.16 has been tested; the upstream touch driver was
-              developed against it. 2.17 has simply never been verified here
-              (override: GK3_SKIP_BIOS_CHECK=1)
   secureboot  the kernel is unsigned — disable Secure Boot in firmware setup
   tools       Debian/Ubuntu: apt install gdisk dosfstools e2fsprogs zstd python3
 EOF

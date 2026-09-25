@@ -31,5 +31,6 @@ flutter:
     - testdata/common/
     - testdata/factory/
     - testdata/windows-free/
+    - testdata/windows-live/
     - testdata/blank/
     - testdata/android/

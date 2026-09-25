@@ -75,7 +75,8 @@ gk3__medium_disk() {
 # 输出：
 #   DISK path=/dev/nvme0n1 size_mib=488386 model=... removable=0 tran=nvme|usb medium=no|yes
 #   PART path=/dev/nvme0n1p1 num=1 start=2048 end=616447 size_mib=300 \
-#        type=<GUID> name=esp fs=vfat fslabel=... os=windows|linux|android|
+#        type=<GUID> name=esp fs=vfat fslabel=... os=windows|linux|android| medium=no|yes
+#   （PART 的 medium=yes：安装器就是从这个分区跑起来的 —— 挂在 /media/gk3 的那个）
 #   FREE disk=/dev/nvme0n1 start=616448 end=… size_mib=…
 #   （model / name / fslabel 已百分号编码）
 gk3_probe() {
@@ -127,7 +128,8 @@ gk3__probe_parts() {
     local tmp; tmp=$(mktemp)
     sgdisk -p "$disk" 2>/dev/null | awk '/^ *[0-9]+ /{print $1" "$2" "$3}' | sort -k2 -n > "$tmp"
 
-    local cursor=$first_usable num start end
+    local cursor=$first_usable num start end medium_part
+    medium_part=$(findmnt -no SOURCE /media/gk3 2>/dev/null || echo "")
     while read -r num start end; do
         [ -n "$num" ] || continue
         if [ "$start" -gt "$cursor" ]; then
@@ -145,7 +147,8 @@ gk3__probe_parts() {
         echo "PART path=$part num=$num start=$start end=$end" \
              "size_mib=$(( (end - start + 1) / 2048 )) size_kib=$(( (end - start + 1) / 2 ))" \
              "type=${ptype:-?} name=$(gk3__enc "$pname") fs=${fstype:-} fslabel=$(gk3__enc "$fslabel")" \
-             "os=$(gk3__guess_os "$part" "$ptype" "$pname" "$fstype")"
+             "os=$(gk3__guess_os "$part" "$ptype" "$pname" "$fstype")" \
+             "medium=$([ -n "$medium_part" ] && [ "$(readlink -f "$medium_part")" = "$(readlink -f "$part")" ] && echo yes || echo no)"
         cursor=$(( end + 1 ))
     done < "$tmp"
     rm -f "$tmp"
@@ -198,7 +201,7 @@ gk3_partpath() {
 #   CHECK id=root       ok=yes|no
 #   CHECK id=uefi       ok=yes|no
 #   CHECK id=model      ok=yes|no|unknown value=GK-W7X
-#   CHECK id=bios       ok=yes|no|unknown value=2.16
+#   CHECK id=bios       ok=yes value=2.16          （只报版本，不拦 —— 见下）
 #   CHECK id=secureboot ok=yes|no|unknown value=disabled|enabled
 #   CHECK id=tools      ok=yes|no         missing=a,b
 # ok=no 的项前端必须拦住；unknown 只警告 —— 读不到 ≠ 不合格（例如内核没开 DMIID）。
@@ -207,12 +210,10 @@ gk3_partpath() {
 #   （drivers/firmware/dmi-id.c:42-47，要 CONFIG_DMIID，Kconfig 默认 y），
 #   读不到时退回内核启动日志里那行 "Hardware name: HUAWEI GK-W7X/GK-W7X-PCB, BIOS 2.16 …"
 #   （本机实测原文见 docs/hw-inventory.md:33）。
-# ★ BIOS 只认 2.16。⚠️ 拒绝 2.17 的理由【不是】"两版触摸的 SPI 总线和 GPIO 编号不同" ——
-#   那个说法比的那份 DSDT_217 其实是 8cx Gen 2（SC8180X）的表，不是本机的下一版
-#   （docs/stage4-findings.md #120 §4）。真实理由只是：上游触摸驱动按 2.16 开发，
-#   2.17 上没人验证过。所以界面上说"未验证"，别说"不兼容"。
-#   GK3_SKIP_BIOS_CHECK=1 可以放行（给知道自己在做什么的人），此时报 unknown；
-#   型号同理：GK3_SKIP_MODEL_CHECK=1（gaokun2 是另一台机器、另一套 EC 协议，别装）。
+# ★ BIOS【不限制】（2026-09-25 用户：已有人验证过，不依赖 BIOS 版本）。原先只认 2.16、拒绝 2.17，
+#   理由几经改写（最早的"两版触摸 SPI 总线与 GPIO 编号不同"比错了表，#120 §4）。现在只报版本号，
+#   永远 ok=yes —— 出问题时 bug 报告里要有它，但它不再是装不装的条件。
+#   型号仍然拦：GK3_SKIP_MODEL_CHECK=1 放行（gaokun2 是另一台机器、另一套 EC 协议，别装）。
 # ★ Secure Boot：EFI 全局变量 SecureBoot，GUID 是 EFI_GLOBAL_VARIABLE_GUID
 #   8be4df61-93ca-11d2-aa0d-00e098032b8c（include/linux/efi.h 里的定义，
 #   Debian 6.12 头文件 :368）。efivarfs 的文件 = 4 字节属性 + 1 字节值。
@@ -240,14 +241,7 @@ gk3_preflight() {
 
     v=$(cat /sys/class/dmi/id/bios_version 2>/dev/null)
     [ -n "$v" ] || v=$(gk3__hwline | sed -n 's/.*, BIOS \([^ ]*\).*/\1/p')
-    if [ "${GK3_SKIP_BIOS_CHECK:-0}" = 1 ]; then
-        echo "CHECK id=bios ok=unknown value=$(gk3__enc "${v:-?}") skipped=yes"
-    else case "$v" in
-        2.16) echo "CHECK id=bios ok=yes value=$v" ;;
-        2.17) echo "CHECK id=bios ok=no value=$v why=bios-untested" ;;
-        "")   echo "CHECK id=bios ok=unknown value=" ;;
-        *)    echo "CHECK id=bios ok=unknown value=$(gk3__enc "$v") why=bios-untested" ;;
-    esac; fi
+    echo "CHECK id=bios ok=yes value=$(gk3__enc "${v:-?}")"
 
     f=/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c
     v=$(od -An -tu1 -j4 -N1 "$f" 2>/dev/null | tr -d ' ')
@@ -577,9 +571,11 @@ gk3_apply() {
         fi
     fi
 
-    # ── 安全闸 1：不能写自己正跑在上面的那块盘 ──────────────────────────
-    # ⚠️ 安装器要么从 U 盘跑、要么从内置盘的救援分区跑。后者做整盘清空
-    #    等于把自己脚下的地板锯掉 —— 而且是【跑到一半】才死，盘已经毁了。
+    # ── 安全闸 1：不能整盘清空自己正跑在上面的那块盘 ─────────────────────
+    # ⚠️ 安装器要么从 U 盘跑、要么从内置盘上的某个分区跑（救援分区，或者免 U 盘安装时
+    #    放 live 的那个分区）。后者做整盘清空等于把自己脚下的地板锯掉 —— 而且是【跑到一半】
+    #    才死，盘已经毁了。★ 双系统（alongside）不受这道闸：它只往空闲区里建新分区，
+    #    不碰任何已有分区 —— 免 U 盘装双系统正是"介质与目标同盘"的情形，必须放行。
     local medium_disk; medium_disk=$(gk3__medium_disk)
     if [ "$mode" = wipe ] && [ -n "$medium_disk" ] && [ "$medium_disk" = "$disk" ]; then
         rm -rf "$parts"
@@ -953,6 +949,12 @@ gk3_shrink_info() {
     fs=$(blkid -o value -s TYPE "$part" 2>/dev/null)
     cur_mib=$(( $(blockdev --getsize64 "$part" 2>/dev/null || echo 0) / 1048576 ))
     can=no; why=""; min_mib=""
+    # ⚠️ 挂着的分区一律不缩 —— 首先是安装器自己所在的那个（live 从内置盘跑时，它就在目标盘上：
+    #    免 U 盘装双系统正是这种情况）。ntfsresize 本来也拒绝挂着的卷，resize2fs 对挂着的 ext4
+    #    缩小会失败，但【先问、先说清楚】比让工具半路报错好。
+    if findmnt -rn -S "$part" >/dev/null 2>&1; then
+        echo "SHRINK part=$part fs=${fs:-none} cur_mib=$cur_mib min_mib=0 can=no why=mounted"; return 1
+    fi
     case "$fs" in
         ntfs)
             if ! command -v ntfsresize >/dev/null; then

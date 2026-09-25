@@ -104,6 +104,7 @@ class ChoiceCard extends StatelessWidget {
     this.warn,
     this.good,
     this.reason,
+    this.note,
     this.icon,
     this.trailing,
     this.extra,
@@ -117,6 +118,10 @@ class ChoiceCard extends StatelessWidget {
 
   /// 不为空 ⇒ 禁用，并把原因写在卡片上
   final String? reason;
+
+  /// 与 reason 同样的样式，但【不】禁用：可以选，只是有件事要先知道
+  /// （例如安装器正从这块盘上运行 —— 能装双系统，不能整盘清空）
+  final String? note;
   final IconData? icon;
   final Widget? trailing, extra;
   final bool selected, danger;
@@ -154,12 +159,12 @@ class ChoiceCard extends StatelessWidget {
                     if (good != null) ...[const SizedBox(height: 6), Text(good!, style: tt.bodyLarge!.copyWith(color: C.ok))],
                     if (body != null) ...[const SizedBox(height: 6), Text(body!, style: tt.bodyMedium)],
                     if (extra != null) ...[const SizedBox(height: 12), extra!],
-                    if (reason != null) ...[
+                    for (final t in [reason, note].whereType<String>()) ...[
                       const SizedBox(height: 10),
                       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         const Icon(Icons.info_outline, size: 20, color: C.warn),
                         const SizedBox(width: 8),
-                        Expanded(child: Text(reason!, style: tt.bodyMedium!.copyWith(color: C.warn))),
+                        Expanded(child: Text(t, style: tt.bodyMedium!.copyWith(color: C.warn))),
                       ]),
                     ],
                   ]),

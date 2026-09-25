@@ -2,39 +2,39 @@ E PROGRESS 1 检查安装文件
 E PROGRESS 1 核对 sha256
 E boot.img：sha256 与发版清单一致
 E super.img.zst：sha256 与发版清单一致
-E   Image          15598080 字节
-E   ramdisk.img    13080354 字节
-E   gaokun3.dtb      173225 字节
-E   cmdline.txt         496 字节
+E   Image            300002 字节
+E   ramdisk.img      123457 字节
+E   gaokun3.dtb       20005 字节
+E   cmdline.txt         183 字节
 E 现有 ESP /dev/nvme0n1p1 空闲 199 MiB（需要 150）
 E PROGRESS 2 计算分区方案
-E 分区表已备份到 /media/gk3/gaokun3/gpt-backup-nvme0n1-20260924-162203.bin（还原：sgdisk --load-backup=/media/gk3/gaokun3/gpt-backup-nvme0n1-20260924-162203.bin /dev/nvme0n1）
+E 分区表已备份到 /media/gk3/gaokun3/gpt-backup-nvme0n1-20260925-080233.bin（还原：sgdisk --load-backup=/media/gk3/gaokun3/gpt-backup-nvme0n1-20260925-080233.bin /dev/nvme0n1）
 E PROGRESS 5 写分区表
 E + sgdisk -n 0:790497280:790505471 -t 0:8300 -c 0:misc /dev/nvme0n1
-D 1024
+D 1012
 E The operation has completed successfully.
 E + sgdisk -n 0:790505472:790571007 -t 0:8300 -c 0:metadata /dev/nvme0n1
-D 1018
+D 1020
 E The operation has completed successfully.
 E + sgdisk -n 0:790571008:790702079 -t 0:8300 -c 0:boot_a /dev/nvme0n1
-D 1023
-E The operation has completed successfully.
-E + sgdisk -n 0:790702080:790833151 -t 0:8300 -c 0:boot_b /dev/nvme0n1
-D 1022
-E The operation has completed successfully.
-E + sgdisk -n 0:790833152:815998975 -t 0:8300 -c 0:super /dev/nvme0n1
-D 1026
-E The operation has completed successfully.
-E + sgdisk -n 0:815998976:818096127 -t 0:8300 -c 0:gk3rescue /dev/nvme0n1
 D 1018
 E The operation has completed successfully.
+E + sgdisk -n 0:790702080:790833151 -t 0:8300 -c 0:boot_b /dev/nvme0n1
+D 1017
+E The operation has completed successfully.
+E + sgdisk -n 0:790833152:815998975 -t 0:8300 -c 0:super /dev/nvme0n1
+D 1030
+E The operation has completed successfully.
+E + sgdisk -n 0:815998976:818096127 -t 0:8300 -c 0:gk3rescue /dev/nvme0n1
+D 1023
+E The operation has completed successfully.
 E + sgdisk -n 0:818096128:958269439 -t 0:8300 -c 0:userdata /dev/nvme0n1
-D 1027
+D 1020
 E The operation has completed successfully.
 E + partprobe /dev/nvme0n1
 D 1500
 E PROGRESS 15 格式化
-D 144
+D 143
 E 复用现有 ESP：/dev/nvme0n1p1（不格式化；空间与类型在动盘之前已验过）
 E + mkfs.ext4 -q -F -L metadata /dev/nvme0n1p9
 E + mkfs.ext4 -q -F -L userdata /dev/nvme0n1p14
@@ -44,94 +44,91 @@ E PROGRESS 30 写入 super
 E PROGRESS 30 写入 super（0 / 12288 MiB）
 E PROGRESS 31 写入 super（337 / 12288 MiB）
 E PROGRESS 32 写入 super（657 / 12288 MiB）
-D 54
 E PROGRESS 33 写入 super（980 / 12288 MiB）
-D 57
 E PROGRESS 34 写入 super（1236 / 12288 MiB）
-D 58
 E PROGRESS 35 写入 super（1556 / 12288 MiB）
-D 313
+D 56
 E PROGRESS 36 写入 super（1876 / 12288 MiB）
-D 208
+D 507
 E PROGRESS 37 写入 super（2196 / 12288 MiB）
 D 1500
 E PROGRESS 38 写入 super（2516 / 12288 MiB）
-D 165
+D 1500
 E PROGRESS 39 写入 super（2772 / 12288 MiB）
-D 249
+D 323
 E PROGRESS 40 写入 super（3092 / 12288 MiB）
-D 191
+D 143
 E PROGRESS 41 写入 super（3412 / 12288 MiB）
-D 162
+D 182
 E PROGRESS 42 写入 super（3732 / 12288 MiB）
-D 592
+D 155
 E PROGRESS 43 写入 super（4000 / 12288 MiB）
-D 559
+D 496
 E PROGRESS 44 写入 super（4336 / 12288 MiB）
-D 1500
+D 128
 E PROGRESS 45 写入 super（4656 / 12288 MiB）
-D 88
+D 129
 E PROGRESS 46 写入 super（4976 / 12288 MiB）
-D 62
+D 151
 E PROGRESS 47 写入 super（5232 / 12288 MiB）
-D 450
+D 310
 E PROGRESS 48 写入 super（5552 / 12288 MiB）
-D 98
+D 255
 E PROGRESS 49 写入 super（5872 / 12288 MiB）
-D 67
+D 205
 E PROGRESS 50 写入 super（6192 / 12288 MiB）
-D 278
+D 193
 E PROGRESS 51 写入 super（6512 / 12288 MiB）
-D 134
+D 141
 E PROGRESS 52 写入 super（6768 / 12288 MiB）
-D 194
+D 208
 E PROGRESS 53 写入 super（7088 / 12288 MiB）
-D 219
+D 239
 E PROGRESS 54 写入 super（7408 / 12288 MiB）
-D 204
+D 170
 E PROGRESS 55 写入 super（7728 / 12288 MiB）
-D 204
+D 158
 E PROGRESS 56 写入 super（8048 / 12288 MiB）
-D 163
+D 142
 E PROGRESS 57 写入 super（8304 / 12288 MiB）
-D 210
+D 207
 E PROGRESS 58 写入 super（8624 / 12288 MiB）
-D 212
+D 209
 E PROGRESS 59 写入 super（8944 / 12288 MiB）
-D 302
+D 495
 E PROGRESS 60 写入 super（9272 / 12288 MiB）
-D 88
 E PROGRESS 61 写入 super（9528 / 12288 MiB）
-D 234
 E PROGRESS 62 写入 super（9848 / 12288 MiB）
-D 224
+D 63
 E PROGRESS 63 写入 super（10168 / 12288 MiB）
-D 68
+D 353
 E PROGRESS 64 写入 super（10488 / 12288 MiB）
-D 65
-E PROGRESS 65 写入 super（10808 / 12288 MiB）
-E PROGRESS 66 写入 super（11064 / 12288 MiB）
-D 52
-E PROGRESS 67 写入 super（11384 / 12288 MiB）
-D 355
-E PROGRESS 68 写入 super（11704 / 12288 MiB）
 D 1500
+E PROGRESS 65 写入 super（10808 / 12288 MiB）
+D 86
+E PROGRESS 66 写入 super（11064 / 12288 MiB）
+D 113
+E PROGRESS 67 写入 super（11384 / 12288 MiB）
+D 129
+E PROGRESS 68 写入 super（11704 / 12288 MiB）
+D 132
 E PROGRESS 69 写入 super（12024 / 12288 MiB）
-D 53
+D 122
 E PROGRESS 70 写入 super（12288 / 12288 MiB）
-D 935
+D 1500
 E gk3-unsparse: 3145728 块 × 4096 字节 = 12288 MiB，200 个块段
 E super：LP geometry 魔数正确
 E PROGRESS 70 写入 boot_a / boot_b
 E + dd if=/media/gk3/gaokun3/payload/boot.img of=/dev/nvme0n1p10 bs=4M conv=fsync status=none
 E + dd if=/media/gk3/gaokun3/payload/boot.img of=/dev/nvme0n1p11 bs=4M conv=fsync status=none
 E PROGRESS 80 安装引导链
-E + mount -t vfat /dev/nvme0n1p1 /tmp/tmp.pMKI1SAjiD
+E + mount -t vfat /dev/nvme0n1p1 /tmp/tmp.uRmHNQmYYW
 E 原有的 EFI/BOOT/BOOTAA64.EFI 已备份为 EFI/BOOT/BOOTAA64.EFI.before-gaokun3
-E + umount /tmp/tmp.pMKI1SAjiD
+E + umount /tmp/tmp.uRmHNQmYYW
 E PROGRESS 92 写入救援系统
-E + mount /dev/nvme0n1p13 /tmp/tmp.6cUXa5yp0k
+E + mount /dev/nvme0n1p13 /tmp/tmp.ym0HXRDqNH
 E 警告：没有 WiFi 配置可带给救援系统 —— 它开机后连不上网，只能在机器旁操作
-E + umount /tmp/tmp.6cUXa5yp0k
+E 警告：没有 ssh 公钥可带给救援系统 —— 只能在机器旁登录（放一份到 U 盘的 gaokun3/authorized_keys）
+E + umount /tmp/tmp.ym0HXRDqNH
 E PROGRESS 100 完成
 X 0

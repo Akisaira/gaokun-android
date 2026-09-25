@@ -28,14 +28,6 @@
       }
     }
   },
-  "checkBiosBad": "BIOS 是 {value}。上游触摸驱动是按 2.16 开发的，{value} 上还没有人验证过。",
-  "@checkBiosBad": {
-    "placeholders": {
-      "value": {
-        "type": "String"
-      }
-    }
-  },
   "checkSecurebootBad": "安全启动已开启。我们的内核没有签名，开着它装好也起不来 —— 请先在固件设置里关闭。",
   "checkUefiBad": "这个系统不是以 UEFI 方式启动的。",
   "checkRootBad": "安装器没有以 root 身份运行。",
@@ -55,6 +47,7 @@
   "diskInternal": "内置固态硬盘",
   "diskExternal": "外接磁盘",
   "diskMedium": "这是你正在使用的安装 U 盘，不能安装到它上面。",
+  "diskMediumInternal": "安装器正从这块盘上运行。可以装在空闲空间里、与现有系统共存，但不能清除整个磁盘。",
   "diskParts": "{count} 个分区",
   "@diskParts": {
     "placeholders": {
@@ -91,6 +84,7 @@
     }
   },
   "modeWhyNoEsp": "此磁盘上没有 EFI 系统分区 —— 这意味着它上面没有可以保留的 UEFI 系统。",
+  "modeWhyMedium": "安装器正从这块盘上运行 —— 清除整个磁盘会把安装器自己也删掉。请选“保留现有系统”。",
   "modeWhyNoRoom": "可用空间不足 {need}（现有最大的一块是 {have}）。可以缩小一个现有分区来腾出空间。",
   "@modeWhyNoRoom": {
     "placeholders": {
@@ -142,6 +136,7 @@
   },
   "shrinkWhyDirty": "这个 NTFS 分区没有被干净地卸载。请回到 Windows，关闭“快速启动”并正常关机，然后再试一次。",
   "shrinkWhyFs": "这种文件系统不支持在不丢数据的前提下缩小。",
+  "shrinkWhyMounted": "这个分区正在使用中（安装器就是从它上面运行的），不能缩小。",
   "shrinkSizeHint": "缩小后的大小",
   "shrinkFreed": "这会腾出大约 {size} 给 Android",
   "@shrinkFreed": {

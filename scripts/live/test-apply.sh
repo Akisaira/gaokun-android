@@ -36,7 +36,7 @@ W=$(mktemp -d /tmp/gk3-test.XXXX)
 LOOPS=()
 cleanup() {
     local l m
-    for m in $(findmnt -rno TARGET | grep "^$W" | sort -r); do umount "$m" 2>/dev/null; done
+    for m in $(findmnt -rno TARGET | grep -e "^$W" -e '^/media/gk3' | sort -r); do umount "$m" 2>/dev/null; done
     # ⚠️★ 按背后的镜像文件找 loop，【不】靠 LOOPS 数组：new_disk 是在 $(…) 里调的，
     #   它往 LOOPS 里加的东西留在子 shell 里 —— 2026-09-24 就这样漏了 58 个 loop，
     #   每个攥着一个已删除的稀疏文件，把 colima 的 98G 盘写满。
@@ -313,6 +313,49 @@ tryb "--esp 指向不存在的节点" "${DE}p9" "要 --esp"
 OUT=$(GK3_DRYRUN=1 gk3_apply --disk "$DC" --mode wipe --rescue yes --release "$REL" 2>&1); rc=$?
 [ "$rc" = 0 ] && printf '%s' "$OUT" | grep -q '^DRY: sgdisk --zap-all' && [ "$(fp "$DC")" = "$BEFORE" ] \
     && ok "dry-run：列出了 $(printf '%s\n' "$OUT" | grep -c '^DRY:') 条命令，盘一个字节没变" || bad "dry-run 不对（rc=${rc}）"
+
+# ── D. 免 U 盘：安装器就跑在目标盘上 ─────────────────────────────────────────
+# 用户 2026-09-25：LiveCD 的初衷之一是【免 U 盘安装】，并且要能装双系统。于是"介质与目标同盘"
+# 是正经流程，不是边角：Windows 里缩出空闲区、建一个放 live 的小分区（这里是 p4 GK3LIVE），
+# 从它起安装器。规则：双系统放行（只往空闲区建分区）、整盘清空拒绝、介质分区不可缩。
+echo "═══ D. 免 U 盘：安装器就跑在目标盘上（介质与目标同盘）═══"
+DD=$(new_disk d 40G)
+TOT=$(blockdev --getsz "$DD"); LAST=$(( TOT - 34 )); WRS=$(( (LAST - 2097152 + 1) / 2048 * 2048 ))
+sgdisk -o \
+  -n 1:2048:+300M -t 1:ef00 -c 1:"EFI system partition" \
+  -n 2:0:+16M     -t 2:0c01 -c 2:"Microsoft reserved partition" \
+  -n 3:0:+4G      -t 3:0700 -c 3:"Basic data partition" \
+  -n 4:0:+1G      -t 4:0700 -c 4:"Basic data partition" \
+  -n 5:$WRS:$LAST -t 5:2700 -c 5:"Basic data partition" "$DD" >/dev/null 2>&1
+partprobe "$DD" 2>/dev/null; udevadm settle 2>/dev/null; sleep 1
+mkfs.vfat -F 32 -n SYSTEM "${DD}p1" >/dev/null; mkntfs -Q -F -L Windows "${DD}p3" >/dev/null 2>&1
+mkfs.vfat -F 32 -n GK3LIVE "${DD}p4" >/dev/null
+mkdir -p /media/gk3 && mount "${DD}p4" /media/gk3 && mkdir -p /media/gk3/gaokun3
+head -c 1048576 /dev/urandom > /media/gk3/gaokun3/live.squashfs; LIVE_SHA=$(sha /media/gk3/gaokun3/live.squashfs); sync
+PU4=$(sgdisk -i 4 "$DD" 2>/dev/null | awk '/unique GUID/{print $4}')
+PROBE=$(gk3_probe 2>/dev/null | awk -v d="$DD" '$2=="path="d || index($0, "disk="d" ") || index($0, "path="d"p")')
+printf '%s\n' "$PROBE" | grep -q "^DISK path=$DD .*medium=yes" && printf '%s\n' "$PROBE" | grep -q "^PART path=${DD}p4 .*medium=yes" \
+    && ! printf '%s\n' "$PROBE" | grep -q "^PART path=${DD}p3 .*medium=yes" \
+    && ok "gk3_probe：整块盘 medium=yes，且只有 p4（安装器所在）标 medium=yes" || bad "medium 标得不对"
+SI=$(gk3_shrink_info "${DD}p4" 2>&1)
+printf '%s' "$SI" | grep -q 'can=no why=mounted' && ok "介质分区不可缩：$SI" || bad "介质分区居然可缩：$SI"
+BEFORE_D=$(fp "$DD")
+OUT=$(gk3_shrink "${DD}p4" 600 2>&1); rc=$?
+[ "$rc" != 0 ] && [ "$(fp "$DD")" = "$BEFORE_D" ] && ok "gk3_shrink 自己也拒绝缩介质分区，盘没动" || bad "gk3_shrink 缩了介质分区（rc=${rc}）"
+OUT=$(gk3_apply --disk "$DD" --mode wipe --rescue no --release "$REL" 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '锯掉' && [ "$(fp "$DD")" = "$BEFORE_D" ] \
+    && ok "整盘清空介质所在的盘：拒绝且盘没动" || bad "整盘清空没被拦住（rc=${rc}）"
+FREE=$(printf '%s\n' "$PROBE" | grep '^FREE ' | sort -t= -k5 -n | tail -1)
+RS=$(gk3__f "$FREE" start); RE=$(gk3__f "$FREE" end)
+gk3_apply --disk "$DD" --mode alongside --rescue no --release "$REL" \
+          --region-start "$RS" --region-end "$RE" --esp "${DD}p1" >"$W/d.log" 2>&1; rc=$?
+if [ "$rc" = 0 ]; then ok "双系统装进同一块盘的空闲区：完成（介质分区一直挂着）"
+    verify_install "$DD" no "${DD}p1"
+else bad "双系统安装失败 rc=$rc"; tail -20 "$W/d.log" | sed 's/^/      /'; fi
+findmnt -rn -S "${DD}p4" -T /media/gk3 >/dev/null && [ "$(sha /media/gk3/gaokun3/live.squashfs)" = "$LIVE_SHA" ] \
+    && [ "$(sgdisk -i 4 "$DD" 2>/dev/null | awk '/unique GUID/{print $4}')" = "$PU4" ] \
+    && ok "介质分区：还挂着、live.squashfs 内容未变、PARTUUID 未变" || bad "介质分区被动了"
+umount /media/gk3
 
 # ── E. 网络安装 ────────────────────────────────────────────────────────────
 echo "═══ E. 网络安装：下载一整套发布文件，再走同一条写盘路径 ═══"
