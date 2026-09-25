@@ -147,12 +147,11 @@ check|prepare)
     # 公钥：开发机专用的一对（out/m0/，不动 ~/.ssh）；p3 上已有 authorized_keys 就【追加】不覆盖
     [ -f "$M0/ssh_ed25519" ] || ssh-keygen -q -t ed25519 -N '' -C "gaokun3-m0@$(hostname -s)" -f "$M0/ssh_ed25519"
     adb -s "$SER" push "$M0/ssh_ed25519.pub" /data/local/tmp/gk3-m0.pub >/dev/null
-    # ⚠️ sshd 的 StrictModes 查文件【和各级目录】：组/他人可写就静默不认这把钥匙。/media/gk3 是 p3 的根目录
+    # ⓘ p3 的根目录属 uid 1001、gaokun3/ 是 777 —— sshd 的 StrictModes 本来会因此拒绝这把钥匙。
+    #   不在这里改 p3 的权限：镜像里的 gk3-ssh-keys 开机时把它并进 /root/.ssh，绕开了介质的属主问题。
+    #   ⚠️ 那是 2026-09-25 下午才加的，这之前构建的 squashfs 里没有它（那时介质上的公钥登不进去）。
     S "f=$P3M/gaokun3/authorized_keys; touch \$f; grep -qF \"\$(cat /data/local/tmp/gk3-m0.pub)\" \$f || cat /data/local/tmp/gk3-m0.pub >> \$f
-       chmod 600 \$f; chown 0:0 \$f $P3M/gaokun3; chmod go-w $P3M/gaokun3; rm -f /data/local/tmp/gk3-m0.pub" >/dev/null
-    S "stat -c '%a %u %n' $P3M $P3M/gaokun3 $P3M/gaokun3/authorized_keys" | sed 's#/mnt/gaokun3_m0_p3#p3:#; s/^/     /'
-    [ "$(S "stat -c %a $P3M" | tail -1 | cut -c2-)" = 55 ] || warn "p3 根目录是组/他人可写的 —— sshd 会不认介质上的公钥（StrictModes）"
-    S "sync; umount $P3M" >/dev/null
+       chmod 600 \$f; chown 0:0 \$f; rm -f /data/local/tmp/gk3-m0.pub; sync; umount $P3M" >/dev/null
     ok "公钥 out/m0/ssh_ed25519.pub → p3:/gaokun3/authorized_keys（ssh -i out/m0/ssh_ed25519 root@<ip>）"
 
     say "7. ESP：initramfs + 启动项"

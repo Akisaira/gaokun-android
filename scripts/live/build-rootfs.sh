@@ -188,6 +188,10 @@ if in_ch 'grep -qE "^(Requires|BindsTo|Requisite)=" /etc/systemd/system/gk3-wifi
     echo "   ✗ gk3-wifi.service 里有硬依赖"; BAD=1; else ok "gk3-wifi 只做排序依赖，没有硬依赖"; fi
 if in_ch 'grep -q "^root::" /etc/shadow'; then ok "root 账户未锁定"; else echo "   ✗ root 账户是锁定的 —— ssh 公钥登录会被直接拒绝"; BAD=1; fi
 if [ -n "$SSH_KEY" ]; then need_path /root/.ssh/authorized_keys; else ok "没装公钥（live 镜像本该如此）"; fi
+# 单元里 Exec* 指向的自家脚本必须可执行 —— ssh 的 ExecStartPre 失败 = sshd 起不来 = 一台连不上的机器
+for f in gk3-ssh-keys gk3-wifi gk3-diag; do
+    if in_ch "[ -x /usr/lib/gaokun3/$f ]"; then ok "/usr/lib/gaokun3/$f 可执行"; else echo "   ✗ /usr/lib/gaokun3/$f 不可执行"; BAD=1; fi
+done
 if [ "$PROFILE" = live ] && in_ch 'ls /etc/ssh/ssh_host_*_key'; then echo "   ✗ live 镜像里有主机私钥"; BAD=1; fi
 # ★ ath11k 固件：没有它 wlan0 根本不出现，而"没网"在这台机器上等于"救援失效"
 for f in amss.bin board-2.bin m3.bin; do need_glob "/usr/lib/firmware/ath11k/WCN6855/hw2.0/$f*"; need_glob "/usr/lib/firmware/ath11k/WCN6855/hw2.1/$f*"; done

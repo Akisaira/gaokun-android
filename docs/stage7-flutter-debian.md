@@ -256,7 +256,7 @@ Flutter 空闲不出帧，60 秒 RSS 一动不动 —— **那条曲线什么也
 
 救援系统的两处补齐（M4.5 的前置）：
 * **公钥放介质上**：公开的 live 镜像不带任何人的公钥，于是从它装出来的救援系统本来【远程进不去】——而远程
-  接入正是救援系统存在的意义。沿用 WiFi 凭据的同一模式：sshd 同时认 `/media/gk3/gaokun3/authorized_keys`；
+  接入正是救援系统存在的意义。沿用 WiFi 凭据的同一模式：ssh 起来之前把 `/media/gk3/gaokun3/authorized_keys` 并进 `/root/.ssh`（见 §5.6b 为什么不让 sshd 直接认）；
   用户把公钥放到 U 盘的 `gaokun3/authorized_keys`，`gk3_apply` 装机时把它（或发布目录里的、或正在跑的系统自己的）
   拷进救援分区。loop 端到端验过（56/56）。
 * **装进去的是 rescue profile，不是 live 本身**：`build-live.sh --with-rescue` 在 U 盘的 `gaokun3/install-rescue/`
@@ -319,6 +319,15 @@ bash scripts/live/m0-internal.sh remove     # 撤掉启动项、initramfs、live
   （`device/huawei/gaokun3/boot_control/EspSlot.cpp:42` 写 default、`:60` 认 ESP）；default 不动。
 * ⚠️ 没有回落槽（`_a` 不可启动）不影响这条路：它**不碰任何 Android 分区**。live 起不来时 initramfs 60 秒后
   自己重启（或长按电源键），一次性启动已经被消费掉，回到 default 的 `_b`。
+
+★ **`check` 在真机上查出的（2026-09-25）**：p3 的根目录（live 里就是 `/media/gk3`）属 **uid 1001**、`gaokun3/` 是 **777**
+（解包 Ubuntu 根文件系统留下的）。原设计让 sshd 直接认介质上的 `gaokun3/authorized_keys`，而 StrictModes 会从公钥文件
+一路查到 `/` —— 于是这把钥匙被**静默拒绝**，M0 会是一台 ssh 不进去的机器。开机冒烟里照这个实况造了一个假介质，
+复现出 `Authentication refused: bad ownership or modes for directory /media/gk3/gaokun3`。
+修法不是去改 p3 的权限（介质是外来的文件系统，下一块 U 盘、下一个用户的分区照样管不了），而是 **ssh 起来之前由
+`gk3-ssh-keys` 把它并进 tmpfs 上的 `/root/.ssh/authorized_keys`**，sshd 只认那一份。冒烟测试现在常驻这一项。
+⚠️ 换了网络后 deb.debian.org 不通、重建做不了，这一条是用 `GK3_TEST_OVERLAY=1`（已构建的根 + 工作区的 overlay）验的，
+**还没进产物**。这次上机本来也 ssh 不进去（Mac 与设备不在一个网里），所以 M0 用的是之前那版镜像。
 
 顺带修的一处：`gk3-diag` 写完诊断会把介质改回只读，而安装器会话把它改成读写、并一直开着 installer.log 与
 浸泡日志。在它之后改回只读，好的情况是 EBUSY 失败，差一点就是**浸泡日志从第 45 秒起全部 EROFS** ——

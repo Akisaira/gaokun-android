@@ -809,7 +809,7 @@ RESC
             # ★ ssh 公钥同理：公开的 live 镜像不带任何人的公钥，所以从它装出来的救援系统本来
             #   【远程进不去】—— 而远程接入正是救援系统存在的意义。来源按优先级：发布目录里放的
             #   → 安装 U 盘上用户放的 → 正在跑的这个系统自己的（私人构建的镜像带了 --ssh-key）。
-            #   救援系统的 sshd 认 /media/gk3/gaokun3/authorized_keys（overlay 里的 sshd_config）。
+            #   救援系统开机时把 /media/gk3/gaokun3/authorized_keys 并进 /root/.ssh（overlay 里的 gk3-ssh-keys）。
             local akeys=""
             akeys=$(gk3__find_file authorized_keys "$rel" /media/gk3/gaokun3) \
                 || { [ -s /root/.ssh/authorized_keys ] && akeys=/root/.ssh/authorized_keys; } || true
