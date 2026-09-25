@@ -11,6 +11,8 @@
 #               （docs/stage7-live-installer.md §2.3）。给 --release 时默认用里面的 boot.img
 #   --payload   把 --release 目录整个放进 U 盘（/gaokun3/payload/），装机就不用联网
 #   --m0        多放几个启动项给真机 M0 用（见下面 M0_ENTRIES）
+#   --with-rescue  live U 盘上另带一份 rescue profile（约 104 MiB），装机时装进救援分区的是它 ——
+#               不带的话，装进去的"救援系统"是 live 镜像本身（带图形安装器）
 #
 # 产物 → out/live/：gaokun3-<profile>.squashfs · initramfs.img · gaokun3-live.img · packages-<profile>.lock
 # packages-<profile>.lock 另拷一份到 scripts/live/ —— 入库，两次构建之间 diff 它就知道变了什么。
@@ -21,7 +23,7 @@ REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 die() { echo "✗ $*" >&2; exit 1; }
 say() { echo; echo "══ $*"; }
 
-PROFILE=live; REL=; BOOTIMG=; PAYLOAD=; M0=; SSH_KEY=; WIFI=
+PROFILE=live; REL=; BOOTIMG=; PAYLOAD=; M0=; SSH_KEY=; WIFI=; WITH_RESCUE=
 while [ $# -gt 0 ]; do
     case "$1" in
         --profile)   PROFILE=$2; shift 2 ;;
@@ -29,6 +31,7 @@ while [ $# -gt 0 ]; do
         --boot-img)  BOOTIMG=$2; shift 2 ;;
         --payload)   PAYLOAD=1; shift ;;
         --m0)        M0=1; shift ;;
+        --with-rescue) WITH_RESCUE=1; shift ;;
         --ssh-key)   SSH_KEY=$2; shift 2 ;;
         --wifi-conf) WIFI=$2; shift 2 ;;
         *) die "不认识的参数：$1" ;;
@@ -74,7 +77,7 @@ ENTRIES_FILE=$REPO/out/live/.entries
 
 say "在容器里构建（${PROFILE}）"
 docker run --rm --privileged "${MOUNTS[@]}" \
-    -e PROFILE="$PROFILE" -e PAYLOAD="$PAYLOAD" -e HAVE_KEY="$SSH_KEY" -e HAVE_WIFI="$WIFI" \
+    -e PROFILE="$PROFILE" -e PAYLOAD="$PAYLOAD" -e HAVE_KEY="$SSH_KEY" -e HAVE_WIFI="$WIFI" -e WITH_RESCUE="$WITH_RESCUE" \
     "$TAG" bash -euo pipefail -c '
     O=/build/out; mkdir -p $O /build/boot
     # 仓库只读挂进来；构建脚本按自己所在目录找 overlay 与清单，所以拷一份可写的
@@ -82,15 +85,24 @@ docker run --rm --privileged "${MOUNTS[@]}" \
     mkdir -p /build/out-installer && [ "$PROFILE" = rescue ] || cp -a /repo/out/installer-flutter-linux-arm64/. /build/out-installer/
     bash /build/scripts/live/build-rootfs.sh --profile "$PROFILE" --out $O --installer /build/out-installer \
         ${HAVE_KEY:+--ssh-key /in/ssh.pub} ${HAVE_WIFI:+--wifi-conf /in/wpa.conf}
+    RSQ=
+    if [ -n "$WITH_RESCUE" ] && [ "$PROFILE" = live ]; then
+        GK3_WORK=/build/work-rescue bash /build/scripts/live/build-rootfs.sh --profile rescue --out /build/out-rescue \
+            ${HAVE_KEY:+--ssh-key /in/ssh.pub} ${HAVE_WIFI:+--wifi-conf /in/wpa.conf}
+        RSQ=/build/out-rescue/gaokun3-rescue.squashfs
+    fi
     bash /build/scripts/live/build-initramfs.sh --busybox $O/busybox.static --firmware $O/fw --out $O
     python3 /build/scripts/live/gk3-bootimg.py /in/boot.img /build/boot
     EA=(); while IFS= read -r e; do [ -n "$e" ] && EA+=(--entry "$e"); done < /outlive/.entries
     bash /build/scripts/live/build-usb.sh --squashfs $O/gaokun3-$PROFILE.squashfs --initramfs $O/initramfs.img \
         --kernel /build/boot/Image --dtb /build/boot/gaokun3.dtb --sdboot $O/systemd-bootaa64.efi \
-        --cmdline /build/boot/cmdline.txt ${PAYLOAD:+--payload /in/payload} ${EA[@]+"${EA[@]}"} --out $O/gaokun3-live.img
+        --cmdline /build/boot/cmdline.txt ${PAYLOAD:+--payload /in/payload} ${RSQ:+--rescue-squashfs $RSQ} \
+        ${EA[@]+"${EA[@]}"} --out $O/gaokun3-live.img
     cp $O/gaokun3-$PROFILE.squashfs $O/initramfs.img $O/gaokun3-live.img $O/packages-$PROFILE.lock /outlive/
+    [ -z "$RSQ" ] || cp "$RSQ" /build/out-rescue/packages-rescue.lock /outlive/
 '
 cp "$REPO/out/live/packages-$PROFILE.lock" "$REPO/scripts/live/packages-$PROFILE.lock"
+[ -z "$WITH_RESCUE" ] || cp "$REPO/out/live/packages-rescue.lock" "$REPO/scripts/live/packages-rescue.lock"
 say "产物（out/live/）"
 ls -lh "$REPO/out/live/"
 echo

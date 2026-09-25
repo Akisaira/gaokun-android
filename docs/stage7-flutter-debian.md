@@ -244,6 +244,7 @@ Flutter 空闲不出帧，60 秒 RSS 一动不动 —— **那条曲线什么也
 | initramfs（busybox + WCN6855 固件） | 4.0 MiB |
 | U 盘镜像（含 25% 余量，不含载荷） | **317 MiB** —— 预算 800，也低于 C 版当初的 ≤400 |
 | 大头 | `libllvm19` 120 MB（Mesa 的软件渲染）· `firmware-atheros` 97 MB（本机只用其中 WCN6855 的 12 MB）—— 要瘦身就从这两项下手 |
+| **rescue profile**（无图形） | 216 个包，squashfs **104 MiB**（计划估 150–250；1 GiB 的 `gk3rescue` 分区绰绰有余） |
 
 体检（不过不出镜像）沿用 Alpine 版的全部断言、换成 Debian 查法，另加：**安装器的每个动态库都能解析**
 （`ldd` 无 `not found`）、**主题按名字回退的 `WenQuanYi Micro Hei` 真的在**、freedreno 驱动在（`dri/msm_dri.so`
@@ -252,6 +253,14 @@ Flutter 空闲不出帧，60 秒 RSS 一动不动 —— **那条曲线什么也
 **开机冒烟**（`scripts/live/test-boot-container.sh`）：squashfs 解开当容器根，systemd 为 PID 1 跑 70 秒。
 验得了单元文件与服务（这台机器没有串口，这类错误在真机上就是黑屏），验不了内核与硬件。第一次跑出
 `nvmf-autoconnect.service` 失败（nvme-cli 带的 NVMe-oF 自动连接），已屏蔽；现在只剩预期内的 `gk3-wifi`（容器里没有 wlan0）。
+
+救援系统的两处补齐（M4.5 的前置）：
+* **公钥放介质上**：公开的 live 镜像不带任何人的公钥，于是从它装出来的救援系统本来【远程进不去】——而远程
+  接入正是救援系统存在的意义。沿用 WiFi 凭据的同一模式：sshd 同时认 `/media/gk3/gaokun3/authorized_keys`；
+  用户把公钥放到 U 盘的 `gaokun3/authorized_keys`，`gk3_apply` 装机时把它（或发布目录里的、或正在跑的系统自己的）
+  拷进救援分区。loop 端到端验过（56/56）。
+* **装进去的是 rescue profile，不是 live 本身**：`build-live.sh --with-rescue` 在 U 盘的 `gaokun3/install-rescue/`
+  另放一份 rescue 镜像，`gk3_apply` 优先用它；不带的话兜底是 live 镜像本身（带图形安装器、开机 tty1 就起它）。
 
 这一轮的坑：
 * Debian trixie 的 `/etc/default/locale` 是指向 `../locale.conf` 的**悬空符号链接**，`cp` 拒绝穿过它写 —— 改为直接提供 `/etc/locale.conf`。

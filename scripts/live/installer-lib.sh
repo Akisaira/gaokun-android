@@ -491,7 +491,11 @@ gk3_apply() {
 
     local r_squash="" r_initrd=""
     if [ "$rescue" = yes ]; then
-        r_squash=$(gk3__find_file rescue.squashfs "$rel" /media/gk3/gaokun3) \
+        # ★ 找救援镜像的顺序：发布目录 → U 盘上专门放的救援镜像（gaokun3/install-rescue/，
+        #   build-usb.sh --rescue-squashfs）→ 最后才是 U 盘上正在跑的这个。
+        #   ⚠️ 最后那个是 live 镜像本身（带图形安装器、开机 tty1 就起它、185 MiB），不是
+        #      rescue profile（104 MiB、只有 ssh 与工具）—— 只是"有总比没有好"的兜底。
+        r_squash=$(gk3__find_file rescue.squashfs "$rel" /media/gk3/gaokun3/install-rescue /media/gk3/gaokun3) \
             || { gk3_die "选了装救援系统，但发布目录和启动介质上都没有 rescue.squashfs"; return 1; }
         r_initrd=$(gk3__find_file initramfs.img "$rel" /media/gk3/gaokun3) \
             || { gk3_die "选了装救援系统，但发布目录和启动介质上都没有 initramfs.img"; return 1; }
@@ -801,6 +805,19 @@ RESC
                 echo "救援系统的 WiFi 配置取自 $wconf" >&2
             else
                 echo "警告：没有 WiFi 配置可带给救援系统 —— 它开机后连不上网，只能在机器旁操作" >&2
+            fi
+            # ★ ssh 公钥同理：公开的 live 镜像不带任何人的公钥，所以从它装出来的救援系统本来
+            #   【远程进不去】—— 而远程接入正是救援系统存在的意义。来源按优先级：发布目录里放的
+            #   → 安装 U 盘上用户放的 → 正在跑的这个系统自己的（私人构建的镜像带了 --ssh-key）。
+            #   救援系统的 sshd 认 /media/gk3/gaokun3/authorized_keys（overlay 里的 sshd_config）。
+            local akeys=""
+            akeys=$(gk3__find_file authorized_keys "$rel" /media/gk3/gaokun3) \
+                || { [ -s /root/.ssh/authorized_keys ] && akeys=/root/.ssh/authorized_keys; } || true
+            if [ -n "$akeys" ]; then
+                install -Dm600 "$akeys" "$rmnt/gaokun3/authorized_keys"
+                echo "救援系统的 ssh 公钥取自 ${akeys}（$(grep -c '^ssh-\|^ecdsa-' "$akeys") 把）" >&2
+            else
+                echo "警告：没有 ssh 公钥可带给救援系统 —— 只能在机器旁登录（放一份到 U 盘的 gaokun3/authorized_keys）" >&2
             fi
             sync
         fi
@@ -1307,7 +1324,7 @@ gk3_release_info() {
         sha=yes
         ver=$(awk '{sub(/^\*/, "", $2)} $2 ~ /\.zip$/ {sub(/\.zip$/, "", $2); print $2; exit}' "$d/install-artifacts.sha256")
     fi
-    gk3__find_file rescue.squashfs "$d" /media/gk3/gaokun3 >/dev/null \
+    gk3__find_file rescue.squashfs "$d" /media/gk3/gaokun3/install-rescue /media/gk3/gaokun3 >/dev/null \
         && gk3__find_file initramfs.img "$d" /media/gk3/gaokun3 >/dev/null && rescue=yes
     echo "RELEASE dir=$(gk3__enc "$d") boot=$boot super=$super sha256=$sha rescue=$rescue version=$(gk3__enc "${ver:-?}") super_mib=$smib"
 }

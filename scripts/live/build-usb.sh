@@ -16,6 +16,8 @@
 #              过滤规则与装机时的救援条目是【同一个函数】（installer-lib.sh 的 gk3__rescue_cmdline）。
 #              ⚠️ 不给就退回下面那份手抄的 —— 那正是 TODO B15 那一类漂移（它缺 himax disable_pressure）。
 #   --entry    多放几个启动项（M0 用：Skia / 浸泡测试…），在开机菜单里选
+#   --rescue-squashfs  装机时装进救援分区的镜像（rescue profile）→ U 盘的 gaokun3/install-rescue/。
+#              不给的话安装器只能把 live 镜像本身当救援系统装进去（见 installer-lib.sh 的 gk3_apply）
 #
 # ★ 用 mtools 往 FAT 里塞文件，【不需要 root】，也不需要 loop 设备。
 #   好处不只是省事：不用 root 就不会因为一次手滑把宿主机的分区写了。
@@ -23,7 +25,7 @@
 # 写盘： sudo dd if=gaokun3-live.img of=/dev/sdX bs=4M conv=fsync status=progress
 set -euo pipefail
 
-SQUASH=; INITRAMFS=; KERNEL=; DTB=; SDBOOT=; PAYLOAD=; OUT=; SIZE_MIB=; WIFI=; CMDLINE=
+SQUASH=; INITRAMFS=; KERNEL=; DTB=; SDBOOT=; PAYLOAD=; OUT=; SIZE_MIB=; WIFI=; CMDLINE=; RESCUE_SQ=
 ENTRIES=()
 die() { echo "!! $*" >&2; exit 1; }
 say() { echo; echo "══ $*"; }
@@ -40,6 +42,7 @@ while [ $# -gt 0 ]; do
         --wifi-conf) WIFI=$2; shift 2 ;;
         --cmdline)   CMDLINE=$2; shift 2 ;;
         --entry)     ENTRIES+=("$2"); shift 2 ;;
+        --rescue-squashfs) RESCUE_SQ=$2; shift 2 ;;
         --size)      SIZE_MIB=$2; shift 2 ;;
         --out)       OUT=$2; shift 2 ;;
         *) die "不认识的参数：$1" ;;
@@ -66,6 +69,7 @@ need=0
 for f in "$SQUASH" "$INITRAMFS" "$KERNEL" "$DTB" "$SDBOOT"; do
     need=$(( need + $(stat -c %s "$f") ))
 done
+[ -n "$RESCUE_SQ" ] && { [ -f "$RESCUE_SQ" ] || die "--rescue-squashfs 不在：$RESCUE_SQ"; need=$(( need + $(wc -c < "$RESCUE_SQ") )); }
 if [ -n "$PAYLOAD" ]; then
     [ -d "$PAYLOAD" ] || die "--payload 不是目录：$PAYLOAD"
     need=$(( need + $(du -sb "$PAYLOAD" | cut -f1) ))
@@ -100,6 +104,12 @@ M "$DTB"       ::/gaokun3/gaokun3.dtb
 M "$INITRAMFS" ::/gaokun3/initramfs.img
 M "$SQUASH"    ::/gaokun3/rescue.squashfs
 ok "引导链 + 内核 + initramfs + squashfs"
+
+if [ -n "$RESCUE_SQ" ]; then
+    mmd -i "$OUT@@$PART_OFF" ::/gaokun3/install-rescue
+    M "$RESCUE_SQ" ::/gaokun3/install-rescue/rescue.squashfs
+    ok "带上了给装机用的救援镜像（$(du -h "$RESCUE_SQ" | cut -f1)）"
+fi
 
 if [ -n "$PAYLOAD" ]; then
     mmd -i "$OUT@@$PART_OFF" ::/gaokun3/payload

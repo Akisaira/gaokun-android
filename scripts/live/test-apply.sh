@@ -99,6 +99,7 @@ open(os.path.join(exp, "super.raw"), "wb").write(raw)
 for n in ("rescue.squashfs", "initramfs.img", "fake-sdboot.efi", "recovery-ramdisk.img"):
     open(os.path.join(rel if n != "fake-sdboot.efi" else exp, n), "wb").write(b"MZ" + os.urandom(65536))
 open(os.path.join(rel, "wpa_supplicant.conf"), "w").write('network={\n\tssid="test"\n\tpsk="12345678"\n}\n')
+open(os.path.join(rel, "authorized_keys"), "w").write("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG0000000000000000000000000000000000000000000 test@gk3\n")
 PYEOF
 img2simg "$W/expect/super.raw" "$W/super.img" >/dev/null
 zstd -q -19 --long -f "$W/super.img" -o "$REL/super.img.zst"
@@ -173,6 +174,9 @@ verify_install() {
         [ "$(sha "$m/gaokun3/rescue.squashfs")" = "$(sha "$REL/rescue.squashfs")" ] \
           && [ "$(stat -c%a "$m/gaokun3/wpa_supplicant.conf")" = 600 ] \
             && ok "救援分区：squashfs 正确、WiFi 配置权限 600" || bad "救援分区内容不对"
+        # 公开的 live 镜像不带公钥 —— 救援系统要能远程进去，公钥得跟着装进来
+        [ "$(sha "$m/gaokun3/authorized_keys")" = "$(sha "$REL/authorized_keys")" ] && [ "$(stat -c%a "$m/gaokun3/authorized_keys")" = 600 ] \
+            && ok "救援分区：ssh 公钥带进来了（600）" || bad "救援分区里没有 ssh 公钥"
         umount "$m"
     fi
 }

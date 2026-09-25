@@ -28,6 +28,10 @@ bash scripts/live/build-live.sh --profile rescue --boot-img <boot.img> --ssh-key
 拆 boot.img（内核 / dtb / 内核参数）→ `build-usb.sh`。**内核直接用 Android 那一个**（见下）。
 装了哪些包的哪个版本写进 `packages-<profile>.lock`（入库；两次构建之间 diff 它）。
 
+`--with-rescue` 在 live U 盘上另带一份 rescue 镜像（约 104 MiB），装机时装进救援分区的是它。
+★ **凭据一律放介质上，不进镜像**：U 盘的 `gaokun3/wpa_supplicant.conf`（WiFi）与 `gaokun3/authorized_keys`
+（ssh 公钥）—— live 系统开机就用它们，装机时安装器把它们带进救援分区。
+
 `--m0` 在 U 盘上多放几个启动项，给真机 M0 在开机菜单里选：Skia（关 Impeller）、两种后端的
 浸泡测试（每 5 秒把 RSS 记到 U 盘的 `gaokun3/diag/soak-*.log`）、反方向旋转。
 启动证据一律写回 U 盘的 `gaokun3/diag/`（`gk3-diag`，开机 45 秒后）。

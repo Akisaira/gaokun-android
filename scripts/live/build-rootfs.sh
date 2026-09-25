@@ -133,7 +133,7 @@ if [ -n "$SSH_KEY" ]; then
     install -m600 "$SSH_KEY" "$ROOTFS/root/.ssh/authorized_keys"
     ok "已装入 ssh 公钥：$(cut -d' ' -f3 "$SSH_KEY" 2>/dev/null || echo '(无注释)')"
 else
-    [ "$PROFILE" = rescue ] && echo "   ⚠️ 没给 --ssh-key —— 这个救援镜像将【无法 ssh 登录】"
+    [ "$PROFILE" = rescue ] && echo "   ⓘ 没给 --ssh-key：镜像本身不带公钥。要远程登录，把公钥放到介质的 gaokun3/authorized_keys（装机时安装器会带进救援分区）"
 fi
 # ssh 主机密钥：rescue 是给一个人用的私有镜像，保留 postinst 生成的密钥 → 每次开机指纹不变。
 # ⚠️ live 是公开发布的：所有人共用一把私钥等于没有加密 → 删掉，开机现生成（ssh.service.d/gaokun3.conf）
