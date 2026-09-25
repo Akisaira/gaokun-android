@@ -20,6 +20,7 @@
 #               不带的话，装进去的"救援系统"是 live 镜像本身（带图形安装器）
 #
 # 产物 → out/live/：gaokun3-<profile>.squashfs · initramfs.img · gaokun3-live.img · packages-<profile>.lock
+#                  live 另有 gaokun3-windows/ 与 gaokun3-windows.zip（免 U 盘安装包，scripts/windows/build-bundle.sh）
 # packages-<profile>.lock 另拷一份到 scripts/live/ —— 入库，两次构建之间 diff 它就知道变了什么。
 #
 # ⚠️ --privileged：mmdebstrap 的 root 模式要在 chroot 里挂 proc/sys/dev。只动容器自己的文件系统。
@@ -110,6 +111,14 @@ docker run --rm --privileged "${MOUNTS[@]}" \
         --cmdline /build/boot/cmdline.txt ${PAYLOAD:+--payload /in/payload} ${RSQ:+--rescue-squashfs $RSQ} \
         ${EA[@]+"${EA[@]}"} --out $O/gaokun3-live.img
     cp $O/gaokun3-$PROFILE.squashfs $O/initramfs.img $O/gaokun3-live.img $O/packages-$PROFILE.lock /outlive/
+    # 免 U 盘安装（用户 2026-09-25）：给 Windows 用户的安装包 —— 同一套内核 / initramfs / squashfs
+    if [ "$PROFILE" = live ]; then
+        bash /build/scripts/windows/build-bundle.sh --squashfs $O/gaokun3-live.squashfs --initramfs $O/initramfs.img \
+            --kernel /build/boot/Image --dtb /build/boot/gaokun3.dtb --sdboot $O/systemd-bootaa64.efi \
+            --cmdline /build/boot/cmdline.txt ${RSQ:+--rescue-squashfs $RSQ} --out $O/gaokun3-windows
+        rm -rf /outlive/gaokun3-windows /outlive/gaokun3-windows.zip
+        cp -a $O/gaokun3-windows $O/gaokun3-windows.zip /outlive/
+    fi
     [ -z "$RSQ" ] || cp "$RSQ" /build/out-rescue/packages-rescue.lock /outlive/
 '
 cp "$REPO/out/live/packages-$PROFILE.lock" "$REPO/scripts/live/packages-$PROFILE.lock"
