@@ -28,6 +28,9 @@ M0=$REPO/out/m0
 ESPM=/mnt/gaokun3_m0_esp
 P3M=/mnt/gaokun3_m0_p3
 SQ_NAME=live.squashfs
+# 默认上机的是正式构建的那份；GK3_M0_SQUASHFS=out/live/gaokun3-live-patched.squashfs 用不联网换了安装器的那份
+# （scripts/live/patch-live-installer.sh）。设备上的文件名不变，启动项不用改
+LIVE_SQ=${GK3_M0_SQUASHFS:-$LIVE/gaokun3-live.squashfs}
 FW_MEDIA=/media/gk3/gaokun3/firmware        # live 里看到的路径；p3 上是 /gaokun3/firmware
 # GPU 要的三个（zap shader 的名字取自 dtb：/proc/device-tree/soc@0/gpu@3d00000/zap-shader/firmware-name）
 GPU_FW="qcom/a660_sqe.fw qcom/a660_gmu.bin qcom/sc8280xp/HUAWEI/gaokun3/qcdxkmsuc8280.mbn"
@@ -113,7 +116,7 @@ check|prepare)
 
     say "4. 本地产物"
     for f in gaokun3-live.squashfs initramfs.img; do [ -f "$LIVE/$f" ] || die "没有 $LIVE/${f}（先跑 scripts/live/build-live.sh）"; done
-    SQ_KB=$(( $(wc -c < "$LIVE/gaokun3-live.squashfs") / 1024 ))
+    SQ_KB=$(( $(wc -c < "$LIVE_SQ") / 1024 ))
     ok "squashfs $((SQ_KB / 1024)) MiB，initramfs ${INIT_KB} KiB"
     [ "${P3_FREE_KB:-0}" -gt $(( SQ_KB + 65536 )) ] && ok "p3 空闲 $((P3_FREE_KB / 1024)) MiB，够" || die "p3 空间不够放 squashfs"
 
@@ -151,9 +154,9 @@ check|prepare)
 
     say "6. 放文件（p3 读写挂载）"
     S "mkdir -p $P3M; mount -t ext4 $PART $P3M && mkdir -p $P3M/gaokun3" >/dev/null || die "p3 挂不成读写"
-    adb -s "$SER" push "$LIVE/gaokun3-live.squashfs" "$P3M/gaokun3/$SQ_NAME" >/dev/null || die "推 squashfs 失败"
+    adb -s "$SER" push "$LIVE_SQ" "$P3M/gaokun3/$SQ_NAME" >/dev/null || die "推 squashfs 失败"
     # ★ 判据看产物：字节数 + sha256（CLAUDE.md 运维坑 1 —— scp 曾经退出码 0 而文件只有 77%）
-    want=$(shasum -a 256 "$LIVE/gaokun3-live.squashfs" | cut -d' ' -f1)
+    want=$(shasum -a 256 "$LIVE_SQ" | cut -d' ' -f1)
     got=$(S "sha256sum $P3M/gaokun3/$SQ_NAME" | cut -d' ' -f1)
     [ "$want" = "$got" ] && ok "live.squashfs sha256 一致（${want:0:16}…）" || die "live.squashfs 的 sha256 不对：$got"
     # GPU 固件（只在 GK3_M0_WORKAROUNDS=1 时有用）：从本机 Android 的 /vendor/firmware 原样拷（Android 上 freedreno/turnip 跑的就是这三个），设备上逐个比 sha256
