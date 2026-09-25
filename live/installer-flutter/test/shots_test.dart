@@ -185,6 +185,17 @@ void main() {
     await shot(t, '15b-confirm-reinstall');
   }, skip: !haveFont);
 
+  testWidgets('04c 调整磁盘（选中 Data、调整大小）', (t) async {
+    await pumpApp(t, 'factory');
+    await toMode(t);
+    await tap(t, find.text(l.editEntryTitle));
+    await next(t);
+    await waitFor(t, find.text(l.editTitle));
+    await tap(t, find.textContaining('Data'));
+    await tap(t, find.text(l.editResize));
+    await shot(t, '04c-edit-resize');
+  }, skip: !haveFont);
+
   testWidgets('15 确认：双系统', (t) async {
     await pumpApp(t, 'windows-free');
     await toMode(t);

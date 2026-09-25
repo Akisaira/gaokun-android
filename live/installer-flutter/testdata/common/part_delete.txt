@@ -1,0 +1,7 @@
+E PROGRESS 10 备份分区表
+E 分区表备份：/media/gk3/gaokun3/gpt-before-delete-loop4-20260925-151404.bin（还原：sgdisk --load-backup=/media/gk3/gaokun3/gpt-before-delete-loop4-20260925-151404.bin /dev/nvme0n1）
+E PROGRESS 50 删除分区 /dev/nvme0n1p6
+D 1500
+E PROGRESS 100 完成
+O RESULT op=delete part=/dev/nvme0n1p6
+X 0

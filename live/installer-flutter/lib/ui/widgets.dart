@@ -242,10 +242,14 @@ class ChoiceCard extends StatelessWidget {
     this.selected = false,
     this.onTap,
     this.danger = false,
+    this.dense = false,
   });
 
   final String title;
   final String? body, warn, good;
+
+  /// 紧凑的一行（调整磁盘页的分区列表：一块盘的分区要一屏看完 —— 出厂布局 7 个分区加空闲区）
+  final bool dense;
 
   /// 不为空 ⇒ 禁用，并把原因写在卡片上
   final String? reason;
@@ -277,9 +281,9 @@ class ChoiceCard extends StatelessWidget {
       child: InkWell(
         onTap: enabled ? onTap : null,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 72),
+          constraints: BoxConstraints(minHeight: dense ? 56 : 72),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+            padding: dense ? const EdgeInsets.fromLTRB(16, 8, 16, 8) : const EdgeInsets.fromLTRB(20, 18, 20, 18),
             // 只有一行标题时垂直居中（WiFi 列表那种）；多行时顶端对齐
             child: Row(
               crossAxisAlignment: single ? CrossAxisAlignment.center : CrossAxisAlignment.start,
@@ -311,7 +315,7 @@ class ChoiceCard extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(title, style: tt.titleLarge!.copyWith(color: onBg)),
+                            Text(title, style: (dense ? tt.titleMedium : tt.titleLarge)!.copyWith(color: onBg)),
                             if (warn != null) ...[
                               const SizedBox(height: 4),
                               Text(warn!, style: tt.bodyLarge!.copyWith(color: selected && danger ? onBg : cs.error)),

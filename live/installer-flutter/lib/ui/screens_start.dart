@@ -5,6 +5,7 @@ import '../app.dart';
 import '../backend/protocol.dart';
 import '../model/model.dart';
 import '../session.dart';
+import 'screens_edit.dart';
 import 'screens_finish.dart';
 import 'screens_source.dart';
 import 'theme.dart';
@@ -224,7 +225,7 @@ class ModePage extends StatefulWidget {
   State<ModePage> createState() => _ModePageState();
 }
 
-enum _Pick { wipe, along, shrink, reinstall }
+enum _Pick { wipe, along, shrink, reinstall, edit }
 
 class _ModePageState extends State<ModePage> {
   _Pick? _pick;
@@ -256,6 +257,13 @@ class _ModePageState extends State<ModePage> {
       case _Pick.reinstall:
         s.setMode(Mode.reinstall);
         go(context, const SourcePage());
+      case _Pick.edit:
+        await go(context, const DiskEditPage());
+        // 改过的盘要重新评估：几种方式能不能走，都可能变了
+        if (mounted && s.disk != null) {
+          setState(() => _pick = null);
+          await s.assess(s.disk!);
+        }
       case _Pick.shrink:
         await go(context, const ShrinkPage());
         // 缩完回来：assess 已经重跑过，双系统多半可行了 —— 替用户选上
@@ -326,6 +334,16 @@ class _ModePageState extends State<ModePage> {
             onTap: () => setState(() => _pick = _Pick.shrink),
           ),
         ],
+        // ★ 最后一项：手动调整（Ubuntu 的"安装类型"也是把手动分区放在最后）。总是可选 ——
+        //   上面几项都走不通的时候，这是用户自己能做点什么的地方
+        const SizedBox(height: 14),
+        ChoiceCard(
+          icon: Icons.construction,
+          title: l.editEntryTitle,
+          body: l.editEntryBody,
+          selected: _pick == _Pick.edit,
+          onTap: () => setState(() => _pick = _Pick.edit),
+        ),
       ]),
     );
   }

@@ -1,0 +1,5 @@
+E PROGRESS 20 格式化 /dev/nvme0n1p6 为 vfat
+D 1500
+E PROGRESS 100 完成
+O RESULT op=format part=/dev/nvme0n1p6 fs=vfat
+X 0

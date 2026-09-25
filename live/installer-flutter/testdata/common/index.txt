@@ -9,3 +9,8 @@ gk3_release_info                                                               r
 #  release_info-none.txt：U 盘里没有镜像（界面测试用 overrides 选它）
 gk3_net_release *                                                              net_release.txt   # 录（本地服务器，内容是上面那份发布目录）
 gk3_net_manifest                                                               net_manifest.txt   # 手写（清单 URL 还不存在）
+gk3_part_delete *                                                              part_delete.txt   # 录（出厂布局的另一块盘上真做）
+gk3_part_resize *                                                              part_resize.txt   # 录（出厂布局的另一块盘上真做）
+gk3_part_create *                                                              part_create.txt   # 录（出厂布局的另一块盘上真做）
+gk3_part_format *                                                              part_format.txt   # 录（出厂布局的另一块盘上真做）
+gk3_part_delete-esp                                                            part_delete-esp.txt   # 录（出厂布局的另一块盘上真做）

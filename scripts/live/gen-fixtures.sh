@@ -328,5 +328,23 @@ X 0
 EOF
 printf '%-78s %s\n' "gk3_net_manifest" "net_manifest.txt   # 手写（清单 URL 还不存在）" >> "$C/index.txt"
 
+# 录：手动调整磁盘的四个操作（用户 2026-09-25）—— 在另一块出厂布局的盘上真做一遍。放 common/（任何场景都能用），
+# 界面按 '<函数> *' 取；做完之后界面会重新探测，拿到的仍是各场景自己那份 probe（测试只核对发出去的调用）
+DE=$(new_disk edit 488386M); make_factory "$DE"
+recc() {   # 和 rec 一样，但录进 common/；$1=文件名 $2=界面发出的调用（nvme0n1）$3=实际执行的命令
+    python3 scripts/live/record-fixture.py "$C/$1" --sub "${DE}p=/dev/nvme0n1p" --sub "$DE=/dev/nvme0n1" --sub "$W=/tmp" \
+        -- bash -c ". scripts/live/installer-lib.sh && $3"
+    printf '%-78s %s\n' "$2" "$1   # 录（出厂布局的另一块盘上真做）" >> "$C/index.txt"
+}
+recc part_delete.txt   "gk3_part_delete *"  "gk3_part_delete ${DE}p6"
+DMIB=$(( $(blockdev --getsize64 "${DE}p4") / 1048576 ))
+recc part_resize.txt   "gk3_part_resize *"  "gk3_part_resize ${DE}p4 $(( DMIB - 10240 ))"
+EF=$(gk3__probe_parts "$DE" "$(blockdev --getsz "$DE")" | grep '^FREE ' | sort -t= -k5 -n | tail -1)
+recc part_create.txt   "gk3_part_create *"  "gk3_part_create --disk $DE --start $(gk3__f "$EF" start) --size-mib 4096 --fs ext4"
+NEWP=$(sed -n 's/^O RESULT op=create part=\([^ ]*\).*/\1/p' "$C/part_create.txt" | sed "s#/dev/nvme0n1p#${DE}p#")
+recc part_format.txt   "gk3_part_format *"  "gk3_part_format $NEWP vfat"
+# 反例：删 ESP（界面不给按钮，但后端要拒绝 —— 测试用 overrides 换进来）
+recc part_delete-esp.txt "gk3_part_delete-esp" "gk3_part_delete ${DE}p1"
+
 echo; echo "fixture 写到 $OUT/："
 find "$OUT" -name '*.txt' | sort | sed 's/^/  /'

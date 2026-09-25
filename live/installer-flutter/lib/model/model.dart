@@ -19,9 +19,13 @@ class Part {
         name = r['name'],
         fs = r['fs'],
         fslabel = r['fslabel'],
-        os = r['os'];
+        os = r['os'],
+        medium = r.yes('medium');
   final String path, type, name, fs, fslabel, os;
   final int num, start, end, sizeMib, sizeKib;
+
+  /// 安装器就是从这个分区跑起来的（gk3_probe 的 PART medium=yes）—— 调整磁盘页不让动它
+  final bool medium;
 
   bool get isEsp => type == espTypeGuid || name == 'esp';
 

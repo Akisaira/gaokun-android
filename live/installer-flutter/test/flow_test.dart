@@ -163,6 +163,71 @@ void main() {
     expect(rec.last('gk3_apply')!.join(' '), contains('--keep-data yes'));
   });
 
+  Future<Rec> openEdit(WidgetTester t, String scenario, {Map<String, String> overrides = const {}}) async {
+    final rec = await pumpApp(t, scenario, overrides: overrides);
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await tap(t, find.text(l.editEntryTitle));
+    await next(t);
+    await see(t, find.text(l.editTitle));
+    return rec;
+  }
+
+  testWidgets('调整磁盘：删除一个分区 —— 按住确认，调用对，完成后回到安装方式页重新评估', (t) async {
+    final rec = await openEdit(t, 'factory');
+    await tap(t, find.textContaining('Onekey'));
+    await tap(t, find.text(l.editDelete));
+    await see(t, find.text(l.editDeleteWarn));
+    await hold(t, '${l.editDelete} · ${l.holdIdle}');
+    expect(rec.last('gk3_part_delete'), ['gk3_part_delete', '/dev/nvme0n1p6']);
+    await see(t, find.textContaining('已完成'));
+    final probes = rec.calls.where((c) => c.first == 'gk3_probe').length;
+    await tap(t, find.text(l.editDone)); // 右下角"完成" → 回到方式页
+    await see(t, find.text(l.modeTitle));
+    expect(rec.calls.where((c) => c.first == 'gk3_plan').isNotEmpty, isTrue);
+    expect(rec.calls.where((c) => c.first == 'gk3_probe').length, greaterThanOrEqualTo(probes));
+  });
+
+  testWidgets('调整磁盘：ESP 只说原因、不给操作', (t) async {
+    await openEdit(t, 'factory');
+    await tap(t, find.textContaining('SYSTEM'));
+    await see(t, find.text(l.editWhyEsp));
+    expect(find.text(l.editDelete), findsNothing);
+    expect(find.text(l.editFormat), findsNothing);
+  });
+
+  testWidgets('调整磁盘：在空闲空间新建 —— 默认占满整段、ext4', (t) async {
+    final rec = await openEdit(t, 'windows-free');
+    await tap(t, find.text(l.editFree));
+    await tap(t, find.text(l.editCreate));
+    await hold(t, '${l.editCreate} · ${l.holdIdle}');
+    final a = rec.last('gk3_part_create')!;
+    expect(a.join(' '), contains('--disk /dev/nvme0n1 --start 790497280'));
+    expect(a.join(' '), contains('--size-mib 81920'));   // 空闲区 [790497280, 958269439] 起点本来就对齐 1 MiB：整段正好 81920 MiB
+    expect(a.join(' '), contains('--fs ext4'));
+  });
+
+  testWidgets('调整磁盘：拖滑块缩小 Data，发出去的目标比现在小', (t) async {
+    final rec = await openEdit(t, 'factory');
+    await tap(t, find.textContaining('Data'));
+    await tap(t, find.text(l.editResize));
+    await t.drag(find.byType(Slider), const Offset(-120, 0));
+    await settle(t);
+    await hold(t, '${l.editResize} · ${l.holdIdle}');
+    final a = rec.last('gk3_part_resize')!;
+    expect(a[1], '/dev/nvme0n1p4');
+    expect(int.parse(a[2]), lessThan(262788 + 1));   // Data 在 factory 里是 262788 MiB
+  });
+
+  testWidgets('调整磁盘：后端拒绝时把原因显示出来', (t) async {
+    await openEdit(t, 'factory', overrides: {'gk3_part_delete': 'part_delete-esp.txt'});
+    await tap(t, find.textContaining('Onekey'));
+    await tap(t, find.text(l.editDelete));
+    await hold(t, '${l.editDelete} · ${l.holdIdle}');
+    await see(t, find.textContaining('EFI 系统分区'));
+  });
+
   testWidgets('预检：BIOS 2.17 不再拦（2026-09-25）；安全启动开着 → 拦住', (t) async {
     await pumpApp(t, 'blank', overrides: {'gk3_preflight': 'preflight-secureboot.txt'});
     await see(t, find.text(l.checkBlocked));

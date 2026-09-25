@@ -164,6 +164,26 @@ class Session extends ChangeNotifier {
 
   bool get canShrink => shrinkables?.any((s) => s.can) ?? false;
 
+  // ── 手动调整磁盘 ────────────────────────────────────────────────────────
+  /// 调整大小要知道每个分区最小能缩到多少：问 gk3_shrink_scan（文件系统自己报，不猜）
+  Future<void> scanShrink() async {
+    final d = disk;
+    if (d == null) return;
+    shrinkables = (await backend.run('gk3_shrink_scan', [d.path])).ofType('SHRINK').map(Shrinkable.new).toList();
+    _changed();
+  }
+
+  /// 执行一个调整操作（gk3_part_delete / format / create / resize）。成功与否都重新探测这块盘 ——
+  /// 分区号、空闲区都可能变了，界面上显示的必须是盘上【现在】的样子
+  Future<CallResult> editDisk(String fn, List<String> args, void Function(Gk3Event) onEvent) async {
+    final r = await backend.run(fn, args, onEvent);
+    await probe();
+    final again = disks?.where((x) => x.path == disk?.path).firstOrNull;
+    if (again != null) disk = again;
+    await scanShrink();
+    return r;
+  }
+
   // ── 缩分区 ──────────────────────────────────────────────────────────────
   Future<CallResult> shrink(Shrinkable s, int targetMib, void Function(Gk3Event) onEvent) async {
     final r = await backend.run('gk3_shrink', [s.part, '$targetMib'], onEvent);
