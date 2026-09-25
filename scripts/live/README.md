@@ -5,30 +5,32 @@
 
 ## 一句话
 
-**救援系统和 LiveCD 是同一套镜像的两个 profile。** 底座 Alpine aarch64，
-整个系统跑在内存里（只读 squashfs + tmpfs overlay），
-所以救援系统**不再需要一个 24.6 GiB 的分区**。
+**救援系统和 LiveCD 是同一套镜像的两个 profile。** 底座 **Debian 13 trixie arm64**
+（2026-09-25 从 Alpine 换过来：图形安装器改用 Flutter，而 Flutter 引擎只有 glibc 版），
+整个系统跑在内存里（只读 squashfs + tmpfs overlay），所以救援系统**不再需要一个 24.6 GiB 的分区**。
 
 | profile | 内容 | 落在哪 |
 |---|---|---|
-| `rescue` | 无图形：ssh + 分区/文件系统工具 | 内置盘的一个小分区 |
-| `live`   | `rescue` + 图形安装器 | U 盘 |
+| `rescue` | 无图形：ssh + 分区/文件系统工具 | 内置盘的一个小分区（`gk3rescue`，1 GiB） |
+| `live`   | `rescue` + 图形安装器（Flutter + cage） | U 盘 |
 
-## 用法
+## 用法（在 Mac 上，全部在 arm64 容器里原生跑，不需要构建机）
 
 ```sh
-# 1. 根文件系统 → squashfs（要 root；x86 上还要 qemu-user-static + binfmt）
-sudo bash scripts/live/build-rootfs.sh \
-     --profile rescue --out /tmp/gk3 \
-     --ssh-key ~/.ssh/ed25519.pub \
-     --sdboot /path/to/systemd-bootaa64.efi
-
-# 2. initramfs（不要 root）
-bash scripts/live/build-initramfs.sh --busybox /tmp/gk3/busybox.static --out /tmp/gk3
+colima start                                              # 第一次
+bash scripts/live/build-flutter.sh                        # 图形安装器 → out/installer-flutter-linux-arm64/
+bash scripts/live/build-live.sh --boot-img <boot.img> [--m0]          # → out/live/gaokun3-live.img
+bash scripts/live/build-live.sh --release <发布目录> --payload        # 带上安装载荷，装机不用联网
+bash scripts/live/build-live.sh --profile rescue --boot-img <boot.img> --ssh-key ~/.ssh/id_ed25519.pub
 ```
 
-产物：`gaokun3-rescue.squashfs` + `initramfs.img`。
-**内核直接用 Android 那一个**，不单独编（见下）。
+`build-live.sh` 在一个特权容器里依次跑 `build-rootfs.sh`（mmdebstrap）→ `build-initramfs.sh` →
+拆 boot.img（内核 / dtb / 内核参数）→ `build-usb.sh`。**内核直接用 Android 那一个**（见下）。
+装了哪些包的哪个版本写进 `packages-<profile>.lock`（入库；两次构建之间 diff 它）。
+
+`--m0` 在 U 盘上多放几个启动项，给真机 M0 在开机菜单里选：Skia（关 Impeller）、两种后端的
+浸泡测试（每 5 秒把 RSS 记到 U 盘的 `gaokun3/diag/soak-*.log`）、反方向旋转。
+启动证据一律写回 U 盘的 `gaokun3/diag/`（`gk3-diag`，开机 45 秒后）。
 
 ## 几条不显然的设计
 
@@ -78,7 +80,13 @@ ath11k 固件 / OpenRC 的 runlevel 链接）。
 理由是本仓反复吃过的亏：**包名写错时 `apk add` 的失败很容易被吞掉**，
 而错误要等到镜像装到机器上、开机连不上网才暴露。
 
-## 现状（2026-08-23）
+## 现状（2026-09-25，Debian）
+
+`build-live.sh` 端到端跑通，体检全过：squashfs **185 MiB**、initramfs 4.0 MiB、U 盘镜像 **317 MiB**。
+开机冒烟（`test-boot-container.sh`）只有预期内的 `gk3-wifi` 失败。⬜ 还没在真机上启动过（M0）。
+详细数字与坑见 `docs/stage7-flutter-debian.md` §5.5。下面"现状（2026-08-23）"是 Alpine 版的历史。
+
+## 现状（2026-08-23，Alpine —— 历史）
 
 三步链路在构建机上**端到端跑通**：
 

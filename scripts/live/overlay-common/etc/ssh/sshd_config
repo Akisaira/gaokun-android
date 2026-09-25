@@ -1,5 +1,5 @@
 # gaokun3 救援/LiveCD 的 sshd。整份覆盖，不做增量 —— 救援系统的登录方式
-# 必须是确定的，不能取决于上游默认值哪天变了。
+# 必须是确定的，不能取决于上游默认值哪天变了（所以也不 Include sshd_config.d）。
 Port 22
 PermitRootLogin prohibit-password
 PubkeyAuthentication yes
@@ -7,7 +7,8 @@ PubkeyAuthentication yes
 #    开了等于把机器挂在网上。
 PasswordAuthentication no
 PermitEmptyPasswords no
-ChallengeResponseAuthentication no
+KbdInteractiveAuthentication no
 UsePAM no
 PrintMotd yes
-Subsystem sftp /usr/lib/ssh/sftp-server
+# Debian 的路径（Alpine 是 /usr/lib/ssh/sftp-server）
+Subsystem sftp /usr/lib/openssh/sftp-server

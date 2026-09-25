@@ -15,7 +15,10 @@
 > ▶ M3 进行中。✅ **Linux arm64 构建成立**（Mac 上 arm64 容器原生构建，产物 22 MiB）；✅ **真程序在
 > headless cage 里跑起来**：无标题栏全屏、`wlr-randr` 设 2560×1600 缩放 2 生效、Impeller / Skia 都能出帧
 > （软件渲染下 61 fps、1 分钟 RSS 无单调增长）。抓到：**中文全是方块**（Flutter 不按字符回退系统字体，§5.1）。
-> ⬜ 剩 Debian 根文件系统（mmdebstrap）与会话服务。
+> ✅ **Debian live 镜像造出来了**（2026-09-25）：mmdebstrap 355 个包，squashfs **185 MiB**、U 盘镜像
+> **317 MiB**（含 25% 余量；预算 800），构建前的体检全过；开机冒烟（squashfs 当容器根、systemd 为 PID 1）
+> 只有预期内的 `gk3-wifi` 失败，ssh 开机现生成主机密钥并在听。U 盘上带 M0 的 4 个变体启动项。
+> ⬜ **M0 要回家、要你同意用 U 盘重启**：`out/live/gaokun3-live.img`，dd 到 U 盘即可。
 >
 > 前情：[`stage7-live-installer.md`](stage7-live-installer.md)（C + cairo 直画 DRM 的
 > 设计与 M0）、[`stage7-installer-roadmap.md`](stage7-installer-roadmap.md)（用户 9 条需求
@@ -65,7 +68,7 @@ scripts/live/installer-lib.sh    唯一的分区 / 写盘实现
 | M0.5 | 内核能不能跑 systemd | 离线 | ✅ **能**（2026-09-25，§5.3）—— 不挡 M0；`AUTOFS_FS=y` 下次编内核时顺带 |
 | **M1** | **后端统一与补齐** | Mac + 容器 | **✅ 2026-09-24** |
 | **M2** | **Flutter 骨架 + fixture 后端 + 出图** | Mac | **✅ 2026-09-25** |
-| M3 | Debian 构建链（mmdebstrap）+ 接真后端 | Mac 上的 arm64 容器 | ▶ Flutter 构建与 headless 渲染 ✅；根文件系统 ⬜ |
+| **M3** | **Debian 构建链（mmdebstrap）+ 接真后端** | Mac 上的 arm64 容器 | **✅ 2026-09-25**（§5.5）—— 真后端的写盘路径由 M4a 在真机上验 |
 | M4a | 装到**外接 USB 盘**并从它启动进 Android | 真机，零风险 | ⬜ |
 | M4b | 内置盘 | 真机，⚠️ **现在没有回落槽**（`_a` 不可启动，#122 §1） | ⬜ 需用户单独点头 |
 | M4.5 | 救援系统迁移（先并列、验过、再删 p3） | 真机 | ⬜ |
@@ -228,6 +231,55 @@ Flutter 空闲不出帧，60 秒 RSS 一动不动 —— **那条曲线什么也
 * 默认**禁止切换 VT**，`-s` 才允许 —— 不加它命令行逃生口必然失效。
 * 没有旋转参数（计划里写的 `-r` 不存在）；但支持输出管理协议，`wlr-randr --custom-mode/--scale` 实测生效，
   旋转走 `--transform`（真机上验）。
+
+### 5.5 Debian 根文件系统与 U 盘镜像
+
+`bash scripts/live/build-live.sh --boot-img <boot.img> [--m0]`：arm64 特权容器里 mmdebstrap（Debian 13 trixie，
+`main,non-free-firmware`，不装推荐包，手册/文档/翻译不进镜像）→ initramfs → 拆 boot.img → U 盘镜像。
+
+| | 大小 |
+|---|---|
+| 根文件系统（展开） | 661 MB，355 个包（`scripts/live/packages-live.lock`，入库；两次构建 diff 它） |
+| squashfs（zstd 19） | **185 MiB** |
+| initramfs（busybox + WCN6855 固件） | 4.0 MiB |
+| U 盘镜像（含 25% 余量，不含载荷） | **317 MiB** —— 预算 800，也低于 C 版当初的 ≤400 |
+| 大头 | `libllvm19` 120 MB（Mesa 的软件渲染）· `firmware-atheros` 97 MB（本机只用其中 WCN6855 的 12 MB）—— 要瘦身就从这两项下手 |
+
+体检（不过不出镜像）沿用 Alpine 版的全部断言、换成 Debian 查法，另加：**安装器的每个动态库都能解析**
+（`ldd` 无 `not found`）、**主题按名字回退的 `WenQuanYi Micro Hei` 真的在**、freedreno 驱动在（`dri/msm_dri.so`
+→ `libgallium` 里编进了 freedreno）、会话服务是 enabled 的（Alpine 版第一次停在 login 提示符）。
+
+**开机冒烟**（`scripts/live/test-boot-container.sh`）：squashfs 解开当容器根，systemd 为 PID 1 跑 70 秒。
+验得了单元文件与服务（这台机器没有串口，这类错误在真机上就是黑屏），验不了内核与硬件。第一次跑出
+`nvmf-autoconnect.service` 失败（nvme-cli 带的 NVMe-oF 自动连接），已屏蔽；现在只剩预期内的 `gk3-wifi`（容器里没有 wlan0）。
+
+这一轮的坑：
+* Debian trixie 的 `/etc/default/locale` 是指向 `../locale.conf` 的**悬空符号链接**，`cp` 拒绝穿过它写 —— 改为直接提供 `/etc/locale.conf`。
+* M0 启动项的标题用 `printf %q` + `eval` 传进容器，Mac 的 bash 3.2 与容器的 bash 5 转义 UTF-8 不一致 ⇒ 乱码。改为逐行写文件。
+* ⚠️ **开机菜单的标题改成了 ASCII**：菜单由 UEFI 固件用它自己的字体画，一般不含中文 —— 原先的中文标题
+  （包括 Alpine 版的"救援系统（Alpine，全内存）"）**从没在本机菜单上看过**。没有证据时取稳妥的一侧；M0 顺便看一眼。
+* U 盘启动项的内核参数原先是手抄的（B15 那一类漂移，缺 `disable_pressure`），改为从 boot.img 的 `cmdline.txt`
+  派生，与装机时的救援条目用同一个函数 `gk3__rescue_cmdline`。
+
+### 5.6 M0 在真机上要做的事（U 盘就绪，要你同意重启）
+
+```sh
+bash scripts/live/build-live.sh --boot-img out/test-bootimg/boot.img --m0   # 已构建：out/live/gaokun3-live.img
+sudo dd if=out/live/gaokun3-live.img of=/dev/rdiskN bs=4m && sync            # ⚠️ 先 diskutil list 确认 N 是 U 盘
+```
+
+插 U 盘，用以前从 U 盘启动 Ubuntu 采集硬件信息时的同一种方法从 U 盘启动（固件的启动选择；⚠️ 具体按键案卷里没记，`hw-inventory.md:4` 只写了"从 U 盘启动"）→ U 盘上的 systemd-boot 菜单（10 秒）：
+
+| 启动项 | 看什么 |
+|---|---|
+| `gaokun3 installer / rescue`（默认） | 出不出画面、**方向对不对**、中文正不正常、触摸点到的是不是手指下面那个按钮、键盘能不能打字、"退出到终端"能不能切到 tty2 |
+| `M0: Skia (Impeller off)` | 同上，比较两种后端（#192915：Impeller 在弱 GPU 上闪烁） |
+| `M0: soak test, Impeller` / `…Skia` | 放着 **至少 10 分钟**：U 盘上 `gaokun3/diag/soak-*.log` 每 5 秒一行 RSS 与帧率（#192603：逐帧泄漏） |
+| `M0: rotate the other way (transform 90)` | 如果默认那个方向是反的，这个应该是对的 |
+
+**不碰内置盘**：安装器会列出磁盘，但 M0 里不要点到"开始安装"。每次启动 45 秒后 `gk3-diag` 把状态、
+dmesg（含 msm/adreno 的行）、失败的单元、还有**一张屏幕截图**写到 U 盘的 `gaokun3/diag/`。
+U 盘拔下来插回 Mac 就能读。⚠️ 槽 `_a` 现在不可启动（#122 §1），U 盘起不来时拔掉即回到 `_b`。
 
 ## 6. 风险（按"会不会让方案作废"排序）
 

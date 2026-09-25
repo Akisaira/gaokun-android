@@ -8,7 +8,14 @@
 #        --dtb     /path/to/gaokun3.dtb \
 #        --sdboot  /path/to/systemd-bootaa64.efi \
 #        [--payload /path/to/release-dir] \
+#        [--cmdline /path/to/cmdline.txt] \
+#        [--entry "标题|附加的内核参数"]…  \
 #        --out /tmp/gk3/gaokun3-live.img
+#
+#   --cmdline  启动项的内核参数从 boot.img 的 cmdline.txt 派生（gk3-bootimg.py 拆出来的那份），
+#              过滤规则与装机时的救援条目是【同一个函数】（installer-lib.sh 的 gk3__rescue_cmdline）。
+#              ⚠️ 不给就退回下面那份手抄的 —— 那正是 TODO B15 那一类漂移（它缺 himax disable_pressure）。
+#   --entry    多放几个启动项（M0 用：Skia / 浸泡测试…），在开机菜单里选
 #
 # ★ 用 mtools 往 FAT 里塞文件，【不需要 root】，也不需要 loop 设备。
 #   好处不只是省事：不用 root 就不会因为一次手滑把宿主机的分区写了。
@@ -16,7 +23,8 @@
 # 写盘： sudo dd if=gaokun3-live.img of=/dev/sdX bs=4M conv=fsync status=progress
 set -euo pipefail
 
-SQUASH=; INITRAMFS=; KERNEL=; DTB=; SDBOOT=; PAYLOAD=; OUT=; SIZE_MIB=; WIFI=
+SQUASH=; INITRAMFS=; KERNEL=; DTB=; SDBOOT=; PAYLOAD=; OUT=; SIZE_MIB=; WIFI=; CMDLINE=
+ENTRIES=()
 die() { echo "!! $*" >&2; exit 1; }
 say() { echo; echo "══ $*"; }
 ok()  { echo "   ✓ $*"; }
@@ -30,6 +38,8 @@ while [ $# -gt 0 ]; do
         --sdboot)    SDBOOT=$2; shift 2 ;;
         --payload)   PAYLOAD=$2; shift 2 ;;
         --wifi-conf) WIFI=$2; shift 2 ;;
+        --cmdline)   CMDLINE=$2; shift 2 ;;
+        --entry)     ENTRIES+=("$2"); shift 2 ;;
         --size)      SIZE_MIB=$2; shift 2 ;;
         --out)       OUT=$2; shift 2 ;;
         *) die "不认识的参数：$1" ;;
@@ -110,27 +120,49 @@ if [ -n "$WIFI" ]; then
     ok "带上了 WiFi 配置（$(grep -c 'network=' "$WIFI") 个网络）"
 fi
 
+if [ -n "$CMDLINE" ]; then
+    [ -f "$CMDLINE" ] || die "--cmdline 指的文件不在：$CMDLINE"
+    # shellcheck source=installer-lib.sh
+    . "$(dirname "${BASH_SOURCE[0]}")/installer-lib.sh"
+    OPTS=$(gk3__rescue_cmdline "$(tr -d '\r\n' < "$CMDLINE")")
+    ok "内核参数从 $(basename "$CMDLINE") 派生"
+else
+    OPTS="console=tty0 clk_ignore_unused pd_ignore_unused arm64.nopauth iommu.passthrough=0 iommu.strict=0 efi=noruntime fbcon=rotate:1 usbhid.quirks=0x12d1:0x10b8:0x20000000 loglevel=4 gk3.squash=/gaokun3/rescue.squashfs"
+    echo "   ⚠️ 没给 --cmdline：用脚本里手抄的内核参数（会漂，TODO B15）"
+fi
+
 TMP=$(mktemp)
-cat > "$TMP" <<'EOF'
-# ⚠️ 不设 default：U 盘只有一个条目，systemd-boot 会直接进。
-#    也【不要】设 timeout 0 —— 万一起不来，用户连菜单都进不去。
-timeout 5
-console-mode keep
-editor no
-EOF
+{
+    # ⚠️ 【不要】设 timeout 0 —— 万一起不来，用户连菜单都进不去。
+    #    只有一个条目时不设 default，systemd-boot 会直接进；有变体条目时默认进主条目、多给几秒去选。
+    if [ ${#ENTRIES[@]} -gt 0 ]; then echo "timeout 10"; echo "default gaokun3-live.conf"; else echo "timeout 5"; fi
+    echo "console-mode keep"
+    echo "editor no"
+} > "$TMP"
 M "$TMP" ::/loader/loader.conf
 
-cat > "$TMP" <<'EOF'
-title      gaokun3 安装器 / 救援系统
+entry() {   # $1=文件名 $2=标题 $3=sort-key $4=附加参数
+    cat > "$TMP" <<EOF
+title      $2
 version    live
+sort-key   $3
 linux      /gaokun3/Image
 devicetree /gaokun3/gaokun3.dtb
 initrd     /gaokun3/initramfs.img
-options    console=tty0 clk_ignore_unused pd_ignore_unused arm64.nopauth iommu.passthrough=0 iommu.strict=0 efi=noruntime fbcon=rotate:1 usbhid.quirks=0x12d1:0x10b8:0x20000000 loglevel=4 gk3.squash=/gaokun3/rescue.squashfs
+options    $OPTS${4:+ $4}
 EOF
-M "$TMP" ::/loader/entries/gaokun3-live.conf
+    M "$TMP" "::/loader/entries/$1"
+}
+# ⚠️ 标题用 ASCII：开机菜单是 UEFI 固件用它自己的字体画的，一般不含中文 —— 中文标题在菜单上
+#    多半是方块（没有在本机实测过，所以取稳妥的一侧）。中文只留在图形界面里，那边字体是我们带的。
+entry gaokun3-live.conf "gaokun3 installer / rescue" live0 ""
+i=1
+for e in ${ENTRIES[@]+"${ENTRIES[@]}"}; do
+    entry "gaokun3-live-$i.conf" "${e%%|*}" "live$i" "${e#*|}"
+    i=$((i + 1))
+done
 rm -f "$TMP"
-ok "启动项"
+ok "启动项 $i 个"
 
 say "体检"
 LIST=$(mdir -i "$OUT@@$PART_OFF" -b ::/gaokun3 ::/EFI/BOOT ::/loader/entries 2>/dev/null)

@@ -1,4 +1,0 @@
-auto lo
-iface lo inet loopback
-# wlan0 由 /etc/init.d/gk3-wifi 管 —— 这台机器【只有 WiFi】，
-# 没有网口（USB-C 扩展坞还卡在 UCSI 缺陷上，见 TODO A6）。

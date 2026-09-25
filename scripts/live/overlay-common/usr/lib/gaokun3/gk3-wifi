@@ -1,0 +1,65 @@
+#!/bin/sh
+# gaokun3 只有 WiFi，所以"上网"这件事必须开机自己完成，否则救援系统就是一台连不上的机器。
+# 由 gk3-wifi.service 调用（Debian / systemd；Alpine 版是 /etc/init.d/gk3-wifi，逻辑相同）。
+#
+# 凭据来源，按优先级：
+#   1. /media/gk3/gaokun3/wpa_supplicant.conf   ← 启动介质上（推荐）
+#   2. /etc/wpa_supplicant/wpa_supplicant.conf  ← 构建时注入（build-rootfs.sh --wifi-conf）
+#
+# ★ 优先用介质上那份，是为了让【镜像本身不含任何凭据】：公开发布的 LiveCD 不能带
+#   别人家的 WiFi 密码，而救援镜像也不该把密码焊死在只读的 squashfs 里。
+#
+# ★ 控制接口统一放在 /run/wpa_supplicant：安装器的 WiFi 页（installer-lib.sh 的
+#   gk3_wifi_up）就连这里。用户放在介质上的配置未必写了 ctrl_interface —— 那样的话
+#   安装器以为没有 wpa_supplicant 在跑，会再起一个去抢同一块网卡。所以这里先合成
+#   一份：统一的控制接口 + 用户配置里除 ctrl_interface 以外的全部内容。
+IFACE=wlan0
+MEDIA_CONF=/media/gk3/gaokun3/wpa_supplicant.conf
+IMAGE_CONF=/etc/wpa_supplicant/wpa_supplicant.conf
+RUN_CONF=/run/gaokun3/wpa_supplicant.conf
+CTRL=/run/wpa_supplicant
+
+ip link set lo up 2>/dev/null
+
+# ★ 兜底：ath11k 若因为任何原因 probe 失败，【重新绑定一次】—— 此刻 squashfs 已挂好，
+#   /lib/firmware 里的固件一定拿得到。重绑之后 wlan0 出现 ⇒ 确实是"probe 时固件不可达"。
+#   （内建 ath11k 在 initramfs 阶段 t≈1.19s 就 probe，所以固件也打进了 initramfs，
+#    见 docs/stage7-live-installer.md 的 M0 一节。这里是第二道保险。）
+if [ ! -e "/sys/class/net/$IFACE" ]; then
+    echo "没有 $IFACE —— 试着重新绑定 ath11k_pci"
+    DRV=/sys/bus/pci/drivers/ath11k_pci
+    if [ -d "$DRV" ]; then
+        for dev in /sys/bus/pci/devices/*; do
+            [ "$(cat "$dev/vendor" 2>/dev/null)" = "0x17cb" ] || continue
+            echo "$(basename "$dev")" > "$DRV/unbind" 2>/dev/null
+            echo "$(basename "$dev")" > "$DRV/bind" 2>/dev/null
+            echo "  重绑 $(basename "$dev")"
+        done
+        i=0; while [ ! -e "/sys/class/net/$IFACE" ] && [ $i -lt 15 ]; do sleep 1; i=$((i+1)); done
+    else
+        echo "  连 $DRV 都没有 —— 驱动没编进内核？"
+    fi
+fi
+if [ ! -e "/sys/class/net/$IFACE" ]; then
+    echo "还是没有 ${IFACE}。看 /media/gk3/gaokun3/diag/ 里 gk3-diag 写的日志"
+    exit 1
+fi
+
+CONF=
+[ -f "$MEDIA_CONF" ] && CONF=$MEDIA_CONF
+[ -z "$CONF" ] && [ -f "$IMAGE_CONF" ] && CONF=$IMAGE_CONF
+mkdir -p /run/gaokun3
+{ echo "ctrl_interface=$CTRL"; echo "update_config=0"
+  [ -n "$CONF" ] && grep -v -E '^[[:space:]]*(ctrl_interface|update_config)[[:space:]]*=' "$CONF"; } > "$RUN_CONF"
+chmod 600 "$RUN_CONF"
+if [ -z "$CONF" ]; then
+    # 没有凭据也照样起 wpa_supplicant（只带控制接口）：安装器的 WiFi 页要用它扫描、连网
+    echo "找不到 wpa_supplicant.conf —— 只起控制接口，等人在安装器里连（或放一份到 $MEDIA_CONF 再重启）"
+else
+    echo "启动 WiFi（配置来自 ${CONF}）"
+fi
+ip link set "$IFACE" up
+wpa_supplicant -B -i "$IFACE" -c "$RUN_CONF" -P /run/wpa_supplicant.pid || exit 1
+# dhcpcd 自己会等载波，不用我们轮询
+dhcpcd -b "$IFACE"
+exit 0

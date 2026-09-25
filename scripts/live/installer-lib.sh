@@ -762,10 +762,12 @@ LOADER
         if [ "$rescue" = yes ]; then
             mkdir -p "$mnt/$mid/rescue"
             cp "$r_initrd" "$mnt/$mid/rescue/initramfs.img"
+            # ⚠️ 标题用 ASCII：开机菜单由 UEFI 固件的字体画，一般不含中文（原先的"救援系统（Alpine，
+            #    全内存）"从没在本机菜单上看过，取稳妥的一侧）。
             # 救援系统与 Android 共用内核与 dtb（docs/stage7-live-installer.md §2.3），
             # 只多一个 initramfs；cmdline 从 Android 那份派生（见 gk3__rescue_cmdline）
             cat > "$mnt/loader/entries/$mid-rescue.conf" <<RESC
-title      救援系统（全内存）
+title      gaokun3 rescue (runs from RAM)
 version    gaokun3-rescue
 sort-key   linux1
 linux      /$mid/android/slot_a/Image
