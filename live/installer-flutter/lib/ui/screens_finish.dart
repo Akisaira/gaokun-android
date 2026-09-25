@@ -89,7 +89,8 @@ String planErrorText(BuildContext context, Plan p) {
     'alongside-needs-existing-esp' || 'reinstall-needs-esp' => l.modeWhyNoEsp,
     'reinstall-missing' => l.errReinstallMissing(e['names'].replaceAll(',', ', ')),
     'reinstall-duplicate' => l.errReinstallDup(e['names'].replaceAll(',', ', ')),
-    'reinstall-part-small' => l.errReinstallSmall(e['name'], fmtMib(e.intOf('have_mib')), fmtMib(e.intOf('need_mib'))),
+    // 按 KiB 报（本机的 misc 只有 1007 KiB，按 MiB 取整是 0）
+    'reinstall-part-small' => l.errReinstallSmall(e['name'], fmtKib(e.intOf('have_kib')), fmtKib(e.intOf('need_kib'))),
     final m => l.errPlan(m),
   };
 }
@@ -240,7 +241,7 @@ class ConfirmPage extends StatelessWidget {
                       switch (r.action) { 'format' => l.actFormat, 'keep' => l.actKeep, _ => l.actWrite },
                       style: tt.bodyLarge!.copyWith(color: r.action == 'format' ? context.cs.error : context.cs.onSurfaceVariant),
                     ),
-                    SizedBox(width: 90, child: Text(fmtMib(r.sizeMib), style: tt.bodyMedium, textAlign: TextAlign.end)),
+                    SizedBox(width: 90, child: Text(fmtKib(r.sizeKib), style: tt.bodyMedium, textAlign: TextAlign.end)),
                   ]),
                 ),
             ] else ...[

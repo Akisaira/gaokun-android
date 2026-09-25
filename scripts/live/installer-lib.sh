@@ -432,23 +432,26 @@ gk3__plan_reinstall() {
     [ -z "$miss" ] || { echo "PLANERR msg=reinstall-missing names=$(echo $miss | tr ' ' ',')"; return 1; }
 
     echo "PLAN op=useesp path=$esp need_mib=$GK3_ESP_REINSTALL_NEED_MIB"
-    local st en mib act min fixed=0 ud=0
+    local st en mib kib act min fixed=0 ud=0
     for nm in $want; do
         n=$(printf '%s' "$table" | awk -v x="$nm" '$1 == x {print $2}')
         st=$(sgdisk -i "$n" "$disk" 2>/dev/null | awk '/^First sector:/{print $3}')
         en=$(sgdisk -i "$n" "$disk" 2>/dev/null | awk '/^Last sector:/{print $3}')
-        mib=$(( (en - st + 1) / 2048 ))
+        kib=$(( (en - st + 1) / 2 )); mib=$(( kib / 1024 ))
+        # ⚠️ 下限按 KiB 比。2026-09-25 真机：本机的 misc 只有 1007 KiB（放在 GPT 头之后那段空隙里，
+        #    Android 天天在用），按 MiB 取整是 0 ——"misc 太小"把重新安装整个拦住了。
+        #    misc 的下限取实测在用的那个量级（1000 KiB）：更小的没验证过，不放行。
         case "$nm" in
-            super) min=$GK3_SUPER_MIB; act=write ;;
-            boot_a|boot_b) min=$GK3_BOOT_MIB; act=write ;;
-            misc) min=1; act=write ;;
-            gk3rescue) min=$GK3_RESCUE_MIB; act=write ;;
-            metadata) min=$GK3_METADATA_MIB; [ "$keep" = yes ] && act=keep || act=format ;;
-            userdata) min=$GK3_USERDATA_MIN_MIB; [ "$keep" = yes ] && act=keep || act=format ;;
+            super) min=$(( GK3_SUPER_MIB * 1024 )); act=write ;;
+            boot_a|boot_b) min=$(( GK3_BOOT_MIB * 1024 )); act=write ;;
+            misc) min=1000; act=write ;;
+            gk3rescue) min=$(( GK3_RESCUE_MIB * 1024 )); act=write ;;
+            metadata) min=$(( GK3_METADATA_MIB * 1024 )); [ "$keep" = yes ] && act=keep || act=format ;;
+            userdata) min=$(( GK3_USERDATA_MIN_MIB * 1024 )); [ "$keep" = yes ] && act=keep || act=format ;;
         esac
         # 新系统要装得下：super / boot 比这一版要的小，写到一半才会发现
-        [ "$mib" -ge "$min" ] || { echo "PLANERR msg=reinstall-part-small name=$nm have_mib=$mib need_mib=$min"; return 1; }
-        echo "PLAN op=reuse name=$nm path=$(gk3_partpath "$disk" "$n") num=$n start=$st end=$en size_mib=$mib action=$act"
+        [ "$kib" -ge "$min" ] || { echo "PLANERR msg=reinstall-part-small name=$nm have_kib=$kib need_kib=$min"; return 1; }
+        echo "PLAN op=reuse name=$nm path=$(gk3_partpath "$disk" "$n") num=$n start=$st end=$en size_mib=$mib size_kib=$kib action=$act"
         if [ "$nm" = userdata ]; then ud=$mib; else fixed=$(( fixed + mib )); fi
     done
     echo "PLANSUM mode=reinstall rescue=$rescue keep_data=$keep avail_mib=$(( fixed + ud )) fixed_mib=$fixed userdata_mib=$ud"
@@ -753,8 +756,11 @@ EOF
         gk3__run mkfs.ext4 -q -F -L metadata "$p_meta" || return 1
         gk3__run mkfs.ext4 -q -F -L userdata "$p_data" || return 1
     fi
-    # misc 必须是全零：libboot_control 读到坏 CRC 才会初始化一份新的 bootloader_control
-    gk3__run dd if=/dev/zero of="$p_misc" bs=1M count="$GK3_MISC_MIB" conv=fsync status=none || return 1
+    # misc 必须是全零：libboot_control 读到坏 CRC 才会初始化一份新的 bootloader_control。
+    # ⚠️ 按分区的【实际大小】清零，不按 GK3_MISC_MIB：重新安装时复用的 misc 可能比 4 MiB 小
+    #    （本机 1007 KiB）—— 按 4 MiB 写会在写满之后报 No space left，整个安装失败在这一步
+    local misc_kib; misc_kib=$(( $(blockdev --getsize64 "$p_misc" 2>/dev/null || echo $(( GK3_MISC_MIB << 20 ))) / 1024 ))
+    gk3__run dd if=/dev/zero of="$p_misc" bs=1024 count="$misc_kib" conv=fsync status=none || return 1
     [ "$rescue" = yes ] && { gk3__run mkfs.ext4 -q -F -L gk3rescue "$p_resc" || return 1; }
 
     # ── 写 super（30% → 70%，进度由 gk3-unsparse.py 按块推进）──────────

@@ -393,6 +393,28 @@ OUT=$(gk3_plan --disk "$DC" --mode reinstall --rescue no --esp /dev/null 2>&1)
 printf '%s' "$OUT" | grep -q '^PLANERR msg=reinstall-missing names=misc,metadata,boot_a,boot_b,super,userdata' \
     && ok "不是一套完整的安装：PLANERR 列出缺的分区" || bad "缺分区没被报出来：$OUT"
 mount "$ESPA" "$mk" && rm -f "$mk/filler.bin" && umount "$mk"
+# ★ 真机的布局（2026-09-25 从设备的 sysfs 读的，按比例缩小）：misc 只有 1007 KiB、从第 34 扇区起
+#   （GPT 表之后那段空隙）；没有 gk3rescue；安装器从 p3（ubunturescue）上跑。第一版的方案按 MiB 比，
+#   把 misc 判成 0 MiB"太小"，重新安装在真机上整个走不通 —— 离线的测试盘都是我们自己的 4 MiB 布局，没抓到。
+DR=$(new_disk r 28G)
+sgdisk -o -a 1 -n 4:34:2047 -c 4:misc -t 4:8300 "$DR" >/dev/null 2>&1
+sgdisk -a 2048 -n 1:2048:+300M -t 1:ef00 -c 1:esp -n 2:0:+9G -c 2:userdata -n 3:0:+1G -c 3:ubunturescue \
+       -n 5:0:+64M -c 5:boot_a -n 6:0:+64M -c 6:boot_b -n 8:0:+12G -c 8:super -n 10:0:+32M -c 10:metadata "$DR" >/dev/null 2>&1
+partprobe "$DR" 2>/dev/null; udevadm settle 2>/dev/null; sleep 1
+mkfs.vfat -F 32 -n ESP "${DR}p1" >/dev/null; mkfs.ext4 -q -F -L userdata "${DR}p2"; mkfs.ext4 -q -F -L ubunturescue "${DR}p3"
+head -c 1031168 /dev/urandom | dd of="${DR}p4" conv=notrunc status=none     # misc 里先放点垃圾：必须被清零
+mkdir -p /media/gk3 && mount "${DR}p3" /media/gk3 && mkdir -p /media/gk3/gaokun3
+MK=$(( $(blockdev --getsize64 "${DR}p4") / 1024 ))
+P=$(gk3_plan --disk "$DR" --mode reinstall --rescue no --esp "${DR}p1")
+printf '%s\n' "$P" | grep -q "^PLAN op=reuse name=misc .*size_kib=$MK " && printf '%s\n' "$P" | grep -q '^PLANSUM mode=reinstall' \
+    && ok "真机布局（misc ${MK} KiB，从第 34 扇区起）：重新安装的方案成立" || { bad "真机布局的方案不成立"; printf '%s\n' "$P" | sed 's/^/      /'; }
+BEFORE_R=$(sgdisk -p "$DR" | grep -v '^Disk identifier')
+gk3_apply --disk "$DR" --mode reinstall --rescue no --release "$REL" --esp "${DR}p1" >"$W/r.log" 2>&1; rc=$?
+[ "$rc" = 0 ] && ok "真机布局：重新安装完成（安装器所在的 p3 一直挂着）" || { bad "真机布局的重新安装失败 rc=$rc"; tail -8 "$W/r.log" | sed 's/^/      /'; }
+[ "$(head -c $(( MK * 1024 )) "${DR}p4" | tr -d '\0' | wc -c)" = 0 ] && ok "1007 KiB 的 misc 整个清零了（不再按 4 MiB 写爆）" || bad "misc 没清干净"
+[ "$(sgdisk -p "$DR" | grep -v '^Disk identifier')" = "$BEFORE_R" ] && findmnt -rn -S "${DR}p3" -T /media/gk3 >/dev/null \
+    && ok "分区表没变，p3 还挂着" || bad "真机布局：分区表变了或 p3 被动了"
+umount /media/gk3
 
 # ── E. 网络安装 ────────────────────────────────────────────────────────────
 echo "═══ E. 网络安装：下载一整套发布文件，再走同一条写盘路径 ═══"

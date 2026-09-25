@@ -8,46 +8,46 @@ E   gaokun3.dtb       20005 字节
 E   cmdline.txt         183 字节
 E 现有 ESP /dev/nvme0n1p1 空闲 199 MiB（需要 150）
 E PROGRESS 2 计算分区方案
-E 分区表已备份到 /media/gk3/gaokun3/gpt-backup-nvme0n1-20260925-143110.bin（还原：sgdisk --load-backup=/media/gk3/gaokun3/gpt-backup-nvme0n1-20260925-143110.bin /dev/nvme0n1）
+E 分区表已备份到 /media/gk3/gaokun3/gpt-backup-nvme0n1-20260925-145703.bin（还原：sgdisk --load-backup=/media/gk3/gaokun3/gpt-backup-nvme0n1-20260925-145703.bin /dev/nvme0n1）
 E PROGRESS 5 写分区表
 E + sgdisk -n 0:798885888:798894079 -t 0:8300 -c 0:misc /dev/nvme0n1
-D 1008
+D 1007
 E Warning: The kernel is still using the old partition table.
 E The new table will be used at the next reboot or after you
 E run partprobe(8) or kpartx(8)
 E The operation has completed successfully.
 E + sgdisk -n 0:798894080:798959615 -t 0:8300 -c 0:metadata /dev/nvme0n1
-D 1012
+D 1016
 E Warning: The kernel is still using the old partition table.
 E The new table will be used at the next reboot or after you
 E run partprobe(8) or kpartx(8)
 E The operation has completed successfully.
 E + sgdisk -n 0:798959616:799090687 -t 0:8300 -c 0:boot_a /dev/nvme0n1
-D 1011
-E Warning: The kernel is still using the old partition table.
-E The new table will be used at the next reboot or after you
-E run partprobe(8) or kpartx(8)
-E The operation has completed successfully.
-E + sgdisk -n 0:799090688:799221759 -t 0:8300 -c 0:boot_b /dev/nvme0n1
 D 1013
 E Warning: The kernel is still using the old partition table.
 E The new table will be used at the next reboot or after you
 E run partprobe(8) or kpartx(8)
 E The operation has completed successfully.
+E + sgdisk -n 0:799090688:799221759 -t 0:8300 -c 0:boot_b /dev/nvme0n1
+D 1016
+E Warning: The kernel is still using the old partition table.
+E The new table will be used at the next reboot or after you
+E run partprobe(8) or kpartx(8)
+E The operation has completed successfully.
 E + sgdisk -n 0:799221760:824387583 -t 0:8300 -c 0:super /dev/nvme0n1
-D 1010
+D 1008
 E Warning: The kernel is still using the old partition table.
 E The new table will be used at the next reboot or after you
 E run partprobe(8) or kpartx(8)
 E The operation has completed successfully.
 E + sgdisk -n 0:824387584:826484735 -t 0:8300 -c 0:gk3rescue /dev/nvme0n1
-D 1010
+D 1012
 E Warning: The kernel is still using the old partition table.
 E The new table will be used at the next reboot or after you
 E run partprobe(8) or kpartx(8)
 E The operation has completed successfully.
 E + sgdisk -n 0:826484736:958269439 -t 0:8300 -c 0:userdata /dev/nvme0n1
-D 1008
+D 1015
 E Warning: The kernel is still using the old partition table.
 E The new table will be used at the next reboot or after you
 E run partprobe(8) or kpartx(8)
@@ -55,11 +55,11 @@ E The operation has completed successfully.
 E + partprobe /dev/nvme0n1
 D 1500
 E PROGRESS 15 格式化
-D 136
+D 149
 E 复用现有 ESP：/dev/nvme0n1p1（不格式化；空间与类型在动盘之前已验过）
 E + mkfs.ext4 -q -F -L metadata /dev/nvme0n1p10
 E + mkfs.ext4 -q -F -L userdata /dev/nvme0n1p15
-E + dd if=/dev/zero of=/dev/nvme0n1p9 bs=1M count=4 conv=fsync status=none
+E + dd if=/dev/zero of=/dev/nvme0n1p9 bs=1024 count=4096 conv=fsync status=none
 E + mkfs.ext4 -q -F -L gk3rescue /dev/nvme0n1p14
 E PROGRESS 30 写入 super
 E PROGRESS 30 写入 super（0 / 12288 MiB）
@@ -68,88 +68,90 @@ E PROGRESS 32 写入 super（657 / 12288 MiB）
 E PROGRESS 33 写入 super（980 / 12288 MiB）
 E PROGRESS 34 写入 super（1236 / 12288 MiB）
 E PROGRESS 35 写入 super（1556 / 12288 MiB）
-D 75
+D 74
 E PROGRESS 36 写入 super（1876 / 12288 MiB）
-D 314
+D 400
 E PROGRESS 37 写入 super（2196 / 12288 MiB）
-D 165
+D 170
 E PROGRESS 38 写入 super（2516 / 12288 MiB）
 D 1500
 E PROGRESS 39 写入 super（2772 / 12288 MiB）
-D 61
+D 248
 E PROGRESS 40 写入 super（3092 / 12288 MiB）
-D 73
+D 201
 E PROGRESS 41 写入 super（3412 / 12288 MiB）
-D 71
+D 231
 E PROGRESS 42 写入 super（3732 / 12288 MiB）
+D 179
 E PROGRESS 43 写入 super（4000 / 12288 MiB）
-D 356
+D 338
 E PROGRESS 44 写入 super（4336 / 12288 MiB）
-D 198
+D 134
 E PROGRESS 45 写入 super（4656 / 12288 MiB）
-D 218
+D 235
 E PROGRESS 46 写入 super（4976 / 12288 MiB）
-D 180
+D 172
 E PROGRESS 47 写入 super（5232 / 12288 MiB）
-D 220
-E PROGRESS 48 写入 super（5552 / 12288 MiB）
-D 216
-E PROGRESS 49 写入 super（5872 / 12288 MiB）
-D 213
-E PROGRESS 50 写入 super（6192 / 12288 MiB）
-D 217
-E PROGRESS 51 写入 super（6512 / 12288 MiB）
-D 183
-E PROGRESS 52 写入 super（6768 / 12288 MiB）
 D 224
+E PROGRESS 48 写入 super（5552 / 12288 MiB）
+D 237
+E PROGRESS 49 写入 super（5872 / 12288 MiB）
+D 225
+E PROGRESS 50 写入 super（6192 / 12288 MiB）
+D 224
+E PROGRESS 51 写入 super（6512 / 12288 MiB）
+D 189
+E PROGRESS 52 写入 super（6768 / 12288 MiB）
+D 201
 E PROGRESS 53 写入 super（7088 / 12288 MiB）
-D 208
+D 241
 E PROGRESS 54 写入 super（7408 / 12288 MiB）
-D 215
+D 193
 E PROGRESS 55 写入 super（7728 / 12288 MiB）
-D 217
+D 128
 E PROGRESS 56 写入 super（8048 / 12288 MiB）
-D 159
+D 107
 E PROGRESS 57 写入 super（8304 / 12288 MiB）
-D 245
+D 107
 E PROGRESS 58 写入 super（8624 / 12288 MiB）
-D 196
+D 190
 E PROGRESS 59 写入 super（8944 / 12288 MiB）
-D 322
+D 317
 E PROGRESS 60 写入 super（9272 / 12288 MiB）
-D 64
+D 107
 E PROGRESS 61 写入 super（9528 / 12288 MiB）
-D 213
+D 185
 E PROGRESS 62 写入 super（9848 / 12288 MiB）
-D 249
+D 325
 E PROGRESS 63 写入 super（10168 / 12288 MiB）
-D 217
+D 98
 E PROGRESS 64 写入 super（10488 / 12288 MiB）
-D 204
+D 89
 E PROGRESS 65 写入 super（10808 / 12288 MiB）
+D 78
 E PROGRESS 66 写入 super（11064 / 12288 MiB）
-D 64
+D 85
 E PROGRESS 67 写入 super（11384 / 12288 MiB）
-D 68
+D 80
 E PROGRESS 68 写入 super（11704 / 12288 MiB）
-D 57
+D 254
 E PROGRESS 69 写入 super（12024 / 12288 MiB）
-D 290
+D 178
 E PROGRESS 70 写入 super（12288 / 12288 MiB）
-D 1358
+D 1480
 E gk3-unsparse: 3145728 块 × 4096 字节 = 12288 MiB，200 个块段
 E super：LP geometry 魔数正确
 E PROGRESS 70 写入 boot_a / boot_b
 E + dd if=/media/gk3/gaokun3/payload/boot.img of=/dev/nvme0n1p11 bs=4M conv=fsync status=none
 E + dd if=/media/gk3/gaokun3/payload/boot.img of=/dev/nvme0n1p12 bs=4M conv=fsync status=none
 E PROGRESS 80 安装引导链
-E + mount -t vfat /dev/nvme0n1p1 /tmp/tmp.JhO3AdkQcu
+E + mount -t vfat /dev/nvme0n1p1 /tmp/tmp.c9xuZf4RMC
 E 原有的 EFI/BOOT/BOOTAA64.EFI 已备份为 EFI/BOOT/BOOTAA64.EFI.before-gaokun3
-E + umount /tmp/tmp.JhO3AdkQcu
+E + umount /tmp/tmp.c9xuZf4RMC
 E PROGRESS 92 写入救援系统
-E + mount /dev/nvme0n1p14 /tmp/tmp.bQV0QvjEEO
+E + mount /dev/nvme0n1p14 /tmp/tmp.0EihobVv3q
 E 警告：没有 WiFi 配置可带给救援系统 —— 它开机后连不上网，只能在机器旁操作
 E 警告：没有 ssh 公钥可带给救援系统 —— 只能在机器旁登录（放一份到 U 盘的 gaokun3/authorized_keys）
-E + umount /tmp/tmp.bQV0QvjEEO
+E + umount /tmp/tmp.0EihobVv3q
 E PROGRESS 100 完成
 X 0

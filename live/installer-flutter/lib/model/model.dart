@@ -152,9 +152,10 @@ class PlanReuse {
       : name = r['name'],
         path = r['path'],
         sizeMib = r.intOf('size_mib'),
+        sizeKib = r.intOf('size_kib', r.intOf('size_mib') * 1024),
         action = r['action'];
   final String name, path;
-  final int sizeMib;
+  final int sizeMib, sizeKib;
 
   /// write = 写入新系统，format = 格式化（数据清掉），keep = 原样保留
   final String action;
@@ -211,6 +212,9 @@ class Variant {
 }
 
 /// MiB → 给人看的大小：100 GiB 以下保留一位小数（"21.2 GiB"），整数不显示 ".0"
+/// 不到 1 MiB 的按 KiB 报（本机的 misc 是 1007 KiB —— 报成"0 MiB"看着像个空分区）
+String fmtKib(int kib) => kib < 1024 ? '$kib KiB' : fmtMib(kib ~/ 1024);
+
 String fmtMib(int mib) {
   if (mib < 1024) return '$mib MiB';
   final g = mib / 1024;
