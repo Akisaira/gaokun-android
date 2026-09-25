@@ -15,6 +15,8 @@
   "welcomeNote": "你的设备使用 UEFI 引导，而不是 fastboot。安装完成后，systemd-boot 将为你启动系统，内核和 ramdisk 会以普通文件的形式放置在 EFI 分区上。",
   "btnStart": "开始使用",
   "btnQuit": "退出到终端",
+  "shellFailed": "切不到终端（{err}）。可以直接按 Ctrl+Alt+F2 试试。",
+  "@shellFailed": {"placeholders": {"err": {"type": "String"}}},
   "btnBack": "返回",
   "btnNext": "下一步",
   "btnReboot": "立即重新启动",

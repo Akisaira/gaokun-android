@@ -359,7 +359,7 @@ class FailPage extends StatelessWidget {
   final int code;
   @override
   Widget build(BuildContext context) {
-    final s = context.session, l = context.l, tt = Theme.of(context).textTheme;
+    final l = context.l, tt = Theme.of(context).textTheme;
     final err = log.lastWhere((x) => x.startsWith('!! '), orElse: () => l.errExit('$code'));
     final backedUp = log.any((x) => x.contains('sgdisk --load-backup='));
     return PopScope(
@@ -369,7 +369,7 @@ class FailPage extends StatelessWidget {
         title: l.failTitle,
         subtitle: l.failSub,
         bottom: Row(children: [
-          Btn(l.shellOpen, kind: BtnKind.secondary, icon: Icons.terminal, onPressed: s.backend.openShell),
+          Btn(l.shellOpen, kind: BtnKind.secondary, icon: Icons.terminal, onPressed: () => openShell(context)),
           const SizedBox(width: 16),
           Expanded(child: Text(l.shellHint, style: tt.bodySmall)),
         ]),

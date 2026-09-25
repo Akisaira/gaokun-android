@@ -13,9 +13,12 @@ import 'package:gk3_installer/session.dart';
 
 /// 包一层 FixtureBackend：记下每一次调用；可以让某个函数失败
 class Rec extends Gk3Backend {
-  Rec(this.inner, {this.failApply = false});
+  Rec(this.inner, {this.failApply = false, this.shellError});
   final FixtureBackend inner;
   final bool failApply;
+
+  /// openShell 的结果（null = 切过去了）
+  final String? shellError;
   final calls = <List<String>>[];
 
   @override
@@ -41,7 +44,7 @@ class Rec extends Gk3Backend {
   @override
   Future<void> reboot() async {}
   @override
-  Future<void> openShell() async {}
+  Future<String?> openShell() async => shellError;
 }
 
 final l = lookupL10n(const Locale('zh'));
@@ -60,11 +63,11 @@ class DiskBundle extends AssetBundle {
 }
 
 Future<Rec> pumpApp(WidgetTester t, String scenario,
-    {Map<String, String> overrides = const {}, bool failApply = false, double speed = 0, String language = 'zh'}) async {
+    {Map<String, String> overrides = const {}, bool failApply = false, double speed = 0, String language = 'zh', String? shellError}) async {
   t.view.physicalSize = const Size(1280, 800);
   t.view.devicePixelRatio = 1;
   addTearDown(t.view.reset);
-  final rec = Rec(FixtureBackend(scenario, bundle: DiskBundle(), speed: speed, overrides: overrides), failApply: failApply);
+  final rec = Rec(FixtureBackend(scenario, bundle: DiskBundle(), speed: speed, overrides: overrides), failApply: failApply, shellError: shellError);
   final session = Session(rec)..language = language;
   await t.pumpWidget(InstallerApp(session: session));
   await settle(t);

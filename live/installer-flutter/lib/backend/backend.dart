@@ -13,7 +13,8 @@ abstract class Gk3Backend {
   String? get demoLabel => null;
 
   Future<void> reboot();
-  Future<void> openShell();
+  /// 切到 tty2 的命令行。成功返回 null，失败返回原因（界面拿去告诉用户 —— 不能点了没反应）
+  Future<String?> openShell();
 
   /// 跑完并收集结果
   Future<CallResult> run(String fn, [List<String> args = const [], void Function(Gk3Event)? onEvent]) async {

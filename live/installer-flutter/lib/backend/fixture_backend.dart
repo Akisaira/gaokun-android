@@ -107,5 +107,5 @@ class FixtureBackend extends Gk3Backend {
   Future<void> reboot() async {}
 
   @override
-  Future<void> openShell() async {}
+  Future<String?> openShell() async => null;
 }

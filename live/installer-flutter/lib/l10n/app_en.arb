@@ -15,6 +15,8 @@
   "welcomeNote": "This device boots with UEFI, not fastboot. After installation systemd-boot starts the system, and the kernel and ramdisk live as plain files on the EFI partition.",
   "btnStart": "Get started",
   "btnQuit": "Quit to terminal",
+  "shellFailed": "Could not switch to the terminal ({err}). Try pressing Ctrl+Alt+F2.",
+  "@shellFailed": {"placeholders": {"err": {"type": "String"}}},
   "btnBack": "Back",
   "btnNext": "Next",
   "btnReboot": "Restart now",

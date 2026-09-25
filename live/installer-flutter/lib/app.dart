@@ -35,6 +35,19 @@ Future<T?> go<T>(BuildContext context, Widget page, {bool replace = false}) {
   return replace ? nav.pushReplacement(route) : nav.push(route);
 }
 
+/// "退出到终端"：切到 tty2；切不过去时用 SnackBar 说清楚原因、给个替代办法（MD3 的做法：轻量的反馈，不打断）
+Future<void> openShell(BuildContext context) async {
+  final err = await context.session.backend.openShell();
+  if (err != null && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(context.l.shellFailed(err)),
+      behavior: SnackBarBehavior.floating,
+      width: 760,
+      duration: const Duration(seconds: 8),
+    ));
+  }
+}
+
 class InstallerApp extends StatelessWidget {
   const InstallerApp({super.key, required this.session, this.home});
   final Session session;

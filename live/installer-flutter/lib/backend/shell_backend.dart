@@ -59,9 +59,21 @@ class ShellBackend extends Gk3Backend {
   }
 
   /// 命令行逃生口：切到 tty2（那里有 getty）。C 版是 system("chvt 2")（gk3-installer.c:1288）。
-  /// ⚠️ 在 cage（wlroots）下还成不成立要真机验 —— 见 docs/stage7-flutter-debian.md M0。
+  /// ⚠️★ 2026-09-25 M0 实测：Debian 镜像里【没有 chvt】（它在 kbd 包里，没装）—— 按钮点了什么都不发生，
+  ///   日志里只有一条没人接的 ProcessException。现在：镜像里 chvt 链到 busybox（overlay-common），
+  ///   这里再退一步直接调 busybox；都不行就把原因交给界面说出来。
   @override
-  Future<void> openShell() async {
-    await Process.run('chvt', const ['2']);
+  Future<String?> openShell() async {
+    String? why;
+    for (final (cmd, args) in const [('chvt', ['2']), ('busybox', ['chvt', '2'])]) {
+      try {
+        final r = await Process.run(cmd, args);
+        if (r.exitCode == 0) return null;
+        why = '$cmd: ${'${r.stderr}'.trim().isEmpty ? 'exit ${r.exitCode}' : '${r.stderr}'.trim()}';
+      } on ProcessException catch (e) {
+        why = '$cmd: ${e.message}';
+      }
+    }
+    return why;
   }
 }

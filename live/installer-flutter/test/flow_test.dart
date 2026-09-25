@@ -69,6 +69,13 @@ void main() {
     expect(a, contains('--esp /dev/nvme0n1p1'));
   });
 
+  testWidgets('退出到终端切不过去：SnackBar 说出原因与替代办法（M0 实测：镜像里没有 chvt，按钮点了没反应）', (t) async {
+    await pumpApp(t, 'windows-free', shellError: 'busybox: No such file or directory');
+    await tap(t, find.text(l.btnQuit));
+    await see(t, find.textContaining('Ctrl+Alt+F2'));
+    await see(t, find.textContaining('busybox: No such file or directory'));
+  });
+
   testWidgets('factory：没有空闲区 → 双系统禁用并报"至少要多少"（后端报的数）→ 缩分区 → 双系统可选', (t) async {
     await pumpApp(t, 'factory');
     await tap(t, find.text(l.btnStart));

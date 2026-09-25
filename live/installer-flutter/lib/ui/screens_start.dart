@@ -58,7 +58,7 @@ class _WelcomePageState extends State<WelcomePage> {
       title: l.welcomeTitle,
       subtitle: l.welcomeSub,
       bottom: Row(children: [
-        Btn(l.btnQuit, kind: BtnKind.secondary, icon: Icons.terminal, onPressed: s.backend.openShell),
+        Btn(l.btnQuit, kind: BtnKind.secondary, icon: Icons.terminal, onPressed: () => openShell(context)),
         const SizedBox(width: 16),
         Btn(l.btnLanguage, kind: BtnKind.secondary, icon: Icons.translate, onPressed: s.toggleLanguage),
         const Spacer(),

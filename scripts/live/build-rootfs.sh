@@ -208,6 +208,8 @@ if [ -n "$SSH_KEY" ]; then need_path /root/.ssh/authorized_keys; else ok "没装
 # 查的是文档里的那种写法（指向 /dev/null 的链接）；overlay 里它是个符号链接，铺的时候要原样保留
 if in_ch '[ "$(readlink /etc/systemd/network/99-default.link)" = /dev/null ]'; then ok "可预测网卡命名已屏蔽（99-default.link → /dev/null）"
 else echo "   ✗ /etc/systemd/network/99-default.link 不是指向 /dev/null 的链接 —— 无线网卡会被改名"; BAD=1; fi
+# "退出到终端"要 chvt（M0 实测：它在 kbd 包里、没装 —— 按钮点了什么都不发生）。overlay 里链到 busybox
+need_cmd chvt
 # 单元里 Exec* 指向的自家脚本必须可执行 —— ssh 的 ExecStartPre 失败 = sshd 起不来 = 一台连不上的机器
 for f in gk3-ssh-keys gk3-wifi gk3-diag; do
     if in_ch "[ -x /usr/lib/gaokun3/$f ]"; then ok "/usr/lib/gaokun3/$f 可执行"; else echo "   ✗ /usr/lib/gaokun3/$f 不可执行"; BAD=1; fi
