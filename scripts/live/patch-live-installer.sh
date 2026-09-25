@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# 不联网换掉 live 镜像里的图形安装器：解开现成的 squashfs、换 /usr/lib/gaokun3/installer/、
-# 再把工作区的 overlay-common / overlay-live 原样叠上去（我们自己的脚本与配置），按原参数重新压。
+# 不联网换掉 live 镜像里【我们自己的东西】：解开现成的 squashfs，换图形安装器（/usr/lib/gaokun3/installer/）、
+# 安装器后端（/usr/share/gaokun3/，与 build-rootfs.sh 同样的装法），再把工作区的 overlay-common / overlay-live
+# 原样叠上去，按原参数重新压。Debian 的包一个都不动。
+# ⚠️★ 后端必须一起换：界面与 installer-lib.sh 是配套的（2026-09-25 第一版只换了界面 —— 新界面调
+#    --mode reinstall，旧后端根本不认识，差点就这么上了机）。
 #
 #   bash scripts/live/build-flutter.sh                 # 先构建新的安装器（不要网：pub 依赖都在构建镜像里）
 #   bash scripts/live/patch-live-installer.sh          # → out/live/gaokun3-live-patched.squashfs
@@ -29,13 +32,20 @@ APP_SHA=$( (cd "$APP" && find . -type f | LC_ALL=C sort | xargs shasum -a 256) |
 echo "══ 底子 $(basename "$BASE")（${BASE_SHA:0:16}…）+ 安装器（${APP_SHA:0:16}…）"
 OV_SHA=$( (cd "$REPO/scripts/live" && find overlay-common overlay-live \( -type f -o -type l \) | LC_ALL=C sort | while read -r f; do
     [ -L "$f" ] && echo "$f -> $(readlink "$f")" || echo "$f $(shasum -a 256 < "$f" | cut -d' ' -f1)"; done) | shasum -a 256 | cut -d' ' -f1)
-docker run --rm -v "$(dirname "$BASE"):/base:ro" -v "$APP:/app:ro" -v "$REPO/out/live:/out" -v "$REPO/scripts/live:/live:ro" -e OV_SHA="$OV_SHA" \
+LIB_SHA=$(cat "$REPO/scripts/live/installer-lib.sh" "$REPO"/scripts/live/gk3-{unsparse,bootimg,wpa-scan}.py "$REPO/scripts/install-gaokun3.sh" | shasum -a 256 | cut -d' ' -f1)
+docker run --rm -v "$(dirname "$BASE"):/base:ro" -v "$APP:/app:ro" -v "$REPO/out/live:/out" -v "$REPO/scripts/live:/live:ro" \
+    -v "$REPO/scripts/install-gaokun3.sh:/cli.sh:ro" -e OV_SHA="$OV_SHA" -e LIB_SHA="$LIB_SHA" \
     -e BASE_NAME="$(basename "$BASE")" -e BASE_SHA="$BASE_SHA" -e APP_SHA="$APP_SHA" "$TAG" bash -euo pipefail -c '
     R=/w/root; mkdir -p /w
     unsquashfs -q -n -d $R /base/$BASE_NAME >/dev/null
     [ -d $R/usr/lib/gaokun3/installer ] || { echo "✗ 底子里没有 /usr/lib/gaokun3/installer —— 不是 live profile？"; exit 1; }
     rm -rf $R/usr/lib/gaokun3/installer && mkdir -p $R/usr/lib/gaokun3/installer
     cp -a /app/. $R/usr/lib/gaokun3/installer/ && chown -R 0:0 $R/usr/lib/gaokun3/installer
+    # 后端：与 build-rootfs.sh 同样的装法（权限一样）
+    install -Dm644 /live/installer-lib.sh $R/usr/share/gaokun3/installer-lib.sh
+    for f in gk3-unsparse.py gk3-bootimg.py gk3-wpa-scan.py; do install -Dm755 /live/$f $R/usr/share/gaokun3/$f; done
+    install -Dm755 /cli.sh $R/usr/share/gaokun3/install-gaokun3.sh
+    chroot $R bash -n /usr/share/gaokun3/installer-lib.sh || { echo "✗ 换进去的 installer-lib.sh 语法不对"; exit 1; }
     for od in overlay-common overlay-live; do
         cp -a /live/$od/. $R/ && (cd /live/$od && find . -mindepth 1 | sed "s#^\.##") | while read -r p; do chown -h 0:0 "$R$p"; done
     done
@@ -45,7 +55,7 @@ docker run --rm -v "$(dirname "$BASE"):/base:ro" -v "$APP:/app:ro" -v "$REPO/out
         echo "✗ 安装器有解析不了的动态库："; chroot $R sh -c "ldd /usr/lib/gaokun3/installer/gk3_installer /usr/lib/gaokun3/installer/lib/*.so" | grep "not found" | sort -u; exit 1
     fi
     printf "%s\n" "这不是正式构建：scripts/live/patch-live-installer.sh 在现成的镜像上换了图形安装器" \
-        "底子      $BASE_NAME sha256=$BASE_SHA" "安装器    out/installer-flutter-linux-arm64 sha256(清单)=$APP_SHA" "overlay   scripts/live/overlay-{common,live} sha256(清单)=$OV_SHA" \
+        "底子      $BASE_NAME sha256=$BASE_SHA" "安装器    out/installer-flutter-linux-arm64 sha256(清单)=$APP_SHA" "overlay   scripts/live/overlay-{common,live} sha256(清单)=$OV_SHA" "后端      installer-lib.sh + gk3-*.py + install-gaokun3.sh sha256=$LIB_SHA" \
         "时间      $(date -u +%FT%TZ)" > $R/etc/gaokun3-patched
     mksquashfs $R /out/gaokun3-live-patched.squashfs -comp zstd -Xcompression-level 19 -noappend -no-progress -quiet
     echo "   ✓ $(du -h /out/gaokun3-live-patched.squashfs | cut -f1)（底子 $(du -h /base/$BASE_NAME | cut -f1)）"'
