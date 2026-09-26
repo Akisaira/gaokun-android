@@ -79,7 +79,7 @@ scripts/live/installer-lib.sh    唯一的分区 / 写盘实现
 | **M2** | **Flutter 骨架 + fixture 后端 + 出图** | Mac | **✅ 2026-09-25** |
 | **M3** | **Debian 构建链（mmdebstrap）+ 接真后端** | Mac 上的 arm64 容器 | **✅ 2026-09-25**（§5.5）—— 真后端的写盘路径由 M4a 在真机上验 |
 | M4a | 装到**外接 USB 盘**并从它启动进 Android | 真机，零风险 | ⬜ |
-| M4b | 内置盘 | 真机，⚠️ **现在没有回落槽**（`_a` 不可启动，#122 §1） | ⬜ 需用户单独点头 |
+| M4b | 内置盘 | 真机，⚠️ **现在没有回落槽**（`_a` 不可启动，#122 §1） | ⬜ 需用户单独点头。★ 2026-09-26 核对：本机整盘是 Android ⇒ **双系统必被 PARTLABEL 查重拒绝**（fixture `android`），计划里"缩 /data 再装双系统"那条路在本机走不通 ⇒ M4b = **重新安装**模式。安全网：`gk3_apply` 只改写 `*-android-{a,b}.conf` 与 `loader.conf`，内置盘上的 live 启动项（`gaokun3-m0*.conf`）与 p3 不动 —— 装坏了从开机菜单进 live 再装一次。载荷：网络安装拿到的是已发布的 v0.6.2（`1789570683`）；设备上是未发布的 `1790206017`，要"同版本、保留数据"得先把它的 `boot.img` + `super.img.zst` 放到 p3 |
 | M4.5 | 救援系统迁移（先并列、验过、再删 p3） | 真机 | ⬜ |
 | M5 | roadmap 欠的 5 条 + 退役 C 版 + 文档 | — | ▶ roadmap 第 1–4 条 Flutter 版都做了（两步式 WiFi 与信号格数、网络安装接进 apply、分区大小回灌 `--userdata-mib`、"已分配 / 共"读 `PLANSUM`）；第 1 条最后一项**隐藏网络** 2026-09-26 补上（后端 `gk3_wifi_connect … hidden` → `scan_ssid=1`，`test-wifi-connect.sh` 12/12，界面 58/58）。第 5 条就是 M4。✅ 退役 C 版（2026-09-26）。⬜ 文档（INSTALL.md / README 的救援描述要等 M4.5） |
 
