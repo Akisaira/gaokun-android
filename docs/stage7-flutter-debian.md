@@ -6,8 +6,7 @@
 > **46/46**（整盘 + 双系统 + 反例，合成与 v0.6.2 真 boot.img 各一遍），
 > 另有 sparse 13/13、WiFi 扫描 9/9、方案计算 8/8、缩分区 8/8。
 > ★ 端到端测试第一次跑就抓到**双系统模式从来装不上**（§3.1）。
-> ⬜ M0（真机打一枪：Debian + mesa + cage + Flutter 能否出画面）要回家后做 ——
-> 本机当时在 `10.187.160.x`，设备在家里的 `192.168.10.x`。
+> ✅ **M0 六项验收全过**（2026-09-25/26，没有 U 盘 ⇒ 放在内置盘上 oneshot 启动，六轮，§5.6b / §5.7）。
 > ✅ **M2 Flutter 骨架完成**（2026-09-25）：13 屏对着真后端录的 fixture 在 Mac 上走通，
 > 测试 42/42（协议 17 · 流程 8 · 文案约定 2 · 出图 15），离线出图 19 张 —— 看图抓到
 > **占位符参数填反**（§4.1）。后端这轮又补了 `gk3_esp_info` / `gk3_release_info` / `gk3_net_release`
@@ -18,7 +17,7 @@
 > ✅ **Debian live 镜像造出来了**（2026-09-25）：mmdebstrap 355 个包，squashfs **185 MiB**、U 盘镜像
 > **317 MiB**（含 25% 余量；预算 800），构建前的体检全过；开机冒烟（squashfs 当容器根、systemd 为 PID 1）
 > 只有预期内的 `gk3-wifi` 失败，ssh 开机现生成主机密钥并在听。U 盘上带 M0 的 4 个变体启动项。
-> ⬜ **M0 要回家、要你同意用 U 盘重启**：`out/live/gaokun3-live.img`，dd 到 U 盘即可。
+> ▶ **下一步是 M4（真装一台）**：M4a 要一块外接 USB 盘；M4b（内置盘）要用户单独点头。
 >
 > 前情：[`stage7-live-installer.md`](stage7-live-installer.md)（C + cairo 直画 DRM 的
 > 设计与 M0）、[`stage7-installer-roadmap.md`](stage7-installer-roadmap.md)（用户 9 条需求
@@ -39,7 +38,7 @@
 
 | # | 要求 | 影响 |
 |---|---|---|
-| 5 | **LiveCD 的初衷之一是免 U 盘安装，并且要支持双系统** | "介质与目标同盘"成为正经流程：live 从内置盘的某个分区起来、装进同一块盘的空闲区。原先内置盘一旦是介质就整盘禁用 —— 改成**只禁整盘清空、介质分区不可缩，双系统放行**（§5.8）。新用户手上是 Windows，所以还缺"在 Windows 里把 live 放上内置盘"那一半（§5.8，⬜ 方案待定） |
+| 5 | **LiveCD 的初衷之一是免 U 盘安装，并且要支持双系统** | "介质与目标同盘"成为正经流程：live 从内置盘的某个分区起来、装进同一块盘的空闲区。原先内置盘一旦是介质就整盘禁用 —— 改成**只禁整盘清空、介质分区不可缩，双系统放行**（§5.8）。新用户手上是 Windows，所以还缺"在 Windows 里把 live 放上内置盘"那一半（§5.8，✅ PowerShell 脚本，虚拟机里整条跑通） |
 | 6 | **去掉 BIOS 版本限制**：有人验证过，不依赖 BIOS 版本 | 预检只报版本号、永远 ok（bug 报告要它）；`GK3_SKIP_BIOS_CHECK` 删掉；界面、命令行版、INSTALL.md 同步 |
 | 7 | **界面改成 Material Design 3**（"一点也不 material design"） | 颜色只用 MD3 的角色（`ColorScheme.fromSeed`，成功 / 警告按 MD3 自定义颜色调和）；大屏布局 = 左侧步骤栏 + 内容；MD3 按钮 / 可选卡片 / 描边输入框 / 2024 版进度条。字体 Roboto + Noto Sans CJK SC **打包进应用**（不再靠 fontconfig 回退 —— 真机中文方块那次的根治），可变字重要显式给 `FontVariation`。触摸目标按 MD3 下限（48 dp ≈ 本机 37 逻辑像素）收到 56 / 72，不再是 C 版的 88。Linux 版 53 MiB（字体占 31 MiB） |
 | 8 | **加"重新安装 Android"，默认清除数据**（M0 上机时两种方式都灰：这台机器整盘是 Android、又是安装器所在的盘） | `gk3_plan/gk3_apply --mode reinstall`：不改分区表，按 PARTLABEL 复用现有的 misc / metadata / boot_a / boot_b / super / userdata（/ gk3rescue），每个名字必须恰好一个、大小够；默认格式化 userdata 与 metadata，`--keep-data yes` 保留（换旧版本时可能起不来）；要写的分区挂着就拒绝（安装器所在的那个）；ESP 按"覆盖自己的文件"只要 16 MiB。loop 端到端 20 项（写坏后重写、分区表逐字节不变、保留 / 清除、挂着拒绝、缺分区报名字）→ test-apply 91/91；界面 50/50 |
@@ -74,7 +73,7 @@ scripts/live/installer-lib.sh    唯一的分区 / 写盘实现
 
 | | 内容 | 在哪做 | 状态 |
 |---|---|---|---|
-| M0 | Debian + mesa + cage + hello-world Flutter 在真机上出画面：方向、触摸、键盘、`chvt 2`、**10 分钟 RSS 曲线**、Impeller 与 Skia 各一遍 | 真机（U 盘，不碰内置盘） | ⬜ 要回家、要用户同意重启 |
+| **M0** | **Debian + mesa + cage + Flutter 在真机上出画面：方向、触摸、键盘、`chvt 2`、10 分钟 RSS 曲线、Impeller 与 Skia 各一遍** | 真机（没有 U 盘 ⇒ 内置盘 + oneshot，§5.6b） | **✅ 2026-09-26**（§5.7）|
 | M0.5 | 内核能不能跑 systemd | 离线 | ✅ **能**（2026-09-25，§5.3）—— 不挡 M0；`AUTOFS_FS=y` 下次编内核时顺带 |
 | **M1** | **后端统一与补齐** | Mac + 容器 | **✅ 2026-09-24** |
 | **M2** | **Flutter 骨架 + fixture 后端 + 出图** | Mac | **✅ 2026-09-25** |
@@ -82,7 +81,7 @@ scripts/live/installer-lib.sh    唯一的分区 / 写盘实现
 | M4a | 装到**外接 USB 盘**并从它启动进 Android | 真机，零风险 | ⬜ |
 | M4b | 内置盘 | 真机，⚠️ **现在没有回落槽**（`_a` 不可启动，#122 §1） | ⬜ 需用户单独点头 |
 | M4.5 | 救援系统迁移（先并列、验过、再删 p3） | 真机 | ⬜ |
-| M5 | roadmap 欠的 5 条 + 退役 C 版 + 文档 | — | ⬜ |
+| M5 | roadmap 欠的 5 条 + 退役 C 版 + 文档 | — | ▶ roadmap 第 1–4 条 Flutter 版都做了（两步式 WiFi 与信号格数、网络安装接进 apply、分区大小回灌 `--userdata-mib`、"已分配 / 共"读 `PLANSUM`）；第 1 条最后一项**隐藏网络** 2026-09-26 补上（后端 `gk3_wifi_connect … hidden` → `scan_ssid=1`，`test-wifi-connect.sh` 12/12，界面 58/58）。第 5 条就是 M4。⬜ 退役 C 版、文档 |
 
 ## 3. M1：这一轮实测抓到的东西
 

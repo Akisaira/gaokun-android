@@ -888,7 +888,7 @@ RESC
             #    来源按优先级：发布目录里放的 → 安装器里刚连上的（gk3_wifi_connect 写的）
             #    → 做 U 盘时放在介质上的。
             local wconf
-            if wconf=$(gk3__find_file wpa_supplicant.conf "$rel" /run/gaokun3 /media/gk3/gaokun3); then
+            if wconf=$(gk3__find_file wpa_supplicant.conf "$rel" "$GK3_RUNDIR" /media/gk3/gaokun3); then
                 install -Dm600 "$wconf" "$rmnt/gaokun3/wpa_supplicant.conf"
                 echo "救援系统的 WiFi 配置取自 $wconf" >&2
             else
@@ -1197,6 +1197,8 @@ gk3_shrink() {
 # 自己再实现一遍只会实现出一个不一致的版本。
 
 GK3_WPA_CTRL=/run/wpa_supplicant
+# 连上之后那份配置放这里（gk3_apply 从这里捡去装进救援分区）；测试换成临时目录
+GK3_RUNDIR=${GK3_RUNDIR:-/run/gaokun3}
 
 # 无线网卡的名字。给了 GK3_WIFI_IF 就用它；否则 wlan0 —— live/rescue 镜像屏蔽了 systemd 的可预测命名
 # （overlay 的 /etc/systemd/network/99-default.link → /dev/null）；再否则认第一块有 wireless/ 的网卡。
@@ -1246,19 +1248,27 @@ gk3_wifi_scan() {
 }
 
 # 连接。$1=SSID（或 hex:<gk3_wifi_scan 给的 ssid_hex>）$2=密码（空 = 开放网络）
+#       $3=hidden：隐藏网络（不广播 SSID，扫描列表里没有它，用户手输名字）
+#
+# ★ 隐藏网络要网络块里的 scan_ssid=1（加全局的 ap_scan=1 —— 那是默认值，我们没改它）：
+#   Debian wpasupplicant 2.10-24 的 README.Debian:521-523。它让 wpa_supplicant 发带这个 SSID 的探测请求，
+#   不广播的 AP 才会应答。连上之后存下来的配置也要带上，否则装好的救援系统一开机又找不到它。
 #
 # ★ 优先用 hex:<…>。wpa_supplicant 的网络配置里，不带引号的 SSID 就是十六进制
 #   （wpa-2.10 src/utils/common.c:679-686）—— 任意字节都不会被引号、空格、
 #   转义搞坏，中文 / GBK 编码的 SSID 也一样。
-# ★ 连上之后把这份配置写到 /run/gaokun3/wpa_supplicant.conf：gk3_apply 会把它
+# ★ 连上之后把这份配置写到 $GK3_RUNDIR/wpa_supplicant.conf：gk3_apply 会把它
 #   装进救援分区，于是装好的救援系统一开机就能连上同一个网 —— 否则就是
 #   "救援起来了但网没起来 = 一台连不上的机器"（docs/stage7-live-installer.md:200-202）。
 gk3_wifi_connect() {
-    local ssid=$1 psk=${2:-} ssid_cfg show
+    local ssid=$1 psk=${2:-} hidden=${3:-} ssid_cfg show
+    case "$hidden" in ''|hidden) ;; *) gk3_die "第三个参数只能是 hidden：$hidden"; return 1 ;; esac
     case "$ssid" in
         hex:*) ssid_cfg=${ssid#hex:}
                case "$ssid_cfg" in ''|*[!0-9a-fA-F]*) gk3_die "SSID 的十六进制写法不对：$ssid_cfg"; return 1 ;; esac
                [ $(( ${#ssid_cfg} % 2 )) = 0 ] || { gk3_die "SSID 的十六进制长度是奇数"; return 1; }
+               # 802.11 的 SSID 最长 32 字节（手输的隐藏网络名可能超 —— 中文一个字就 3 字节）
+               [ ${#ssid_cfg} -le 64 ] || { gk3_die "网络名最长 32 字节，这个是 $(( ${#ssid_cfg} / 2 )) 字节"; return 1; }
                show="所选网络" ;;
         *)     ssid_cfg="\"$ssid\""; show=$ssid ;;
     esac
@@ -1281,6 +1291,10 @@ gk3_wifi_connect() {
             || { gk3_die "wpa_supplicant 不接受这个密码（含控制字符？）"; return 1; }
     else
         $W set_network "$id" key_mgmt NONE >/dev/null 2>&1
+    fi
+    if [ -n "$hidden" ]; then
+        [ "$($W set_network "$id" scan_ssid 1 2>/dev/null | tail -1)" = OK ] \
+            || { gk3_die "wpa_supplicant 不接受 scan_ssid"; return 1; }
     fi
     $W enable_network "$id" >/dev/null 2>&1
     $W select_network "$id" >/dev/null 2>&1
@@ -1310,13 +1324,14 @@ gk3_wifi_connect() {
         || { gk3_die "连上了但没拿到 IP（DHCP 没响应？）"; return 1; }
     # 存一份给 gk3_apply 装进救援分区（0600：里面是明文密码，和原先
     # "把用户当前用的那份 wpa_supplicant.conf 复制过去"是同一个设计）
-    ( umask 077; mkdir -p /run/gaokun3
+    ( umask 077; mkdir -p "$GK3_RUNDIR"
       { echo "ctrl_interface=$GK3_WPA_CTRL"
         echo "update_config=1"
         echo "network={"
         echo "	ssid=$ssid_cfg"
+        [ -z "$hidden" ] || echo "	scan_ssid=1"
         if [ -n "$psk" ]; then echo "	psk=\"$psk\""; else echo "	key_mgmt=NONE"; fi
-        echo "}"; } > /run/gaokun3/wpa_supplicant.conf ) 2>/dev/null || true
+        echo "}"; } > "$GK3_RUNDIR/wpa_supplicant.conf" ) 2>/dev/null || true
     gk3_prog 100 "已连接"
     gk3_net_status
 }

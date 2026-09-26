@@ -291,6 +291,51 @@ void main() {
     expect(rec.calls.indexWhere((c) => c.first == 'gk3_net_release'), lessThan(rec.calls.indexWhere((c) => c.first == 'gk3_apply')));
   });
 
+  testWidgets('WiFi 隐藏网络：手输名字（软键盘跟着焦点走）、密码可空、按字节限 32、后端收到 hidden', (t) async {
+    final rec = await pumpApp(t, 'windows-free', overrides: {'gk3_release_info': 'release_info-none.txt'});
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await tap(t, find.text(l.modeAlongTitle));
+    await next(t);
+    await see(t, find.text(l.sourceUsbMissing));
+    await next(t);
+    await tap(t, find.text(l.netHidden));
+    await see(t, find.text(l.netHiddenTitle));
+    bool canConnect() => t
+        .widget<ButtonStyleButton>(find.ancestor(of: find.text(l.netConnect), matching: find.byWidgetPredicate((w) => w is ButtonStyleButton)).first)
+        .onPressed != null;
+    expect(canConnect(), isFalse); // 名字是空的
+    // 实体键盘：11 个汉字 = 33 字节 → 报错、不许连
+    await t.enterText(find.widgetWithText(TextField, l.netSsid), '一二三四五六七八九十一');
+    await settle(t);
+    await see(t, find.text(l.netSsidTooLong));
+    expect(canConnect(), isFalse);
+    // 名字框一开始就有焦点：软键盘打进名字框
+    await t.enterText(find.widgetWithText(TextField, l.netSsid), '');
+    await settle(t);
+    for (final k in 'lab'.split('')) {
+      await tap(t, find.text(k));
+    }
+    expect(find.text('lab'), findsOneWidget);
+    expect(canConnect(), isTrue); // 密码空 = 开放网络
+    // 点密码框之后软键盘改打进密码框（点软键盘本身会让输入框失焦 —— 打字的目标不能跟着丢）
+    await tap(t, find.widgetWithText(TextField, l.netPasswordOptional));
+    for (final k in 'abc'.split('')) {
+      await tap(t, find.text(k));
+    }
+    await see(t, find.text(l.netPasswordLength));
+    expect(canConnect(), isFalse);
+    for (final k in 'defgh'.split('')) {
+      await tap(t, find.text(k));
+    }
+    expect(find.text('lab'), findsOneWidget); // 名字没被打乱
+    await tap(t, find.text(l.netConnect));
+    expect(rec.last('gk3_wifi_connect'), ['gk3_wifi_connect', 'hex:6c6162', 'abcdefgh', 'hidden']);
+    await see(t, find.text(l.netTitle)); // 连上后回到列表
+    await see(t, find.textContaining('已连接到'));
+  });
+
   testWidgets('安装失败：失败页给出错误、说明分区表有备份、不许返回', (t) async {
     await pumpApp(t, 'blank', failApply: true);
     await tap(t, find.text(l.btnStart));

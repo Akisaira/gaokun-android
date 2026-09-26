@@ -288,7 +288,7 @@ class Session extends ChangeNotifier {
   bool get online => net?.yes('online') ?? false;
 
   Future<CallResult> connect(Ap ap, String password, void Function(Gk3Event) onEvent) async {
-    final r = await backend.run('gk3_wifi_connect', ['hex:${ap.ssidHex}', password], onEvent);
+    final r = await backend.run('gk3_wifi_connect', ['hex:${ap.ssidHex}', password, if (ap.hidden) 'hidden'], onEvent);
     if (r.ok) net = r.first('NET');
     _changed();
     return r;

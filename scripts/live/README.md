@@ -136,6 +136,7 @@ ath11k 固件 / OpenRC 的 runlevel 链接）。
 bash scripts/live/test-plan.sh          # 方案计算：不重叠、不越界（任何机器）
 bash scripts/live/test-unsparse.sh      # sparse 展开，含截断输入必须失败（任何机器）
 bash scripts/live/test-wpa-scan.sh      # 中文 / GBK / 空格 / 引号 SSID（任何机器）
+bash scripts/live/test-wifi-connect.sh  # 连接时对 wpa_cli 说了什么：隐藏网络的 scan_ssid、SSID 32 字节上限（桩，任何机器）
 # 下面要 root + loop 设备：在 Linux 容器里跑（macOS 上先 colima start）
 bash scripts/live/test-in-container.sh scripts/live/test-unsparse.sh   # 多一轮与真 simg2img 交叉比对
 bash scripts/live/test-in-container.sh scripts/live/test-apply.sh      # 端到端真装：整盘 / 双系统 / 反例

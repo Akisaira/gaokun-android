@@ -1,4 +1,6 @@
-// 来源 →（连 WiFi → 输密码 → 选版本）
+// 来源 →（连 WiFi → 输密码 / 手输隐藏网络 → 选版本）
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../app.dart';
@@ -104,26 +106,38 @@ class _NetPageState extends State<NetPage> {
           ]),
           const SizedBox(height: 16),
         ],
+        if (!s.scanning && (aps == null || aps.isEmpty)) ...[
+          Text(l.netNone, style: tt.bodyLarge),
+          const SizedBox(height: 16),
+        ],
         Expanded(
           child: s.scanning && aps == null
               ? Row(children: [const CircularProgressIndicator(), const SizedBox(width: 16), Text(l.netScanning, style: tt.bodyLarge)])
-              : (aps == null || aps.isEmpty)
-                  ? Text(l.netNone, style: tt.bodyLarge)
-                  : GridView(
-                      // 固定行高而不是宽高比：卡片里最多两行（标题 + 说明 / 不支持的原因）
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 12, crossAxisSpacing: 12, mainAxisExtent: 100),
-                      children: [
-                        for (final ap in aps)
-                          ChoiceCard(
-                            title: ap.ssid,
-                            body: ap.supported ? (ap.secure ? null : l.netOpen) : null,
-                            reason: ap.supported ? null : l.netEnterprise,
-                            selected: s.online && net?['ssid'] == ap.ssid,
-                            trailing: SignalBars(ap.bars, secure: ap.secure),
-                            onTap: () => _pick(ap),
-                          ),
-                      ],
+              : GridView(
+                  // 固定行高而不是宽高比：卡片里最多两行（标题 + 说明 / 不支持的原因）
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 12, crossAxisSpacing: 12, mainAxisExtent: 100),
+                  children: [
+                    for (final ap in aps ?? const <Ap>[])
+                      ChoiceCard(
+                        title: ap.ssid,
+                        body: ap.supported ? (ap.secure ? null : l.netOpen) : null,
+                        reason: ap.supported ? null : l.netEnterprise,
+                        selected: s.online && net?['ssid'] == ap.ssid,
+                        trailing: SignalBars(ap.bars, secure: ap.secure),
+                        onTap: () => _pick(ap),
+                      ),
+                    // 放在最后、扫不到网络时也在：不广播名字的网络永远不会出现在上面
+                    ChoiceCard(
+                      title: l.netHidden,
+                      body: l.netHiddenBody,
+                      trailing: Icon(Icons.wifi_find_outlined, color: context.cs.onSurfaceVariant),
+                      onTap: () async {
+                        await go(context, const HiddenNetPage());
+                        if (mounted) setState(() {});
+                      },
                     ),
+                  ],
+                ),
         ),
       ]),
     );
@@ -225,6 +239,133 @@ class _PasswordPageState extends State<PasswordPage> {
         if (_error != null) Text(_error!, style: tt.bodyLarge!.copyWith(color: context.cs.error)),
         const Spacer(),
         if (!widget.open) SoftKeyboard(controller: _pw, onDone: _connect),
+      ]),
+    );
+  }
+}
+
+// ── WiFi 第二步的另一种：隐藏的网络，名字手输 ────────────────────────────────
+//
+// ⚠️ live 里没有输入法：软键盘只有 ASCII，实体键盘在 cage 里也只出 ASCII ——
+//    中文名字的隐藏网络连不上。那种网络少见，界面上不专门说。
+
+class HiddenNetPage extends StatefulWidget {
+  const HiddenNetPage({super.key});
+  @override
+  State<HiddenNetPage> createState() => _HiddenNetPageState();
+}
+
+class _HiddenNetPageState extends State<HiddenNetPage> {
+  final _ssid = TextEditingController(), _pw = TextEditingController();
+  final _ssidFocus = FocusNode(), _pwFocus = FocusNode();
+
+  /// 软键盘打进【最后一个得到焦点】的框。不能看"现在谁有焦点"：Linux 上点输入框以外的地方
+  /// （包括软键盘本身）输入框就失焦了（EditableText 默认的 onTapOutside）
+  late TextEditingController _target = _ssid;
+  bool _show = false, _busy = false;
+  String? _error;
+  int _pct = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _ssid.addListener(() => setState(() {}));
+    _pw.addListener(() => setState(() {}));
+    _ssidFocus.addListener(() => _ssidFocus.hasFocus ? setState(() => _target = _ssid) : null);
+    _pwFocus.addListener(() => _pwFocus.hasFocus ? setState(() => _target = _pw) : null);
+  }
+
+  @override
+  void dispose() {
+    _ssid.dispose();
+    _pw.dispose();
+    _ssidFocus.dispose();
+    _pwFocus.dispose();
+    super.dispose();
+  }
+
+  /// 802.11 的 SSID 是 1–32 个【字节】（后端 gk3_wifi_connect 也会再验一遍）
+  int get _ssidBytes => utf8.encode(_ssid.text).length;
+  bool get _ssidOk => _ssidBytes >= 1 && _ssidBytes <= 32;
+
+  /// 空 = 开放网络；否则同 PasswordPage 的 8–63
+  bool get _pwOk => _pw.text.isEmpty || (_pw.text.length >= 8 && _pw.text.length <= 63);
+
+  Future<void> _connect() async {
+    if (!_ssidOk || !_pwOk || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _pct = 0;
+    });
+    final ap = Ap.hidden(_ssid.text, secure: _pw.text.isNotEmpty);
+    final r = await context.session.connect(ap, _pw.text, (e) {
+      if (e is Gk3Progress && mounted) setState(() => _pct = e.percent);
+    });
+    if (!mounted) return;
+    if (r.ok) {
+      Navigator.pop(context);
+    } else {
+      setState(() {
+        _busy = false;
+        _error = context.l.netHiddenFailed;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l = context.l, tt = Theme.of(context).textTheme;
+    return StepPage(
+      step: Gk3Step.source,
+      title: l.netHiddenTitle,
+      subtitle: l.netHiddenSub,
+      onBack: _busy ? null : () => Navigator.pop(context),
+      nextLabel: l.netConnect,
+      onNext: _ssidOk && _pwOk && !_busy ? _connect : null,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        TextField(
+          controller: _ssid,
+          focusNode: _ssidFocus,
+          autofocus: true,
+          enabled: !_busy,
+          style: tt.titleLarge,
+          textInputAction: TextInputAction.next,
+          onSubmitted: (_) => _pwFocus.requestFocus(),
+          decoration: InputDecoration(
+            labelText: l.netSsid,
+            prefixIcon: const Icon(Icons.wifi),
+            errorText: _ssidBytes > 32 ? l.netSsidTooLong : null,
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _pw,
+          focusNode: _pwFocus,
+          obscureText: !_show,
+          enabled: !_busy,
+          style: tt.titleLarge,
+          onSubmitted: (_) => _connect(),
+          decoration: InputDecoration(
+            labelText: l.netPasswordOptional,
+            prefixIcon: const Icon(Icons.key_outlined),
+            suffixIcon: IconButton(
+              tooltip: l.netShowPassword,
+              icon: Icon(_show ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+              onPressed: () => setState(() => _show = !_show),
+            ),
+            errorText: _pw.text.isNotEmpty && !_pwOk ? l.netPasswordLength : null,
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_busy) ...[
+          LinearProgressIndicator(value: _pct / 100, minHeight: 8),
+          const SizedBox(height: 12),
+        ],
+        if (_error != null) Text(_error!, style: tt.bodyLarge!.copyWith(color: context.cs.error)),
+        const Spacer(),
+        // 回车：在名字框里 = 跳到密码框；在密码框里 = 连接
+        SoftKeyboard(controller: _target, onDone: identical(_target, _ssid) ? _pwFocus.requestFocus : _connect),
       ]),
     );
   }

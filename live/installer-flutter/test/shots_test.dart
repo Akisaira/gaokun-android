@@ -140,6 +140,21 @@ void main() {
       await tap(t, find.text(k));
     }
     await shot(t, '10-wifi-password');
+    await tap(t, find.text(l.btnBack));
+    await tap(t, find.text(l.netHidden));
+    for (final k in 'lab-guest'.split('')) {
+      await tap(t, find.text(k == '-' ? '123' : k));
+      if (k == '-') {
+        await tap(t, find.text('-'));
+        await tap(t, find.text('abc'));
+      }
+    }
+    await shot(t, '10b-wifi-hidden');
+    await tap(t, find.text(l.btnBack));
+    await tap(t, find.text('宿舍网-5G'));
+    for (final k in 'hunter'.split('')) {
+      await tap(t, find.text(k));
+    }
     for (final k in '42'.split('')) {
       await tap(t, find.text('123'));
       await tap(t, find.text(k));

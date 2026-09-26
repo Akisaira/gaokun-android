@@ -2,6 +2,8 @@
 //
 // ⚠️ 这里只做【解读】，不做任何分区计算：空间够不够、/data 能给多大、放不放得下，
 //    一律问 gk3_plan（backend.dart 顶上那条规矩）。
+import 'dart:convert';
+
 import '../backend/backend.dart';
 import '../backend/protocol.dart';
 
@@ -192,9 +194,19 @@ class Ap {
         secure = r.yes('secure'),
         auth = r['auth'],
         ssidHex = r['ssid_hex'],
-        ssid = r['ssid'];
+        ssid = r['ssid'],
+        hidden = false;
+
+  /// 手输的隐藏网络（不广播名字，扫描列表里没有它）。名字按 UTF-8 转成 ssid_hex ——
+  /// 与扫描来的网络走同一条 hex: 路径，引号、空格都不会坏；后端再加 scan_ssid=1
+  Ap.hidden(this.ssid, {required this.secure})
+      : signal = -100,
+        auth = secure ? 'psk' : 'open',
+        ssidHex = utf8.encode(ssid).map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
+        hidden = true;
+
   final int signal;
-  final bool secure;
+  final bool secure, hidden;
   final String auth, ssidHex, ssid;
 
   bool get supported => auth != 'eap';
