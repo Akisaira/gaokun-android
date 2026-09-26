@@ -16,7 +16,7 @@
 路由器（OpenWrt，`192.168.10.1`）加了静态租约：`00:03:7f:12:*:*` → `.239`（本机 MAC 只有后两字节每次开机变），设备侧的静态 IP 仍保留。
 新工具 `gaokun3-ncam-smoke`（应用视角的相机冒烟测试，设备上 `/data/local/tmp/`）。案卷 #119。
 2026-09-18：SELinux 第五轮（案卷 #117）—— 补了 7 处规则（触摸服务的域 / `/dev/dri` 目录 / ESP 块设备类型 / OTA postinstall / 温控 HAL 的 sysfs_thermal / audioroute 的 tinymix / hwc 的 uevent socket），自研属性改名 `persist.vendor.gaokun3.*` 且 **allow_suspend 默认值改成 0**（⚠️ 不只新装机：v0.6.2 老用户多半没设过这个属性，OTA 后也会落到 0、失去待机 —— 发版前要用户定，见 `docs/TODO.md` S1）。构建机编译验证通过；`-userdebug` 重编后**装机成功**（戳 `1789737346`，槽 `_a`，60 秒起来）：温控 HAL 的 35 条 denial 归零且 `dumpsys thermalservice` 报真温度、audioroute 的 7 条归零、`/dev/dri` 与 ESP 的标签实机确认、功能零回归。⚠️ 中途误用 `-user` 变体导致一次装机失败（#117 §15）。⬜ 新查出的 4 处规则（hwc 的 create/bind、同进程 HAL 库、mediaswcodec、wakeup genfscon）**已写未验**，下次构建一起。
-2026-09-24/25：**Stage 7 图形安装器重启，改 Flutter + Debian**（`docs/stage7-flutter-debian.md`）：M1 后端统一（loop 端到端 56/56，抓到双系统模式从来装不上）、M2 Flutter 13 屏（测试 42/42）、M3 Debian live 镜像（U 盘 317 MiB，开机冒烟干净）、M0.5 内核能跑 systemd 均已完成，全部在 Mac 上离线做的，均为本地提交未推送。2026-09-25/26 **M0 从内置盘跑了六轮，六项验收全过**（`scripts/live/m0-internal.sh` + oneshot，§5.7）：画面方向、触摸、键盘、tty2、两种渲染后端各浸泡 10 分钟（RSS 每分钟只长约 0.2 MiB，预想的逐帧泄漏没出现），默认保持 Impeller。同期按用户要求加了：**免 U 盘装双系统**（安装器侧 + Windows PowerShell 脚本，后者在 Parallels 克隆机里整条跑通，§5.8）、**去掉 BIOS 限制**、**界面改 Material Design 3**（字体打包进应用）、**重新安装 Android**（默认清除数据）、**手动调整磁盘页**、版本页退回 OTA 清单。2026-09-26：网快了（中科大镜像 6 MB/s），**`build-live.sh` 正式重建完成**（`out/live/`，包清单与 09-25 那次逐行相同）；补上 WiFi **隐藏网络**（roadmap 欠账的最后一项）；**C 版安装器已删**（`git show 445e978:live/installer/…`）。⚠️ 设备 p3 上的仍是 `patch-live-installer.sh` 打的补丁镜像 —— 设备回到能 adb 的网络后 `m0-internal.sh prepare` 换成正式的。⚠️ 设备 ESP 上留着 5 个 `gaokun3-m0*.conf`（非默认）、p3 上有 `gaokun3/live.squashfs` 与 `firmware/`，`m0-internal.sh remove` 撤。⬜ 要用户定：TODO B23（华为 zap shader 的再分发）、推送。（每次开工时更新这一行）**
+2026-09-24/25：**Stage 7 图形安装器重启，改 Flutter + Debian**（`docs/stage7-flutter-debian.md`）：M1 后端统一（loop 端到端 56/56，抓到双系统模式从来装不上）、M2 Flutter 13 屏（测试 42/42）、M3 Debian live 镜像（U 盘 317 MiB，开机冒烟干净）、M0.5 内核能跑 systemd 均已完成，全部在 Mac 上离线做的，均为本地提交未推送。2026-09-25/26 **M0 从内置盘跑了六轮，六项验收全过**（`scripts/live/m0-internal.sh` + oneshot，§5.7）：画面方向、触摸、键盘、tty2、两种渲染后端各浸泡 10 分钟（RSS 每分钟只长约 0.2 MiB，预想的逐帧泄漏没出现），默认保持 Impeller。同期按用户要求加了：**免 U 盘装双系统**（安装器侧 + Windows PowerShell 脚本，后者在 Parallels 克隆机里整条跑通，§5.8）、**去掉 BIOS 限制**、**界面改 Material Design 3**（字体打包进应用）、**重新安装 Android**（默认清除数据）、**手动调整磁盘页**、版本页退回 OTA 清单。2026-09-26：网快了（中科大镜像 6 MB/s），**`build-live.sh` 正式重建完成**（`out/live/`，包清单与 09-25 那次逐行相同）；补上 WiFi **隐藏网络**（roadmap 欠账的最后一项）；**C 版安装器已删**（`git show 445e978:live/installer/…`）。设备 p3 上已换成正式镜像。★★ **同晚 M4b：图形安装器第一次真的装了一台**（内置盘上的 live → 重新安装 + 保留数据，同版本 `1790206017`，约 3 分钟，数据逐项原样；设备因此从 `_b` 换到 `_a`，§5.9）；顺带补上"介质上没有 `gk3_apply` 日志"的缺口。⚠️ 设备 ESP 上留着 5 个 `gaokun3-m0*.conf`（非默认）、p3 上有 `gaokun3/live.squashfs` 与 `firmware/`，`m0-internal.sh remove` 撤。⬜ 要用户定：TODO B23（华为 zap shader 的再分发）、推送。（每次开工时更新这一行）**
 
 > ## ★★★ 开工前先读（这一段是"现在"，历史在 `docs/project-log.md`）
 >
@@ -79,14 +79,14 @@
 > * **不推仓库、不发版**是需要用户点头的两件事；其余（本地提交、构建、staging、设备实验）直接做。
 >
 > ### 现在设备上跑的是什么
-> ⚠️★ **槽 `_b` = v0.6.3 候选版，未发布**（戳 `1790206017`，incremental `20260923232657`，2026-09-24 装，
-> `lineage_gaokun3-bp4a-userdebug`）。40 秒起来、已标记成功，远程验收过了大半（#122 §2），剩前摄目视与 USB 拔插要人。
-> 发版 = 用户点头后 `release.sh --no-build`（构建机 `out/` 里就是这一版；payload 另存在 `~/ota-0924/`）。
-> ⚠️★★ 槽 `_a` **已不可启动**（`bootctl is-slot-bootable 0` = 0，快照已合并、mapper 里只有 `*_b`，#122 §1）——
-> **现在没有回落槽**，和 #118 §2 同样的处境、方向反过来。重启 / 装内核前把这一点算进风险：万一 `_b` 起不来，只能靠救援系统。
-> `default` 由 boot_control 在成功启动后自动指向当前槽（现在是 `*-android-b.conf`，实测）。
-> ★ `slot_b/gaokun3.dtb` 来自镜像本身（`8b390878…` = 0048 版；0049 只改注释），**不再是手放的**。
-> `slot_a` 目录里那份手放的 0048 dtb 与 `.pre0048` 备份还在，但 `_a` 已起不来，只剩历史意义。
+> ★★ **2026-09-26 起跑在槽 `_a`：同一个 v0.6.3 候选版**（戳 `1790206017`，incremental `20260923232657`，未发布），
+> 是 **Stage 7 图形安装器第一次真装**（M4b）装上去的：内置盘上的 live → 重新安装 + 保留数据，数据逐项核对原样
+> （`docs/stage7-flutter-debian.md` §5.9）。已标记成功；ESP default = `*-android-a.conf`。
+> 发版 = 用户点头后 `release.sh --no-build`（构建机 `out/` 里就是这一版；安装载荷另存在本机 `out/m4b-1790206017/` 与设备 p3 的 `gaokun3/payload/`）。
+> ⚠️★★ **仍然没有回落槽，方向又反过来了**：新写的 super 里 `*_b` 是空的（`lpdump`：`system_b` 没有 extent）⇒ `_b` 起不来。
+> 重启 / 装内核前把这一点算进风险。★ 但现在多了一张安全网：开机菜单里的 `gaokun3 M0: live installer`（内置盘上的 live，能重新安装），另有救援 Ubuntu。
+> `slot_a/`、`slot_b/` 下的 Image / dtb / ramdisk 都是安装器从 `boot.img` 拆出来的（`slot_a` 那份手放的 0048 dtb 已被覆盖；`.pre0048` 备份若还在只剩历史意义）。
+> ⚠️ 在热点（`10.187.160.x`）下设备 IP 会变（09-26 一晚上 `.49` → `.34`），用 `find-device.sh`。
 > 此前 bind-mount 的相机 HAL 随重启消失，现在跑的是镜像里的那份（同一份代码）。
 > ⚠️ 开发机上手动设着 `settings global ntp_server=ntp.aliyun.com`（B22 的临时解；镜像里的修复已写未编）。
 > ⚠️ 本机待机仍然关着：属性已改名为 **`persist.vendor.gaokun3.allow_suspend`**（现值 0，

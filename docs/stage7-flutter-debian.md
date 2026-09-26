@@ -17,7 +17,8 @@
 > ✅ **Debian live 镜像造出来了**（2026-09-25）：mmdebstrap 355 个包，squashfs **185 MiB**、U 盘镜像
 > **317 MiB**（含 25% 余量；预算 800），构建前的体检全过；开机冒烟（squashfs 当容器根、systemd 为 PID 1）
 > 只有预期内的 `gk3-wifi` 失败，ssh 开机现生成主机密钥并在听。U 盘上带 M0 的 4 个变体启动项。
-> ▶ **下一步是 M4（真装一台）**：M4a 要一块外接 USB 盘；M4b（内置盘）要用户单独点头。
+> ✅ **M4b 第一次真的装了一台**（2026-09-26，内置盘上的 live → 重新安装 + 保留数据，约 3 分钟，数据原样，§5.9）。
+> ⬜ 还没验：清除数据 / 整盘 / 双系统（后两者本机没有合适的盘面，M4a 要外接 USB 盘）；M4.5 救援迁移。
 >
 > 前情：[`stage7-live-installer.md`](stage7-live-installer.md)（C + cairo 直画 DRM 的
 > 设计与 M0）、[`stage7-installer-roadmap.md`](stage7-installer-roadmap.md)（用户 9 条需求
@@ -79,7 +80,7 @@ scripts/live/installer-lib.sh    唯一的分区 / 写盘实现
 | **M2** | **Flutter 骨架 + fixture 后端 + 出图** | Mac | **✅ 2026-09-25** |
 | **M3** | **Debian 构建链（mmdebstrap）+ 接真后端** | Mac 上的 arm64 容器 | **✅ 2026-09-25**（§5.5）—— 真后端的写盘路径由 M4a 在真机上验 |
 | M4a | 装到**外接 USB 盘**并从它启动进 Android | 真机，零风险 | ⬜ |
-| M4b | 内置盘 | 真机，⚠️ **现在没有回落槽**（`_a` 不可启动，#122 §1） | ⬜ 需用户单独点头。★ 2026-09-26 核对：本机整盘是 Android ⇒ **双系统必被 PARTLABEL 查重拒绝**（fixture `android`），计划里"缩 /data 再装双系统"那条路在本机走不通 ⇒ M4b = **重新安装**模式。安全网：`gk3_apply` 只改写 `*-android-{a,b}.conf` 与 `loader.conf`，内置盘上的 live 启动项（`gaokun3-m0*.conf`）与 p3 不动 —— 装坏了从开机菜单进 live 再装一次。载荷：网络安装拿到的是已发布的 v0.6.2（`1789570683`）；设备上是未发布的 `1790206017`，要"同版本、保留数据"得先把它的 `boot.img` + `super.img.zst` 放到 p3 |
+| **M4b** | **内置盘** | 真机，⚠️ **现在没有回落槽**（`_a` 不可启动，#122 §1） | **✅ 2026-09-26 重新安装 + 保留数据，同版本 `1790206017`，数据逐项核对原样（§5.9）**。★ 2026-09-26 核对：本机整盘是 Android ⇒ **双系统必被 PARTLABEL 查重拒绝**（fixture `android`），计划里"缩 /data 再装双系统"那条路在本机走不通 ⇒ M4b = **重新安装**模式。安全网：`gk3_apply` 只改写 `*-android-{a,b}.conf` 与 `loader.conf`，内置盘上的 live 启动项（`gaokun3-m0*.conf`）与 p3 不动 —— 装坏了从开机菜单进 live 再装一次。载荷：网络安装拿到的是已发布的 v0.6.2（`1789570683`）；设备上是未发布的 `1790206017`，要"同版本、保留数据"得先把它的 `boot.img` + `super.img.zst` 放到 p3 |
 | M4.5 | 救援系统迁移（先并列、验过、再删 p3） | 真机 | ⬜ |
 | M5 | roadmap 欠的 5 条 + 退役 C 版 + 文档 | — | ▶ roadmap 第 1–4 条 Flutter 版都做了（两步式 WiFi 与信号格数、网络安装接进 apply、分区大小回灌 `--userdata-mib`、"已分配 / 共"读 `PLANSUM`）；第 1 条最后一项**隐藏网络** 2026-09-26 补上（后端 `gk3_wifi_connect … hidden` → `scan_ssid=1`，`test-wifi-connect.sh` 12/12，界面 58/58）。第 5 条就是 M4。✅ 退役 C 版（2026-09-26）。⬜ 文档（INSTALL.md / README 的救援描述要等 M4.5） |
 
@@ -422,6 +423,42 @@ BitLocker 恢复密钥两项要真机（`scripts/windows/README.md`）。做法�
 ⚠️ **验证难题**：唯一一台机器的 Windows 已在 2026-08-20 抹掉，没有 Windows 可测。可选：Mac 上用 UTM 跑
 Windows 11 ARM 虚拟机验 PowerShell 与 bcdedit 的流程（验不了华为固件对 `bootsequence` 的处理），或找有 Windows
 的用户试。
+
+### 5.9 ★ M4b：第一次真的装了一台（2026-09-26，内置盘，重新安装 + 保留数据）
+
+`docs/stage7-installer-roadmap.md` 那条"从来没有真的装过一台机器"的欠账，今天还上了。
+本机整盘是 Android，双系统必被 PARTLABEL 查重拒绝 ⇒ 走**重新安装**；用户选"同版本、保留数据"（对日用数据改动最小）。
+
+* 载荷：构建机 `out/` 里的 `1790206017`（设备正在跑的那一版，未发布）照 `release.sh` 的办法打包
+  （`boot.img` · `zstd -19 --long` 的 `super.img.zst` 1.28 GB · `install-artifacts.sha256`）→ 直连拉回本机
+  （热点下约 4 MB/s，按偏移续传、sha256 一致；R2 凭据不在构建机上，没去找）→ `m0-internal.sh payload` 推到
+  p3 的 `gaokun3/payload/`（WiFi adb 8.8 MB/s，推前推后各核一遍）。live 换成**正式构建**的镜像（`prepare`）。
+* 装机前在 /data 与 /data/media/0 各放一个随机标记，记下第三方应用清单、`/data` 用量、几个设置项。
+* oneshot 进 live → 用户在屏幕上：重新安装 → U 盘里的镜像 → 保留数据 → 按住确认 → 重启。
+  **会话开始 23:30:53，Android 23:34:07 已 `boot_completed`** —— 点界面 + 写盘 + 重启 + 开机一共约 3 分钟。
+
+| | 装机前 | 装机后 |
+|---|---|---|
+| 槽 | `_b`（mapper 里只有 `*_b`） | **`_a`**，已标记成功；mapper 里只有 `*_a`（super 是新写的）|
+| 版本 | `1790206017` | `1790206017` |
+| ESP default | `*-android-b.conf` | `*-android-a.conf`；live 的 5 个启动项、Ubuntu / Alpine 救援项都还在 |
+| 两个随机标记 | 写入 | **原样**（/data/local/tmp 与 /data/media/0）|
+| 第三方应用 | 21 个 | **逐行相同** |
+| `/data` 已用 | 62 796 872 KiB | 62 797 620 KiB |
+| `ntp_server` / `allow_suspend` | `ntp.aliyun.com` / 0 | 同左 |
+
+⇒ **保留数据的重新安装在真机上成立**（同版本）。开机后用户处于 `RUNNING_LOCKED`、`/sdcard` 还没挂 ——
+那是任何一次重启后"等第一次解锁"的正常状态，不是这次装机造成的。
+⚠️ 回落槽的处境照旧、方向反了：新写的 super 里 `*_b` 是空的（`lpdump`：`system_b` 没有 extent）⇒ `_b` 起不来。
+安全网是开机菜单里内置盘上的 live（再装一次）与救援 Ubuntu。
+
+**★ 抓到的缺口：介质上找不到 `gk3_apply` 的任何一行输出。** `diag/installer.log` 只有 Flutter 进程自己的
+stderr；后端的进度、sha256 核对、每一步写盘只在屏幕上的日志区里出现过。这一次装成了所以无所谓，
+装坏的那一次就只剩"屏幕上好像报了个错"。修法：`ShellBackend` 把每次调用的参数（WiFi 密码遮住）、
+stdout 记录、stderr、退出码与耗时照抄到自己的 stderr —— session 脚本早已把它接到 `diag/installer.log`。
+测试 `shell_backend_test.dart`（含"参数里的 `$(…)` 不被 shell 解释"），界面测试 60/60。
+
+⬜ 没验的：清除数据的重新安装（默认那条）、整盘清空、双系统 —— 后两者在本机都没有合适的盘面；换旧版本 + 保留数据（界面上写了"可能起不来"）。
 
 ## 6. 风险（按"会不会让方案作废"排序）
 
