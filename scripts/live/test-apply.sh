@@ -197,7 +197,8 @@ grep -q '^PROGRESS 100 ' "$W/a1.log" && ok "进度走到 100" || bad "进度没�
 [ "$(grep -c '^PROGRESS [3-6][0-9] 写入 super' "$W/a1.log")" -ge 5 ] \
     && ok "写 super 期间有 $(grep -c '^PROGRESS [3-6][0-9] 写入 super' "$W/a1.log") 行进度（simg2img 那里是几分钟的沉默）" \
     || bad "写 super 期间没有进度"
-ls /tmp/gpt-backup-"$(basename "$DA")"-*.bin >/dev/null 2>&1 && ok "动盘前备份了分区表" || bad "没有分区表备份"
+ls /tmp/gpt-before-apply-"$(basename "$DA")"-*.bin >/dev/null 2>&1 && grep -q '分区表只备份到了内存里' "$W/a1.log" \
+    && ok "动盘前备份了分区表（介质不可写 → 落到 /tmp，并且警告了重启就没）" || bad "没有分区表备份，或者落到内存里却没警告"
 
 # ── B. 双系统 ──────────────────────────────────────────────────────────────
 echo "═══ B. 双系统：装进 Windows 盘中间的空闲区 ═══"
@@ -507,6 +508,15 @@ ntfs-3g -o ro "${DG}p2" "$mg" && GOT=$(sha "$mg/win.bin") && NSZ=$(df -m "$mg" |
     && ok "扩大 NTFS 3 → 4 GiB：文件没变，PARTUUID 没变（Windows 的 BCD 靠它）" || { bad "扩大 NTFS 不对（rc=$rc df=$NSZ）"; tail -3 "$W/g4.log"; }
 gfail "扩到比后面的空闲还大" "紧挨着的空闲不够" gk3_part_resize "${DG}p2" 30000
 
+# ★ 2026-09-27 审查：partprobe 没生效（分区被占着）时内核还拿着旧分区表，同号节点指着旧起点 —— -b 看不出来
+DS=$(new_disk s 2G); sgdisk -o -n 1:2048:+100M "$DS" >/dev/null 2>&1; partprobe "$DS"; sleep 1
+mkfs.ext4 -q -F "${DS}p1"; ms=$W/mnt-s; mkdir -p "$ms"; mount "${DS}p1" "$ms"
+sgdisk -d 1 -n 1:411648:+100M "$DS" >/dev/null 2>&1; partprobe "$DS" 2>/dev/null   # p1 挂着：内核改不了它
+OUT=$(gk3__node_matches "$DS" "${DS}p1" 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '对不上' && ok "内核还拿着旧分区表：同号节点认出来是旧的（起点对不上）" || bad "旧节点没认出来（rc=$rc）"
+umount "$ms"; partprobe "$DS"; sleep 1
+gk3__node_matches "$DS" "${DS}p1" 2>/dev/null && ok "卸下、partprobe 生效之后：对上了" || bad "partprobe 之后还说对不上"
+
 # ── E. 网络安装 ────────────────────────────────────────────────────────────
 echo "═══ E. 网络安装：下载一整套发布文件，再走同一条写盘路径 ═══"
 # 迷你 HTTP 服务器：range 模式支持 "Range: bytes=N-"（R2 支持；Python 自带的 http.server 不支持）
@@ -565,6 +575,17 @@ DL3=$W/dl3; mkdir -p "$DL3"; head -c 12345 "$REL/super.img.zst" > "$DL3/super.im
 gk3_net_release http://127.0.0.1:18082/good/ "$DL3" >/dev/null 2>"$W/e3.err"; rc=$?
 [ "$rc" = 0 ] && [ "$(sha "$DL3/super.img.zst")" = "$(sha "$REL/super.img.zst")" ] && grep -q '不支持断点续传' "$W/e3.err" \
     && ok "服务器不支持续传：丢掉半截、从头下完，sha256 一致" || { bad "无 Range 服务器时 rc=$rc"; tail -3 "$W/e3.err"; }
+# ★ 2026-09-27 审查：同一个下载目录里先下完 A、再换 B（同一次会话里换版本再装）—— boot.img 一样大，续传 416；
+#   super 的新内容接在 A 的前缀后面，sha256 永远对不上。现在：不符就删掉，重试从头下
+mkdir -p "$SRV/alt"; cp "$SRV/good/boot.img" "$SRV/alt/"
+{ cat "$SRV/good/super.img.zst"; head -c 1048576 /dev/urandom; } > "$SRV/alt/super.img.zst"
+printf 'Z' | dd of="$SRV/alt/super.img.zst" bs=1 seek=100 conv=notrunc status=none    # 开头也不同：续传接上的前缀是错的
+( cd "$SRV/alt" && sha256sum boot.img super.img.zst > install-artifacts.sha256 )
+DL6=$W/dl6; gk3_net_release http://127.0.0.1:18081/good/ "$DL6" >/dev/null 2>&1
+gk3_net_release http://127.0.0.1:18081/alt/ "$DL6" >/dev/null 2>&1; rc1=$?
+gk3_net_release http://127.0.0.1:18081/alt/ "$DL6" >/dev/null 2>&1; rc2=$?
+[ "$rc1" != 0 ] && [ "$rc2" = 0 ] && [ "$(sha "$DL6/super.img.zst")" = "$(sha "$SRV/alt/super.img.zst")" ] \
+    && ok "同一目录换版本：第一次 sha256 不符并删掉，重试从头下、这次对了" || bad "换版本后卡住了（rc1=$rc1 rc2=$rc2）"
 OUT=$(gk3_net_release http://127.0.0.1:18081/bad/ "$W/dl4" 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'boot.img 的 sha256 不符' \
     && ok "服务器上的 boot.img 被改过：拒绝" || bad "被改过的文件居然通过了（rc=${rc}）"

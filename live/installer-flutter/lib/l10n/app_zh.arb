@@ -191,6 +191,7 @@
     }
   },
   "shrinkWhyDirty": "这个 NTFS 分区没有被干净地卸载。请回到 Windows，关闭“快速启动”并正常关机，然后再试一次。",
+  "shrinkWhyHibernated": "Windows 处于休眠或“快速启动”状态，这时缩小它会损坏 Windows 的数据。请回到 Windows，关闭“快速启动”，用“关机”（不是休眠）退出，然后再试一次。",
   "shrinkWhyFs": "这种文件系统不支持在不丢数据的前提下缩小。",
   "shrinkWhyMounted": "这个分区正在使用中（安装器就是从它上面运行的），不能缩小。",
   "shrinkSizeHint": "缩小后的大小",

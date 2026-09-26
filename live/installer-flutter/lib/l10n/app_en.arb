@@ -113,6 +113,7 @@
   "shrinkNone": "There is no partition on this disk we can shrink. Only NTFS and ext filesystems can be shrunk without losing data.",
   "shrinkRow": "{fs} · now {cur} · can shrink to {min}",
   "shrinkWhyDirty": "This NTFS partition was not cleanly unmounted. Go back to Windows, turn off Fast Startup and shut down normally, then try again.",
+  "shrinkWhyHibernated": "Windows is hibernated or in Fast Startup, and shrinking it now would corrupt Windows’ data. Go back to Windows, turn off Fast Startup, choose Shut down (not Hibernate), then try again.",
   "shrinkWhyFs": "This filesystem cannot be shrunk without losing data.",
   "shrinkWhyMounted": "This partition is in use (the installer is running from it), so it cannot be shrunk.",
   "shrinkSizeHint": "Size after shrinking",

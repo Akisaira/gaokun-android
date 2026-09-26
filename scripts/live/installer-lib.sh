@@ -527,6 +527,22 @@ gk3__esp_delta_kib() {
     echo "$kib"
 }
 
+# 写完之后从【介质】读回来核对：卸下、丢掉这块设备的缓存（blockdev --flushbufs）、只读挂回去逐个 cmp。
+# 挂着直接 cmp 读的是页缓存 —— 介质在回写时才报的错那样看不出来（2026-09-27 审查）。
+#   gk3__verify_on <分区> <文件系统类型> <分区上的相对路径>=<源文件> …
+gk3__verify_on() {
+    local dev=$1 fst=$2 m w bad=""; shift 2
+    blockdev --flushbufs "$dev" 2>/dev/null
+    m=$(mktemp -d)
+    mount -o ro -t "$fst" "$dev" "$m" 2>/dev/null || { rmdir "$m"; gk3_die "写完之后 $dev 挂不回来"; return 1; }
+    for w in "$@"; do
+        cmp -s "$m/${w%%=*}" "${w#*=}" || { bad=${w%%=*}; break; }
+    done
+    umount "$m"; rmdir "$m" 2>/dev/null
+    [ -z "$bad" ] || { gk3_die "$dev 上的 $bad 与源文件不一致（读回来核对没过）"; return 1; }
+    echo "$dev：$# 个文件从介质读回核对一致" >&2
+}
+
 gk3_apply() {
     local disk="" mode=wipe rescue=no rel="" rstart="" rend="" esp="" ud_mib="" keep=no
     while [ $# -gt 0 ]; do
@@ -754,17 +770,7 @@ gk3_apply() {
     #     sgdisk --load-backup=<文件> <盘>
     #   代价是几十 KB 和一秒钟；没有它的话，改错分区表就只能靠猜。
     if [ "$DRY" != 1 ] && [ "$mode" != reinstall ]; then
-        local bkdir bk
-        bkdir=/media/gk3/gaokun3
-        mount -o remount,rw /media/gk3 2>/dev/null || true
-        [ -d "$bkdir" ] && [ -w "$bkdir" ] || bkdir=/tmp
-        bk="$bkdir/gpt-backup-$(basename "$disk")-$(date +%Y%m%d-%H%M%S).bin"
-        if sgdisk --backup="$bk" "$disk" >/dev/null 2>&1; then
-            echo "分区表已备份到 ${bk}（还原：sgdisk --load-backup=$bk ${disk}）" >&2
-        else
-            echo "警告：分区表备份失败（继续，但出事就没有还原点了）" >&2
-        fi
-        sync
+        gk3__gpt_backup "$disk" apply
     fi
 
     if [ "$mode" = reinstall ]; then
@@ -825,7 +831,8 @@ EOF
     # ⚠️ 按分区的【实际大小】清零，不按 GK3_MISC_MIB：重新安装时复用的 misc 可能比 4 MiB 小
     #    （本机 1007 KiB）—— 按 4 MiB 写会在写满之后报 No space left，整个安装失败在这一步
     local misc_kib; misc_kib=$(( $(blockdev --getsize64 "$p_misc" 2>/dev/null || echo $(( GK3_MISC_MIB << 20 ))) / 1024 ))
-    gk3__run dd if=/dev/zero of="$p_misc" bs=1024 count="$misc_kib" conv=fsync status=none || return 1
+    # conv=nocreat：节点要是在这之前被 udev 删了又没建回来，dd 会在 /dev 里新建一个普通文件、写成功、盘上什么也没有（审查 #4）
+    gk3__run dd if=/dev/zero of="$p_misc" bs=1024 count="$misc_kib" conv=fsync,nocreat status=none || return 1
     [ "$rescue" = yes ] && { gk3__run mkfs.ext4 -q -F -L gk3rescue "$p_resc" || return 1; }
 
     # ── 写 super（30% → 70%，进度由 gk3-unsparse.py 按块推进）──────────
@@ -833,8 +840,15 @@ EOF
     gk3__write_super "$super_src" "$p_super" || return 1
 
     gk3_prog 70 "写入 boot_a / boot_b"
-    gk3__run dd if="$rel/boot.img" of="$p_boota" bs=4M conv=fsync status=none || return 1
-    gk3__run dd if="$rel/boot.img" of="$p_bootb" bs=4M conv=fsync status=none || return 1
+    gk3__run dd if="$rel/boot.img" of="$p_boota" bs=4M conv=fsync,nocreat status=none || return 1
+    gk3__run dd if="$rel/boot.img" of="$p_bootb" bs=4M conv=fsync,nocreat status=none || return 1
+    # 写过的节点必须还是块设备 —— 否则上面那些字节进了内存里的一个文件（gk3-unsparse 同理：它会 O_CREAT）
+    if [ "$DRY" != 1 ]; then
+        local wn
+        for wn in "$p_misc" "$p_boota" "$p_bootb" "$p_super"; do
+            [ -b "$wn" ] || { gk3_die "$wn 已经不是块设备了 —— 写进去的东西不在盘上（udev 在写盘期间重建了节点？）"; return 1; }
+        done
+    fi
 
     # ── 引导链 ──────────────────────────────────────────────────────────
     # ⚠️ 少了这一步，前面所有东西都写对了，机器照样起不来 —— 这台机器是 UEFI，
@@ -947,37 +961,41 @@ options    $(gk3__rescue_cmdline "$cmdline")
 RESC
         fi
         sync
-        # ★ 写完逐个核对：cp 没报错不等于文件是全的（介质可能在 sync 时才报错）
-        local -a wl; local w
-        mapfile -t wl < <(gk3__esp_files "$mid")
-        for w in "${wl[@]}"; do
-            cmp -s "$mnt/${w%%=*}" "${w#*=}" || { esp_fail "${w%%=*} 与源文件不一致（截断？）"; return 1; }
-        done
         for slot in a b; do
             [ -s "$mnt/loader/entries/$mid-android-$slot.conf" ] || { esp_fail "启动项 $mid-android-$slot.conf 是空的"; return 1; }
         done
-        echo "ESP：目录 ${mid}，${#wl[@]} 个文件逐字节核对一致" >&2
     else
         echo "DRY: 往 $p_esp 写 systemd-boot、两个 Android 启动项（options=$cmdline …）、内核/dtb/ramdisk" >&2
     fi
-    gk3__run umount "$mnt" || true
+    gk3__run umount "$mnt" || { gk3_die "ESP 卸不下来（$p_esp）—— 写进去的东西可能没落盘"; return 1; }
     rmdir "$mnt" 2>/dev/null || true
+    if [ "$DRY" != 1 ]; then
+        # ★ 写完逐个核对（cp 没报错不等于文件是全的），从介质读回来
+        local -a wl
+        mapfile -t wl < <(gk3__esp_files "$mid")
+        gk3__verify_on "$p_esp" vfat "${wl[@]}" || return 1
+    fi
 
     # ── 救援系统 ────────────────────────────────────────────────────────
     if [ "$rescue" = yes ]; then
         gk3_prog 92 "写入救援系统"
         local rmnt; rmnt=$(mktemp -d)
         gk3__run mount "$p_resc" "$rmnt" || return 1
+        # ★ 每一步都查（2026-09-27 审查：原先全不查，救援系统坏了要等到真要用它的那天才知道；
+        #   重新安装时分区刚被格式化过，写失败等于把一个好的救援系统换成了坏的）
+        resc_fail() { gk3_die "写救援分区失败：$1（$p_resc）"; umount "$rmnt" 2>/dev/null; rmdir "$rmnt" 2>/dev/null; }
+        local -a rfl=("gaokun3/rescue.squashfs=$r_squash")
         if [ "$DRY" != 1 ]; then
-            mkdir -p "$rmnt/gaokun3"
-            cp "$r_squash" "$rmnt/gaokun3/rescue.squashfs"
+            mkdir -p "$rmnt/gaokun3" || { resc_fail "建目录"; return 1; }
+            cp "$r_squash" "$rmnt/gaokun3/rescue.squashfs" || { resc_fail "rescue.squashfs"; return 1; }
             # ⚠️ WiFi 凭据【不打包进镜像】：安装器把用户当前用的那份复制过去，
             #    这样救援系统一开机就能连上同一个网。见 gk3-wifi 的注释。
             #    来源按优先级：发布目录里放的 → 安装器里刚连上的（gk3_wifi_connect 写的）
             #    → 做 U 盘时放在介质上的。
             local wconf
             if wconf=$(gk3__find_file wpa_supplicant.conf "$rel" "$GK3_RUNDIR" /media/gk3/gaokun3); then
-                install -Dm600 "$wconf" "$rmnt/gaokun3/wpa_supplicant.conf"
+                install -Dm600 "$wconf" "$rmnt/gaokun3/wpa_supplicant.conf" || { resc_fail "WiFi 配置"; return 1; }
+                rfl+=("gaokun3/wpa_supplicant.conf=$wconf")
                 echo "救援系统的 WiFi 配置取自 $wconf" >&2
             else
                 echo "警告：没有 WiFi 配置可带给救援系统 —— 它开机后连不上网，只能在机器旁操作" >&2
@@ -990,15 +1008,19 @@ RESC
             akeys=$(gk3__find_file authorized_keys "$rel" /media/gk3/gaokun3) \
                 || { [ -s /root/.ssh/authorized_keys ] && akeys=/root/.ssh/authorized_keys; } || true
             if [ -n "$akeys" ]; then
-                install -Dm600 "$akeys" "$rmnt/gaokun3/authorized_keys"
+                install -Dm600 "$akeys" "$rmnt/gaokun3/authorized_keys" || { resc_fail "ssh 公钥"; return 1; }
+                rfl+=("gaokun3/authorized_keys=$akeys")
                 echo "救援系统的 ssh 公钥取自 ${akeys}（$(grep -c '^ssh-\|^ecdsa-' "$akeys") 把）" >&2
             else
                 echo "警告：没有 ssh 公钥可带给救援系统 —— 只能在机器旁登录（放一份到 U 盘的 gaokun3/authorized_keys）" >&2
             fi
             sync
         fi
-        gk3__run umount "$rmnt" || true
+        gk3__run umount "$rmnt" || { gk3_die "救援分区卸不下来（$p_resc）"; return 1; }
         rmdir "$rmnt" 2>/dev/null || true
+        if [ "$DRY" != 1 ]; then
+            gk3__verify_on "$p_resc" ext4 "${rfl[@]}" || return 1
+        fi
     fi
 
     rm -rf "$parts"
@@ -1040,7 +1062,7 @@ gk3__write_super() {
                 python3 "$us" --progress 30 40 "$dst" < "$src" || { gk3_die "super 展开失败"; return 1; }
             else
                 echo "super.img 不是 sparse 格式，直接写" >&2
-                dd if="$src" of="$dst" bs=4M conv=fsync status=none || { gk3_die "dd super 失败"; return 1; }
+                dd if="$src" of="$dst" bs=4M conv=fsync,nocreat status=none || { gk3_die "dd super 失败"; return 1; }
             fi ;;
     esac
     # ★ 判格式不判校验和：偏移 4096 处必须是 LP geometry 魔数。
@@ -1087,6 +1109,7 @@ gk3__need_part() {
     if [ ! -b "$path" ]; then
         gk3_die "$path 等了 10 秒还不是块设备 —— 分区表写下去了但内核没认"; return 1
     fi
+    gk3__node_matches "$disk" "$path" || return 1
     echo "$path"
 }
 
@@ -1120,6 +1143,60 @@ gk3__bylabel() {
 #   5. 重建分区时保住 PARTUUID：Windows 的 BCD 按 PARTUUID 找系统盘，
 #      换了它 Windows 就起不来（分区还在、数据还在，但引导指向不存在的 UUID）
 
+# ── NTFS：Windows 休眠 / 快速启动 / 没关干净 ─────────────────────────────────
+# ⚠️★ 2026-09-27 审查查出、按 ntfs-3g 2022.10.3（packages-live.lock 里那一版）的源码核实：
+#   * ntfsresize【看不出】Windows 在休眠（快速启动的"关机"也是休眠，而它默认开着）：它按 NTFS_MNT_FORENSIC
+#     打开卷（ntfsprogs/ntfsresize.c:2888），这个标志正好跳过休眠与 $LogFile 两项检查（libntfs-3g/volume.c:1286）
+#   * 原先还给 --info / --no-action 加了 --force —— 而脏卷那一道一个 --force 就放行（ntfsresize.c:2946-2948）；
+#     真做时的 --force --force 再喂一个 y，连"确认"（ntfsresize.c:4656）一起替用户答了
+#   这样的卷缩了，Windows 醒来时它缓存里的元数据与盘上对不上 = 损坏。上面"不要绕过它"那条纪律，代码自己没守住。
+#   现在：只读的探测看 hiberfil.sys（与 ntfs-3g 自己的判据相同，volume.c:832-833）+ 不带 --force 的 --info；
+#   真动手之前再让 ntfs-3g 读写挂一次（它做全套检查，挂成只读 = 不安全）；ntfsresize 只给一个 --force，stdin 接 /dev/null。
+
+# hiberfil.sys 开头是 hibr / HIBR ⇒ Windows 休眠着。ntfscat 只读打开卷，不写任何东西
+gk3__ntfs_hibernated() {
+    case "$(ntfscat "$1" /hiberfil.sys 2>/dev/null | head -c 4 | od -An -tx1 | tr -d ' \n')" in
+        68696272|48494252) return 0 ;;    # "hibr" / "HIBR"
+    esac
+    return 1
+}
+
+# 动手之前的终审：让 ntfs-3g 按读写挂一次再卸下 —— 休眠与 $LogFile 没关干净这两项它都查，判据就是库里那一套。
+# ⚠️ 判据是"挂成了只读"，不是退出码：读写挂载默认带 NTFS_MNT_MAY_RDONLY（src/ntfs-3g.c:4031-4033），
+#    卷不安全时它【退回只读、照样返回 0】（libntfs-3g/volume.c:1286-1315 的 need_fallback_ro）。
+# ⚠️ norecover：不加的话，$LogFile 没关干净时它会"修好"—— 清空日志（volume.c:1296-1302）。这正是要避免的写入。
+# no_detach：让它在前台跑，卸下之后 wait 它 —— 它把卷真正关好之前，不能让 ntfsresize 去开同一个设备
+gk3__ntfs_trial_mount() {
+    local part=$1 m pid rc i opts=""
+    m=$(mktemp -d)
+    ntfs-3g -o no_detach,norecover "$part" "$m" 2>/dev/null &
+    pid=$!
+    for i in $(seq 1 100); do
+        findmnt -rn "$m" >/dev/null 2>&1 && break
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+    done
+    if findmnt -rn "$m" >/dev/null 2>&1; then
+        opts=$(findmnt -rn -o OPTIONS "$m")
+        umount "$m" 2>/dev/null || fusermount3 -u "$m" 2>/dev/null || fusermount -u "$m" 2>/dev/null
+    fi
+    wait "$pid"; rc=$?
+    rmdir "$m" 2>/dev/null
+    if [ "$rc" = 0 ] && [ -n "$opts" ]; then
+        case ",$opts," in
+            *,rw,*) return 0 ;;
+        esac
+        # 退回了只读 = 不安全。是哪一种：自己再看一眼 hiberfil.sys（只读）
+        if gk3__ntfs_hibernated "$part"; then rc=14; else rc=15; fi
+    fi
+    case "$rc" in
+        14) gk3_die "Windows 处于休眠或“快速启动”状态（${part}）—— 这时改它的大小会损坏 Windows 的数据。回 Windows 关掉快速启动、用“关机”退出，再试（盘没动过）" ;;
+        15) gk3_die "这个 NTFS 分区上次没有正常关机（${part}，日志里有没做完的操作）—— 回 Windows 正常开关机一次，再试（盘没动过）" ;;
+        *)  gk3_die "ntfs-3g 挂不上 ${part}（退出码 ${rc}）—— 不敢改它的大小（盘没动过）" ;;
+    esac
+    return 1
+}
+
 # 问文件系统"最小能缩到多少 MiB"。问不出来就报 can=no —— 不猜。
 gk3_shrink_info() {
     local part=$1 fs cur_mib min_mib can why out b bs blocks
@@ -1139,13 +1216,17 @@ gk3_shrink_info() {
         ntfs)
             if ! command -v ntfsresize >/dev/null; then
                 why=no-ntfsresize
+            elif gk3__ntfs_hibernated "$part"; then
+                why=ntfs-hibernated
             else
-                out=$(ntfsresize --info --force "$part" 2>&1)
+                # ⚠️ 不加 --force：它就是脏卷检查的开关（见上面"NTFS：Windows 休眠"那一段）
+                out=$(ntfsresize --info "$part" 2>&1)
                 if [ $? -ne 0 ]; then
                     # ⚠️ 最常见的原因是卷脏（Windows 快速启动/休眠）。
                     #    这不是该绕过的错误，是该转达给用户的错误。
+                    # 脏卷时 ntfsresize 的原话是 "Volume is scheduled for check"（ntfsresize.c:2948）
                     case "$out" in
-                        *dirty*|*Dirty*|*unclean*)  why=ntfs-dirty ;;
+                        *"scheduled for check"*|*dirty*|*Dirty*|*unclean*)  why=ntfs-dirty ;;
                         *"resize support"*)         why=ntfs-unsupported ;;
                         *)                          why=ntfsresize-failed ;;
                     esac
@@ -1208,28 +1289,24 @@ gk3_shrink() {
     if [ -z "$pu" ] || [ -z "$pt" ]; then
         gk3_die "读不到分区 $num 的 GUID —— 不敢重建它"; return 1
     fi
-    echo "分区 $num 身份：PARTUUID=$pu 类型=$pt 名字=${pl:-(无)}" >&2
+    local pattr; pattr=$(gk3__part_attr "$disk" "$num")
+    echo "分区 $num 身份：PARTUUID=$pu 类型=$pt 名字=${pl:-(无)} 属性=${pattr:-?}" >&2
 
     gk3_prog 5 "备份分区表"
-    mount -o remount,rw /media/gk3 2>/dev/null || true
-    bk=/media/gk3/gaokun3/gpt-before-shrink-$(date +%Y%m%d-%H%M%S).bin
-    [ -d /media/gk3/gaokun3 ] || bk=/tmp/gpt-before-shrink.bin
-    if sgdisk --backup="$bk" "$disk" >/dev/null 2>&1; then
-        echo "分区表备份：${bk}（还原：sgdisk --load-backup=$bk ${disk}）" >&2
-    else
-        echo "警告：分区表备份失败" >&2
-    fi
+    gk3__gpt_backup "$disk" shrink; bk=${GK3_GPT_BK:-（没有备份）}
 
     # ── 第 1 步：缩文件系统（演练 → 真做）───────────────────────────────
     gk3_prog 15 "演练缩小文件系统"
     case "$fs" in
         ntfs)
-            if ! ntfsresize --no-action --force --size "${target_mib}M" "$part" >/dev/null 2>&1; then
+            gk3__ntfs_trial_mount "$part" || return 1
+            if ! ntfsresize --no-action --size "${target_mib}M" "$part" >/dev/null 2>&1 </dev/null; then
                 gk3_die "ntfsresize 演练没通过 —— 不往下做"; return 1
             fi
             gk3_prog 30 "缩小 NTFS"
-            # 两个 --force 是 ntfsresize 自己的要求（第二次是确认），不是硬来
-            if ! printf 'y\n' | ntfsresize --force --force --size "${target_mib}M" "$part" >/dev/null 2>&1; then
+            # 一个 --force = 替用户答"确认"那一问（ntfsresize.c:4656）。脏卷的话它先被脏卷检查吃掉，
+            # 确认那一问就会去读 stdin —— 接的是 /dev/null，于是停下。别再喂 y
+            if ! ntfsresize --force --size "${target_mib}M" "$part" >/dev/null 2>&1 </dev/null; then
                 gk3_die "缩小 NTFS 失败 —— 分区表还没动过，数据应当完好"; return 1
             fi ;;
         ext2|ext3|ext4)
@@ -1259,9 +1336,12 @@ gk3_shrink() {
     if ! sgdisk -n "${num}:${start}:${end}" -t "${num}:${pt}" -u "${num}:${pu}" "$disk" >/dev/null 2>&1; then
         gk3_die "重建分区项失败 —— 分区表备份在 $bk"; return 1
     fi
-    [ -n "$pl" ] && sgdisk -c "${num}:${pl}" "$disk" >/dev/null 2>&1
-    partprobe "$disk" 2>/dev/null || true
-    sleep 1
+    # 分区名丢了的话 by-name 找不到它（userdata / metadata 丢了名字，以后重新安装就找不到）
+    if [ -n "$pl" ] && ! sgdisk -c "${num}:${pl}" "$disk" >/dev/null 2>&1; then
+        gk3_die "分区名 $pl 没写回去 —— 分区表备份在 $bk"; return 1
+    fi
+    gk3__part_attr_restore "$disk" "$num" "$pattr" || return 1
+    gk3__settle "$disk"
 
     # ── 第 3 步：验 ─────────────────────────────────────────────────────
     gk3_prog 90 "复核"
@@ -1270,6 +1350,8 @@ gk3_shrink() {
         gk3_die "PARTUUID 变了（$pu -> ${newpu}）—— Windows 会起不来"; return 1
     fi
     newmib=$(( $(blockdev --getsize64 "$part" 2>/dev/null || echo 0) / 1048576 ))
+    [ "$newmib" = "$target_mib" ] \
+        || { gk3_die "分区 $num 现在是 ${newmib} MiB，不是要的 ${target_mib} MiB（内核没看到新分区表？）—— 文件系统已缩到 ${target_mib} MiB，数据完好；重启后看一眼"; return 1; }
     echo "分区 ${num}：${cur} MiB -> ${newmib} MiB（PARTUUID 未变）" >&2
     gk3_prog 100 "缩小完成"
     return 0
@@ -1528,7 +1610,9 @@ gk3_net_fetch() {
     if [ -n "$want" ]; then
         gk3_prog $(( lo + span * 95 / 100 )) "校验 $name"
         local got; got=$(sha256sum "$dst" | cut -d' ' -f1)
-        [ "$got" = "$want" ] || { gk3_die "$name 的 sha256 不符：$got != ${want}（下载不完整或被篡改；重跑会从断点续传）"; return 1; }
+        # ⚠️ 不符就删掉（2026-09-27 审查）：留着的话，下一次 --continue-at 会接在一个坏的（或另一个版本的）前缀后面，
+        #   永远对不上 —— 在同一次会话里换一个版本再装，boot.img 同样大小续传 416、super 接错前缀，就是这样卡死的
+        [ "$got" = "$want" ] || { rm -f "$dst"; gk3_die "$name 的 sha256 不符：$got != ${want}（下载不完整或被篡改；已删掉，重试会从头下载）"; return 1; }
         gk3_log "${name}：sha256 校验通过"
     fi
     gk3_prog $(( lo + span )) "$name 下载完成"
@@ -1646,22 +1730,61 @@ gk3__edit_guard() {    # $1=分区 → 设 GK3_E_DISK / GK3_E_NUM
     [ -b "$GK3_E_DISK" ] && [ -n "$GK3_E_NUM" ] || { gk3_die "认不出 $part 属于哪块盘的第几个分区"; return 1; }
 }
 
-gk3__gpt_backup() {    # $1=盘 $2=标签：备份到介质（出事一条命令还原），与 gk3_apply / gk3_shrink 同一个做法
-    local disk=$1 dir=/media/gk3/gaokun3 bk
+# 分区的 GPT 属性位（16 位十六进制）。重建分区项时要原样带过去 —— Windows 恢复分区靠它们
+# （"平台必需" / "不分配盘符"；2026-09-27 审查）
+gk3__part_attr() { sgdisk -i "$2" "$1" 2>/dev/null | awk '/^Attribute flags:/{print $3}'; }
+gk3__part_attr_restore() {    # $1=盘 $2=号 $3=原来的属性位
+    [ -z "$3" ] || [ "$3" = 0000000000000000 ] && return 0
+    sgdisk -A "$2:=:$3" "$1" >/dev/null 2>&1 && [ "$(gk3__part_attr "$1" "$2")" = "$3" ] \
+        || { gk3_die "分区 $2 的属性位 $3 没带回去"; return 1; }
+}
+
+# 动盘之前备份分区表到介质（出事一条命令还原）。gk3_apply / gk3_shrink / 调整磁盘共用这一份；路径留在 GK3_GPT_BK。
+# ⚠️ "还原：sgdisk --load-backup=" 这几个字界面在认（screens_finish.dart 的失败页），别改
+gk3__gpt_backup() {    # $1=盘 $2=标签
+    local disk=$1 dir=/media/gk3/gaokun3
     mount -o remount,rw /media/gk3 2>/dev/null || true
     [ -d "$dir" ] && [ -w "$dir" ] || dir=/tmp
-    bk="$dir/gpt-before-$2-$(basename "$disk")-$(date +%Y%m%d-%H%M%S).bin"
-    if sgdisk --backup="$bk" "$disk" >/dev/null 2>&1; then
-        echo "分区表备份：${bk}（还原：sgdisk --load-backup=$bk ${disk}）" >&2
+    GK3_GPT_BK="$dir/gpt-before-$2-$(basename "$disk")-$(date +%Y%m%d-%H%M%S).bin"
+    if sgdisk --backup="$GK3_GPT_BK" "$disk" >/dev/null 2>&1; then
+        sync
+        echo "分区表备份：${GK3_GPT_BK}（还原：sgdisk --load-backup=$GK3_GPT_BK ${disk}）" >&2
+        # 2026-09-27 审查：落到 /tmp 的备份在内存里，重启就没了 —— 说清楚，别让人以为有还原点
+        [ "$dir" != /tmp ] || echo "警告：安装介质写不进去，分区表只备份到了内存里（${GK3_GPT_BK}），重启就没了 —— 要留着就先把它拷走" >&2
     else
-        echo "警告：分区表备份失败" >&2
+        GK3_GPT_BK=""
+        echo "警告：分区表备份失败（继续，但出事就没有还原点了）" >&2
     fi
 }
 
 gk3__settle() { partprobe "$1" 2>/dev/null || true; command -v udevadm >/dev/null && udevadm settle --timeout=5 2>/dev/null; sleep 1; }
 
 gk3__wait_node() {     # 分区节点是异步出现的："还没出现"和"不存在"是两回事（gk3__need_part 的注释）
-    local i=0; while [ ! -b "$1" ] && [ $i -lt 50 ]; do sleep 0.2; i=$((i+1)); done; [ -b "$1" ]
+    local i=0; while [ ! -b "$1" ] && [ $i -lt 50 ]; do sleep 0.2; i=$((i+1)); done; [ -b "$1" ] || return 1
+    local d; d=$(gk3__disk_of "$1") && gk3__node_matches "$d" "$1"
+}
+
+# 分区所在的整块盘（/dev/nvme0n1p5 → /dev/nvme0n1，/dev/loop3p2 → /dev/loop3），按 sysfs 找，不按名字猜
+gk3__disk_of() {
+    local n; n=$(readlink -f "/sys/class/block/${1##*/}/.." 2>/dev/null) || return 1
+    [ -b "/dev/${n##*/}" ] && echo "/dev/${n##*/}"
+}
+
+# ⚠️ 节点存在不等于它对：partprobe 失败时（有分区被占着），内核还拿着【旧】分区表，同号的节点指着旧的起点 ——
+#   往它上面 mkfs / dd 就写进了别处（2026-09-27 审查）。拿内核看到的起点 / 大小（sysfs，512 字节为单位）
+#   对一遍盘上的分区表（sgdisk，逻辑扇区为单位）。$1=盘 $2=分区节点
+gk3__node_matches() {
+    local disk=$1 path=$2 n ss kst ksz st en
+    n=${path##*[!0-9]}
+    ss=$(( $(blockdev --getss "$disk" 2>/dev/null || echo 512) / 512 ))
+    kst=$(cat "/sys/class/block/${path##*/}/start" 2>/dev/null); ksz=$(cat "/sys/class/block/${path##*/}/size" 2>/dev/null)
+    st=$(sgdisk -i "$n" "$disk" 2>/dev/null | awk '/^First sector:/{print $3}')
+    en=$(sgdisk -i "$n" "$disk" 2>/dev/null | awk '/^Last sector:/{print $3}')
+    [ -n "$kst" ] && [ -n "$st" ] || return 0          # 读不到就不拦（不在这里制造新的失败）
+    if [ "$kst" != $(( st * ss )) ] || [ "$ksz" != $(( (en - st + 1) * ss )) ]; then
+        gk3_die "内核看到的 $path（起点 ${kst}、${ksz} 扇区）与盘上的分区表（${st}–${en}）对不上 —— 新分区表没生效（有分区被占着？）。重启后再来"
+        return 1
+    fi
 }
 
 gk3__mkfs() {          # $1=分区 $2=ext4|vfat|ntfs
@@ -1695,7 +1818,9 @@ gk3_part_format() {
     gk3__edit_guard "$part" || return 1
     gk3_prog 20 "格式化 $part 为 $fs"
     gk3__mkfs "$part" "$fs" || { gk3_die "格式化 $part 失败"; return 1; }
-    sgdisk -t "$GK3_E_NUM:$(gk3__type_for_fs "$fs")" "$GK3_E_DISK" >/dev/null 2>&1 || true
+    # 类型码没改过去的话，格式化成 NTFS 的分区 Windows 不认（审查 #8）—— 文件系统已经建好，说清楚
+    sgdisk -t "$GK3_E_NUM:$(gk3__type_for_fs "$fs")" "$GK3_E_DISK" >/dev/null 2>&1 \
+        || { gk3_die "已格式化成 ${fs}，但分区类型码没改过去（sgdisk -t 失败）—— 别的系统可能不认它"; return 1; }
     gk3__settle "$GK3_E_DISK"
     gk3_prog 100 "完成"
     echo "RESULT op=format part=$part fs=$fs"
@@ -1772,6 +1897,7 @@ gk3__grow() {
     pu=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition unique GUID:' | awk '{print $4}')
     pl=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition name:' | cut -d"'" -f2)
     pt=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition GUID code:' | awk '{print $4}')
+    local pattr; pattr=$(gk3__part_attr "$disk" "$num")
     [ -n "$st" ] && [ -n "$pu" ] && [ -n "$pt" ] || { gk3_die "读不到分区 $num 的起点 / GUID —— 不敢重建它"; return 1; }
     next=$(sgdisk -p "$disk" 2>/dev/null | awk -v e="$en" '/^ *[0-9]+ /{ if ($2 > e && (n == "" || $2 < n)) n = $2 } END { print n }')
     last=$(sgdisk -p "$disk" 2>/dev/null | sed -n 's/.*last usable sector is \([0-9]*\).*/\1/p')
@@ -1782,7 +1908,8 @@ gk3__grow() {
     fi
     if [ "$fs" = ntfs ]; then
         # 与缩小同一条纪律：脏卷（Windows 快速启动 / 休眠）不碰 —— ntfsresize --info 先问一遍
-        ntfsresize --info --force "$part" >/dev/null 2>&1 || { gk3_die "ntfsresize 检查没通过（卷脏？回 Windows 关掉快速启动、正常关机）—— 盘没动过"; return 1; }
+        gk3__ntfs_trial_mount "$part" || return 1
+        ntfsresize --info "$part" >/dev/null 2>&1 </dev/null || { gk3_die "ntfsresize 检查没通过（卷脏？回 Windows 关掉快速启动、正常关机）—— 盘没动过"; return 1; }
     fi
     gk3_prog 10 "备份分区表"
     gk3__gpt_backup "$disk" grow
@@ -1790,12 +1917,18 @@ gk3__grow() {
     sgdisk -d "$num" "$disk" >/dev/null 2>&1 || { gk3_die "删旧分区项失败"; return 1; }
     sgdisk -n "$num:$st:$newend" -t "$num:$pt" -u "$num:$pu" "$disk" >/dev/null 2>&1 \
         || { gk3_die "重建分区项失败 —— 用上面的分区表备份还原"; return 1; }
-    [ -n "$pl" ] && sgdisk -c "$num:$pl" "$disk" >/dev/null 2>&1
+    if [ -n "$pl" ]; then
+        sgdisk -c "$num:$pl" "$disk" >/dev/null 2>&1 || { gk3_die "分区名 $pl 没写回去 —— 用上面的分区表备份还原"; return 1; }
+    fi
+    gk3__part_attr_restore "$disk" "$num" "$pattr" || return 1
     gk3__settle "$disk"
     gk3__wait_node "$part" || { gk3_die "分区节点没回来（$part）"; return 1; }
+    # 内核看到的必须已经是新大小 —— 否则 resize2fs / ntfsresize 会说"不用改"然后退出 0，报一个假的"扩大完成"
+    [ "$(blockdev --getsize64 "$part" 2>/dev/null)" = "$(( target * 1048576 ))" ] \
+        || { gk3_die "内核还没看到新的分区大小（$part）—— 分区项已扩大，文件系统没动；重启后再扩一次"; return 1; }
     gk3_prog 60 "扩大文件系统"
     case "$fs" in
-        ntfs) printf 'y\n' | ntfsresize --force --force "$part" >/dev/null 2>&1 || { gk3_die "扩大 NTFS 失败（分区项已扩大，文件系统还是原来的大小，数据完好）"; return 1; } ;;
+        ntfs) ntfsresize --force "$part" >/dev/null 2>&1 </dev/null || { gk3_die "扩大 NTFS 失败（分区项已扩大，文件系统还是原来的大小，数据完好）"; return 1; } ;;
         *)
             e2fsck -fp "$part" >/dev/null 2>&1; rc=$?
             [ "$rc" -lt 4 ] || { gk3_die "e2fsck 报错（${rc}），不敢扩"; return 1; }

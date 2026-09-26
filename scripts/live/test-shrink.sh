@@ -79,10 +79,14 @@ fi
 
 echo "═══ 3. 缩 ext4：5 GiB -> 3 GiB ═══"
 U2=$(uuid_of 2)
+sgdisk -A 2:set:0 -A 2:set:63 "$LOOP" >/dev/null 2>&1      # 恢复分区那种属性：平台必需 + 不分配盘符
+A2=$(sgdisk -i 2 "$LOOP" 2>/dev/null | awk '/^Attribute flags:/{print $3}')
 if gk3_shrink "$P2" 3072 >/dev/null 2>&1; then
     NEW=$(( $(blockdev --getsize64 "$P2") / 1048576 ))
     [ "$NEW" -le 3100 ] && ok "分区变成 ${NEW} MiB" || bad "分区还是 ${NEW} MiB"
     [ "$(uuid_of 2)" = "$U2" ] && ok "PARTUUID 未变" || bad "PARTUUID 变了！"
+    [ "$(sgdisk -i 2 "$LOOP" 2>/dev/null | awk '/^Attribute flags:/{print $3}')" = "$A2" ] && [ "$A2" = 8000000000000001 ] \
+        && ok "GPT 属性位原样带过去了（$A2）" || bad "属性位丢了（原来 ${A2}）"
     check_files "$P2" ext4
 else
     bad "缩 ext4 失败"
@@ -94,6 +98,27 @@ FREE=$(GK3_ALLOW_LOOP=1 gk3_probe 2>/dev/null | grep "^FREE disk=$LOOP" | awk '{
 
 echo "═══ 5. 拒绝缩到太小 ═══"
 gk3_shrink "$P2" 100 >/dev/null 2>&1 && bad "缩到 100 MiB 居然通过了" || ok "缩到 100 MiB 被拒"
+
+# ★ 2026-09-27 审查查出、按 ntfs-3g 源码核实：原先 --info / --no-action 带 --force（一个就放过脏卷），而休眠
+#   ntfsresize 根本看不出来（NTFS_MNT_FORENSIC）。Windows 的快速启动默认开着 —— 这是双系统用户的常态，不是边角。
+echo "═══ 6. 脏卷与休眠的 Windows：拒绝，盘不动 ═══"
+SZ1=$(blockdev --getsize64 "$P1")
+ntfsfix "$P1" >/dev/null 2>&1      # ntfsfix 会置上 dirty 位，让 Windows 下次开机跑 chkdsk（ntfsfix.c:299-318）
+I=$(gk3_shrink_info "$P1" 2>/dev/null)
+printf '%s' "$I" | grep -q 'can=no why=ntfs-dirty' && ok "脏卷：探测报 why=ntfs-dirty" || bad "脏卷没认出来：$I"
+gk3_shrink "$P1" 5500 >/dev/null 2>&1 && bad "脏卷居然缩了" || ok "脏卷：gk3_shrink 拒绝"
+ntfsfix -d "$P1" >/dev/null 2>&1
+mount "$P1" /tmp/sm && { printf 'HIBR' > /tmp/sm/hiberfil.sys; head -c 65532 /dev/zero >> /tmp/sm/hiberfil.sys; sync; umount /tmp/sm; }
+I=$(gk3_shrink_info "$P1" 2>/dev/null)
+printf '%s' "$I" | grep -q 'can=no why=ntfs-hibernated' && ok "休眠（hiberfil.sys 开头 HIBR）：探测报 why=ntfs-hibernated" || bad "休眠没认出来：$I"
+OUT=$(gk3_shrink "$P1" 5500 2>&1) && bad "休眠的卷居然缩了" || ok "休眠：gk3_shrink 拒绝"
+OUT=$(gk3__ntfs_trial_mount "$P1" 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '休眠' && ok "终审（ntfs-3g 读写挂一次）也认出休眠" || bad "ntfs-3g 终审没认出休眠（rc=$rc）：$OUT"
+[ "$(blockdev --getsize64 "$P1")" = "$SZ1" ] && ok "分区大小没变" || bad "分区大小变了"
+check_files "$P1" "NTFS（被拒之后）"
+# ⚠️ 休眠的卷普通 mount 会退回只读，rm 静默失败 —— 得用 remove_hiberfile（真实世界里这等于丢掉 Windows 的休眠会话）
+mount -t ntfs-3g -o remove_hiberfile "$P1" /tmp/sm && { [ ! -e /tmp/sm/hiberfil.sys ] || rm -f /tmp/sm/hiberfil.sys; umount /tmp/sm; }
+gk3__ntfs_trial_mount "$P1" 2>/dev/null && ok "干净的卷：终审放行" || bad "干净的卷被终审拦住了"
 
 echo
 echo "═══ 通过 $PASS · 失败 $FAIL ═══"
