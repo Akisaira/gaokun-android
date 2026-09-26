@@ -309,7 +309,7 @@ U 盘拔下来插回 Mac 就能读。⚠️ 槽 `_a` 现在不可启动（#122 �
 ```sh
 bash scripts/live/m0-internal.sh check      # 只读：按内容找 p3、量 ESP 与 p3 空间、抽 slot_b 内核的 .config 核 systemd 要求、看 WiFi 配置在不在
 bash scripts/live/m0-internal.sh prepare    # squashfs → p3:/gaokun3/live.squashfs，initramfs → ESP:<mid>/live/，写 5 个启动项，sha256 逐个核
-bash scripts/boot-oneshot.sh gaokun3-m0.conf && adb -s gaokun3 reboot     # ⚠️ 要你在场并同意
+bash scripts/boot-oneshot.sh gaokun3-live.conf && adb -s gaokun3 reboot   # ⚠️ 要你在场并同意（M0 时叫 gaokun3-m0.conf，2026-09-27 改名）
 bash scripts/live/m0-internal.sh logs       # 回到 Android 后取 p3:/gaokun3/diag/ → out/m0/diag/
 bash scripts/live/m0-internal.sh payload <发布目录>   # （M4b 加的）载荷 → p3:/gaokun3/payload/，推之前推之后各核一遍 sha256
 bash scripts/live/m0-internal.sh remove     # 撤掉启动项、initramfs、live.squashfs、payload/

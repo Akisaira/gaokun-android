@@ -4,7 +4,7 @@
 #
 #   bash scripts/live/m0-internal.sh check      # 只读：找分区、量空间、核内核配置、看凭据在不在
 #   bash scripts/live/m0-internal.sh prepare    # 放文件 + 写启动项（★ 不重启、不改 default）
-#   bash scripts/boot-oneshot.sh gaokun3-m0.conf && adb -s "$SER" reboot    ← ⚠️ 要用户同意
+#   bash scripts/boot-oneshot.sh gaokun3-live.conf && adb -s "$SER" reboot  ← ⚠️ 要用户同意
 #   bash scripts/live/m0-internal.sh logs       # 回到 Android 之后：取回 p3:/gaokun3/diag/ → out/m0/diag/
 #   bash scripts/live/m0-internal.sh payload <发布目录>   # 安装载荷 → p3:/gaokun3/payload/（live 里就是"U 盘里的镜像"）
 #   bash scripts/live/m0-internal.sh remove     # 撤掉启动项、initramfs、live.squashfs 与 payload/
@@ -48,7 +48,7 @@ S true >/dev/null 2>&1 || die "adb 连不上 ${SER}（走 TCP：SER=192.168.10.2
 umount_all() { S "umount $ESPM 2>/dev/null; umount $P3M 2>/dev/null; rmdir $ESPM $P3M 2>/dev/null; true" >/dev/null; }
 trap umount_all EXIT
 
-# 找放 live 的分区：按【内容】认 —— 上面有 Alpine M0 留下的 /gaokun3/rescue.squashfs 的那个。
+# 找放 live 的分区：按【内容】认 —— 上面有 /gaokun3/live.squashfs（或 Alpine M0 留下的 rescue.squashfs）的那个。
 # 不写死分区号：hw-inventory.md 第 8 节那张表之后又加过 boot_a/boot_b。
 # 只看【没挂载】的 ext4 分区，只读挂载。GK3_M0_PART=/dev/block/nvme0n1pN 可以直接指定。
 find_part() {
@@ -59,7 +59,7 @@ find_part() {
          n=\$(readlink -f \$d); grep -q \"^\$n \" /proc/mounts && continue
          blkid \$d 2>/dev/null | grep -q 'TYPE=\"ext4\"' || continue
          mount -t ext4 -o ro \$d $P3M 2>/dev/null || continue
-         [ -f $P3M/gaokun3/rescue.squashfs ] && { umount $P3M; echo \$d; break; }
+         { [ -f $P3M/gaokun3/live.squashfs ] || [ -f $P3M/gaokun3/rescue.squashfs ]; } && { umount $P3M; echo \$d; break; }
          umount $P3M
        done; rmdir $P3M 2>/dev/null; true"
 }
@@ -81,7 +81,7 @@ case "$cmd" in
 check|prepare)
     say "1. 放 live 的分区"
     PART=$(find_part | tail -1)
-    [ -n "$PART" ] || die "没找到带 /gaokun3/rescue.squashfs 的 ext4 分区。指定：GK3_M0_PART=/dev/block/nvme0n1pN"
+    [ -n "$PART" ] || die "没找到带 /gaokun3/live.squashfs 或 rescue.squashfs 的 ext4 分区。指定：GK3_M0_PART=/dev/block/nvme0n1pN"
     KNODE=$(S "readlink -f $PART"); KNAME=${KNODE##*/}
     ok "${PART}（内核节点 /dev/${KNAME}）"
     S "mkdir -p $P3M; mount -t ext4 -o ro $PART $P3M && { df -h $P3M | tail -1; ls -la $P3M/gaokun3/; umount $P3M; }" | sed 's/^/     /'
@@ -137,12 +137,15 @@ check|prepare)
     [ "${GK3_M0_WORKAROUNDS:-0}" = 1 ] && BASE="$BASE firmware_class.path=$FW_MEDIA net.ifnames=0"
     say "5. 启动项（非默认；标题 ASCII —— 开机菜单由固件字体画）"
     echo "     options  $BASE"
-    ENTRIES=(
-        "gaokun3-m0.conf|gaokun3 M0: live installer|"
-        "gaokun3-m0-skia.conf|gaokun3 M0: Skia (Impeller off)|gk3.renderer=skia"
-        "gaokun3-m0-soak.conf|gaokun3 M0: soak test, Impeller|gk3.soak=1"
-        "gaokun3-m0-soak-skia.conf|gaokun3 M0: soak test, Skia|gk3.soak=1 gk3.renderer=skia"
-        "gaokun3-m0-rot90.conf|gaokun3 M0: rotate the other way|gk3.rotate=90"
+    # 文件名 | 标题 | sort-key | 附加参数。常驻的只有安装器这一个 —— 与 Windows 那条路装上的同名同标题
+    # （scripts/windows/build-bundle.sh），装坏了从开机菜单进它再装一次。
+    # M0 的四个变体（渲染后端 / 浸泡 / 反向旋转）验收完就撤了（用户 2026-09-27"启动项清理下"），要时 GK3_M0_VARIANTS=1
+    ENTRIES=("gaokun3-live.conf|gaokun3 installer|gk3live|")
+    [ "${GK3_M0_VARIANTS:-0}" = 1 ] && ENTRIES+=(
+        "gaokun3-m0-skia.conf|gaokun3 M0: Skia (Impeller off)|zzm01|gk3.renderer=skia"
+        "gaokun3-m0-soak.conf|gaokun3 M0: soak test, Impeller|zzm02|gk3.soak=1"
+        "gaokun3-m0-soak-skia.conf|gaokun3 M0: soak test, Skia|zzm03|gk3.soak=1 gk3.renderer=skia"
+        "gaokun3-m0-rot90.conf|gaokun3 M0: rotate the other way|zzm04|gk3.rotate=90"
     )
     for e in "${ENTRIES[@]}"; do
         f=${e%%|*}
@@ -184,11 +187,11 @@ check|prepare)
     [ "$(S "sha256sum $ESPM/$MID/live/initramfs.img" | cut -d' ' -f1)" = "$want" ] && ok "initramfs sha256 一致" || die "initramfs 的 sha256 不对"
     TMP=$(mktemp); i=0
     for e in "${ENTRIES[@]}"; do
-        f=${e%%|*}; rest=${e#*|}; title=${rest%%|*}; extra=${rest#*|}
+        IFS='|' read -r f title skey extra <<< "$e"
         cat > "$TMP" <<EOF
 title      $title
-version    gaokun3-m0
-sort-key   zzm0$i
+version    ${f%.conf}
+sort-key   $skey
 linux      /$MID/android/slot_b/Image
 devicetree /$MID/android/slot_b/gaokun3.dtb
 initrd     /$MID/live/initramfs.img
@@ -204,7 +207,7 @@ EOF
     cat <<EOF
 
 准备完毕，没有重启。进 M0（⚠️ 要用户在场并同意）：
-  bash scripts/boot-oneshot.sh gaokun3-m0.conf          # 或 gaokun3-m0-soak.conf 等
+  bash scripts/boot-oneshot.sh gaokun3-live.conf        # GK3_M0_VARIANTS=1 时还有 gaokun3-m0-soak.conf 等
   adb -s $SER reboot
 起不来：initramfs 60 秒后自己重启，或长按电源键 → 回到 default（${DEF}）。
 回到 Android 后取结果：bash scripts/live/m0-internal.sh logs
@@ -255,8 +258,8 @@ logs)
     ;;
 remove)
     INFO=$(esp_info) || die "挂不上 ESP"; eval "$(printf '%s\n' "$INFO" | grep '^MID=')"
-    S "mkdir -p $ESPM; mount -t vfat /dev/block/by-name/esp $ESPM && rm -f $ESPM/loader/entries/gaokun3-m0*.conf && rm -rf $ESPM/$MID/live; sync; umount $ESPM" >/dev/null
-    ok "ESP：删了 gaokun3-m0*.conf 与 $MID/live/"
+    S "mkdir -p $ESPM; mount -t vfat /dev/block/by-name/esp $ESPM && rm -f $ESPM/loader/entries/gaokun3-m0*.conf $ESPM/loader/entries/gaokun3-live.conf && rm -rf $ESPM/$MID/live; sync; umount $ESPM" >/dev/null
+    ok "ESP：删了 gaokun3-live.conf、gaokun3-m0*.conf 与 $MID/live/"
     PART=$(find_part | tail -1)
     [ -n "$PART" ] && S "mkdir -p $P3M; mount -t ext4 $PART $P3M && rm -f $P3M/gaokun3/$SQ_NAME; sync; umount $P3M" >/dev/null \
         && S "mkdir -p $P3M; mount -t ext4 $PART $P3M && rm -rf $P3M/gaokun3/firmware $P3M/gaokun3/payload; sync; umount $P3M" >/dev/null \
