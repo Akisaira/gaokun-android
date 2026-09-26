@@ -69,7 +69,7 @@
 >    就把它 umount 了，于是安全网那一步静默失败。共享的可变状态要么私有、要么加锁。
 >
 > ### 发布与构建
-> * 构建机用完 **`az vm deallocate`**（按分钟计费）。构建机的树**不等于**本仓 checkout ——
+> * 构建机**按负载选机型开**（`bash scripts/cicd.sh start <档位>`，2026-09-27 起），用完 **`bash scripts/cicd.sh stop`**（按分钟计费，见 `docs/build-machine.md`）。构建机的树**不等于**本仓 checkout ——
 >   这个坑咬过五次，编内核前先 `bash scripts/kernel-apply-patches.sh <树> --verify`（绿了再 make），
 >   同步设备树**只用 `bash scripts/sync-device-tree.sh <IP>`**，别手写 rsync：2026-09-16 一条
 >   `rsync --delete` 把构建机上四样**不入库但构建必需**的输入（adb_keys / firmware / hexagonrpcd-root /
@@ -113,6 +113,7 @@
 | 硬件原始数据 | `docs/hw-inventory.md`、`docs/hw/`（转储） |
 | 发版说明 | `docs/relnotes/` |
 | 要投上游的补丁 | `docs/upstream/`（未发，等用户点头） |
+| **构建机怎么开、开多大**（按负载选机型、停机规矩、盘的代价） | `docs/build-machine.md` + `scripts/cicd.sh` |
 | **图形安装器（Flutter + Debian，进行中）** | `docs/stage7-flutter-debian.md`（决定、里程碑、M1 实测）；后端 `scripts/live/installer-lib.sh` + `scripts/live/README.md` 的测试一节 |
 | **指纹（TA 已在本机加载成功，进行中）** | `docs/fingerprint-driver-design.md`（架构+决策+复现+里程碑）；案卷 #120/#123/#124/#125；工具 `tools/fingerprint-bringup/` |
 
@@ -181,13 +182,16 @@ Android 相关知识。因此：
 
 ## 环境
 
-- **编译机：Azure VM `CICD`**（资源组 `AIROUTER_GROUP`，Standard_D32as_v5，
-  32 vCPU / 125 GB RAM / 504 GB 盘，静态公网 IP）。**按分钟计费，用完
-  `az vm deallocate`**（盘保留，下次 `az vm start` 约 1 分钟起来）。
+- **编译机：Azure VM `CICD`**（资源组 `AIROUTER_GROUP`，`centralindia`，Dasv5 家族，
+  504 GB 盘，静态公网 IP）。**按分钟计费，用完停机**（盘保留，开机约 1 分钟）。
   crDroid 源码树在 `~/crdroid`，内核树在 `~/gk3-kernel`。
-  ⚠️ **系统盘 2026-09-27 起是 `StandardSSD_LRS`**（用户要求；原来是 Premium P20）。
-  服务端标称吞吐 100 MB/s（P20 是 150），IOPS 也低不少 ⇒ 构建时间别拿老记录估，
-  尤其冷启动的 soong 分析（对照：09-26 在 P20 上，独立 OUT_DIR 冷编几个模块，跑到 71% 用了 9.5 分钟，接着补完剩下的用了 13 分钟）。
+  ★★ **2026-09-27 起（用户要求）：开机时先判断负载、按负载选机型** —— 一律用
+  `bash scripts/cicd.sh start <light|kernel|module|rom|clean>`（换机型 + 开机 + 回读核对，**在沙箱内跑**），
+  用完 `bash scripts/cicd.sh stop`。简表：不跑 `m` 的活 → `light`（D4）；内核 / 单编模块 → `kernel`/`module`（D16）；
+  整包增量 → `rom`（D32）；冷构建 → `clean`（D64，配额上限）。**任何 `m` 都不低于 D16（64 GB）**。
+  机器已在运行时不换机型（可能是别的会话在用）；停机前先 ssh 看有没有别人的构建。细则与依据：`docs/build-machine.md`。
+  ⚠️ **系统盘 2026-09-27 起是 `StandardSSD_LRS`**（用户要求；原 Premium P20）：吞吐 150→100 MB/s、IOPS 低不少，
+  冷启动的 Soong 分析受影响最大 ⇒ 构建时间别拿老记录估，新盘上的实测记到 `docs/build-machine.md` §4。
   ⚠️ **沙箱代理会掐断到它的 ssh** —— 长任务与大流量一律绕沙箱。
   ⚠️ 直连回家只有约 1.3 MB/s，大文件走 **R2 中转**（41 MB/s，出站免费）。
   ⚠️ NSG 的 22 端口目前对 `*` 开放 —— M6 说过要锁到自己出口 IP，**没落地**。
