@@ -29,10 +29,17 @@ PRODUCT_COPY_FILES += \
 #   免得换 ROM 后 USB 侧不通就彻底失联（本机 UCSI 拔插会丢 adb，见坑 #27）。
 #   属性名实名核实：packages/modules/adb/daemon/main.cpp:272-274
 #   先读 service.adb.tcp.port，回落 persist.adb.tcp.port。
-PRODUCT_PROPERTY_OVERRIDES += \
-    ro.adb.secure=0 \
-    ro.debuggable=1 \
-    persist.sys.usb.config=adb \
+#
+# ⚠️★ 2026-09-27（#126）：这四个原先写在这里 = 落进 /vendor/build.prop，而 init 加载
+#   vendor 的 build.prop 时按 vendor_init 的身份逐条检查能不能设
+#   （system/core/init/property_service.cpp:723-729 选 kVendorContext，:797 CheckPermissions）。
+#   设备上用 /sys/fs/selinux/access 实测：vendor_init 对 build_prop / userdebug_or_eng_prop /
+#   system_prop / default_prop 的 set 全是 DENY ⇒ enforcing 下四个【全被静默丢掉】。
+#   前三个 system_ext 里本来就有（WITH_ADB_INSECURE 与 lineage_gaokun3.mk 的
+#   PRODUCT_SYSTEM_EXT_PROPERTIES，设备上 /system_ext/etc/build.prop 核过），这里删掉；
+#   只靠这里发的是 persist.adb.tcp.port —— 丢了它，全新装的机器第一次开机就没有 TCP adb。
+#   system_ext 用 init 的身份加载，不受这条检查。
+PRODUCT_SYSTEM_EXT_PROPERTIES += \
     persist.adb.tcp.port=5555
 
 # 屏幕密度
@@ -592,11 +599,17 @@ PRODUCT_PACKAGES += \
     tinypcminfo
 
 # ─── Stage 6: 修正 /sys/fs/bpf 的 SELinux 标签（主线内核 vs Android 的不兼容）───
-# 不装它 → ClatCoordinator 标签比对失败 → system_server 崩溃循环，开不进桌面。
-# 完整机制、对照实验与时序依据见 bin/bpf-relabel.sh 的注释。
-PRODUCT_COPY_FILES += \
-    $(LOCAL_PATH)/bin/bpf-relabel.sh:$(TARGET_COPY_OUT_VENDOR)/bin/bpf-relabel.sh \
-    $(LOCAL_PATH)/etc/bpfrelabel.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/bpfrelabel.rc
+# ⚠️ 2026-09-27 退役（#126）：bin/bpf-relabel.sh + etc/bpfrelabel.rc【不再随镜像安装】。
+#   * 根治早就在内核里：patches/0007（bpffs 改回惰性标注），在 kernel-apply-patches.sh 的链上；
+#     带 0007 的内核上这个服务每次开机都是"标签已正确 → exit 0"（2026-08-22 实测）。
+#   * 而它在 enforcing 下【不可能】工作：rc 里 `seclabel u:r:vendor_init:s0` 执行一个
+#     vendor 脚本，撞两条没有任何豁免的 neverallow ——
+#       private/vendor_init.te:356  neverallow vendor_init { file_type fs_type -init_exec }:file entrypoint;
+#       private/vendor_init.te:365  neverallow vendor_init { file_type fs_type }:file execute_no_trans;
+#     permissive 下每次开机留 4 条 denial（entrypoint / 两个 execute_no_trans / fs_bpf search）。
+#   ⇒ 它唯一还能兜底的场景（没打 0007 的内核）恰恰是它在 enforcing 下跑不起来的场景。
+#   没打 0007 的内核上 system_server 会崩溃循环 —— 那种内核本来就不该配这个 ROM。
+#   两个文件留在仓库里只为记录（同 bin/thermal-guard.sh 的处理）。
 
 # ─── 传感器：hexagonrpcd 给 SLPI 上的 DSP 当只读文件服务器 ───
 #
@@ -826,5 +839,7 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/gaokun3-touch-mode.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-touch-mode.sh \
     $(LOCAL_PATH)/etc/touchmode.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/touchmode.rc
 
-PRODUCT_VENDOR_PROPERTIES += \
+# ⚠️ 2026-09-27（#126）改走 system_ext：persist.sys.* 是 system_prop，vendor_init 设不了，
+#   写在 PRODUCT_VENDOR_PROPERTIES 里 enforcing 下会被 init 静默丢掉（理由同本文件开头 adb 那段）。
+PRODUCT_SYSTEM_EXT_PROPERTIES += \
     persist.sys.gaokun3.touch_mode=game

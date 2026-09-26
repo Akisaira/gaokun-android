@@ -18,3 +18,14 @@ r_dir_file(hal_camera_default, sysfs)
 # 后摄闪光灯：/sys/class/leds/white:flash/{brightness,…}（genfs_contexts 打成 sysfs_leds）
 allow hal_camera_default sysfs_leds:dir r_dir_perms;
 allow hal_camera_default sysfs_leds:file rw_file_perms;
+
+# ── libcamera 软件 ISP 的参数 memfd（2026-09-27，#126）─────────────────────────
+# 证据：`hal_camera_default tmpfs:file { write map read }  name=memfd:softIsp_params`（HAL 启动时）。
+# 本机策略 memfd_class=0，memfd 的 inode 按"创建者 × tmpfs"的 type_transition 取标签，
+# 没有转换规则就落在通用 tmpfs 上。照核心策略的 tmpfs_domain() 写法给一个专用类型
+# （public/te_macros:76；hal_graphics_composer_default 也是这样：vendor/hal_graphics_composer_default.te）。
+# ⚠️ 运行期 enforcing 试跑里相机照样全过，是因为 memfd 早在开机时就建好并映射了 ——
+#    enforcing 下 HAL 一旦重启，这里就会失败，软件 ISP 出不了帧。
+type gaokun3_camera_tmpfs, file_type;
+type_transition hal_camera_default tmpfs:file gaokun3_camera_tmpfs;
+allow hal_camera_default gaokun3_camera_tmpfs:file { read write getattr map };

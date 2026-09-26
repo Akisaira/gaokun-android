@@ -13,3 +13,14 @@
 #      滚掉的日志会静默地把"只发生一次"的权限藏起来，而那恰恰是启动类权限。
 # ⬜ 仍然不给 setopt/write：没被拒过。
 allow hal_graphics_composer_default self:netlink_kobject_uevent_socket { create bind read };
+
+# ── drm_hwcomposer 要找 allocator 与 mapper（2026-09-27，#126）──────────────────
+# 证据（完整开机日志，uptime 7.2 s）：
+#   hal_graphics_composer_default hal_graphics_allocator_service:service_manager find  IAllocator/default
+#   hal_graphics_composer_default hal_graphics_allocator_default:binder call
+#   hal_graphics_composer_default hal_graphics_mapper_service:service_manager find     mapper/minigbm
+# ⚠️ 这三条都只在 HWC 启动那一瞬发生 —— enforcing 下拿不到就是 HWC 起不来、没有屏幕。
+# 核心策略的 hal_graphics_composer_default 不是 allocator 的客户端（vendor/hal_graphics_composer_default.te），
+# 做成客户端一次覆盖三条：find allocator + binder call 来自 hal_client_domain，
+# find mapper_service 来自 private/hal_graphics_allocator.te:6。与 dragonboard 同一行。
+hal_client_domain(hal_graphics_composer_default, hal_graphics_allocator)

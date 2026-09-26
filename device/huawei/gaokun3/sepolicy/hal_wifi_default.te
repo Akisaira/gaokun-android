@@ -1,0 +1,13 @@
+# WiFi HAL（android.hardware.wifi-service，legacy HAL 跑 ath11k）。2026-09-27，#126。
+
+# 证据：`hal_wifi_default self:netlink_route_socket { create bind }`（uptime 15.2 s，
+# 早于开机完成时才施加的审计限速，所以其它权限没被拒就是真的没被拒）。
+allow hal_wifi_default self:netlink_route_socket { create bind };
+
+# HAL 启动时 setprop vendor.wlan.firmware.version / vendor.wlan.driver.version。
+# 证据：`hal_wifi_default vendor_default_prop:property_service set  property=vendor.wlan.firmware.version`。
+# 不能直接放行：vendor_default_prop 只许 init / vendor_init 设（private/domain.te:802 的 neverallow）。
+# ★ 照搬 cuttlefish / goldfish 的做法（device/google/cuttlefish/shared/sepolicy/vendor/
+#   property.te:4 与 property_contexts:9-10）：给这两个属性一个专用类型。
+vendor_restricted_prop(vendor_wlan_versions_prop)
+set_prop(hal_wifi_default, vendor_wlan_versions_prop)

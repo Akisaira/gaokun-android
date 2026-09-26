@@ -61,7 +61,7 @@ start)
     [ -n "$cur" ] && [ -n "$st" ] || die "读不到构建机状态（az 登录？在沙箱内跑？）"
     if [ "$st" = running ]; then
         if [ "$(vcpus "$cur")" -ge "$(vcpus "$want")" ]; then
-            ok "已经在运行（$cur ≥ 档位要的 $want），照用 —— 可能是别的会话开的，用完别急着停，先看 docs/build-machine.md §3"
+            ok "已经在运行（$cur ≥ 档位要的 ${want}），照用 —— 可能是别的会话开的，用完别急着停，先看 docs/build-machine.md §3"
             echo "ip=$(ip)"; exit 0
         fi
         echo "✗ 已经在运行，但机型 $cur 比 '$2' 档要的 $want 小。" >&2
@@ -69,12 +69,12 @@ start)
         exit 3
     fi
     if [ "$cur" != "$want" ]; then
-        echo "═══ 换机型：$cur → $want（'$2' 档）═══"
+        echo "═══ 换机型：$cur → ${want}（'$2' 档）═══"
         az_q vm resize -g "$RG" -n "$VM" --size "$want" >/dev/null || die "resize 失败（配额？DASv5 家族上限 65 vCPU，停机的也算）"
         [ "$(size)" = "$want" ] || die "resize 之后回读的机型是 $(size)，不是 $want"
         ok "机型已是 $want"
     else
-        ok "机型已经是 $want，不用换"
+        ok "机型已经是 ${want}，不用换"
     fi
     echo "═══ 开机 ═══"
     az_q vm start -g "$RG" -n "$VM" >/dev/null || true   # 结果以回读为准

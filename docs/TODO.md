@@ -79,7 +79,7 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 
 | # | 事情 | 为什么值得做 / 现状 |
 |---|---|---|
-| **B1** | SELinux 转 enforcing | 第五轮（[#117](stage4-findings.md)）7 处规则：3 条实机验证、2 个标签实机确认、属性改名生效；**另 4 处已写未验**（见"眼前的下一步"）。两个结构性阻塞原封不动：`gaokun3_smmustall`（正解 = B6）、`gaokun3_hangdump`（36 条，60 秒才采一次样）。09-18 误编 user 版 = 一次真 enforcing 试跑：**起不来** |
+| **B1** 🔄 | SELinux 转 enforcing | ★ **2026-09-27 第六轮（[#126](stage4-findings.md)）**：完整开机普查（logd 的 kernel 缓冲从 2 s 起）+ **运行期 enforcing 试跑**（硬解 / 前后摄 / 触摸 / 键盘全过，USB adb 掉线查到原因）。查出 enforcing 下会整机失效的几处 —— **固件全部加载不了**（kernel 读不了 `/vendor/firmware`）、vendor build.prop 丢 6 个属性（含 `persist.adb.tcp.port`）、vendor rc 的属性触发器被丢、HWC 找不到 allocator、gatekeeper 注册失败、super 重标（OTA）—— 共 20 余处规则已写，**`m selinux_policy` 通过、未上机**。两个"结构性阻塞"都改了处理：hangdump 拆成看门狗 + 合法取证，smmustall 在 userdebug 里放行（B6 仍是根治）。⬜ 下一步：出一版带新策略的镜像（`out/` 被 v0.6.3 候选版占着，**要用户定**）→ permissive 普查验证 → oneshot 真 enforcing 开机（要人在场） |
 | **B0** | 让构建机的树**就是**本仓 checkout | **已经咬了六次**。`kernel-apply-patches.sh --verify` 与 `sync-device-tree.sh`（带断言）是探测器，不是根治 |
 | **B5b** | UBWC：仓库写着关 | `device.mk:174` 仍是 `nocompression`，**一次测量都没有**。下版构建前删那行并带一次实测 |
 | **B6** | GPU SMMU 中断根治 | 做掉它 `smmu-nostall.sh` 整个消失，B1 的一半阻塞跟着消失 |
@@ -812,7 +812,11 @@ checkout），让 `git status` 直接说话。⚠️ 换之前先做一次清单
 决定只记录不编码（理由见 [#82](stage4-findings.md) 第五节）。
 下次干净树构建若出现 `tar`/`date` 相关报错，就是它。
 
-### B1. SELinux 转 enforcing —— 四步 + 第五轮补漏，剩两个结构性阻塞与一个待定
+### B1. SELinux 转 enforcing —— 四步 + 第五轮补漏 + 第六轮（2026-09-27）
+★ **现状以 [#126](stage4-findings.md) 为准**：第六轮之后已经没有"加规则解决不了"的阻塞，剩下的是上机验证
+（新策略编译通过、未上机）。工具在 [`scripts/selinux/`](../scripts/selinux/README.md)。下面是第五轮及以前的记录，
+其中"两个结构性阻塞"的处理 #126 §4 已改。
+
 [#75](stage4-findings.md) / [#76](stage4-findings.md) / [#77](stage4-findings.md)。
 2026-08-23 夜随构建戳 `1787436126` 装机验收：
 

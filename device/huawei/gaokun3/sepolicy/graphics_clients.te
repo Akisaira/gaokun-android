@@ -1,0 +1,14 @@
+# 跑 GPU 的系统进程 / 应用里，mesa 探测 vendor.mesa.* 覆盖属性（2026-09-27，#126）。
+#
+# 证据：surfaceflinger / bootanim / system_app / platform_app 各
+#   `vendor_default_prop:file { open getattr map }`
+# vulkan.freedreno.so 里的 os_get_option() 在 Android 上把每个环境变量名拼成
+# "debug.mesa.<名>" 和 "vendor.mesa.<名>" 各查一次属性（strings 可见 "mesa." / "vendor."）；
+# 后者落在 vendor_default_prop。本机从没设过任何 vendor.mesa.*，所以查不到就是正确结果。
+#
+# 为什么是 dontaudit 而不是 allow：coredomain 读 vendor 的非 public 属性被
+# private/property.te 的 neverallow 禁死，写 allow 构建就过不去；而这里也【不需要】放行。
+# appdomain 包括游戏（turnip 在应用进程里跑，同样会探测）。
+# ⚠️ 代价：以后这些主体真读某个 vendor_default_prop 属性时也看不到 denial。
+#    真要给它们读 vendor 属性，正路本来就是给那个属性单独定 vendor_public 类型，不会走这里。
+dontaudit { surfaceflinger bootanim appdomain } vendor_default_prop:file { read open getattr map };

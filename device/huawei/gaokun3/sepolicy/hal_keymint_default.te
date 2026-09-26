@@ -1,0 +1,4 @@
+# 软件 KeyMint（com.android.hardware.keymint.rust_nonsecure）读 ro.serialno（设备证明要用）。
+# 证据：`hal_keymint_default serialno_prop:file { read open getattr map }`（2026-09-27 完整开机日志）。
+# 不撞 neverallow：private/domain.te:826-844 那条限制 serialno 读取的名单里有 hal_keymint_server。
+get_prop(hal_keymint_default, serialno_prop)

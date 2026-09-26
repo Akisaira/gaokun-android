@@ -9874,3 +9874,91 @@ LOAD 成功后 `LOOKUP "fingerprint"` 返回 `-ENOENT`。app_id 直接来自 LOA
 ⬜ 卡在【命令帧格式 + 安全的第一条只读命令的确切字节】—— 正从驱动二进制静态逆向（`fp-cmd-protocol.md`）。
 安全网：patch 0050 的 service_listeners 对无人认领的安全存储回调自动应答 FAILURE、256 轮后 -ELOOP 放弃，
 所以发错命令【不会硬挂】，最坏是该命令失败。
+
+## #126 ★★★★ SELinux 第六轮：完整开机普查 + 运行期 enforcing 试跑 —— 查出 enforcing 下会整机失效的几处（固件 / 属性 / HWC / gatekeeper），规则写完、编译通过（2026-09-27）
+
+用户："继续推进 sel 严格"。设备在线（`_a`，`1790206017`，permissive）。本轮没有重启、没有装机，
+规则**编译通过、未上机**。工具收进了 `scripts/selinux/`（README 有用法）。
+
+### 1. 方法：四个会让普查漏东西的坑，这一轮逐个堵上
+1. **dmesg 会滚掉开头**（本次从 7.4 s 起）。★ logd 的 `kernel` 缓冲从开机就在读 kmsg ——
+   `logcat -b all -d` 里的 denial 从 **2.28 s** 起，覆盖了 dmesg 丢掉的那段（vendor build.prop 加载、
+   第一阶段块设备重标都在 2–3 s）。
+2. **审计限速**：logd.rc 在 `boot_completed` 时才把限速设成 5/秒（`persist.logd.audit.rate`），
+   本次 23–24 s 丢了 20 条、之后 hangdump 每分钟冲一次又丢了几百条。
+   开发机已 `setprop persist.logd.audit.rate 1000`（持久），下次开机起不丢。
+3. ★★ **permissive 下同一个 (主体, 目标类型, 类, 权限) 只记一次**。按类型写 allow 的修法不受影响；
+   但**改标签**的修法，日志只露出第一个对象。本轮凡是标签修法，都另外把同类对象枚举全了：
+   vendor build.prop 148 行逐条查上下文（多挖出一个 `persist.sys.usb.config`）、SF / systemui / launcher / hwc 的
+   `/proc/<pid>/maps`（27 个 vendor 库里只剩 `libui.so` 一个没标）、`/sys/class/wakeup/*` 52 个（19 个没标，日志只露了 1 个）。
+4. **读 .te 会漏**：用 selinuxfs 的 `access` 节点直接问设备上正在跑的策略（`scripts/selinux/policy-query.sh`）。
+   这一轮它抓到了 refs 与构建机的版本差：refs 的 `access_vectors` 里 `class system` 只有 6 个权限，
+   设备策略（与构建机）有 11 个，多出的 **`firmware_load`** 就是下面第 3 节那条。
+
+外加一个 permissive 普查做不到的：**运行期 enforcing 试跑**（`scripts/selinux/enforcing-trial.sh`）。
+敢做是因为本机 adbd 与 su 都在 KernelSU 的 `ksu` 域 —— `policy-query.sh` 查到它 `flags=1`（permissive 域）且全放行，
+全局 enforcing 锁不住 adb；脚本自带 300 秒看门狗。enforcing 下每次拒绝都记，能看到去重藏起来的对象和"拒了之后功能怎么坏"。
+
+### 2. 运行期 enforcing 试跑（约 50 秒 enforcing，uptime 1435→1488 s）
+**功能**：硬解（`c2.v4l2.avc.decoder`，30 帧）、后摄全套（AF 三种模式、JPEG 旋转，143 个结果 0 失败）、前摄、
+触摸模式切换、键盘开关、`bootctl`、温控、WiFi 扫描 —— **全过**。
+**denial 只有 4 类**：smmustall 读 `/dev/mem` ×481（已知）、**usbrole 读 `sysfs_udc` ×3**、kdevtmpfs ×2、
+mediacodec 读 `vendor.minigbm.debug` ×1。
+⚠️★ **USB adb 当场掉线**：usbrole 的 follow 守护进程读不到 UDC state ⇒ 以为没被主机枚举 ⇒ 6 秒后切 host ⇒
+再判成"纯充电器"停在 host（`settled=1` 要拔线才重置）。回 permissive 后 `setprop ctl.restart gaokun3_usbfollow`
+重新判断才回来。TCP adb 全程在。
+★ 重启服务那一下又露出一条开机日志里从没有过的：usbrole 切 device 前写 `wake_lock` 要 `block_suspend`。
+
+### 3. 查出来的，按"enforcing 下会怎样"排序（规则都已写）
+| 严重度 | 现象（enforcing 下） | 根因 | 修法 |
+|---|---|---|---|
+| ★★★★ | **GPU / WiFi / 蓝牙 / 三颗 DSP 的固件全部加载失败** | 内核直读 `/vendor/firmware`（cmdline `firmware_class.path`），整棵树是通用 `vendor_file`；核心策略里 kernel 对它没有 read，也没有新内核的 `system firmware_load`（设备上实测三项全 DENY） | 新类型 `gaokun3_firmware_file` + `kernel.te` 三条。用户态没人读这棵树（实测） |
+| ★★★ | **全新装机没有 TCP adb**；默认触摸手感丢失；`allow_suspend` 默认值丢失 | init 按 vendor_init 身份检查 `/vendor/build.prop` 的每一行（`property_service.cpp:723-729,797`），6 个设不了：`ro.adb.secure` `ro.debuggable` `persist.sys.usb.config` `persist.adb.tcp.port` `persist.sys.gaokun3.touch_mode` `persist.vendor.gaokun3.allow_suspend` | 前三个 system_ext 里本来就有 → 删；`tcp.port` 与 `touch_mode` 挪到 `PRODUCT_SYSTEM_EXT_PROPERTIES`；`allow_suspend` 靠已有的 `set_prop(vendor_init, …)`（候选版之后才加，设备上还是 DENY） |
+| ★★★ | **键盘开关、触摸手感、扬声器增强三个设置静默失效** | vendor rc 里 `on property:persist.sys.gaokun3.*` 的触发器，init 解析时要确认 vendor_init 读得到（`action_parser.cpp:39-58`），读不到整个动作丢弃 | `get_prop(vendor_init, system_prop)`（system_prop 是 public，不撞 neverallow） |
+| ★★★ | **HWC 起不来 ⇒ 没有屏幕** | drm_hwcomposer 启动时要 find IAllocator / mapper、调 allocator；核心策略的 hwc 不是 allocator 客户端 | `hal_client_domain(hal_graphics_composer_default, hal_graphics_allocator)`（dragonboard 同一行） |
+| ★★★ | 软件 gatekeeper 注册不了 `ISharedSecret/gatekeeper` ⇒ 锁屏凭据 / auth token 链断 | 这个服务名核心 service_contexts 里没有，落到 `default_android_service` | vendor `service_contexts` 标成 `hal_gatekeeper_service` + `hal_client_domain(keystore, hal_gatekeeper)`（dragonboard / cuttlefish / goldfish 三家一字不差） |
+| ★★★ | allow_suspend=0 的机器会睡（device 模式下 = #52 整板复位） | `init.gaokun3.rc` 的 `write /sys/power/wake_lock` 跑在 vendor_init，缺 `block_suspend`；usbrole 同样缺 | 两个域各一条 `block_suspend` |
+| ★★★ | USB adb 掉线（见第 2 节，实测） | usbrole 读不到 `sysfs_udc` | `r_dir_file(gaokun3_usbrole, sysfs_udc)` |
+| ★★ | **OTA 写不进 super** | 第一阶段 init 建的 `nvme0n1p8` 要在第二阶段重标成 `super_block_device`，核心策略的重标名单（`init.te:172-178`）里没有 super | `init.te` 一条 relabelto |
+| ★★ | 相机 HAL 重启后软件 ISP 出不了帧 | libcamera 的参数 memfd 落在通用 tmpfs（`memfd_class=0`）；试跑里没坏是因为开机时就映射好了 | `tmpfs_domain` 式的专用类型 `gaokun3_camera_tmpfs` |
+| ★★ | 游戏 / 应用的 turnip 枚举 GPU 读不到 uevent | libdrm `drmGetDevice2` 读 `…/ae01000.display-controller/uevent`，通用 sysfs | 只把这一个文件标成 `sysfs_gpu`（其文件读权限核心策略已给 app / SF / bootanim；目录 search 没给，所以不标目录。`genfs_seclabel_symlinks=0`，符号链接不受影响） |
+| ★ | 同进程 HAL 的依赖库打不开 | `/vendor/lib64/libui.so` 是 `vendor_file` | 标 `same_process_hal_file`（零 allow，第五次"标对就够"） |
+| ★ | 唤醒源统计缺 19 个 | 通用 sysfs | 16 个固定路径写 genfscon；3 个动态编号的（`xhci-hcd.N.auto` 等）用 file_contexts 正则靠 ueventd 的 restorecon（`devices.cpp:379-383`）⬜ 这条机制**未上机验证** |
+| 小 | keymint 读 serialno、WiFi HAL 的 netlink 与版本属性、bootctl stat boot 槽、亮度 HAL opendir `/sys/class/backlight`、init 写 `discard_max_bytes`、vold 的 NVMe 寿命查询（AOSP 16 新代码，`NvmeDeviceUtils.cpp`，核心策略没跟上）、mediacodec 读 minigbm 属性 | — | 各一两条，出处都写在 .te 注释里 |
+
+**只静音、不放行**（拒绝就是正确结果）：mesa 在每个 GPU 进程里探测 `vendor.mesa.*`（coredomain 读 vendor 属性被 neverallow 禁死，
+而本机从没设过这类属性）；kdevtmpfs 写它私有的 devtmpfs（`/dev` 是 tmpfs，没人看得见）；bootreceiver 的 tracefs ——
+⚠️ 这条我先按"文件不存在"写了注释，上机一看文件在、值是 1：真相是 eventfs 查找时才生成文件，`lookup_open()` 对 O_CREAT
+先调 `may_o_create()`（→ denial），被拒只去掉 O_CREAT 位、照常打开 ⇒ enforcing 下写照样生效。
+
+**退役**：`bpfrelabel`（`seclabel u:r:vendor_init:s0` 执行 vendor 脚本，被 `vendor_init.te:356/365` 两条无豁免的
+neverallow 永久堵死；根治是内核 `patches/0007`，它在带 0007 的内核上本来就每次 exit 0）。
+
+**上游缺口，不修**：system_server 的 EventHub 读 HID 键盘的 `country`（AOSP 没有给 HID 属性定类型，只影响键盘布局自动识别）；
+`com.android.se` 的数据目录是 `system_data_file`（`seapp_contexts:187` 没写 `type=`，所有 AOSP 设备一样）。
+
+### 4. 两个"结构性阻塞"：本轮都改了处理方式
+* **hangdump**：重读脚本发现它**不**扫所有线程，只看 4 个固定进程 —— #117 那 32 类 denial 全是 `pidof` 顺手读了每个进程的 cmdline。
+  拆成两半：看门狗只放行这 4 个域的 `/proc`、其余静音；取证保留 vendor 域合法能做的（dmesg、PCM 状态、QRTR、
+  binderfs 的 `state` —— userdebug 可读，"谁在等谁"正是查死锁要的），**删掉 logcat 与 dumpsys**（vendor 域执行
+  `logcat_exec`、打开 `/dev/binder` 都被 Treble 禁）。
+* **smmustall**：改为在 `userdebug_or_eng()` 里放行 `sys_rawio` + `/dev/mem`。#117 的立场是"宁可在 enforcing 下明确失效"，
+  但"失效"在这里意味着**第一次 GPU 页错误就永久卡死**，而"只在 userdebug 成立"这个顾虑实际不存在（user 变体起不来，#117 §15）。
+  写了 = 与今天 permissive 下行为相同。B6 仍是根治。
+
+### 5. 编译
+`sync-device-tree.sh` → 独立 `OUT_DIR=out-sel`（`out/` 是待发的候选版，不碰）→ `m selinux_policy`。
+**第一次被打回**：`domain.te:1681-1691` 对 `sys_ptrace` 的 neverallow（多行写法，我 grep 单行没抓到；豁免只有 vold / dumpstate /
+storaged / system_server）—— hangdump 取证读跨 uid 的 `wchan` 那条放不了，改回静音。**第二次通过**（3 分 37 秒），
+产物里逐条核对了 `vendor_sepolicy.cil` / `vendor_file_contexts` / `vendor_service_contexts` / `vendor_property_contexts`。
+（顺带修了 `scripts/cicd.sh`：`$want（` 在 C.UTF-8 下被 bash 当成变量名的一部分，`set -u` 直接退出。
+停机时第一次回读还是 running，重试后回读 deallocated。）
+
+### 6. 还没验证的，与下一步
+* ⬜ 新策略**没上过机**。要一版新镜像：`out/` 里是待发的 v0.6.3 候选版，所以要么先发 v0.6.3 再在 `out/` 增量构建，
+  要么另开 `OUT_DIR` 冷构建（贵）。**要用户定**。
+* ⬜ 装上之后（permissive）：完整开机普查应只剩 hangdump 的静音项以外零星几条；`ls -Z /sys/class/wakeup/*/name` 全是 `sysfs_wakeup`
+  （验 ueventd 正则）；`ls -Z /vendor/firmware` 是 `gaokun3_firmware_file`；`getprop persist.adb.tcp.port` 仍是 5555（来自 system_ext）。
+* ⬜ 然后才是**真 enforcing 开机**：oneshot 一个只加了 `androidboot.selinux=enforcing` 的启动项（userdebug 认这个参数），
+  起不来下一次重启回 permissive 默认项。⚠️ 重启，要用户点头、要有人能按电源键。
+* 这一轮之后 B1 已经没有"加规则解决不了"的阻塞了 —— 剩下的是验证。

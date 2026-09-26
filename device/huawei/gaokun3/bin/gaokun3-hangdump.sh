@@ -6,9 +6,11 @@
 # 而我们**一次都没复现过**。它的诊断建议全是推导出来的，不是观测。
 # 现实是死锁发生时用户只会重启，证据就没了 —— 所以证据必须【自动】留下。
 #
-# 探针刻意做得很便宜：只读 /proc 里的线程状态，**不跑 dumpsys**。
-# 每 60 秒一次、每次几毫秒。dumpsys 只在确认异常之后才跑一次
-# （而且它本身就可能挂住，所以放在最后并带 timeout）。
+# 探针刻意做得很便宜：只读 /proc 里的线程状态。每 60 秒一次、每次几毫秒。
+# ⚠️ 2026-09-27（#126）：取证部分删掉了 logcat 与 dumpsys —— 这个脚本跑在 vendor 域
+#   （gaokun3_hangdump），而 Treble 的 neverallow 不许 vendor 域执行 /system/bin/logcat
+#   （logcat_exec）、也不许它打开 /dev/binder（dumpsys 要）。permissive 下它们能跑，
+#   enforcing 下只会留下空文件。binder 那一段改读 binderfs 的 state（见 sepolicy/gaokun3_scripts.te 末尾）。
 #
 # 判据不是"出现 D 状态"（短暂的 D 很正常），而是
 # **同一个 tid 连续三次采样都在 D**（= 卡住至少两分钟）。
@@ -76,20 +78,16 @@ collect() {
         { echo "== $f"; timeout 5 cat "$f"; } >> $O/05-pcm.txt 2>&1
     done
 
-    # ★ 2026-09-14：binder 日志改从 binderfs 读（/dev/binderfs/binder_logs/，本机实测存在且可读），
-    #   不再碰 debugfs —— 那条 neverallow（domain.te 读 debugfs）没有 userdebug 豁免，是 SELinux
-    #   转 enforcing 的两个结构性阻塞之一（TODO B1）。debugfs 只作回落。
-    BL=/dev/binderfs/binder_logs; [ -r $BL/transactions ] || BL=/sys/kernel/debug/binder
-    { echo "== source: $BL"
-      echo "== failed_transaction_log"; timeout 5 cat $BL/failed_transaction_log
-      echo "== transactions (前 300 行)"; timeout 5 head -300 $BL/transactions
-    } > $O/06-binder.txt 2>&1
+    # binder：只读 binderfs 的 state —— 每个进程的 binder 线程与挂起中的事务，
+    #   "谁在等谁"正是查死锁要的。它的类型是 binderfs_logs，userdebug 上可读
+    #   （system/sepolicy private/domain.te:739 的豁免；本机只编 userdebug）。
+    # ⚠️ 2026-09-27 改（#126）：此前读的 transactions / failed_transaction_log 在 domain.te:558-568
+    #   里只许 dumpstate / system_server 等读；debugfs 回落那条 neverallow 没有任何豁免。都删了。
+    BL=/dev/binderfs/binder_logs
+    { echo "== $BL/state（前 2000 行）"; timeout 5 head -2000 $BL/state; } > $O/06-binder.txt 2>&1
 
-    timeout 30 logcat -d -b all -t 3000 > $O/07-logcat.txt 2>&1
-
-    # ★ dumpsys 放最后：它自己就可能挂住，前面的证据不能被它拖累。
-    timeout 25 dumpsys media.audio_flinger > $O/08-audioflinger.txt 2>&1
-    timeout 25 dumpsys bluetooth_manager   > $O/09-bluetooth.txt 2>&1
+    # ✗ logcat / dumpsys 已删（vendor 域做不到，见文件开头）。死锁现场的 logcat 要靠用户
+    #   事后 `adb logcat -d` 或 bug report —— 取证目录里的时间戳（目录名就是 uptime）用来对齐。
 
     sync
     touch $DONE

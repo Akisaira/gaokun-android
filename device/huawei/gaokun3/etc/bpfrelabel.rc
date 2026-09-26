@@ -1,3 +1,4 @@
+# ⚠️ 已退役（2026-09-27，#126）：不再随镜像安装，理由见 device.mk 与 bin/bpf-relabel.sh 开头。
 # 在 bpfloader 之后、zygote 之前修正 /sys/fs/bpf 的 SELinux 标签。
 # 原因与时序依据见 bin/bpf-relabel.sh 的注释。
 service bpfrelabel /vendor/bin/bpf-relabel.sh

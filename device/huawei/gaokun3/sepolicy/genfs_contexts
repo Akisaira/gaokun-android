@@ -72,3 +72,46 @@ genfscon sysfs /devices/platform/soc@0/c440000.spmi/spmi-0/0-00/c440000.spmi:pmi
 #   sysfs_batteryinfo 手里抢回来标成 sysfs_wakeup。
 genfscon sysfs /devices/platform/soc@0/ac0000.geniqup/a9c000.i2c/i2c-15/15-0038/huawei_gaokun_ec.ucsi.0/power_supply/ucsi-source-psy-huawei_gaokun_ec.ucsi.01/wakeup u:object_r:sysfs_wakeup:s0
 genfscon sysfs /devices/platform/soc@0/ac0000.geniqup/a9c000.i2c/i2c-15/15-0038/huawei_gaokun_ec.ucsi.0/power_supply/ucsi-source-psy-huawei_gaokun_ec.ucsi.02/wakeup u:object_r:sysfs_wakeup:s0
+
+# ── 2026-09-27 第六轮：完整开机普查 + 运行期 enforcing 试跑查出的（#126）──────────────
+
+# libdrm 的 drmGetDevice2 读 DRM 设备的 uevent（OF_FULLNAME / OF_COMPATIBLE）。
+# 证据：surfaceflinger / bootanim / system_app / platform_app 各 3 条
+#   sysfs:file { read open getattr } path=…/ae01000.display-controller/uevent
+# ★ 只标【这一个文件】，不标整个 display-controller：
+#   * sysfs_gpu 的【文件】读权限核心策略给了正是这批主体（app.te:395 含 untrusted_app ——
+#     游戏里的 turnip 枚举 GPU 走的也是这条；bootanim.te:37、surfaceflinger.te:42、system_server.te:495），
+#   * 但 sysfs_gpu 的【目录】search 它们都没有（设备上 /sys/fs/selinux/access 实测 DENY），
+#     标整个目录反而会把 SF 挡在外面。genfscon 是字符串前缀，`…/uevent` 只命中这一个文件。
+#   * 路径上的符号链接不受影响：本机策略 genfs_seclabel_symlinks=0，链接一律保持 sysfs。
+# （dragonboard 标的是整个 ae00000.display-subsystem，再给每个客户端补 sysfs_gpu:dir search。）
+genfscon sysfs /devices/platform/soc@0/ae00000.display-subsystem/ae01000.display-controller/uevent u:object_r:sysfs_gpu:s0
+
+# 亮度 HAL 开机 opendir(/sys/class/backlight) 找面板背光（sysfs:dir { read open }）。
+# 核心策略只标了 /class/leds（private/genfs_contexts:130），背光类目录没人管。
+# hal_light_default 对 sysfs_leds 的 dir read / lnk_file read 现成（设备上实测 ALLOW）。
+genfscon sysfs /class/backlight u:object_r:sysfs_leds:s0
+
+# init.rc:1224-1225 写 discard_max_bytes（类型与理由见 device.te）。
+genfscon sysfs /devices/platform/soc@0/1c20000.pcie/pci0002:00/0002:00:00.0/0002:01:00.0/nvme/nvme0/nvme0n1/queue/discard_max_bytes u:object_r:gaokun3_sysfs_disk_queue:s0
+
+# ── 唤醒源：本机 19 个还是通用 sysfs 的里，路径固定的这 16 个直接写死 ──────────────
+# （2026-09-27 实测清单；动态编号的那几个靠 file_contexts 里的正则 + ueventd restorecon）
+# 证据：system_suspend 读 …/gpio-keys/wakeup/wakeup18/name 被拒 —— 同一个
+#   (system_suspend, sysfs, file, read) 只记一次，所以其余 18 个是枚举出来的，不是日志里看到的。
+genfscon sysfs /devices/platform/gpio-keys/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/1b300000.remoteproc/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/2400000.remoteproc/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/3000000.remoteproc/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/1c00000.pcie/pci0006:00/0006:00:00.0/0006:01:00.0/mhi0/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/a4f8800.usb/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/a4f8800.usb/a400000.usb/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/a6f8800.usb/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/a6f8800.usb/a600000.usb/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/a8f8800.usb/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/a8f8800.usb/a800000.usb/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/ac0000.geniqup/a9c000.i2c/i2c-15/15-0038/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/c251000.thermal-sensor/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/c252000.thermal-sensor/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/c263000.thermal-sensor/wakeup u:object_r:sysfs_wakeup:s0
+genfscon sysfs /devices/platform/soc@0/c440000.spmi/spmi-0/0-00/c440000.spmi:pmic@0:rtc@6100/wakeup u:object_r:sysfs_wakeup:s0

@@ -127,6 +127,15 @@ allow gaokun3_usbrole sysfs:dir r_dir_perms;
 allow gaokun3_usbrole sysfs:file rw_file_perms;
 allow gaokun3_usbrole sysfs_wake_lock:file rw_file_perms;
 get_prop(gaokun3_usbrole, vendor_gaokun3_prop)
+# ★ 2026-09-27 运行期 enforcing 试跑补的两条（#126）：
+#   1. /sys/class/udc 是 sysfs_udc（核心策略 genfscon），follow 模式读 UDC state 要穿过它。
+#      试跑里被拒 3 次 ⇒ 守护进程以为"没被主机枚举"，6 秒后切 host、再判成纯充电器停在 host
+#      ⇒ **USB adb 当场掉线**，回 permissive 后也不会自己恢复（settled 要等拔线）。
+#   2. 切 device 之前要拿 wakelock（"device 模式不挂起"的不变量，#52），写 wake_lock 要
+#      CAP_BLOCK_SUSPEND —— 这一条在开机日志里从没出现过，因为守护进程开机时不切角色；
+#      试跑后重启服务、它切回 device 的那一下才露出来。拿不到锁 ⇒ device 模式下可能挂起 ⇒ 整板复位。
+r_dir_file(gaokun3_usbrole, sysfs_udc)
+allow gaokun3_usbrole self:global_capability2_class_set block_suspend;
 
 # ── audio-route.sh：2026-09-18 实机重跑一次这个服务抓到的完整清单 ────────────
 #
@@ -161,7 +170,7 @@ typeattribute gaokun3_audioroute vendor_executes_system_violators;
 allow gaokun3_audioroute system_file:file rx_file_perms;
 allow gaokun3_audioroute system_file:file execute_no_trans;
 
-# ── ⚠️ 故意【不写】的两个域 ─────────────────────────────────────────────
+# ── ⚠️ 故意【不写】的两个域（2026-09-18）—— ★ 2026-09-27 起两个都写了，见本文件末尾（#126）──
 #
 # gaokun3_smmustall：实测要 `self:capability sys_rawio` +
 #   `gaokun3_devmem_device:chr_file {map open read write}`。
@@ -179,8 +188,14 @@ allow gaokun3_audioroute system_file:file execute_no_trans;
 #   ★ 正解是把 [TODO B6] 做掉（DT 中断映射修对），这个轮询脚本整个消失。
 #   在那之前，宁可让它在 enforcing 下明确失效，也不要写一条只在
 #   userdebug 上成立的规则。
+#   ⚠️★ 2026-09-27 改了主意（#126），规则写在本文件末尾：
+#   "明确失效"在这里的意思是【第一次 GPU 页错误就永久卡死、无法自愈】（device.mk 装它那一节），
+#   而那条顾虑"只在 userdebug 上成立"在实际中不存在 —— user 变体本来就起不来（#117 §15），
+#   本仓只编 userdebug。不写规则 = enforcing 下拆掉 GPU 的安全网；写了 = 与今天 permissive 下
+#   的行为一模一样。B6 仍是根治，做掉之后这几行连同脚本一起删。
 #
-# gaokun3_hangdump：实测要读别的域的 /proc（观测到 init 与 kernel，
+# gaokun3_hangdump：⚠️ 下面这段是 2026-09-18 的判断，2026-09-27 改了主意（见本文件末尾）：
+#   实测要读别的域的 /proc（观测到 init 与 kernel，
 #   而它的职责是扫【所有】线程找 D 状态，所以实际需要 domain:file r_file_perms）。
 #   ⚠️ 再加上 debugfs 那条【没有 userdebug 豁免】的 neverallow
 #   （lineage-23.0 的 domain.te:1462
@@ -190,3 +205,58 @@ allow gaokun3_audioroute system_file:file execute_no_trans;
 #   给它半套权限，结果是"能跑但会漏进程"——**比明确不可用更糟**。
 #   出路：要么把 binder-debugfs 部分换成 dumpsys，要么做成只在
 #   userdebug 上启用的诊断件。见 #75。
+#   ★ 2026-09-27 重新看脚本：它【不】扫所有线程 —— 只看 4 个固定进程（watched_pids）。
+#     那 32 类 denial 全是 `pidof` 顺手读了每个进程的 cmdline。所以"半套权限会漏进程"不成立。
+
+# ── gaokun3-hangdump.sh：拆成"看门狗"与"取证"两半，各给各的（2026-09-27，#126）─────────
+#
+# 看门狗（每 60 秒一次）：pidof 找 4 个进程 → 读它们 /proc/<pid>/task/*/stat 看有没有线程卡在 D。
+#   * 只给这 4 个域的 /proc 读权限（audioserver / com.android.bluetooth / 蓝牙 HAL / hexagonrpcd）。
+#   * pidof 会顺手读【每个】进程的 cmdline —— 那是 permissive 下每分钟一批 denial 的来源，
+#     enforcing 下读不到的进程它直接跳过，结果不变。静音，不放行。
+#   * sys_ptrace：root 读别的 uid 进程的 /proc/<pid>/wchan、exe 要过 ptrace_may_access 的 uid 检查。
+#     D 状态检测本身不需要它（task/*/stat 走 PTRACE_MODE_NOAUDIT，读不到只是 wchan 等字段清零）。
+#     ✗ 放行不了：private/domain.te:1681-1691 的 neverallow 只豁免 vold / dumpstate / storaged /
+#       system_server（加几个 userdebug 的），vendor 域一个都没有。2026-09-27 第一版写了 allow，
+#       sepolicy_neverallows 当场打回 —— 我之前 grep 单行没抓到这条多行的规则。
+#     ⇒ enforcing 下取证拿不到跨 uid 的 wchan（01-stuck-threads.txt 里那一行会是 0），静音。
+r_dir_file(gaokun3_hangdump, { audioserver bluetooth hal_bluetooth_default hexagonrpcd })
+dontaudit gaokun3_hangdump domain:dir search;
+dontaudit gaokun3_hangdump domain:file { read open };
+dontaudit gaokun3_hangdump self:global_capability_class_set sys_ptrace;
+
+# 取证（整个开机只触发一次，写 /data/vendor/gaokun3/hangdump-<uptime>/）：
+#   * dmesg：kernel:system syslog_read（非应用域没有禁令，bootstat.te:33 同款）
+#   * /proc/asound/card0/pcm*/sub0/status
+#   * binder：只读 /dev/binderfs/binder_logs/state（所有进程的 binder 线程与挂起事务，查死锁要的正是它）。
+#     它是 binderfs_logs，只在 userdebug 上可读（private/domain.te:739 的豁免）——本机只编 userdebug。
+#     transactions / failed_transaction_log 在 domain.te:558-568 里只许 dumpstate / system_server 等读，拿不到；
+#     debugfs 那条回退路径没有任何豁免，脚本已删。
+#   * 写取证目录：/data/vendor/gaokun3 是 hangdump.rc 建的，标签就是 vendor_data_file（实机核过）。
+#   * gaokun3-qrtr-lookup：vendor_file 里的可执行文件（执行权限核心策略已给非 coredomain，domain.te:209），
+#     要一个 QRTR socket（与 hal_sensors_default.te 同款权限）。
+#   ✗ 做不到、脚本已删的：logcat（/system/bin/logcat 是 logcat_exec，vendor 域执行 system 文件被 Treble
+#     neverallow 禁）、dumpsys（要 /dev/binder，vendor 域同样被禁）、/proc/<tid>/stack（要 ptrace attach）。
+allow gaokun3_hangdump kernel:system syslog_read;
+allow gaokun3_hangdump proc_asound:dir r_dir_perms;
+allow gaokun3_hangdump proc_asound:file r_file_perms;
+userdebug_or_eng(`
+  allow gaokun3_hangdump binderfs:dir search;
+  allow gaokun3_hangdump binderfs_logs:dir r_dir_perms;
+  allow gaokun3_hangdump binderfs_logs:file r_file_perms;
+')
+allow gaokun3_hangdump vendor_data_file:dir create_dir_perms;
+allow gaokun3_hangdump vendor_data_file:file create_file_perms;
+allow gaokun3_hangdump self:qipcrtr_socket { create getattr read write };
+
+# ── gaokun3-smmu-nostall.sh：只在 userdebug / eng 上放行（2026-09-27，#126）──────────
+# 证据：`gaokun3_smmustall gaokun3_devmem_device:chr_file { read open map write }` 与
+#   `self:capability sys_rawio`（enforcing 试跑里 3 分钟被拒 481 次 —— 它每 0.1 秒轮询一次）。
+# sys_rawio 的 neverallow 带 userdebug_or_eng(`-domain') 豁免，所以必须包在 userdebug_or_eng 里，
+# 否则 user 变体的 sepolicy_neverallows 会失败。/dev/mem 的类型是我们自己的（device.te），没有核心禁令。
+# ⚠️ 这是在 enforcing 下保住现状，不是认可这种做法：用户态经 /dev/mem 改 SMMU 寄存器
+#    本身就是 B6 没做完的症状。理由见本文件"故意不写的两个域"一节的 2026-09-27 补注。
+userdebug_or_eng(`
+  allow gaokun3_smmustall self:global_capability_class_set sys_rawio;
+  allow gaokun3_smmustall gaokun3_devmem_device:chr_file { open read write map };
+')

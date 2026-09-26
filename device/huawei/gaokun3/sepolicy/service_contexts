@@ -1,0 +1,19 @@
+# gaokun3 的 vendor service_contexts。
+
+# ── 软件 gatekeeper 顺带发布的 ISharedSecret 实例（2026-09-27，#126）─────────────
+#
+# com.android.hardware.gatekeeper.nonsecure（device.mk 里装的那个软件实现）除了
+# IGatekeeper/default 还注册 ISharedSecret/gatekeeper
+# （hardware/interfaces/gatekeeper/aidl/software/android.hardware.security.sharedsecret-gatekeeper.xml），
+# 让 keystore2 跟它协商 HMAC 共享密钥（签发 auth token 的前提）。
+# 核心 service_contexts 只有 ISharedSecret/default（private/service_contexts:118），
+# 于是这个名字落到兜底的 default_android_service：
+#   hal_gatekeeper_default  default_android_service:service_manager add
+#   keystore                default_android_service:service_manager find
+#   keystore                hal_gatekeeper_default:binder call
+# ⚠️ enforcing 下 add 失败 ⇒ 软件 gatekeeper 起不来或没有共享密钥 ⇒ 锁屏凭据 / keystore 的
+#    auth token 这条链断掉。
+# ★ 标法照搬构建树里另外三台用同一个软件 gatekeeper 的参考设备（dragonboard / cuttlefish /
+#   goldfish 的 service_contexts 一字不差）：标成 hal_gatekeeper_service —— 服务端能 add
+#   靠的是 hal_gatekeeper 的 hal_attribute_service，零新规则；客户端那一半见 keystore.te。
+android.hardware.security.sharedsecret.ISharedSecret/gatekeeper u:object_r:hal_gatekeeper_service:s0

@@ -23,3 +23,7 @@ persist.vendor.gaokun3.  u:object_r:vendor_gaokun3_prop:s0
 # 非持久的 vendor.gaokun3.*（2026-09-26 起）：扬声器增强总开关的镜像 vendor.gaokun3.histen.on，
 # 由 etc/histen.rc 在 vendor_init 里 setprop、音频 HAL 读。`vendor.` 也在允许的前缀清单里。
 vendor.gaokun3.          u:object_r:vendor_gaokun3_prop:s0
+
+# WiFi HAL 写的固件 / 驱动版本号（类型与理由见 sepolicy/hal_wifi_default.te）
+vendor.wlan.firmware.version   u:object_r:vendor_wlan_versions_prop:s0 exact string
+vendor.wlan.driver.version     u:object_r:vendor_wlan_versions_prop:s0 exact string

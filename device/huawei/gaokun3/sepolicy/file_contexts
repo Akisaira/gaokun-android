@@ -98,6 +98,10 @@
 #    内核上】给 bpffs 子目录 chcon，而 relabel bpffs 是受 neverallow 限制的
 #    动作，只有 vendor_init 拿得到。给它独立域反而会让那条保命通路失效。
 #    （在打了 0007 的内核上它会提前 exit 0，实测 chcon 一次都不跑 —— 见 #60。）
+#    ⚠️★ 2026-09-27 退役（#126）：这段推理漏了一半 —— vendor_init 能 relabel bpffs 不假，
+#    但 vendor_init【进不去】一个 vendor 脚本：vendor_init.te:356 禁 entrypoint、:365 禁
+#    execute_no_trans，都没有豁免。也就是说这条"保命通路"只在 permissive 下存在。
+#    脚本与 rc 已不再装进镜像（device.mk），根治靠内核 patches/0007。
 
 # ⬜ /vendor/bin/tu_debug_loader.sh —— 调试用，不由 init 启动，不给标签。
 #
@@ -171,6 +175,13 @@
 #    看不见它们 —— 与 hwc 那条 netlink 是同一个取样偏差。
 /vendor/lib(64)?/hw/vulkan\.freedreno\.so                          u:object_r:same_process_hal_file:s0
 /vendor/lib(64)?/android\.hardware\.graphics\.allocator@[0-9]+\.[0-9]+\.so   u:object_r:same_process_hal_file:s0
+# ★ 2026-09-27 补上最后一个：/vendor/lib64/libui.so（同进程 HAL 的依赖）。
+#   证据：完整开机日志里 surfaceflinger / bootanim / system_app / platform_app 各 5 条
+#   `vendor_file:file { read open getattr map execute }` path=/vendor/lib64/libui.so。
+#   ⚠️ permissive 下同一个 (主体, 类型, 类, 权限) 只记一次，所以"只看到 libui"不代表
+#   只有它 —— 已按 /proc/<pid>/maps 把 SF / systemui / launcher / hwc 映射的 /vendor 文件
+#   全列了一遍：27 个里 26 个已是 same_process_hal_file，只剩这一个。
+/vendor/lib(64)?/libui\.so                                           u:object_r:same_process_hal_file:s0
 
 # libcamera 的日志文件（gaokun3-camera.rc 的 LIBCAMERA_LOG_FILE）
 /data/vendor/camera(/.*)?   u:object_r:gaokun3_camera_vendor_data_file:s0
@@ -185,3 +196,22 @@
 #    devmem，而那需要 sys_rawio —— 那条 neverallow 只在 userdebug 上失效。
 #    正解是把 TODO B6 做掉，让这个脚本整个消失。见 #75。
 /dev/mem                 u:object_r:gaokun3_devmem_device:s0
+
+# ── /vendor/firmware：只给内核读（类型定义与理由见 device.te，规则见 kernel.te）──
+/vendor/firmware(/.*)?   u:object_r:gaokun3_firmware_file:s0
+
+# ── 唤醒源：用正则兜住所有 /sys/devices/platform 下的 wakeupN（2026-09-27）──────────
+#
+# 实测本机 52 个唤醒源里 19 个还是通用 sysfs（system_suspend 开机时逐个读 name 等属性）。
+# 其中能写死路径的都在 genfs_contexts 里；但有几个父路径带动态编号 ——
+# xhci-hcd.N.auto、键盘所在的 usb3/3-3、alarmtimer.N.auto —— genfscon 写不稳。
+#
+# ★ 这条靠 ueventd：它在 coldboot 与之后每个 add 事件上都对 sysfs 路径做
+#   递归 restorecon（system/core/init/devices.cpp:379-383 FixupSysPermissions），
+#   用的就是 file_contexts；ueventd 有 sysfs_type 的 relabelfrom/relabelto
+#   （private/ueventd.te:20-21）。所以正则能覆盖热插拔后才出现的唤醒源。
+#   匹配不到的 sysfs 路径 restorecon 不动它（核心策略只有精确的 `/sys` 一条），
+#   genfscon 打的标签不受影响。
+# ⚠️ 只匹配 `…/wakeup/wakeupN`，不会碰到每个设备的 `power/wakeup` 属性文件。
+# ⬜ 这条机制在本机【未上机验证】：下一版装上后 `ls -Z /sys/class/wakeup/*/name` 应全是 sysfs_wakeup。
+/sys/devices/platform/.*/wakeup/wakeup[0-9]+(/.*)?   u:object_r:sysfs_wakeup:s0

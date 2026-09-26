@@ -1,0 +1,11 @@
+# vold 查 NVMe 盘寿命（2026-09-27，#126）。
+#
+# 证据：`vold userdata_block_device:blk_file ioctl  ioctlcmd=0x4e41  path=/dev/block/nvme0n1p2`
+# 0x4e41 = NVME_IOCTL_ADMIN_CMD（_IOWR('N', 0x41, …)；xperm 只看低 16 位）。
+# 来自 AOSP 16 新加的 system/vold/NvmeDeviceUtils.cpp:GetNvmeStorageLifeTime（IdleMaint.cpp:421-425
+# 在盘名含 nvme 时调它，发 GET_LOG_PAGE 读 SMART 的 percentage used）—— 核心策略没跟着给权限
+# （private/vold.te:313 对 userdata 只放了 BLKSECDISCARD）。
+# 拿不到时存储寿命查询返回 -1，不影响功能；但这是 AOSP 自己的代码路径，没理由让它失败。
+# ⚠️ xperm 限制不了 NVMe 管理命令的 opcode —— 这等于把 NVMe 管理通道交给 vold。
+#    vold 本来就能 BLKSECDISCARD 整个 userdata，信任级别相当。
+allowxperm vold userdata_block_device:blk_file ioctl 0x4e41;

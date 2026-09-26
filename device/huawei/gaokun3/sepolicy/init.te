@@ -1,0 +1,28 @@
+# init（PID 1）要的、核心策略没覆盖到本机的几条（2026-09-27，#126）。
+
+# ── super 分区节点的重标 ────────────────────────────────────────────────
+#
+# 证据：`init super_block_device:blk_file relabelto  name=nvme0n1p8`（uptime 2.3 s）。
+# 第一阶段 init 为挂 super 自己建了 /dev/block/nvme0n1p8（那时还没有策略，标签是临时的），
+# 第二阶段 restorecon /dev/block 时要把它改成 file_contexts 里的 super_block_device。
+# 核心策略允许重标的块设备类型只有 metadata / misc / recovery / system / userdata
+# （private/init.te:172-178），没有 super —— 大概因为 AOSP 的参考设备 super 不走这条路。
+# ⚠️ 不补的后果：enforcing 下 super 节点停在临时标签，update_engine / snapuserd / apexd
+#    按 super_block_device 拿到的权限全落空 ⇒ OTA 写不进 super。
+allow init super_block_device:{ blk_file lnk_file } relabelto;
+
+# ── init.rc:1224-1225 写 discard_max_bytes ─────────────────────────────────
+# 证据：`init sysfs:file { write open }  path=…/nvme0n1/queue/discard_max_bytes`。
+# 类型与 genfscon 见 device.te / genfs_contexts。只是个性能旋钮，但没理由让它失败。
+allow init gaokun3_sysfs_disk_queue:file w_file_perms;
+
+# ── 只静音：bootreceiver 的 tracefs 事件 ────────────────────────────────────
+# 证据：`init debugfs_bootreceiver_tracing:dir { write add_name }  name=enable`
+#   —— init.rc:707 写 …/instances/bootreceiver/events/error_report/error_report_end/enable。
+# 这不是缺权限：init 对那个文件的 open/write 现成（设备上实测 ALLOW，现值 enable=1）。
+# 是 tracefs 的 eventfs【查找时才生成文件】，而 WriteStringToFile 带 O_CREAT：
+# 内核 lookup_open() 对还没进 dcache 的名字会先调 may_o_create()（→ SELinux 的
+# dir write/add_name 检查，就是这条），被拒只会把 O_CREAT 位去掉、接着照常查找 ——
+# eventfs 当场生成文件，打开成功。所以 enforcing 下写照样生效，拒掉与现状等价。
+# （2026-09-27 我先按"文件不存在"写了这段注释，上机一看文件在、值是 1，才查到这层。）
+dontaudit init debugfs_bootreceiver_tracing:dir { write add_name };

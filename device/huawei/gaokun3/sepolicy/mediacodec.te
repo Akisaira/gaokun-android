@@ -12,3 +12,9 @@
 # ⚠️ 这是本轮唯一一条【预测性】规则：主体会从 init 变成 mediacodec，
 #    而客体和权限不变。第 4 步复查时要确认它确实被用到了。
 allow mediacodec video_device:chr_file rw_file_perms;
+
+# 2026-09-27 运行期 enforcing 试跑抓到（permissive 的开机日志里没露面 —— 硬解是用到才建组件）：
+#   mediacodec vendor_minigbm_debug_prop:file read   comm=DecodeComponent
+# gralloc(minigbm) 在 codec 进程里读 vendor.minigbm.debug；与 mediaserver / mediaswcodec 那两条同根。
+# 读不到也能解码（试跑里硬解照样过），但 minigbm 会拿不到 nocompression 设置。
+get_prop(mediacodec, vendor_minigbm_debug_prop)

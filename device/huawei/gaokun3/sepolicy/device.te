@@ -23,3 +23,23 @@ type gaokun3_devmem_device, dev_type;
 # ⚠️ 分区号写死在 file_contexts 里，与 p2/p4/p5/p6/p8/p10 那几条同一批 ——
 #    本机布局由 scripts/install-gaokun3.sh 固定生成。换布局要一起改。
 type gaokun3_esp_block_device, dev_type;
+
+# ── /vendor/firmware：内核直读固件（firmware_class.path=/vendor/firmware/）──────
+# ⚠️★★★ 2026-09-27 查出：这整棵树此前挂的是通用 vendor_file，而核心策略里 kernel 对
+#    vendor_file【没有任何读权限】（private/kernel.te 一条 vendor_file 规则都没有），
+#    新内核还多一道 `system firmware_load` 检查（构建机 private/access_vectors:379，
+#    refs 里那份旧的还没有这一位）。设备上用 /sys/fs/selinux/access 直接问内核：
+#      kernel vendor_file:file read / open / system firmware_load 全是 DENY。
+#    ⇒ enforcing 下 GPU（a660_sqe/gmu/zap）、WiFi（ath11k）、蓝牙（qca）、
+#      三颗 DSP（*.mbn）的固件【全部】加载失败。permissive 下只留一行 denial。
+#    用户态没人读这棵树（实测：/proc/*/fd 与设备树脚本里都没有），所以换专用类型
+#    只影响内核。规则在 sepolicy/kernel.te。
+#    （dragonboard 的做法是直接放行 kernel 读 vendor_file —— 它的策略里没有
+#     firmware_load，说明它没在这么新的内核 + 策略组合上 enforcing 跑过。）
+type gaokun3_firmware_file, vendor_file_type, file_type;
+
+# ── NVMe 盘的块队列参数（…/nvme0n1/queue/discard_max_bytes）────────────────
+# AOSP 自己的 init.rc:1224-1225 要写它（经 /dev/sys/block/by-name/{userdata,rootdisk}），
+# 但 init 能写的 sysfs 类型清单里（private/init.te:592-601）没有任何块设备类型，
+# 通用 sysfs 也不在里面。给这一个文件专用类型，规则在 sepolicy/init.te。
+type gaokun3_sysfs_disk_queue, fs_type, sysfs_type;

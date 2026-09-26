@@ -1,0 +1,28 @@
+# 内核自己（kernel 域：kworker、kdevtmpfs 等内核线程）要的规则。
+
+# ── 固件：内核直读 /vendor/firmware（2026-09-27，#126）──────────────────────
+#
+# cmdline 带 firmware_class.path=/vendor/firmware/（BoardConfig.mk），所以 GPU / WiFi /
+# 蓝牙 / 三颗 DSP 的固件都是内核线程自己 open + read，用的是 kernel 域的身份。
+# 证据（完整开机日志）：
+#   kernel vendor_file:file { read open }      path=/vendor/firmware/ath11k/WCN6855/hw2.1/amss.bin
+#   kernel vendor_file:system firmware_load    同上；蓝牙的 qca/wcnhpbtfw21.tlv 等同样
+# 设备上直接问内核（/sys/fs/selinux/access）：这三项在现行策略下全是 DENY，
+# dir search 是 ALLOW（domain.te 的全局规则）。
+# ⇒ 不补这几条，enforcing 下所有固件都加载失败。类型定义见 device.te。
+allow kernel gaokun3_firmware_file:dir r_dir_perms;
+allow kernel gaokun3_firmware_file:file r_file_perms;
+# firmware_load 检查的客体是【固件文件本身】（security/selinux/hooks.c 的
+# selinux_kernel_load_from_file：avc_has_perm(sid, 文件的 isec->sid, SECCLASS_SYSTEM, …)）。
+allow kernel gaokun3_firmware_file:system firmware_load;
+
+# ── kdevtmpfs：不放行，只静音 ────────────────────────────────────────────
+#
+# 证据：kernel device:dir { write add_name }、device:chr_file { create setattr }，
+#   comm=kdevtmpfs，name=gpiochip5 / usb 等。
+# CONFIG_DEVTMPFS_MOUNT=y，但 Android 的 /dev 是第一阶段 init 挂的 tmpfs
+# （设备上 /proc/mounts 里没有任何 devtmpfs）—— kdevtmpfs 维护的是它自己私有的那一份，
+# 没人看得见；真正的 /dev 节点由 ueventd 建。拒掉它没有任何后果。
+# 核心策略对同一类噪声就是这么处理的（private/kernel.te:173-174 对 dm_user_device 的 dontaudit）。
+dontaudit kernel device:dir { write add_name remove_name create rmdir };
+dontaudit kernel device:{ chr_file blk_file } { create setattr unlink };
