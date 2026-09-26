@@ -4,7 +4,7 @@
 //   flutter test test/shots_test.dart   # → test/shots/*.png
 //
 // ★ 这是 C 版 `make shots` 的等价物，也是本仓那条铁律："目标机器同时是作者的日用平板，
-//   经常拿不到。没有离线渲染，改一行文案都要排队等上机"（live/installer/README.md:13-14）。
+//   经常拿不到。没有离线渲染，改一行文案都要排队等上机"（C 版 README.md:13-14；C 版已删，git show 445e978:live/installer/README.md）。
 // ★ 它是"出图"，不是像素比对：每次都重写 PNG（autoUpdateGoldenFiles）。行为由
 //   flow_test.dart 管；像素级 golden 跨平台字体渲染不一致，比对只会制造噪音。
 // ⚠️ 没有字体时整组跳过（不然全是方块，看了等于没看）。

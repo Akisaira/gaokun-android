@@ -16,7 +16,7 @@
 路由器（OpenWrt，`192.168.10.1`）加了静态租约：`00:03:7f:12:*:*` → `.239`（本机 MAC 只有后两字节每次开机变），设备侧的静态 IP 仍保留。
 新工具 `gaokun3-ncam-smoke`（应用视角的相机冒烟测试，设备上 `/data/local/tmp/`）。案卷 #119。
 2026-09-18：SELinux 第五轮（案卷 #117）—— 补了 7 处规则（触摸服务的域 / `/dev/dri` 目录 / ESP 块设备类型 / OTA postinstall / 温控 HAL 的 sysfs_thermal / audioroute 的 tinymix / hwc 的 uevent socket），自研属性改名 `persist.vendor.gaokun3.*` 且 **allow_suspend 默认值改成 0**（⚠️ 不只新装机：v0.6.2 老用户多半没设过这个属性，OTA 后也会落到 0、失去待机 —— 发版前要用户定，见 `docs/TODO.md` S1）。构建机编译验证通过；`-userdebug` 重编后**装机成功**（戳 `1789737346`，槽 `_a`，60 秒起来）：温控 HAL 的 35 条 denial 归零且 `dumpsys thermalservice` 报真温度、audioroute 的 7 条归零、`/dev/dri` 与 ESP 的标签实机确认、功能零回归。⚠️ 中途误用 `-user` 变体导致一次装机失败（#117 §15）。⬜ 新查出的 4 处规则（hwc 的 create/bind、同进程 HAL 库、mediaswcodec、wakeup genfscon）**已写未验**，下次构建一起。
-2026-09-24/25：**Stage 7 图形安装器重启，改 Flutter + Debian**（`docs/stage7-flutter-debian.md`）：M1 后端统一（loop 端到端 56/56，抓到双系统模式从来装不上）、M2 Flutter 13 屏（测试 42/42）、M3 Debian live 镜像（U 盘 317 MiB，开机冒烟干净）、M0.5 内核能跑 systemd 均已完成，全部在 Mac 上离线做的，均为本地提交未推送。2026-09-25/26 **M0 从内置盘跑了六轮，六项验收全过**（`scripts/live/m0-internal.sh` + oneshot，§5.7）：画面方向、触摸、键盘、tty2、两种渲染后端各浸泡 10 分钟（RSS 每分钟只长约 0.2 MiB，预想的逐帧泄漏没出现），默认保持 Impeller。同期按用户要求加了：**免 U 盘装双系统**（安装器侧 + Windows PowerShell 脚本，后者在 Parallels 克隆机里整条跑通，§5.8）、**去掉 BIOS 限制**、**界面改 Material Design 3**（字体打包进应用）、**重新安装 Android**（默认清除数据）、**手动调整磁盘页**、版本页退回 OTA 清单。⚠️ 设备上跑的是 `patch-live-installer.sh` 不联网打的补丁镜像，**不是正式构建**；换到快网络后要 `build-live.sh` 正式重建一次。⚠️ 设备 ESP 上留着 5 个 `gaokun3-m0*.conf`（非默认）、p3 上有 `gaokun3/live.squashfs` 与 `firmware/`，`m0-internal.sh remove` 撤。⬜ 要用户定：TODO B23（华为 zap shader 的再分发）、推送。（每次开工时更新这一行）**
+2026-09-24/25：**Stage 7 图形安装器重启，改 Flutter + Debian**（`docs/stage7-flutter-debian.md`）：M1 后端统一（loop 端到端 56/56，抓到双系统模式从来装不上）、M2 Flutter 13 屏（测试 42/42）、M3 Debian live 镜像（U 盘 317 MiB，开机冒烟干净）、M0.5 内核能跑 systemd 均已完成，全部在 Mac 上离线做的，均为本地提交未推送。2026-09-25/26 **M0 从内置盘跑了六轮，六项验收全过**（`scripts/live/m0-internal.sh` + oneshot，§5.7）：画面方向、触摸、键盘、tty2、两种渲染后端各浸泡 10 分钟（RSS 每分钟只长约 0.2 MiB，预想的逐帧泄漏没出现），默认保持 Impeller。同期按用户要求加了：**免 U 盘装双系统**（安装器侧 + Windows PowerShell 脚本，后者在 Parallels 克隆机里整条跑通，§5.8）、**去掉 BIOS 限制**、**界面改 Material Design 3**（字体打包进应用）、**重新安装 Android**（默认清除数据）、**手动调整磁盘页**、版本页退回 OTA 清单。2026-09-26：网快了（中科大镜像 6 MB/s），**`build-live.sh` 正式重建完成**（`out/live/`，包清单与 09-25 那次逐行相同）；补上 WiFi **隐藏网络**（roadmap 欠账的最后一项）；**C 版安装器已删**（`git show 445e978:live/installer/…`）。⚠️ 设备 p3 上的仍是 `patch-live-installer.sh` 打的补丁镜像 —— 设备回到能 adb 的网络后 `m0-internal.sh prepare` 换成正式的。⚠️ 设备 ESP 上留着 5 个 `gaokun3-m0*.conf`（非默认）、p3 上有 `gaokun3/live.squashfs` 与 `firmware/`，`m0-internal.sh remove` 撤。⬜ 要用户定：TODO B23（华为 zap shader 的再分发）、推送。（每次开工时更新这一行）**
 
 > ## ★★★ 开工前先读（这一段是"现在"，历史在 `docs/project-log.md`）
 >
@@ -248,7 +248,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 | **4** ✅ | 输入 / 音频 / WiFi / 电源 | **全部通过**：触摸（gpio174）、WiFi 免干预自动连、扬声器+耳机+双麦、蓝牙、待机。案卷 `docs/stage4-findings.md` |
 | **5** ✅ | GPU：freedreno + turnip 硬件 Vulkan | **全部通过**（2026-08-19）：SMMU fault 0，22 分钟浸泡零错误。案卷 `docs/stage5-freedreno.md` |
 | **6** | 转 crDroid 16.0 + 产品化 | 主体完成：OTA / root / SELinux 四步 / 传感器 / 硬解。案卷 `docs/stage6-crdroid.md` |
-| **7** | LiveCD 图形安装器 + 轻量救援系统 | ▶ **2026-09-24 重启，改 Flutter + Debian**：M1 后端统一完成（loop 端到端 46/46）。`docs/stage7-flutter-debian.md`（前情 `docs/stage7-live-installer.md`） |
+| **7** | LiveCD 图形安装器 + 轻量救援系统 | ▶ **2026-09-24 重启，改 Flutter + Debian**：M0–M3 完成（M0 六项真机验收 2026-09-26），C 版已删；下一步 M4 真装一台。`docs/stage7-flutter-debian.md`（前情 `docs/stage7-live-installer.md`） |
 
 > ⚠️★ **本表编号一度与实际里程碑脱节**：原表写"5 = 游戏适配"，而实际
 > Stage 5 做的是 GPU、Stage 6/7 表里压根没有。**游戏适配已经达成**

@@ -29,7 +29,7 @@
 
 | # | 决定 | 代价 / 注意 |
 |---|---|---|
-| 1 | **退役 C 版安装器**（`live/installer/`，20 屏，真机跑通过） | 退役排在最后一步（M5）：在 M0 证明新栈能出画面之前删掉唯一能跑的前端没有好处 |
+| 1 | **退役 C 版安装器**（`live/installer/`，20 屏，真机跑通过） | 退役排在 M0 之后：在证明新栈能出画面之前删掉唯一能跑的前端没有好处。✅ **2026-09-26 M0 过了、已删**（连同 `scripts/live/gen-strings.py`；最后一版 `git show 445e978:live/installer/…`） |
 | 2 | 渲染 = **官方 `flutter_linux`（GTK）+ cage** | 正是原设计 §3 方案 B 否掉的那条（"合成器能出的问题比界面还多"）。要 mesa/freedreno 在 Debian 用户态可用 —— **Stage 5 只在 Android 侧验过**，M0 专打这一枪 |
 | 3 | rescue 与 live **统一 Debian** | rescue 从 55 MiB 涨到 Debian 量级（预计 150–250 MiB），1 GiB 分区够 |
 | 4 | live 镜像预算 **~800 MiB**（不含 payload） | 原目标 ≤400 MiB |
@@ -81,7 +81,7 @@ scripts/live/installer-lib.sh    唯一的分区 / 写盘实现
 | M4a | 装到**外接 USB 盘**并从它启动进 Android | 真机，零风险 | ⬜ |
 | M4b | 内置盘 | 真机，⚠️ **现在没有回落槽**（`_a` 不可启动，#122 §1） | ⬜ 需用户单独点头 |
 | M4.5 | 救援系统迁移（先并列、验过、再删 p3） | 真机 | ⬜ |
-| M5 | roadmap 欠的 5 条 + 退役 C 版 + 文档 | — | ▶ roadmap 第 1–4 条 Flutter 版都做了（两步式 WiFi 与信号格数、网络安装接进 apply、分区大小回灌 `--userdata-mib`、"已分配 / 共"读 `PLANSUM`）；第 1 条最后一项**隐藏网络** 2026-09-26 补上（后端 `gk3_wifi_connect … hidden` → `scan_ssid=1`，`test-wifi-connect.sh` 12/12，界面 58/58）。第 5 条就是 M4。⬜ 退役 C 版、文档 |
+| M5 | roadmap 欠的 5 条 + 退役 C 版 + 文档 | — | ▶ roadmap 第 1–4 条 Flutter 版都做了（两步式 WiFi 与信号格数、网络安装接进 apply、分区大小回灌 `--userdata-mib`、"已分配 / 共"读 `PLANSUM`）；第 1 条最后一项**隐藏网络** 2026-09-26 补上（后端 `gk3_wifi_connect … hidden` → `scan_ssid=1`，`test-wifi-connect.sh` 12/12，界面 58/58）。第 5 条就是 M4。✅ 退役 C 版（2026-09-26）。⬜ 文档（INSTALL.md / README 的救援描述要等 M4.5） |
 
 ## 3. M1：这一轮实测抓到的东西
 

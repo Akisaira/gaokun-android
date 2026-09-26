@@ -58,7 +58,7 @@ class ShellBackend extends Gk3Backend {
     await Process.run('reboot', const []);
   }
 
-  /// 命令行逃生口：切到 tty2（那里有 getty）。C 版是 system("chvt 2")（gk3-installer.c:1288）。
+  /// 命令行逃生口：切到 tty2（那里有 getty）。C 版是 system("chvt 2")（gk3-installer.c:1288；C 版已删，git show 445e978:live/installer/gk3-installer.c）。
   /// ⚠️★ 2026-09-25 M0 实测：Debian 镜像里【没有 chvt】（它在 kbd 包里，没装）—— 按钮点了什么都不发生，
   ///   日志里只有一条没人接的 ProcessException。现在：镜像里 chvt 链到 busybox（overlay-common），
   ///   这里再退一步直接调 busybox；都不行就把原因交给界面说出来。

@@ -1,5 +1,8 @@
 # Stage 7 设计：LiveCD 图形安装器 + 轻量救援系统
 
+> ⚠️ **C 版源码（`live/installer/`、`scripts/live/gen-strings.py`）2026-09-26 已删**（改 Flutter，M0 验收过后）。
+> 文中 `gk3-installer.c:行号` 一类的引用指最后一版：`git show 445e978:live/installer/<文件>`。
+
 > 状态：**M0 上机完成 —— 完整启动跑通，ssh 可达、WiFi 自动连上、分区工具齐全。**
 > ⏸ 2026-08-23 起用户决定暂缓（TODO B4），⬜ 欠 `gk3_apply`（真写盘）与 DRM 后端。
 > 产物实测大小：`gaokun3-rescue.squashfs` **55 MiB** ／ `initramfs.img` **2.7 MiB**

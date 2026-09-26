@@ -1,6 +1,7 @@
 # gaokun3 图形安装器（Flutter）
 
-LiveCD 上的图形安装流程。取代 C 版 `live/installer/`（C + cairo 直画 DRM，20 屏）——
+LiveCD 上的图形安装流程。取代 C 版 `live/installer/`（C + cairo 直画 DRM，20 屏；M0 验收过后 2026-09-26 删掉，
+最后一版 `git show 445e978:live/installer/…`）——
 决定与理由见 [`docs/stage7-flutter-debian.md`](../../docs/stage7-flutter-debian.md)。
 
 ## 分区逻辑不在这里
@@ -67,10 +68,11 @@ bash scripts/live/test-in-container.sh scripts/live/gen-fixtures.sh
 索引里的 `@next gk3_shrink windows-free` 让演示走得通"出厂 → 缩分区 → 双系统"：缩成功后
 接着按缩完之后录的那份回放。找不到的调用返回失败（127）而不是编一个结果。
 
-## 界面上的几个决定（继承自 C 版，见 `live/installer/README.md`）
+## 界面上的几个决定（继承自 C 版的 `README.md`：`git show 445e978:live/installer/README.md`）
 
 * 逻辑坐标固定 1280×800，整体缩放；旋转交给 cage
-* **触摸目标最小 88 逻辑像素**（软键盘：键帽 80 + 缝 8）
+* 触摸目标：按钮 56、列表项 ≥ 72 逻辑像素（软键盘：键帽 48 + 缝 8）。C 版定的是 88；改 MD3 时按 MD3 的下限
+  （48 dp ≈ 本机 37 逻辑像素）收回来，理由写在 `lib/ui/theme.dart` 的 `kTouch`
 * 最后一步和缩分区是**按住 2 秒**；键盘上按住回车 / 空格也行 —— 触摸坏了不能变砖
 * 做不到的选项**禁用并写明原因**，不藏起来（安装 U 盘也列出来，写明"不能装到它上面"）
 * 导航就是 Navigator 的栈：返回 = 回到真正来的那一页（C 版 `screen--` 掉进过没走过的分支屏）

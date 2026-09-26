@@ -114,7 +114,8 @@ ath11k 固件 / OpenRC 的 runlevel 链接）。
   固件，所以固件必须打进 initramfs。这不是膨胀，是修复。
 * ⬜ 图形安装器（`live` profile）还没写
   ⚠️ 本行已过时：C 版图形安装器 2026-08 写过（`live/installer/`），
-  2026-09-24 决定改为 Flutter + Debian（`docs/stage7-flutter-debian.md`）。
+  2026-09-24 决定改为 Flutter + Debian（`docs/stage7-flutter-debian.md`）；C 版 2026-09-26 删掉
+  （`git show 445e978:live/installer/…`），`gen-strings.py` 一起删。
 * ✅ ~~`install-gaokun3.sh` 还是"清空整盘"一条路，未拆成可调用的库~~
   2026-09-24：命令行版改成 `installer-lib.sh` 外面的一层薄壳，见下一节。
 

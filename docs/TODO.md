@@ -925,8 +925,8 @@ mock 值恒定才没打到。**只换 HAL 不改阈值 = 开机几分钟自动�
 
 ### B4. LiveCD 图形安装器 —— ▶ **2026-09-24 重启：改 Flutter + Debian**
 ⚠️ 下面「⏸ 搁置」那段是 2026-08-23 的状态，留作历史。**现状与里程碑见
-[stage7-flutter-debian.md](stage7-flutter-debian.md)**：M1 后端统一已完成（loop 端到端 46/46，
-抓到双系统模式从来装不上），下一步 M2 Flutter 骨架（Mac 上）与 M0 真机打一枪（要回家）。
+[stage7-flutter-debian.md](stage7-flutter-debian.md)**：M0–M3 已完成（2026-09-26 M0 六项真机验收全过），
+C 版已删；下一步 M4 真装一台（M4a 要外接 USB 盘，M4b 内置盘要用户单独点头）。
 
 （原标题：⏸ **用户决定暂时搁置**（2026-08-23））
 接手说明见 [stage7-installer-roadmap.md](stage7-installer-roadmap.md) 末尾。
