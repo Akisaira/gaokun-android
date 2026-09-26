@@ -114,12 +114,15 @@ PRODUCT_COPY_FILES += \
 
 # 扬声器增强（试验功能，PR #7）：自研 AIDL effect = Histen 引擎 + LR4 高通 +
 # makeup + 限幅 + 软削波。★ 默认关：Parts 里的开关写 persist.sys.gaokun3.histen，
+# histen.rc 把它镜像成 vendor.gaokun3.histen.on（音频 HAL 读不了 system_prop，理由在 rc 里）；
 # 只有 =1 且输出是内置扬声器时才处理，其余一律逐比特直通。
 # 与 stock 配置的差别是纯增量（stock 的 21 库/18 effect 全保留，只多一个
 # gaokun_histen 槽位与一条 music postprocess）。
 # 详见 device/huawei/gaokun3/effects/README.md。
 PRODUCT_PACKAGES += \
     libgaokunhisteneffect
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/etc/histen.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/histen.rc
 
 # Histen 引擎本体：华为专有二进制（iMedia Audio 8.0 / Histen 6.1.9，取自麒麟 V10 SP1，
 # 且为 bionic 打过二进制补丁），**未获再分发授权** ⇒ 与 firmware/ 同一套规矩：

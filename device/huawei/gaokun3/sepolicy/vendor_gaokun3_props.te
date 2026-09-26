@@ -47,3 +47,10 @@ get_prop(postinstall, vendor_gaokun3_prop)
 #    键盘开关与触摸模式走的是 persist.sys.gaokun3.*（system_prop，AOSP 已经
 #    allow system_app 写，见 private/system_app.te:43）——【那两个不要跟着改名】，
 #    改了 Parts 应用反而写不了。#117 第 5 条。
+
+# 扬声器增强（试验功能，PR #7）的总开关镜像：etc/histen.rc 在 vendor 的 rc 里
+# `setprop vendor.gaokun3.histen.on …`，动作跑在 vendor_init 域。
+# ★ vendor_init 对 vendor 属性的笼统写权限只在 not_compatible_property 下才有
+#   （private/vendor_init.te:258-264），本机是兼容属性模式 ⇒ 要显式给。
+#   neverallow 那边只拦 coredomain 写 vendor 属性，vendor_init 不是 coredomain。
+set_prop(vendor_init, vendor_gaokun3_prop)

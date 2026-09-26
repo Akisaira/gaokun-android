@@ -1,0 +1,24 @@
+# 扬声器增强（试验功能，PR #7）的总开关：把 Parts 写的 system 属性镜像成音频 HAL 读得到的 vendor 属性。
+#
+# ★ 为什么要这一跳（2026-09-26 编译器实测，不是推理）：
+#   Parts 是 system_app（coredomain），只能写 system 属性 —— 所以开关是 persist.sys.gaokun3.histen；
+#   但 persist.sys.* 的上下文 system_prop 是 core_property_type（private/property.te:157），
+#   compatible_property_only 里那条 neverallow 禁止一切非 coredomain 读 core_property_type：
+#       violated by allow hal_audio_default system_prop:file { read open };
+#   反过来 coredomain 又不许写任何 vendor 属性（vendor_gaokun3_props.te 顶上）。
+#   两头都堵死，只能靠 init：触发条件由 init 本身求值（不需要谁有读权限，keyboard.rc 就是这么
+#   用 persist.sys.* 的，#65 实测通过），动作在 vendor_init 里执行 setprop（vendor_gaokun3_props.te 给了权限）。
+#
+# 镜像是【非持久】的 vendor.gaokun3.histen.on：真值只有 Parts 那一个。只有 "1" 算开 ——
+# 没设过 / 设成 0，镜像要么不存在、要么是 0，effect 都当关（gaokun_effect.cpp 的 masterOn()）。
+
+on property:persist.sys.gaokun3.histen=1
+    setprop vendor.gaokun3.histen.on 1
+
+on property:persist.sys.gaokun3.histen=0
+    setprop vendor.gaokun3.histen.on 0
+
+# 开机补一次：属性触发器在 init 早期不会重放（同 keyboard.rc / touchmode.rc 的做法）。
+# 只补"开"：关着的时候镜像不存在，本来就等于关。
+on boot && property:persist.sys.gaokun3.histen=1
+    setprop vendor.gaokun3.histen.on 1

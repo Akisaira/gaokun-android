@@ -109,7 +109,7 @@ endif
 * `relative_install_path: "soundfx"` + `installable: true` ⇒ 落到 `/vendor/lib64/soundfx/`，
   即 effects HAL 在 APEX 之外查找库的目录之一（`EffectConfig.h` 的 `kEffectLibPath`）。
 
-SELinux：`sepolicy/hal_audio_default.te` 给音频 HAL 两条读属性的规则（开关 + 旋钮）。
+SELinux：`sepolicy/hal_audio_default.te` 让音频 HAL 读 `vendor_gaokun3_prop`（开关的镜像 + 旋钮）；`sepolicy/vendor_gaokun3_props.te` 让 `vendor_init` 写它（`etc/histen.rc` 的镜像）。⚠️ HAL **不能**直接读 Parts 写的 `persist.sys.*`：`system_prop` 是 `core_property_type`，2026-09-26 的 `sepolicy_neverallows` 就拒在这里 —— 所以才有 init 镜像这一跳。
 
 ---
 
@@ -119,7 +119,7 @@ SELinux：`sepolicy/hal_audio_default.te` 给音频 HAL 两条读属性的规则
 
 | 条件 | 来源 | 变了以后 |
 |---|---|---|
-| 总开关 `persist.sys.gaokun3.histen` = `1` | Parts 开关；没设过 = 关 | **关**：约 1 秒内生效。**开**：从下一次开始播放起生效（这一路流之前开过的话立刻恢复） |
+| 总开关 = `1` | Parts 写 `persist.sys.gaokun3.histen`，`etc/histen.rc` 镜像成 `vendor.gaokun3.histen.on`，effect 读镜像；没设过 = 关 | **关**：约 1 秒内生效。**开**：从下一次开始播放起生效（这一路流之前开过的话立刻恢复） |
 | 这一路流已经"装好"（armed） | 开流时或 START 时开关是开的 | 装链会 dlopen 引擎，不能在音频线程上做，所以只在开流 / START 时做 |
 | 输出是**内置扬声器** | 框架推来的设备（descriptor 设了 `deviceIndication`） | 插拔耳机、连蓝牙立刻切换。蓝牙音箱也是 `OUT_SPEAKER` 但带 `bt-a2dp` 连接，不算 |
 | 立体声 | 开流时的格式 | 另外 Histen 只在 48 kHz 下进链；别的采样率只跑扬声器链 |
@@ -240,6 +240,7 @@ adb shell su -c 'logcat -d -s gaokun_effect' | tail -40
 3. `eq.N` 的**符号约定**来自作者的实测扫描，不是文档：先小步扫描，别凭直觉设值。
 4. 进 Histen 之前信号被量化到 16 位（高半字）并硬限在 ±1.0，出来再丢掉低 16 位 —— 外放听不出来，但不是无损的。
 5. 在**本机扬声器（WSA 双单元）**上调的参数，不具备跨机型通用性。
-6. ⬜ 维护者 2026-09-26 的改动**还没编译过、没上机**。要看的：整包构建通过；开关关时只有一行 `bypass`；
+6. ✅ **2026-09-26 编译验证通过**（构建机独立 `OUT_DIR=out-pr7`，不碰 `out/`）：effect 在 `-Werror -Wthread-safety -Wextra` 下编过、导出 `createEffect / queryEffect / destroyEffect`、字符串里只有新属性名；Parts 的 APK 带 `SpeakerFxSettingsActivity`（注入 `ia.sound`）；`selinux_policy`（含 neverallow）与 `vendor_property_contexts`（前缀检查）通过；引擎 / 配置 / `histen.rc` 三份拷贝与源文件一致。★ 第一轮编译抓到一处我自己的错：`get_prop(hal_audio_default, system_prop)` 撞 neverallow（`system_prop` 是 `core_property_type`），于是改成 init 镜像（`etc/histen.rc`）。
+   ⬜ **还没上机**。要看的：开关关时只有一行 `bypass`；打开后 `getprop vendor.gaokun3.histen.on` = 1、外放有 `meter:`；插耳机立刻 `bypass: output is not the built-in speaker`；「设置 → 声音」里有这一项；enforcing 下没有 `hal_audio_default` / `vendor_init` 的 avc。
    开关开 + 外放有 `meter:`；插耳机立刻 `bypass: output is not the built-in speaker`；
    enforcing 下没有 `hal_audio_default` 读属性的 avc。

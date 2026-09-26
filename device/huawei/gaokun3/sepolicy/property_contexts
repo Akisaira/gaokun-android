@@ -20,3 +20,6 @@
 #     * postinstall —— OTA 钩子 getprop 那个 recovery_entry
 #   所以只能是 public。类型定义与 allow 在 sepolicy/vendor_gaokun3_props.te。
 persist.vendor.gaokun3.  u:object_r:vendor_gaokun3_prop:s0
+# 非持久的 vendor.gaokun3.*（2026-09-26 起）：扬声器增强总开关的镜像 vendor.gaokun3.histen.on，
+# 由 etc/histen.rc 在 vendor_init 里 setprop、音频 HAL 读。`vendor.` 也在允许的前缀清单里。
+vendor.gaokun3.          u:object_r:vendor_gaokun3_prop:s0

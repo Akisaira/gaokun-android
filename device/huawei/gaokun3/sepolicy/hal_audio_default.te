@@ -1,22 +1,25 @@
-# 音频 HAL 域：扬声器增强试验功能（PR #7，effects/gaokun_effect.cpp）要读两类属性。
+# 音频 HAL 域：扬声器增强试验功能（PR #7，effects/gaokun_effect.cpp）要读 vendor_gaokun3_prop。
 #
 # 域从哪来：effect 库被 android.hardware.audio.effect.service-aidl.example dlopen，
 #   那个服务在 APEX com.android.hardware.audio 里，APEX 的 file_contexts 把它标成
 #   hal_audio_default_exec（hardware/interfaces/audio/aidl/default/apex/
 #   com.android.hardware.audio/file_contexts:4，crDroid 16.0）⇒ 域是 hal_audio_default。
 #
-# ① 总开关 persist.sys.gaokun3.histen —— Parts 应用写（system_app 本来就能写 system_prop）。
-#    system_prop 是 system_public_prop（public/property.te:267），vendor 域读它不撞
-#    private/property.te:179-184 那条 neverallow（只豁免 restricted/public 两类）。
-#    ⚠️ 不能反过来用 persist.vendor.* 当开关：coredomain 不许写任何 vendor 属性
-#      （见 vendor_gaokun3_props.te 顶上那段编译器实测）。
-get_prop(hal_audio_default, system_prop)
-#
-# ② 调参旋钮 persist.vendor.gaokun3.histen.* —— vendor_gaokun3_prop（property_contexts:22）。
-#    PR 原版叫 persist.gaokun3.histen.*，落在 default_prop（system_internal_prop，
-#    public/property.te:279）⇒ 上面那条 neverallow 让 vendor 域【永远】读不到，
-#    转 enforcing 后所有旋钮会静默回到默认值 —— 这正是改名的理由。
+# 读的是两样，都在 vendor_gaokun3_prop 下（property_contexts）：
+#   * vendor.gaokun3.histen.on          总开关的镜像（etc/histen.rc 从 persist.sys.gaokun3.histen 抄过来）
+#   * persist.vendor.gaokun3.histen.*   调参旋钮（root setprop）
+#   PR 原版的旋钮叫 persist.gaokun3.histen.*，落在 default_prop（system_internal_prop，
+#   public/property.te:279）⇒ private/property.te:179-184 让 vendor 域【永远】读不到。
 get_prop(hal_audio_default, vendor_gaokun3_prop)
 #
+# ⚠️★ 曾经这里还有一条 get_prop(hal_audio_default, system_prop)，想直接读 Parts 写的
+#    persist.sys.gaokun3.histen。**它编不过去**，2026-09-26 构建机实测（sepolicy_neverallows）：
+#      neverallow on line 291 of system/sepolicy/private/property.te
+#        violated by allow hal_audio_default system_prop:file { read open };
+#    system_prop 是 core_property_type（private/property.te:157），compatible_property_only 里
+#    那条 neverallow 禁止一切非 coredomain 读 core_property_type。
+#    ★ 我审阅时"system_public 就能读"的推理漏了这一条 —— 和 vendor_gaokun3_props.te 顶上
+#      那次一样，neverallow 读漏了，只有编译器能证伪（permissive 下实机永远不报）。
+#
 # ⬜ 未验证：dlopen /vendor/lib64/soundfx/ 下的两个库（vendor_file）在 enforcing 下
-#    是否还要别的规则。本机现在 permissive，下次构建后看 dmesg 的 avc。
+#    是否还要别的规则。本机现在 permissive，装机后看 dmesg 的 avc。

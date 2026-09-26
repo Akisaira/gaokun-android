@@ -13,8 +13,9 @@
  * The effect is registered for every music session, but it only touches audio
  * when ALL of these hold -- otherwise every buffer goes through bit-exact:
  *
- *   1. The master switch is on: persist.sys.gaokun3.histen = 1 (the Parts app's
- *      "Speaker enhancement (experimental)" toggle).  Unset = OFF.
+ *   1. The master switch is on: vendor.gaokun3.histen.on = 1.  That is init's
+ *      mirror (etc/histen.rc) of persist.sys.gaokun3.histen, which the Parts
+ *      app's "Speaker enhancement (experimental)" toggle writes.  Unset = OFF.
  *   2. The chain was armed for this stream -- i.e. the switch was already on
  *      at open() or at the last START.  Turning the switch OFF takes effect
  *      within about a second; turning it ON takes effect on the next playback
@@ -36,12 +37,15 @@
  *      rate only the speaker chain runs.
  *
  * Tuning knobs are persist.vendor.gaokun3.histen.* (root setprop; see the
- * README).  Why the master switch is persist.sys.* while the knobs are
- * persist.vendor.*: the Parts app is a system_app, and coredomain may not set
- * vendor properties at all (sepolicy/vendor_gaokun3_props.te); conversely the
- * original persist.gaokun3.* names were default_prop, which no vendor process
- * may ever read (private/property.te:179-184) -- so under enforcing every knob,
- * the old enable=0 safety valve included, would have silently read as unset.
+ * README).  Why the switch needs init's mirror at all: the Parts app is a
+ * system_app, and coredomain may not set vendor properties
+ * (sepolicy/vendor_gaokun3_props.te) -- while this vendor HAL may not read
+ * persist.sys.* either, because system_prop is a core_property_type
+ * (sepolicy_neverallows rejected exactly that on 2026-09-26; see
+ * sepolicy/hal_audio_default.te).  Conversely the original persist.gaokun3.*
+ * knob names were default_prop, which no vendor process may ever read
+ * (private/property.te:179-184) -- so under enforcing every knob, the old
+ * enable=0 safety valve included, would have silently read as unset.
  *
  * ---------------------------------------------------------------------------
  * ★★★ THE ONE ARCHITECTURAL FACT THAT COST A DAY: SUBCLASS EffectImpl.
@@ -219,8 +223,13 @@ constexpr int32_t kMemoryUsageKiB = 64;
  * Read at open(), at every START, and about once a second on the audio thread.
  * Only "1" means on: unset, empty and anything else is off, because an
  * experimental feature must never switch itself on.
+ *
+ * This is init's non-persistent MIRROR (etc/histen.rc), not the property the
+ * Parts app writes (persist.sys.gaokun3.histen): this HAL is not allowed to
+ * read system_prop.  vendor.gaokun3.* is vendor_gaokun3_prop
+ * (sepolicy/property_contexts).
  * ------------------------------------------------------------------------- */
-constexpr char kMasterProp[] = "persist.sys.gaokun3.histen";
+constexpr char kMasterProp[] = "vendor.gaokun3.histen.on";
 
 bool masterOn() {
     char buf[PROP_VALUE_MAX] = {0};
