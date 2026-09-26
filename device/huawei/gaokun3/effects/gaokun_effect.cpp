@@ -8,6 +8,42 @@
  * <library>/<effect> entries of /vendor/etc/audio_effects_config.xml.
  *
  * ---------------------------------------------------------------------------
+ * ★★ EXPERIMENTAL: OFF BY DEFAULT, BUILT-IN SPEAKER ONLY (maintainer, 2026-09-26)
+ *
+ * The effect is registered for every music session, but it only touches audio
+ * when ALL of these hold -- otherwise every buffer goes through bit-exact:
+ *
+ *   1. The master switch is on: persist.sys.gaokun3.histen = 1 (the Parts app's
+ *      "Speaker enhancement (experimental)" toggle).  Unset = OFF.
+ *   2. The chain was armed for this stream -- i.e. the switch was already on
+ *      at open() or at the last START.  Turning the switch OFF takes effect
+ *      within about a second; turning it ON takes effect on the next playback
+ *      (immediately, if this stream had been armed before it was switched off).
+ *      That asymmetry is deliberate: arming dlopen()s the Histen engine, which
+ *      must not happen on the audio thread, and with the switch off no library
+ *      code runs at all.
+ *   3. The output is the built-in speaker (OUT_SPEAKER / OUT_SPEAKER_SAFE with
+ *      an empty connection).  The postprocess entry is keyed on the STREAM, not
+ *      the device, and on this machine the speaker, wired headphones and wired
+ *      headset all hang off the same "primary output" mix port -- so without
+ *      this check headphones got the 150 Hz high-pass, the makeup gain and a
+ *      speaker tuning.  A Bluetooth speaker is OUT_SPEAKER too, but with a
+ *      "bt-a2dp" connection, hence the empty-connection test.  The device list
+ *      arrives through Parameter::deviceDescription because the descriptor sets
+ *      flags.deviceIndication (Effects.cpp:1459 only forwards it then); the
+ *      first one lands right after open() (Threads.cpp:1874).
+ *   4. The stream is stereo.  Histen additionally requires 48 kHz; at any other
+ *      rate only the speaker chain runs.
+ *
+ * Tuning knobs are persist.vendor.gaokun3.histen.* (root setprop; see the
+ * README).  Why the master switch is persist.sys.* while the knobs are
+ * persist.vendor.*: the Parts app is a system_app, and coredomain may not set
+ * vendor properties at all (sepolicy/vendor_gaokun3_props.te); conversely the
+ * original persist.gaokun3.* names were default_prop, which no vendor process
+ * may ever read (private/property.te:179-184) -- so under enforcing every knob,
+ * the old enable=0 safety valve included, would have silently read as unset.
+ *
+ * ---------------------------------------------------------------------------
  * ★★★ THE ONE ARCHITECTURAL FACT THAT COST A DAY: SUBCLASS EffectImpl.
  *
  * An earlier revision of this file subclassed BnEffect directly and hand-rolled
@@ -98,6 +134,8 @@
 #include <aidl/android/hardware/audio/effect/Flags.h>
 #include <aidl/android/hardware/audio/effect/IEffect.h>
 #include <aidl/android/hardware/audio/effect/Parameter.h>
+#include <aidl/android/media/audio/common/AudioDeviceDescription.h>
+#include <aidl/android/media/audio/common/AudioDeviceType.h>
 #include <aidl/android/media/audio/common/AudioUuid.h>
 
 #include "effect-impl/EffectContext.h"
@@ -114,12 +152,15 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace aidl::android::hardware::audio::effect {
 
 /* AudioUuid lives in the common AIDL package and is only pulled into this
  * namespace by the audio-effect AIDL headers through qualified names, so spell
  * the using out: AOSP's own effect implementations do the same. */
+using ::aidl::android::media::audio::common::AudioDeviceDescription;
+using ::aidl::android::media::audio::common::AudioDeviceType;
 using ::aidl::android::media::audio::common::AudioUuid;
 
 namespace {
@@ -163,45 +204,63 @@ constexpr char kImplUuidText[] = "b7e4c9a2-3f18-4d6b-9c05-8a1e7f2d4b93";
  * MAX_EFFECTS_MEMORY = 512 -- AudioFlinger refuses the effect with status -38
  * otherwise, logging only
  *     W APM::EffectDescriptor: registerEffect() memory limit exceeded for Fx ...
- * This is a declared budget that is checked before anything is allocated; the
- * real working set is one 480-frame stereo float block plus the Histen instance,
- * which is well under 64 KiB even with the algorithm's 1 MB scratch buffers
- * (those live inside libhw_histen_processing.so's own accounting). */
+ * This is a declared budget that is checked before anything is allocated.  It
+ * is NOT the real working set: with Histen armed, histen_chain.h calloc()s two
+ * 1 MB scratch buffers plus two 128 KiB rings (about 2.3 MB).  Declaring that
+ * honestly would exceed MAX_EFFECTS_MEMORY and the effect would never be
+ * registered, so the number stays nominal -- AOSP's accounting simply was not
+ * designed around a third-party engine with megabyte scratch space. */
 constexpr int32_t kCpuLoad = 3;
 constexpr int32_t kMemoryUsageKiB = 64;
 
 /* ---------------------------------------------------------------------------
- * Runtime knobs, read from system properties so a value can be changed on a
- * running device -- no rebuild, no reboot:
+ * The master switch -- see the EXPERIMENTAL block at the top of this file.
  *
- *     adb shell su -c "setprop persist.gaokun3.histen.makeup 4"   (~1 s, live)
- *     adb shell su -c "setprop persist.gaokun3.histen.scene 3"   (next open())
+ * Read at open(), at every START, and about once a second on the audio thread.
+ * Only "1" means on: unset, empty and anything else is off, because an
+ * experimental feature must never switch itself on.
+ * ------------------------------------------------------------------------- */
+constexpr char kMasterProp[] = "persist.sys.gaokun3.histen";
+
+bool masterOn() {
+    char buf[PROP_VALUE_MAX] = {0};
+    if (__system_property_get(kMasterProp, buf) <= 0) return false;
+    return buf[0] == '1' && buf[1] == 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Tuning knobs, read from system properties so a value can be changed on a
+ * running device -- no rebuild, no reboot.  They only matter while the master
+ * switch is on.  vendor_gaokun3_prop, so setting them needs root:
+ *
+ *     adb shell su -c "setprop persist.vendor.gaokun3.histen.makeup 4"  (~1 s, live)
+ *     adb shell su -c "setprop persist.vendor.gaokun3.histen.scene 3"   (next playback)
  *
  * Two refresh classes, and the difference decides whether playback has to be
- * restarted: `enable` and `scene` are read once, at open(), because Histen takes
- * its profile at Init time -- the five speaker knobs (hpf / makeup / limit /
- * ceiling / release) are re-read about once a second and are live.
+ * restarted: `engine` and `scene` are read when the chain is armed (open() or
+ * START), because Histen takes its profile at Init time -- the five speaker
+ * knobs (hpf / makeup / limit / ceiling / release) and Histen's eq.N / ben.* /
+ * vol.* overrides are re-read about once a second and are live.
  *
  * All are strings; an unset or unparsable property means "use the default".
  * ------------------------------------------------------------------------- */
 
-/* Safety valve, read at open() -- i.e. it takes effect on the next playback,
- * never mid-stream.  When it is "0" the chain is never initialised at all, so
- * the effect is a bit-exact wire and no library code runs against our buffers.
- * That matters because a fault inside the Histen library takes down the whole
- * effect service and audioserver with it (music silent, UI sounds seconds
- * late).  Unset means enabled. */
-bool histenEnabled() {
+/* A/B knob, read when the chain is armed.  "0" keeps the Histen engine out of
+ * the chain (no library code runs against our buffers) while the speaker chain
+ * below stays on -- that is what the pre-2026-09-26 `enable=0` did, under a
+ * name that no longer suggests a bit-exact wire.  The bit-exact wire is the
+ * master switch.  Unset means the engine is used when it is present. */
+bool engineEnabled() {
     char buf[PROP_VALUE_MAX] = {0};
-    if (__system_property_get("persist.gaokun3.histen.enable", buf) <= 0) return true;
+    if (__system_property_get(GAOKUN_HISTEN_PROP("engine"), buf) <= 0) return true;
     return !(buf[0] == '0' && buf[1] == 0);
 }
 
-/* Which entry of the scene table HistenChain::init() loads.  Read once, at
- * open(): the algorithm takes its profile at Init/SetParams time. */
+/* Which entry of the scene table HistenChain::init() loads.  Read when the
+ * chain is armed: the algorithm takes its profile at Init/SetParams time. */
 int readSceneProperty() {
     char buf[PROP_VALUE_MAX] = {0};
-    if (__system_property_get("persist.gaokun3.histen.scene", buf) <= 0) return gaokun::kDefScene;
+    if (__system_property_get(GAOKUN_HISTEN_PROP("scene"), buf) <= 0) return gaokun::kDefScene;
     const long v = std::strtol(buf, nullptr, 10);
     if (v < 0 || v >= HISTEN_SCENE_COUNT) return gaokun::kDefScene;
     return static_cast<int>(v);
@@ -209,19 +268,18 @@ int readSceneProperty() {
 
 /* ---------------------------------------------------------------------------
  * The speaker-protection half -- see speaker_chain.h for the measurements that
- * justify it.  Deliberately independent of `enable`: the high-pass is worth
+ * justify it.  Deliberately independent of `engine`: the high-pass is worth
  * having even with the algorithm switched off, because it is diaphragm
  * excursion (not Histen) that caps how loud this speaker can go.
  *
- *     adb shell su -c "setprop persist.gaokun3.histen.hpf 150"      0 = off
- *     adb shell su -c "setprop persist.gaokun3.histen.makeup 4"     dB
- *     adb shell su -c "setprop persist.gaokun3.histen.limit 1"      0 = limiter off
- *     adb shell su -c "setprop persist.gaokun3.histen.ceiling -1"   dBFS
- *     adb shell su -c "setprop persist.gaokun3.histen.release 120"  ms
+ *     setprop persist.vendor.gaokun3.histen.hpf 150      Hz, 0 = off
+ *     setprop persist.vendor.gaokun3.histen.makeup 4     dB
+ *     setprop persist.vendor.gaokun3.histen.limit 1      on/off (0 = limiter off)
+ *     setprop persist.vendor.gaokun3.histen.ceiling -1   dBFS
+ *     setprop persist.vendor.gaokun3.histen.release 120  ms
  *
- * Unlike enable/scene these are re-read about once a second while audio flows,
- * so they can be auditioned without stopping playback.  (`enable` and `scene`
- * still need a fresh stream: Histen only reads its profile at Init time.)
+ * Unlike engine/scene these are re-read about once a second while audio flows,
+ * so they can be auditioned without stopping playback.
  * ------------------------------------------------------------------------- */
 
 /* Deployment default for the makeup gain.  SpeakerChain itself defaults to
@@ -249,7 +307,7 @@ float readFloatProp(const char* name, float lo, float hi, float fallback) {
  * clamping first would silently turn "off" into 20 Hz. */
 float readHpfProp() {
     char buf[PROP_VALUE_MAX] = {0};
-    if (__system_property_get("persist.gaokun3.histen.hpf", buf) <= 0) return gaokun::kDefHpfHz;
+    if (__system_property_get(GAOKUN_HISTEN_PROP("hpf"), buf) <= 0) return gaokun::kDefHpfHz;
     const float v = std::strtof(buf, nullptr);
     if (!(v == v) || v < 0.0f) return gaokun::kDefHpfHz;
     if (v == 0.0f) return 0.0f;
@@ -259,8 +317,9 @@ float readHpfProp() {
 
 /* Makeup gain, in dB.
  *
- * ⚠ There is deliberately NO fall-back to the old `persist.gaokun3.histen.gain`
- * property, even though that is the knob the pre-DSP-chain builds used.  It is
+ * ⚠ There is deliberately NO fall-back to the old `gain` property (then
+ * persist.gaokun3.histen.gain), even though that is the knob the pre-DSP-chain
+ * builds used.  It is
  * not worth the compatibility: `gain` is a *stale* property on this device (it
  * was left at 0 by an earlier A/B session), and an alias would let that stale 0
  * silently shadow the +4 dB deployment default -- the chain would install
@@ -269,7 +328,7 @@ float readHpfProp() {
  * `makeup` now anyway. */
 float readMakeupProp() {
     char buf[PROP_VALUE_MAX] = {0};
-    if (__system_property_get("persist.gaokun3.histen.makeup", buf) <= 0) return kDefaultMakeupDb;
+    if (__system_property_get(GAOKUN_HISTEN_PROP("makeup"), buf) <= 0) return kDefaultMakeupDb;
     const float v = std::strtof(buf, nullptr);
     if (!(v == v) || v < -60.0f || v > gaokun::kMaxMakeupDb) return kDefaultMakeupDb;
     return v;
@@ -279,8 +338,23 @@ float readMakeupProp() {
  * control, so the safe value is the default one. */
 bool readLimitProp() {
     char buf[PROP_VALUE_MAX] = {0};
-    if (__system_property_get("persist.gaokun3.histen.limit", buf) <= 0) return true;
+    if (__system_property_get(GAOKUN_HISTEN_PROP("limit"), buf) <= 0) return true;
     return !(buf[0] == '0' && buf[1] == 0);
+}
+
+/* The one output this chain is tuned for: the built-in speaker.  All devices
+ * must qualify -- a duplicated route (speaker + headset, e.g. a ringtone) would
+ * otherwise push the speaker tuning into the headset too.  An empty list means
+ * "not told yet" and counts as not-speaker: bypass is the safe side. */
+bool isBuiltinSpeaker(const std::vector<AudioDeviceDescription>& devices) {
+    if (devices.empty()) return false;
+    for (const auto& d : devices) {
+        const bool speaker =
+                d.type == AudioDeviceType::OUT_SPEAKER || d.type == AudioDeviceType::OUT_SPEAKER_SAFE;
+        /* OUT_SPEAKER + "bt-a2dp" is a Bluetooth speaker, not ours. */
+        if (!speaker || !d.connection.empty()) return false;
+    }
+    return true;
 }
 
 /* "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -> AudioUuid */
@@ -378,6 +452,10 @@ Descriptor buildDescriptor() {
      * right name, flags and uuids). */
     d.common.flags.type = Flags::Type::INSERT;
     d.common.flags.insert = Flags::Insert::LAST;
+    /* ★ Without this AudioFlinger never tells us the output device
+     * (EffectModule only forwards setDevices() to DEVICE_IND effects,
+     * Effects.cpp:1459), and the speaker-only gate would stay closed forever. */
+    d.common.flags.deviceIndication = true;
     return d;
 }
 
@@ -403,6 +481,9 @@ class GaokunHisten final : public EffectImpl {
 
     ndk::ScopedAStatus getDescriptor(Descriptor* ret) override;
 
+    /* Watches Parameter::deviceDescription for the speaker-only gate; every tag
+     * is still handled by EffectImpl first. */
+    ndk::ScopedAStatus setParameterCommon(const Parameter& param) REQUIRES(mImplMutex) override;
     ndk::ScopedAStatus setParameterSpecific(const Parameter::Specific& specific)
             REQUIRES(mImplMutex) override;
     ndk::ScopedAStatus getParameterSpecific(const Parameter::Id& id, Parameter::Specific* specific)
@@ -418,9 +499,10 @@ class GaokunHisten final : public EffectImpl {
             REQUIRES(mImplMutex) override;
 
   protected:
-    /* Only for the journal: the state transitions themselves belong to
-     * EffectImpl::command(), which calls this hook at the right moment (before
-     * starting the worker, after stopping it). */
+    /* The state transitions themselves belong to EffectImpl::command(), which
+     * calls this hook at the right moment (before starting the worker, after
+     * stopping it).  START is also where a switch turned on mid-stream gets the
+     * chain armed -- on a binder thread, not the audio thread. */
     ndk::ScopedAStatus commandImpl(CommandId id) REQUIRES(mImplMutex) override;
 
   private:
@@ -428,6 +510,11 @@ class GaokunHisten final : public EffectImpl {
     void meterOut(const float* buf, int samples) REQUIRES(mImplMutex);
     void drainMeterWindow() REQUIRES(mImplMutex);
     void refreshSpeakerKnobs() REQUIRES(mImplMutex);
+    /* Brings the chain up for this stream if the master switch is on.  Never
+     * called from the audio thread: it may dlopen() the engine. */
+    void arm(const char* why, bool logOff) REQUIRES(mImplMutex);
+    /* Why the current buffer is (not) processed, for the transition log. */
+    const char* gateReason() const REQUIRES(mImplMutex);
 
     /* The algorithm.  Not ready (library missing, Init failed, knob turned off)
      * means it is a bit-exact wire -- see HistenChain::process(). */
@@ -455,6 +542,14 @@ class GaokunHisten final : public EffectImpl {
 
     uint32_t mCalls GUARDED_BY(mImplMutex) = 0;
     bool mFirstBuffer GUARDED_BY(mImplMutex) = true;
+
+    /* ---- the gate (see the EXPERIMENTAL block at the top) ---------------- */
+    int mSampleRate GUARDED_BY(mImplMutex) = 48000;
+    bool mStereo GUARDED_BY(mImplMutex) = false;     /* both chains assume L/R pairs */
+    bool mArmed GUARDED_BY(mImplMutex) = false;      /* chain prepared for this stream */
+    bool mMaster GUARDED_BY(mImplMutex) = false;     /* last read of kMasterProp */
+    bool mOnSpeaker GUARDED_BY(mImplMutex) = false;  /* from deviceDescription */
+    bool mActive GUARDED_BY(mImplMutex) = false;     /* previous buffer's verdict */
 };
 
 const std::string GaokunHisten::kEffectName = "Gaokun Histen";
@@ -488,12 +583,61 @@ ndk::ScopedAStatus GaokunHisten::getParameterSpecific(const Parameter::Id& id,
                                                             "GaokunHistenHasNoParameters");
 }
 
+/* Two common tags matter to us, and EffectImpl gets to handle both first:
+ *   deviceDescription -- the speaker-only gate.  Sent right after open() and
+ *                        again on every routing change (EffectChain::setDevices_l).
+ *   common            -- the framework re-sends the stream config when it changes
+ *                        after open() (EffectConversionHelperAidl::handleSetConfig);
+ *                        the biquads and Histen's 48 kHz assumption follow it.
+ * Binder thread, mImplMutex held -- the same lock the audio thread takes, so the
+ * flags below never change in the middle of a buffer. */
+ndk::ScopedAStatus GaokunHisten::setParameterCommon(const Parameter& param) {
+    ndk::ScopedAStatus ret = EffectImpl::setParameterCommon(param);
+    if (!ret.isOk()) return ret;
+
+    switch (param.getTag()) {
+        case Parameter::deviceDescription: {
+            const auto& devices = param.get<Parameter::deviceDescription>();
+            mOnSpeaker = isBuiltinSpeaker(devices);
+            logi("output device: %zu device(s), first type=%d connection='%s' -> %s",
+                 devices.size(), devices.empty() ? -1 : static_cast<int>(devices[0].type),
+                 devices.empty() ? "" : devices[0].connection.c_str(),
+                 mOnSpeaker ? "built-in speaker" : "not the built-in speaker (bypass)");
+            break;
+        }
+        case Parameter::common: {
+            const auto& c = param.get<Parameter::common>();
+            const int sr = (c.input.base.sampleRate > 0) ? c.input.base.sampleRate : 48000;
+            const bool stereo =
+                    ::aidl::android::hardware::audio::common::getChannelCount(
+                            c.input.base.channelMask) == 2;
+            if (sr == mSampleRate && stereo == mStereo) break;
+            logi("stream reconfigured: sr %d -> %d, stereo %d -> %d", mSampleRate, sr,
+                 mStereo ? 1 : 0, stereo ? 1 : 0);
+            mSampleRate = sr;
+            mStereo = stereo;
+            if (mArmed) {
+                mSpeaker.configure(static_cast<float>(sr));
+                refreshSpeakerKnobs();
+                if (mHisten.ready() && (!stereo || sr != 48000)) {
+                    mHisten.destroy();
+                    logi("Histen dropped: it needs 48 kHz stereo -- speaker chain only");
+                }
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return ret;
+}
+
 /* ---------------------------------------------------------------------------
  * Context: the base class already does exactly what we want (it creates the
  * StatusMQ/DataMQ rings and sizes them from common.input/output.frameCount).
- * The only reason to override at all is to bring Histen up at the one moment we
- * know the stream exists -- and because a failure there is survivable: the chain
- * stays a wire and the log says why.
+ * The reasons to override are to learn the stream format, and to arm the chain
+ * at the one moment we know the stream exists -- a failure there is survivable:
+ * the effect stays a wire and the log says why.
  *
  * Called from EffectImpl::open() with mImplMutex held, which is what lets us
  * touch mHisten without a lock of our own.
@@ -502,31 +646,17 @@ ndk::ScopedAStatus GaokunHisten::getParameterSpecific(const Parameter::Id& id,
 std::shared_ptr<EffectContext> GaokunHisten::createContext(const Parameter::Common& common) {
     /* Build the DSP chain for the rate we are actually handed rather than for a
      * constant.  This machine's speaker path runs at 48 kHz today, but nothing
-     * in the framework promises that, and a biquad built for the wrong rate is
-     * a wrong cutoff with no error anywhere.  `base` is AudioConfigBase, which
-     * is where sampleRate lives; an unset/zero value falls back to 48 kHz. */
-    const int sr = (common.input.base.sampleRate > 0) ? common.input.base.sampleRate : 48000;
-    mSpeaker.configure(static_cast<float>(sr));
-    refreshSpeakerKnobs();
+     * in the framework promises that (the primary output's profile also lists
+     * 44.1 kHz and mono), and a biquad built for the wrong rate is a wrong
+     * cutoff with no error anywhere.  `base` is AudioConfigBase, which is where
+     * sampleRate lives; an unset/zero value falls back to 48 kHz. */
+    mSampleRate = (common.input.base.sampleRate > 0) ? common.input.base.sampleRate : 48000;
+    const size_t channels =
+            ::aidl::android::hardware::audio::common::getChannelCount(common.input.base.channelMask);
+    mStereo = (channels == 2);
+    logi("open: sr=%d channels=%zu", mSampleRate, channels);
 
-    logi("speaker chain up: sr=%d %s hpf=%.0fHz makeup=%+.1fdB limit=%d ceiling=%.1fdB "
-         "release=%.0fms",
-         sr, mSpeaker.tag(), mSpeaker.hpfHz(), mSpeaker.makeupDb(), mSpeaker.limiterOn() ? 1 : 0,
-         mSpeaker.ceilingDb(), mSpeaker.releaseMs());
-
-    /* Independent of the speaker chain on purpose: turning Histen off must not
-     * also turn off excursion protection. */
-    if (!histenEnabled()) {
-        logi("Histen disabled by persist.gaokun3.histen.enable=0 -- bit-exact passthrough");
-    } else {
-        const int scene = readSceneProperty();
-        if (mHisten.init(scene)) {
-            logi("Histen chain up: scene=%d of %d, block=%d frames", scene, HISTEN_SCENE_COUNT,
-                 gaokun::kBlk);
-        } else {
-            logi("Histen unavailable -- running as a bit-exact passthrough");
-        }
-    }
+    arm("open", /*logOff=*/true);
     return EffectImpl::createContext(common);
 }
 
@@ -537,15 +667,83 @@ RetCode GaokunHisten::releaseContext() {
      * stream duck for no reason. */
     mSpeaker.reset();
     mSoftClipsSeen = 0;
+    /* HistenChain::init() restarts its starvation counter at 0; a stale
+     * mStarveSeen would make the first meter line print a wrapped uint64. */
+    mStarveSeen = 0;
+    mInSum2 = mOutSum2 = 0.0;
+    mWinSamples = 0;
+    mInPeak = mOutPeak = 0.0f;
     mCalls = 0;
     mFirstBuffer = true;
+    mArmed = false;
+    mActive = false;
+    /* mOnSpeaker is deliberately kept: it describes this instance's output,
+     * and the next routing notification (not the next open()) is what updates
+     * it. */
     return EffectImpl::releaseContext();
+}
+
+/* Arming = everything that must not happen on the audio thread: configuring
+ * the biquads and, above all, dlopen() + Init of the Histen engine.
+ *
+ * With the master switch off nothing is prepared and no library code runs:
+ * that is the safety property the old `enable=0` provided (a fault inside the
+ * Histen library takes down the whole effect service and audioserver with it --
+ * music silent, UI sounds seconds late), now as the default state. */
+void GaokunHisten::arm(const char* why, bool logOff) {
+    mMaster = masterOn();
+    if (mArmed) return;
+    if (!mMaster) {
+        if (logOff) logi("%s: %s is off -- bit-exact passthrough, nothing loaded", why, kMasterProp);
+        return;
+    }
+    if (!mStereo) {
+        logi("%s: stream is not stereo -- bit-exact passthrough", why);
+        return;
+    }
+
+    mSpeaker.configure(static_cast<float>(mSampleRate));
+    refreshSpeakerKnobs();
+    logi("%s: speaker chain up: sr=%d %s hpf=%.0fHz makeup=%+.1fdB limit=%d ceiling=%.1fdB "
+         "release=%.0fms",
+         why, mSampleRate, mSpeaker.tag(), mSpeaker.hpfHz(), mSpeaker.makeupDb(),
+         mSpeaker.limiterOn() ? 1 : 0, mSpeaker.ceilingDb(), mSpeaker.releaseMs());
+
+    /* Independent of the speaker chain on purpose: turning Histen off must not
+     * also turn off excursion protection. */
+    if (!engineEnabled()) {
+        logi("%s: Histen engine disabled by %s=0 -- speaker chain only", why,
+             GAOKUN_HISTEN_PROP("engine"));
+    } else if (mSampleRate != 48000) {
+        logi("%s: Histen needs 48 kHz, stream is %d Hz -- speaker chain only", why, mSampleRate);
+    } else {
+        const int scene = readSceneProperty();
+        if (mHisten.init(scene)) {
+            mStarveSeen = 0;
+            logi("%s: Histen chain up: scene=%d of %d, block=%d frames", why, scene,
+                 HISTEN_SCENE_COUNT, gaokun::kBlk);
+        } else {
+            logi("%s: Histen unavailable -- speaker chain only", why);
+        }
+    }
+    mArmed = true;
+}
+
+/* In the order the gate in effectProcessImpl() tests them. */
+const char* GaokunHisten::gateReason() const {
+    if (!mStereo) return "stream is not stereo";
+    if (!mMaster) return "master switch off";
+    if (!mArmed) return "switched on mid-stream, takes effect on the next playback";
+    if (!mOnSpeaker) return "output is not the built-in speaker";
+    return mHisten.ready() ? "built-in speaker, Histen + speaker chain"
+                           : "built-in speaker, speaker chain only";
 }
 
 /* ---------------------------------------------------------------------------
  * The hook EffectImpl::command() calls around its own state machine.  START
- * arrives before startThread(), STOP/RESET after stopThread(), so nothing needs
- * to be re-armed here -- logging both is enough to prove the chain reached us.
+ * arrives before startThread(), STOP/RESET after stopThread().  START is also
+ * the second chance to arm: a switch turned on while this instance was open
+ * gets the chain prepared here, off the audio thread.
  * ------------------------------------------------------------------------- */
 
 ndk::ScopedAStatus GaokunHisten::commandImpl(CommandId id) {
@@ -554,6 +752,7 @@ ndk::ScopedAStatus GaokunHisten::commandImpl(CommandId id) {
          : id == CommandId::STOP    ? "STOP"
          : id == CommandId::RESET   ? "RESET"
                                     : "?");
+    if (id == CommandId::START) arm("start", /*logOff=*/false);
     return EffectImpl::commandImpl(id);
 }
 
@@ -588,18 +787,46 @@ IEffect::Status GaokunHisten::effectProcessImpl(float* in, float* out, int sampl
 
     if (samples <= 0) return st;
 
-    if (mFirstBuffer) {
-        mFirstBuffer = false;
-        logi("first buffer: samples=%d (%d frames), chain=%s", samples, samples / 2,
-             mHisten.ready() ? "HISTEN" : "WIRE");
+    /* Re-read the master switch and the DSP knobs about once a second.
+     * Normally one process() call is one 4096-frame block (~85 ms), so every 16
+     * calls is roughly a second -- which is why the switch turns off, and
+     * hpf/makeup/limit/ceiling/release change, without stopping playback.
+     * Every setter short-circuits on an unchanged value, so the steady-state
+     * cost is a handful of property reads and comparisons. */
+    if ((mCalls++ & 0x0F) == 0) {
+        mMaster = masterOn();
+        if (mArmed && mMaster) refreshSpeakerKnobs();
     }
 
-    /* Re-read the DSP knobs a few times a second.  Normally one process() call
-     * is one 4096-frame block (~85 ms), so every 16 calls is roughly a second
-     * -- which is why hpf/makeup/limit/ceiling/release are audible without
-     * stopping playback.  Every setter short-circuits on an unchanged value, so
-     * the steady-state cost is five property reads and five comparisons. */
-    if ((mCalls++ & 0x0F) == 0) refreshSpeakerKnobs();
+    /* ★ The gate.  Anything short of "armed, switched on, built-in speaker,
+     * stereo" is a bit-exact wire: with in == out that means not touching the
+     * buffer at all.  No metering either -- this is the path every default
+     * install takes on every music stream, and it must stay silent in the log
+     * apart from the one line per state change. */
+    const bool active = mArmed && mMaster && mOnSpeaker && mStereo;
+    if (active != mActive || mFirstBuffer) {
+        logi("%s: %s (buffer=%d samples)", active ? "processing" : "bypass", gateReason(),
+             samples);
+        if (active && !mFirstBuffer) {
+            /* Coming back from bypass: the filter/limiter state and Histen's
+             * 10 ms cushion still hold audio from before the gap.  Start both
+             * clean rather than replay a stale block. */
+            mSpeaker.reset();
+            mSoftClipsSeen = 0;
+            mHisten.flush();
+            /* ...and do not let a half-filled window from before the gap
+             * leak into the first meter line after it. */
+            mInSum2 = mOutSum2 = 0.0;
+            mWinSamples = 0;
+            mInPeak = mOutPeak = 0.0f;
+        }
+        mActive = active;
+        mFirstBuffer = false;
+    }
+    if (!active) {
+        if (in != out) std::memcpy(out, in, static_cast<size_t>(samples) * sizeof(float));
+        return st;
+    }
 
     /* Measure BEFORE processing: with in == out the buffer is overwritten in
      * place, so the input level has to be taken first or the comparison is
@@ -629,17 +856,17 @@ IEffect::Status GaokunHisten::effectProcessImpl(float* in, float* out, int sampl
     return st;
 }
 
-/* Called from the audio thread about once a second -- and once from
- * createContext() so the first block already runs with the right settings.
- * The biquad trig and the exp() for the release coefficient only run when a
- * value actually changes, not once per block. */
+/* Called from the audio thread about once a second -- and once from arm() so
+ * the first block already runs with the right settings.  The biquad trig and
+ * the exp() for the release coefficient only run when a value actually
+ * changes, not once per block. */
 void GaokunHisten::refreshSpeakerKnobs() {
     mSpeaker.setHighPass(readHpfProp());
     mSpeaker.setMakeupDb(readMakeupProp());
     mSpeaker.setLimiter(readLimitProp(),
-                        readFloatProp("persist.gaokun3.histen.ceiling", gaokun::kMinCeilingDb,
+                        readFloatProp(GAOKUN_HISTEN_PROP("ceiling"), gaokun::kMinCeilingDb,
                                       gaokun::kMaxCeilingDb, gaokun::kDefCeilingDb),
-                        readFloatProp("persist.gaokun3.histen.release", gaokun::kMinReleaseMs,
+                        readFloatProp(GAOKUN_HISTEN_PROP("release"), gaokun::kMinReleaseMs,
                                       gaokun::kMaxReleaseMs, gaokun::kDefReleaseMs));
 }
 
@@ -670,9 +897,10 @@ void GaokunHisten::meterOut(const float* buf, int samples) {
     mWinSamples += static_cast<uint64_t>(samples);
 }
 
-/* One line per ~2 s of stereo audio.  The `[WIRE]` flag means the chain gave up
- * on Histen and is passing audio through untouched -- the first thing to check
- * when the level moves unexpectedly.
+/* One line per ~2 s of stereo audio, and only while the gate is open (bypassed
+ * streams are not metered).  The `[WIRE]` flag means Histen is not in the
+ * chain (engine missing, disabled, or given up on) -- the speaker chain after
+ * it still runs; the first thing to check when the level moves unexpectedly.
  *
  * Reading the speaker fields:
  *   gr        worst-case gain reduction the limiter applied in this window.  A
@@ -685,7 +913,7 @@ void GaokunHisten::meterOut(const float* buf, int samples) {
  *             nonzero count here means the limiter is off or its ceiling is
  *             above the knee. */
 void GaokunHisten::drainMeterWindow() {
-    if (mWinSamples < 2ull * 48000 * 2) return;
+    if (mWinSamples < 2ull * static_cast<uint64_t>(mSampleRate) * 2) return;
 
     const double inDb = 20.0 * std::log10(std::sqrt(mInSum2 / mWinSamples) + 1e-12);
     const double outDb = 20.0 * std::log10(std::sqrt(mOutSum2 / mWinSamples) + 1e-12);

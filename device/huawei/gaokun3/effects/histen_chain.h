@@ -79,6 +79,12 @@
  *   Anything that goes wrong makes the chain fall back to bit-exact
  *   passthrough for that buffer.  An audio effect that mangles the speaker or
  *   crashes audioserver is much worse than one that does nothing.
+ *
+ * ⚠ PROVENANCE OF THE REFERENCES BELOW (maintainer, 2026-09-26)
+ *   docs/meta/…, android/docs/…, scripts/audio/… and _histen_re/… are the PR #7
+ *   author's working tree.  None of them is in this repository; they are kept
+ *   as the author's record of where each fact came from.  The engine binary is
+ *   not in the repository either -- see effects/prebuilt/README.md.
  */
 #ifndef GAOKUN_HISTEN_CHAIN_H
 #define GAOKUN_HISTEN_CHAIN_H
@@ -96,26 +102,34 @@
 
 #include "histen_scenes.h"
 
+/* Every tuning knob lives under this prefix -- vendor_gaokun3_prop
+ * (sepolicy/property_contexts), readable by the effect HAL
+ * (sepolicy/hal_audio_default.te), settable with root.  The pre-2026-09-26
+ * names were persist.gaokun3.histen.*, i.e. default_prop, which no vendor
+ * process may read once SELinux enforces.  The master switch is NOT under this
+ * prefix: see kMasterProp in gaokun_effect.cpp. */
+#define GAOKUN_HISTEN_PROP(name) "persist.vendor.gaokun3.histen." name
+
 namespace gaokun {
 
 /* Where the proprietary Histen engine (libhw_histen_processing.so) is looked
  * for, in order.
  *
  * ⚠️ A list of ABSOLUTE paths is the only workable form here. dlopen() consults
- * the linker search path ONLY when the requested name contains no '/', and this
- * engine has already cost one debugging session over exactly that: its own
- * internal dlopen() of a helper used a single baked-in absolute path, so
- * LD_LIBRARY_PATH did not apply to it at all.
+ * the linker search path ONLY when the requested name contains no '/'.
+ * (Maintainer's note: the PR text blamed an internal dlopen() inside this
+ * engine for an earlier LD_LIBRARY_PATH surprise, but the binary imports no
+ * dlopen at all -- only memcpy/memset/sincos/sqrtf/abort and the stack
+ * protector; the README says it was another component.)
  *
- * /vendor first -- that is where a ROM build installs a proprietary blob, and
- *   /vendor/lib64/soundfx is where the AOSP effect libraries themselves live
- *   (libbundlewrapper.so, libdownmix.so, libdynproc.so, ...).
+ * /vendor first -- that is where the ROM build installs it
+ *   (device.mk, when effects/prebuilt/ holds the file).
  * /system second -- kept because the out-of-tree deployment this effect was
  *   originally developed against (a KernelSU overlay) installs it there.
  *
  * Finding it in neither place is NOT a fatal condition: init() returns false
- * and the effect degrades to a bit-exact passthrough, so a build that ships
- * without the blob still produces a library that is safe to enable. */
+ * and the effect runs the speaker chain alone, so a build that ships without
+ * the blob still produces a library that is safe to enable. */
 constexpr const char* kHistenLibPaths[] = {
     "/vendor/lib64/soundfx/libhw_histen_processing.so",
     "/system/lib64/soundfx/libhw_histen_processing.so",
@@ -152,14 +166,14 @@ constexpr size_t kExtBytes = 32;      /* scene ext payload                      
  *
  * With these properties each field can be swept on its own, live:
  *
- *     setprop persist.gaokun3.histen.ben.on    1        ext[0]/[1]  switch
- *     setprop persist.gaokun3.histen.ben.freq  300      ext[2]/[3]  Hz
- *     setprop persist.gaokun3.histen.ben.gain  135      ext[4]/[5]  (raw)
- *     setprop persist.gaokun3.histen.ben.thr   15       ext[6]/[7]  (raw)
- *     setprop persist.gaokun3.histen.ben.a     85       ext[8]/[9]  (raw)
- *     setprop persist.gaokun3.histen.ben.b     50       ext[10]/[11] (raw)
- *     setprop persist.gaokun3.histen.vol.dig   60       ext[12]/[13] digital gain
- *     setprop persist.gaokun3.histen.vol.ana   -20      ext[14]/[15] analog gain
+ *     setprop persist.vendor.gaokun3.histen.ben.on    1        ext[0]/[1]  switch
+ *     setprop persist.vendor.gaokun3.histen.ben.freq  300      ext[2]/[3]  Hz
+ *     setprop persist.vendor.gaokun3.histen.ben.gain  135      ext[4]/[5]  (raw)
+ *     setprop persist.vendor.gaokun3.histen.ben.thr   15       ext[6]/[7]  (raw)
+ *     setprop persist.vendor.gaokun3.histen.ben.a     85       ext[8]/[9]  (raw)
+ *     setprop persist.vendor.gaokun3.histen.ben.b     50       ext[10]/[11] (raw)
+ *     setprop persist.vendor.gaokun3.histen.vol.dig   60       ext[12]/[13] digital gain
+ *     setprop persist.vendor.gaokun3.histen.vol.ana   -20      ext[14]/[15] analog gain
  *
  * Unset = keep whatever the scene table says.  These are re-read about once a
  * second while audio flows (same cadence as the speaker-chain knobs), so they
@@ -229,7 +243,7 @@ inline uint16_t extU16(long v) {
  * So idx60..70 is the working EQ gain array.  Each property writes one slot,
  * packed into both halves:
  *
- *     setprop persist.gaokun3.histen.eq.0  180     # -> 0xb4b4 (L=R=180)
+ *     setprop persist.vendor.gaokun3.histen.eq.0  180     # -> 0xb4b4 (L=R=180)
  *     ...through eq.10 (11 slots: idx60..idx70)
  *
  * Unset = keep the scene value.  Re-read about once a second, same as ext.
@@ -249,7 +263,7 @@ inline void buildP3(uint16_t *out, const uint16_t *base) {
     char name[64];
     long v;
     for (int i = 0; i < kEqLen; i++) {
-        std::snprintf(name, sizeof(name), "persist.gaokun3.histen.eq.%d", i);
+        std::snprintf(name, sizeof(name), GAOKUN_HISTEN_PROP("eq.%d"), i);
         if (!readExtProp(name, v)) continue;
         if (v < -128) v = -128;
         if (v > 255) v = 255;
@@ -262,14 +276,14 @@ inline void buildP3(uint16_t *out, const uint16_t *base) {
 inline void buildExt(uint16_t *out, const uint16_t *base) {
     std::memcpy(out, base, kExtBytes);
     long v;
-    if (readExtProp("persist.gaokun3.histen.ben.on", v))  out[0]  = out[1]  = v ? 1u : 0u;
-    if (readExtProp("persist.gaokun3.histen.ben.freq", v)) out[2] = out[3]  = extU16(v);
-    if (readExtProp("persist.gaokun3.histen.ben.gain", v)) out[4] = out[5]  = extU16(v);
-    if (readExtProp("persist.gaokun3.histen.ben.thr", v))  out[6] = out[7]  = extU16(v);
-    if (readExtProp("persist.gaokun3.histen.ben.a", v))    out[8] = out[9]  = extU16(v);
-    if (readExtProp("persist.gaokun3.histen.ben.b", v))    out[10] = out[11] = extU16(v);
-    if (readExtProp("persist.gaokun3.histen.vol.dig", v))  out[12] = out[13] = extU16(v);
-    if (readExtProp("persist.gaokun3.histen.vol.ana", v))  out[14] = out[15] = extU16(v);
+    if (readExtProp(GAOKUN_HISTEN_PROP("ben.on"), v))  out[0]  = out[1]  = v ? 1u : 0u;
+    if (readExtProp(GAOKUN_HISTEN_PROP("ben.freq"), v)) out[2] = out[3]  = extU16(v);
+    if (readExtProp(GAOKUN_HISTEN_PROP("ben.gain"), v)) out[4] = out[5]  = extU16(v);
+    if (readExtProp(GAOKUN_HISTEN_PROP("ben.thr"), v))  out[6] = out[7]  = extU16(v);
+    if (readExtProp(GAOKUN_HISTEN_PROP("ben.a"), v))    out[8] = out[9]  = extU16(v);
+    if (readExtProp(GAOKUN_HISTEN_PROP("ben.b"), v))    out[10] = out[11] = extU16(v);
+    if (readExtProp(GAOKUN_HISTEN_PROP("vol.dig"), v))  out[12] = out[13] = extU16(v);
+    if (readExtProp(GAOKUN_HISTEN_PROP("vol.ana"), v))  out[14] = out[15] = extU16(v);
 }
 
 class HistenChain {
@@ -471,7 +485,10 @@ class HistenChain {
 
         if (mSetParams(reinterpret_cast<void *>(mHdl), mP2, kApplyBufSize, mP3, mP4) != 0) {
             log("SetParams failed on refresh -- keeping previous values");
-            buildP3(curP3, sc.p3);   /* scene values, i.e. the last good state */
+            /* Back to the plain scene values -- NOT necessarily the last good
+             * state, since earlier overrides that did apply are dropped too.
+             * The next refresh will see the overrides again and retry. */
+            buildP3(curP3, sc.p3);
             buildExt(mExt, sc.ext);
             std::memcpy(mP4, mExt, kExtBytes);
             return false;
@@ -515,11 +532,24 @@ class HistenChain {
      * audible as a dropout, so the worker logs the delta. */
     uint64_t starvedFrames() const { return mStarved; }
 
+    /* Drop everything buffered and re-prime the 10 ms cushion with silence,
+     * exactly as init() leaves it.  The effect calls this when it comes back
+     * from bypass: without it the first block after the gap would replay audio
+     * captured before the gap.  (The engine's own filter history is not
+     * touched -- that costs a few ms of settling, not a replayed block.) */
+    void flush() {
+        if (!mReady) return;
+        mInHead = mInCount = 0;
+        mOutHead = mOutCount = 0;
+        memset(mOutBuf, 0, kBlk * 2 * sizeof(int32_t));
+        ringPush(mOutRing, mOutHead, mOutCount, mOutBuf, kBlk);
+    }
+
     /* in/out: interleaved stereo float, `frames` frames.  Never fails: on any
      * error the input is copied to the output. */
     void process(const float *in, float *out, size_t frames) {
         if (!mReady) {
-            memcpy(out, in, frames * 2 * sizeof(float));
+            wire(in, out, frames);
             return;
         }
 
@@ -559,11 +589,18 @@ class HistenChain {
                 memcpy(mOutBuf, mInBuf, kBlk * 2 * sizeof(int32_t));
                 mFailed++;
                 if (mFailed > 64) {
-                    log("Apply kept failing (%d) -- going to passthrough", mFailed);
+                    log("Apply failed %d times in a row -- going to passthrough", mFailed);
                     mReady = false;
-                    memcpy(out, in, frames * 2 * sizeof(float));
+                    /* Nothing has been written to `out` yet, so with in == out
+                     * the buffer still holds this call's untouched input. */
+                    wire(in, out, frames);
                     return;
                 }
+            } else {
+                /* "Kept failing" means consecutively: a stray failure every few
+                 * minutes must not add up to a permanent passthrough over a
+                 * long session. */
+                mFailed = 0;
             }
             ringPush(mOutRing, mOutHead, mOutCount, mOutBuf, kBlk);
         }
@@ -613,6 +650,13 @@ class HistenChain {
         va_start(ap, fmt);
         __android_log_vprint(ANDROID_LOG_INFO, "gaokun_effect", fmt, ap);
         va_end(ap);
+    }
+
+    /* Bit-exact passthrough.  The effect is INSERT, so in == out is the normal
+     * case and there is nothing to copy -- memcpy() onto itself is formally
+     * undefined, so skip it rather than rely on the libc tolerating it. */
+    static void wire(const float *in, float *out, size_t frames) {
+        if (out != in) memcpy(out, in, frames * 2 * sizeof(float));
     }
 
     static void ringPush(int32_t *ring, int &head, int &count, const int32_t *src, int frames) {

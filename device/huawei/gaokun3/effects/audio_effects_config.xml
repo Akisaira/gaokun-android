@@ -147,10 +147,14 @@
          链路：postprocess[music] → mOutputStreams[MUSIC] → 每个 output socket 新建
          audio session 时 addOutputSessionEffects() 按配置里的 **impl UUID**
          （b7e4c9a2-…，不是 type UUID）createEffect，成功后才 setEnabled(true)。
-         ⚠ 验证顺序：先 persist.gaokun3.histen.enable=0 走直通，确认出现
-         `meter: in=… out=…`（= 音频真的流过我们）且整机有声，再开算法。
-         生效方式（2026-09-23 验证）：改 KSU 模块 overlay 的 lowerdir 活文件
-         + `echo 3 > /proc/sys/vm/drop_caches` + 重启 audioserver，即可热生效，**不必重启整机**。 -->
+         ★ 2026-09-26 维护者：这条链是**试验功能、默认关**。挂在 music 上的只是一个
+           逐比特直通的槽位；Parts 里的开关（persist.sys.gaokun3.histen=1）打开、
+           且输出是内置扬声器时才真的处理。耳机 / 蓝牙 / USB 一律直通 —— 这个
+           postprocess 是按【流】挂的，不按设备，判断在 gaokun_effect.cpp 里。
+         ⚠ 验证顺序：先 persist.vendor.gaokun3.histen.engine=0（只留扬声器链）打开开关，
+           确认外放时出现 `meter: in=… out=…`（= 音频真的流过我们）且整机有声，再放开引擎。
+         （作者开发期的热生效办法：改 KSU 模块 overlay 的 lowerdir 活文件
+           + `echo 3 > /proc/sys/vm/drop_caches` + 重启 audioserver，不必重启整机。） -->
     <postprocess>
         <stream type="music">
             <apply effect="gaokun_histen"/>

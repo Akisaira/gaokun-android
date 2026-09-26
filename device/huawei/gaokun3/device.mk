@@ -105,16 +105,32 @@ PRODUCT_PACKAGES += \
 #   prebuilt_etc 的 enabled**，不参与任何编译期决策，所以关掉是安全的。
 #   ⚠ 但它与下面那行 PRODUCT_COPY_FILES 是成对的：关掉而没装上自己的配置，
 #     HAL 会因找不到配置文件启动即退（正是当初设 true 的原因）。
+#   ⚠ 我们那份是 crDroid 16.0 原版的【拷贝】+ 增量（2026-09-26 核对：删除行 0）。
+#     crDroid 以后改原版（上游 lineage-23.0 已把 eraser 改名 erasersw），这里不会跟着变
+#     —— 同步源码树后要重新比对一次。
 $(call soong_config_set_bool,hardware_interfaces_audio,use_default_audio_effects_config,false)
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/effects/audio_effects_config.xml:$(TARGET_COPY_OUT_VENDOR)/etc/audio_effects_config.xml
 
-# 扬声器后处理链：自研 AIDL effect（LR4 高通 + EQ + 限幅 + 软削波）。
+# 扬声器增强（试验功能，PR #7）：自研 AIDL effect = Histen 引擎 + LR4 高通 +
+# makeup + 限幅 + 软削波。★ 默认关：Parts 里的开关写 persist.sys.gaokun3.histen，
+# 只有 =1 且输出是内置扬声器时才处理，其余一律逐比特直通。
 # 与 stock 配置的差别是纯增量（stock 的 21 库/18 effect 全保留，只多一个
-# gaokun_histen 槽位与一条 music postprocess）—— 已用脚本逐项比对过。
+# gaokun_histen 槽位与一条 music postprocess）。
 # 详见 device/huawei/gaokun3/effects/README.md。
 PRODUCT_PACKAGES += \
     libgaokunhisteneffect
+
+# Histen 引擎本体：华为专有二进制（iMedia Audio 8.0 / Histen 6.1.9，取自麒麟 V10 SP1，
+# 且为 bionic 打过二进制补丁），**未获再分发授权** ⇒ 与 firmware/ 同一套规矩：
+# 目录整个 .gitignore、只放行 README.md，构建机上由 sync-device-tree.sh 带过去并断言。
+# 用 wildcard：别人的 checkout 里没有它也照样能编 —— effect 找不到引擎就只跑扬声器链。
+# 获取与校验见 effects/prebuilt/README.md。
+GAOKUN3_HISTEN_ENGINE := $(LOCAL_PATH)/effects/prebuilt/lib64/soundfx/libhw_histen_processing.so
+ifneq ($(wildcard $(GAOKUN3_HISTEN_ENGINE)),)
+PRODUCT_COPY_FILES += \
+    $(GAOKUN3_HISTEN_ENGINE):$(TARGET_COPY_OUT_VENDOR)/lib64/soundfx/libhw_histen_processing.so
+endif
 
 # 音频 policy 配置 —— example HAL 的 IModule 实例清单【完全来自】
 # audio_policy_configuration.xml 解析结果（main.cpp:93-99 实名核实），

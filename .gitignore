@@ -59,6 +59,14 @@ device/huawei/gaokun3/hexagonrpcd-root/**
 device/huawei/gaokun3/prebuilt-boot/**
 !device/huawei/gaokun3/prebuilt-boot/README.md
 
+# 扬声器增强试验功能（PR #7）的 Histen 引擎 libhw_histen_processing.so ——
+# 华为专有二进制（取自麒麟 V10 SP1，为 bionic 打过补丁），未获再分发授权。
+# device.mk 用 wildcard 判断：有就装进 vendor，没有照样能编（effect 只跑扬声器链）。
+# 获取与校验见 device/huawei/gaokun3/effects/prebuilt/README.md。
+# ⚠️ 同 firmware/ 一样【整目录忽略 + 只放行 README.md】。
+device/huawei/gaokun3/effects/prebuilt/**
+!device/huawei/gaokun3/effects/prebuilt/README.md
+
 # 指纹逆向报告（docs/fingerprint/*.md）—— 对华为/高通【签名专有二进制】fingerpr.mbn
 # 与 Windows 驱动 QcTrEE.sys/FtWbioDriverUmdf.dll 的静态逆向笔记（用户从 Windows/Ghidra 侧做）。
 # 结论与工程要点已进 docs/stage4-findings.md #120/#123（受版本控制）；原始报告不入库，

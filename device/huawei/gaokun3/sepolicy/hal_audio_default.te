@@ -1,0 +1,22 @@
+# 音频 HAL 域：扬声器增强试验功能（PR #7，effects/gaokun_effect.cpp）要读两类属性。
+#
+# 域从哪来：effect 库被 android.hardware.audio.effect.service-aidl.example dlopen，
+#   那个服务在 APEX com.android.hardware.audio 里，APEX 的 file_contexts 把它标成
+#   hal_audio_default_exec（hardware/interfaces/audio/aidl/default/apex/
+#   com.android.hardware.audio/file_contexts:4，crDroid 16.0）⇒ 域是 hal_audio_default。
+#
+# ① 总开关 persist.sys.gaokun3.histen —— Parts 应用写（system_app 本来就能写 system_prop）。
+#    system_prop 是 system_public_prop（public/property.te:267），vendor 域读它不撞
+#    private/property.te:179-184 那条 neverallow（只豁免 restricted/public 两类）。
+#    ⚠️ 不能反过来用 persist.vendor.* 当开关：coredomain 不许写任何 vendor 属性
+#      （见 vendor_gaokun3_props.te 顶上那段编译器实测）。
+get_prop(hal_audio_default, system_prop)
+#
+# ② 调参旋钮 persist.vendor.gaokun3.histen.* —— vendor_gaokun3_prop（property_contexts:22）。
+#    PR 原版叫 persist.gaokun3.histen.*，落在 default_prop（system_internal_prop，
+#    public/property.te:279）⇒ 上面那条 neverallow 让 vendor 域【永远】读不到，
+#    转 enforcing 后所有旋钮会静默回到默认值 —— 这正是改名的理由。
+get_prop(hal_audio_default, vendor_gaokun3_prop)
+#
+# ⬜ 未验证：dlopen /vendor/lib64/soundfx/ 下的两个库（vendor_file）在 enforcing 下
+#    是否还要别的规则。本机现在 permissive，下次构建后看 dmesg 的 avc。
