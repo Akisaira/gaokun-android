@@ -1444,6 +1444,9 @@ gk3_net_status() {
 #   （scripts/release.sh:154-172）—— 不另打包，也就不会有第二份可能漂的东西。
 
 GK3_MANIFEST_URL=${GK3_MANIFEST_URL:-https://ota.072172.xyz/installer/variants.txt}
+# 介质上的变体清单（同一格式）：有就先列它 —— 局域网里的镜像（一次下载、装多台）、自建源、离线环境里的测试。
+# 2026-09-27 加：网络安装在真机上的第一次实测，就是用它把开发机当下载源
+GK3_LOCAL_MANIFEST=${GK3_LOCAL_MANIFEST:-/media/gk3/gaokun3/variants.txt}
 # 设备"系统更新"读的那份（release.sh 每次发版都更新它）—— 变体清单取不到时从它推出"最新发布"
 GK3_OTA_JSON_URL=${GK3_OTA_JSON_URL:-https://ota.072172.xyz/ota/gaokun3.json}
 
@@ -1451,13 +1454,21 @@ GK3_OTA_JSON_URL=${GK3_OTA_JSON_URL:-https://ota.072172.xyz/ota/gaokun3.json}
 #    "无法获取版本列表"。退回 OTA 清单：它一定在（设备天天读），且安装文件就在同一个桶的
 #    install/<zip 名去掉 .zip>/（release.sh 同一次上传，scripts/release.sh:154-172）。
 gk3_net_manifest() {
-    local url=${1:-$GK3_MANIFEST_URL} out
+    local url=${1:-$GK3_MANIFEST_URL} out local_n=0
     command -v curl >/dev/null || { gk3_die "没有 curl"; return 1; }
+    if [ -f "$GK3_LOCAL_MANIFEST" ]; then
+        local_n=$(grep -c '^VARIANT ' "$GK3_LOCAL_MANIFEST")
+        echo "介质上的变体清单 $GK3_LOCAL_MANIFEST：$local_n 个" >&2
+        grep '^VARIANT ' "$GK3_LOCAL_MANIFEST"
+    fi
     if out=$(curl -fsSL --max-time 30 "$url" 2>/dev/null) && printf '%s\n' "$out" | grep -q '^VARIANT '; then
         printf '%s\n' "$out" | grep '^VARIANT '; return 0
     fi
     echo "变体清单取不到（${url}）—— 退回 OTA 清单 $GK3_OTA_JSON_URL" >&2
-    gk3__ota_variant || { gk3_die "取不到版本列表：变体清单（${url}）与 OTA 清单（${GK3_OTA_JSON_URL}）都不可用"; return 1; }
+    gk3__ota_variant && return 0
+    # 线上两份都取不到：介质上有就够了（局域网 / 离线），否则才算失败
+    [ "$local_n" -gt 0 ] && return 0
+    gk3_die "取不到版本列表：变体清单（${url}）与 OTA 清单（${GK3_OTA_JSON_URL}）都不可用"; return 1
 }
 
 # 从 OTA 清单推出一个变体（latest=yes）：名字取版本号，大小用 HEAD 量（安装文件的 Content-Length 之和）

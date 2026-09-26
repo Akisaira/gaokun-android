@@ -581,6 +581,14 @@ gk3_net_release "$BASE" "$DL5" >/dev/null 2>&1 && [ "$(sha "$DL5/super.img.zst")
     && ok "推出来的 base 能直接交给 gk3_net_release 下载（sha256 一致）" || bad "推出来的 base 下载不了"
 OUT=$(GK3_MANIFEST_URL=http://127.0.0.1:18081/nope GK3_OTA_JSON_URL=http://127.0.0.1:18081/nope2 gk3_net_manifest 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '都不可用' && ok "两份清单都取不到：报出两个地址" || bad "两份都取不到时报错不对：$OUT"
+# 介质上的变体清单（局域网镜像 / 自建源 / 离线）：先列它；线上两份都取不到时有它就够了
+printf 'VARIANT id=lan name=%s desc= base=http://127.0.0.1:18081/install/%s/ size_mib=1\n' "LAN%20mirror" "$ZN" > "$W/local-variants.txt"
+VM=$(GK3_LOCAL_MANIFEST=$W/local-variants.txt GK3_MANIFEST_URL=http://127.0.0.1:18081/nope GK3_OTA_JSON_URL=http://127.0.0.1:18081/nope2 gk3_net_manifest 2>/dev/null); rc=$?
+[ "$rc" = 0 ] && [ "$(printf '%s\n' "$VM" | grep -c '^VARIANT ')" = 1 ] && printf '%s' "$VM" | grep -q '^VARIANT id=lan ' \
+    && ok "介质上有变体清单、线上两份都取不到：照样列出介质上的那个（rc=0）" || bad "介质清单没顶上（rc=$rc）：$VM"
+VM=$(GK3_LOCAL_MANIFEST=$W/local-variants.txt GK3_MANIFEST_URL=http://127.0.0.1:18081/installer/variants.txt GK3_OTA_JSON_URL=http://127.0.0.1:18081/ota/gaokun3.json gk3_net_manifest 2>/dev/null); rc=$?
+[ "$rc" = 0 ] && [ "$(printf '%s\n' "$VM" | head -1 | cut -d' ' -f2)" = id=lan ] && printf '%s' "$VM" | grep -q '^VARIANT id=latest ' \
+    && ok "介质清单与线上的都有：介质的排在前面，线上的最新发布也在" || bad "合并顺序不对（rc=$rc）：$VM"
 kill $SRVPID1 $SRVPID2 2>/dev/null
 # 下载下来的目录交给 gk3_apply —— 网络安装与 U 盘安装是同一条写盘路径
 DN=$(new_disk n 40G); sgdisk -o "$DN" >/dev/null 2>&1
