@@ -458,6 +458,26 @@ stderr；后端的进度、sha256 核对、每一步写盘只在屏幕上的日�
 stdout 记录、stderr、退出码与耗时照抄到自己的 stderr —— session 脚本早已把它接到 `diag/installer.log`。
 测试 `shell_backend_test.dart`（含"参数里的 `$(…)` 不被 shell 解释"），界面测试 60/60。
 
+**★★ 事后查出的第二个、也是更要紧的问题：ESP 被写满了，而安装报告成功。**（装完推新 live 镜像时 `m0-internal.sh` 报"ESP 只剩 0 KiB"才发现）
+* `gk3_apply` 的 `<machine-id>/` 目录名取的是**正在跑的系统**的 `/etc/machine-id` —— live 的是 systemd 每次开机现生成的
+  （`c1d9da8e…`），于是重新安装没有覆盖设备上现有的 `8a29534f…/android/`，而是另开一个目录又写了一整套（46 MB）。
+  300 MiB 的 ESP 上还住着固件的 `Persisted_Capsules.bin`（70 MB）与救援 Ubuntu 的内核（60 MB）⇒ 写满：
+  `c1d9…/slot_b/ramdisk.img` 截断在 2.8 MB、`c1d9…-android-b.conf` 是**空文件**；`cp` 的失败没人查，安装照样走到 100%。
+* 这次能开机是运气：default 的通配 `*-android-a.conf` 同时匹配新旧两个条目，systemd-boot 挑中了新的（完整的）那个。
+  而 **OTA postinstall 找目录的规则是"第一个 32 位十六进制目录"**（`gaokun3-ota-postinstall.sh:79`）⇒ 下一次 OTA 会写进旧目录、
+  default 改成 `*-android-b.conf` ⇒ 同时匹配旧目录的好条目与新目录的**空条目 + 截断的 ramdisk** —— 抛硬币。
+* 🔧 **设备上当场修了**（不重启）：删截断的 `c1d9…/slot_b` 与空条目 → 这次启动用的 ramdisk 拷进 `8a29…/slot_a`（先写临时名、核 sha256 再换）→
+  三个文件与 `boot.img` 拆出来的逐一相同、`8a29…-android-a.conf` 的 options 与刚启动的那条**逐字相同** ⇒ 下一次启动与这一次字节相同 →
+  再删 `c1d9…`。结果：只剩一个目录、每个槽一个启动项、ESP 空闲 46 MiB。
+* 🔧 **安装器**：① 目录名与 postinstall 用**同一条规则**（`gk3__esp_pick_mid`：ESP 上第一个 32 位十六进制目录，没有才用 machine-id）；
+  ② 动盘前按**真要写的量**核空间（`gk3__esp_delta_kib`：新文件减去同一路径上会被覆盖的旧文件），并且要求装完之后还过得了
+  OTA postinstall 的门槛（空闲 + 槽里旧文件 > 56 MiB）；③ 每个写 ESP 的动作都查结果，写完按同一份清单逐字节 `cmp`；
+  ④ 别的目录下我们的 `*-android-{a,b}.conf` 改名 `.disabled`（default 的通配会同时匹配它们）。
+* 测试为什么没抓到：`test-apply.sh` 一直导出**同一个** `GK3_MACHINE_ID`，而真机上每次开机都换。F 节补 4 条
+  （换 machine-id 重装、停用别的目录的条目、放不下、放得下但 OTA 过不了）→ **114/114**。
+* ⓘ 顺带核对到的：OTA 解出来的 ramdisk（`7a006810…`）与 `boot.img` 里的（`8f258bbb…`）内容确实不同（解压后差 768 字节）——
+  OTA 的 boot 镜像是从 target-files 重新打包的，两个都能起同一版，不是问题。
+
 ⬜ 没验的：清除数据的重新安装（默认那条）、整盘清空、双系统 —— 后两者在本机都没有合适的盘面；换旧版本 + 保留数据（界面上写了"可能起不来"）。
 
 ## 6. 风险（按"会不会让方案作废"排序）

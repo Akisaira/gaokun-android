@@ -51,6 +51,9 @@ GK3_USERDATA_MIN_MIB=8192
 GK3_ESP_NEED_MIB=150
 # 重新安装时 ESP 上我们的文件是【覆盖】不是新增：只给内核 / ramdisk 变大留余量
 GK3_ESP_REINSTALL_NEED_MIB=16
+# OTA postinstall 的门槛：ESP 空闲 + 目标槽目录里将被覆盖的旧文件 > 56 MiB
+# （device/huawei/gaokun3/bin/gaokun3-ota-postinstall.sh:93-96）。装完之后要还能 OTA
+GK3_ESP_OTA_NEED_KIB=57344
 
 # 这个库所在的目录。gk3-unsparse.py / gk3-bootimg.py / gk3-wpa-scan.py 跟它放在一起
 # （仓库里是 scripts/live/，live 镜像里是 /usr/share/gaokun3/）。
@@ -498,6 +501,32 @@ gk3__emit_part() {
 # ⚠️★ 所有输入【在第一次写盘之前】验完。原先 systemd-boot 和散装内核文件的
 #   检查排在写完 super 之后 —— 缺一个就是分区表已改、super 已写、然后死在
 #   引导链那一步，留下一块半装的盘（本函数下面 ESP 那段的注释警告过同一件事）。
+# ESP 上 <machine-id>/ 用哪个目录。$1=挂载点 $2=没有现成目录时用的名字
+# ★ 必须与 OTA postinstall 找目录的规则【一致】：第一个 32 位十六进制的目录
+#   （device/huawei/gaokun3/bin/gaokun3-ota-postinstall.sh:79，`ls | grep | head -1`）——
+#   不一致的话 OTA 写进一个目录、启动项指着另一个。
+# ⚠️★ 2026-09-26 M4b 实测：这里原先直接用【正在跑的系统】的 /etc/machine-id。live 的 machine-id
+#   是 systemd 每次开机现生成的，于是重新安装在 ESP 上另开了一个目录、又写了一整套内核
+#   （46 MB），ESP 写满，slot_b 的 ramdisk 截断在 2.8 MB、它的启动项是空文件 —— 而安装报告成功；
+#   default 的通配 *-android-b.conf 从此同时匹配新旧两个条目，下一次 OTA 就是抛硬币。
+gk3__esp_pick_mid() {
+    local d; d=$(LC_ALL=C ls "$1" 2>/dev/null | grep -E '^[0-9a-f]{32}$' | head -1)
+    echo "${d:-$2}"
+}
+
+# 往 ESP 上写一组文件还要多少 KiB。$1=挂载点，其余是 <ESP 上的相对路径>=<源文件>。
+# 同一路径上已有的文件会被覆盖，只算变大的那部分；每个文件按 4 KiB 簇向上取整
+gk3__esp_delta_kib() {
+    local m=$1 t src new old kib=0; shift
+    for t in "$@"; do
+        src=${t#*=}; t=${t%%=*}
+        new=$(wc -c < "$src"); old=0
+        [ -f "$m/$t" ] && old=$(wc -c < "$m/$t")
+        [ "$new" -gt "$old" ] && kib=$(( kib + (new - old + 4095) / 4096 * 4 ))
+    done
+    echo "$kib"
+}
+
 gk3_apply() {
     local disk="" mode=wipe rescue=no rel="" rstart="" rend="" esp="" ud_mib="" keep=no
     while [ $# -gt 0 ]; do
@@ -602,6 +631,20 @@ gk3_apply() {
     #   于是双系统模式在任何一台 Windows 机器上都必然失败，并留下一串建了一半的
     #   分区。空间检查也排在分区表之后（下面格式化那段的注释说过为什么那样不行）。
     #   双系统的 apply 此前从未真跑过：真盘上验过的只是 gk3_plan 的方案计算。
+    # ESP 上 <machine-id>/ 的名字：双系统 / 重新安装在动盘前按现有 ESP 选（gk3__esp_pick_mid），
+    # 整盘清空时 ESP 是新格式化的，在写引导链时再选（那时没有现成目录 → 用这个）
+    local esp_mid="" mid_fb=${GK3_MACHINE_ID:-$(cat /etc/machine-id 2>/dev/null || echo 8a29534fa802480d9fbb71aa18c01d7b)}
+    # 要往 ESP 上写的文件：<相对路径>=<源>。算空间与写完之后逐个核对用的是同一份清单
+    gk3__esp_files() {
+        local sl f
+        echo "EFI/BOOT/BOOTAA64.EFI=$sdboot"
+        echo "EFI/systemd/systemd-bootaa64.efi=$sdboot"
+        for sl in a b; do
+            for f in Image gaokun3.dtb ramdisk.img; do echo "$1/android/slot_$sl/$f=$parts/$f"; done
+            [ ! -f "$rel/recovery-ramdisk.img" ] || echo "$1/android/slot_$sl/recovery-ramdisk.img=$rel/recovery-ramdisk.img"
+        done
+        [ "$rescue" != yes ] || echo "$1/rescue/initramfs.img=$r_initrd"
+    }
     if [ "$mode" != wipe ]; then
         [ -n "$esp" ] && [ -b "$esp" ] || { rm -rf "$parts"; gk3_die "双系统模式要 --esp <现有 ESP 的分区节点>，给的是 '${esp}'"; return 1; }
         if [ "$DRY" != 1 ]; then
@@ -619,7 +662,29 @@ gk3_apply() {
             local em fm; em=$(mktemp -d)
             if mount -o ro -t vfat "$esp" "$em" 2>/dev/null; then
                 fm=$(df -m "$em" | awk 'NR==2{print $4}')
+                # ★ 按【真要写的文件】算（2026-09-26 M4b 之后）：新文件减去同一路径上会被覆盖的旧文件
+                esp_mid=$(gk3__esp_pick_mid "$em" "$mid_fb")
+                local -a efl; mapfile -t efl < <(gk3__esp_files "$esp_mid")
+                local need_kib free_kib slot_kib
+                need_kib=$(( $(gk3__esp_delta_kib "$em" "${efl[@]}") + 256 ))    # 256：启动项、loader.conf
+                if [ -f "$em/EFI/BOOT/BOOTAA64.EFI" ] && [ ! -e "$em/EFI/BOOT/BOOTAA64.EFI.before-gaokun3" ] \
+                   && ! cmp -s "$em/EFI/BOOT/BOOTAA64.EFI" "$sdboot"; then        # 原件要留一份（见写引导链那一段）
+                    need_kib=$(( need_kib + $(wc -c < "$em/EFI/BOOT/BOOTAA64.EFI") / 1024 + 4 ))
+                fi
+                free_kib=$(df -k "$em" | awk 'NR==2{print $4}')
+                slot_kib=$(( $(cat "$parts/Image" "$parts/gaokun3.dtb" "$parts/ramdisk.img" | wc -c) / 1024 ))
                 umount "$em"; rmdir "$em" 2>/dev/null
+                echo "ESP 上用目录 ${esp_mid}；要写 $(( need_kib / 1024 )) MiB（已扣掉会被覆盖的同名文件），空闲 $(( free_kib / 1024 )) MiB" >&2
+                if [ "$free_kib" -lt "$need_kib" ]; then
+                    rm -rf "$parts"
+                    gk3_die "ESP 空间不够：要写 $(( need_kib / 1024 )) MiB，只有 $(( free_kib / 1024 )) MiB。请先清理 EFI 分区（盘还没动过）"
+                    return 1
+                fi
+                if [ $(( free_kib - need_kib + slot_kib )) -le "$GK3_ESP_OTA_NEED_KIB" ]; then
+                    rm -rf "$parts"
+                    gk3_die "ESP 装得下，但装完只剩 $(( (free_kib - need_kib) / 1024 )) MiB —— 以后的系统更新（OTA）会因为 ESP 空间不够失败。请先清理 EFI 分区（盘还没动过）"
+                    return 1
+                fi
                 # 重新安装是【覆盖】ESP 上我们自己的文件，不是新增 —— 按 150 MiB 要求的话，一台已经装过的
                 # 机器（我们的文件占了一百多 MiB）会被误判成"空间不够"
                 local eneed=$GK3_ESP_NEED_MIB; [ "$mode" = reinstall ] && eneed=$GK3_ESP_REINSTALL_NEED_MIB
@@ -776,15 +841,28 @@ EOF
     #    内核/dtb/ramdisk 是 ESP 上的【普通文件】，不在 boot 分区里被引导。
     #    （boot_a/boot_b 有内容是为了让 update_engine 的 A/B 流程完整。）
     gk3_prog 80 "安装引导链"
-    local mid; mid=${GK3_MACHINE_ID:-$(cat /etc/machine-id 2>/dev/null || echo 8a29534fa802480d9fbb71aa18c01d7b)}
+    local mid=$esp_mid
     # ⚠️ 挂载点用 mktemp，不用 /mnt/esp —— CLAUDE.md 操作禁忌 4：共享的挂载点
     #    会被另一个 shell 里"顺手看一眼"的人 umount 掉，于是这一步静默失败。
     local mnt; mnt=$(mktemp -d)
     gk3__run mount -t vfat "$p_esp" "$mnt" || return 1
+    # 整盘清空：ESP 是刚格式化的，没有现成目录 → 用 machine-id
+    [ -n "$mid" ] || mid=$(gk3__esp_pick_mid "$mnt" "$mid_fb")
+    # ★ 每一个写 ESP 的动作都查结果（2026-09-26 M4b：ESP 写满，cp 失败被忽略，安装照样报告成功）
+    esp_fail() { gk3_die "写 ESP 失败：$1 —— ESP 空间不够，或者介质出了错（$p_esp）"; umount "$mnt" 2>/dev/null; rmdir "$mnt" 2>/dev/null; }
 
     if [ "$DRY" != 1 ]; then
         mkdir -p "$mnt/EFI/BOOT" "$mnt/EFI/systemd" "$mnt/loader/entries" \
-                 "$mnt/$mid/android/slot_a" "$mnt/$mid/android/slot_b"
+                 "$mnt/$mid/android/slot_a" "$mnt/$mid/android/slot_b" || { esp_fail "建目录"; return 1; }
+        # ⚠️ 别的 <machine-id> 目录下我们的启动项：default 的通配 *-android-<槽>.conf 会同时匹配它们，
+        #   开机走哪个看 systemd-boot 的排序（M4b 那次留下的就是这种局面）。改名停用（systemd-boot 只读 *.conf），不删
+        local e
+        for e in "$mnt"/loader/entries/*-android-[ab].conf; do
+            [ -e "$e" ] || continue
+            case "${e##*/}" in "$mid"-android-*) continue ;; esac
+            mv "$e" "$e.disabled" || { esp_fail "停用 ${e##*/}"; return 1; }
+            echo "停用了另一个目录的启动项 ${e##*/} → ${e##*/}.disabled（默认项的通配会同时匹配它）" >&2
+        done
         # --no-variables 那条路的等价物：固件实际走的是可移动介质回落路径
         # EFI/BOOT/BOOTAA64.EFI（内核带 efi=noruntime，不指望 EFI 启动变量）
         #
@@ -799,19 +877,19 @@ EOF
         for f in EFI/BOOT/BOOTAA64.EFI loader/loader.conf; do
             if [ -f "$mnt/$f" ] && [ ! -e "$mnt/$f.before-gaokun3" ] \
                && ! cmp -s "$mnt/$f" "$sdboot"; then
-                cp -p "$mnt/$f" "$mnt/$f.before-gaokun3"
+                cp -p "$mnt/$f" "$mnt/$f.before-gaokun3" || { esp_fail "备份 $f"; return 1; }
                 echo "原有的 $f 已备份为 $f.before-gaokun3" >&2
             fi
         done
-        cp "$sdboot" "$mnt/EFI/BOOT/BOOTAA64.EFI"
-        cp "$sdboot" "$mnt/EFI/systemd/systemd-bootaa64.efi"
+        cp "$sdboot" "$mnt/EFI/BOOT/BOOTAA64.EFI" || { esp_fail "BOOTAA64.EFI"; return 1; }
+        cp "$sdboot" "$mnt/EFI/systemd/systemd-bootaa64.efi" || { esp_fail "systemd-bootaa64.efi"; return 1; }
         local slot
         for slot in a b; do
-            cp "$parts/Image" "$parts/gaokun3.dtb" "$parts/ramdisk.img" "$mnt/$mid/android/slot_$slot/"
+            cp "$parts/Image" "$parts/gaokun3.dtb" "$parts/ramdisk.img" "$mnt/$mid/android/slot_$slot/" || { esp_fail "slot_$slot 的内核 / dtb / ramdisk"; return 1; }
             # 文件名是承重的：boot_control HAL 按 *-android-a.conf / *-android-b.conf
             # 改写 loader.conf 的 default（EspSlot.cpp:41-43）；OTA postinstall 只改
             # options 那一行、只往 slot_<后缀>/ 写这三个文件名。改一边就要改另一边。
-            cat > "$mnt/loader/entries/$mid-android-$slot.conf" <<ENTRY
+            cat > "$mnt/loader/entries/$mid-android-$slot.conf" <<ENTRY || { esp_fail "启动项 $mid-android-$slot.conf"; return 1; }
 title      crDroid 16.0 (gaokun3) — slot _$slot
 version    gaokun3-slot-$slot
 sort-key   zandroid$slot
@@ -827,14 +905,14 @@ ENTRY
         #   15 秒菜单里误选一次就得有人跑到机器旁按电源键。ramdisk 照样铺（无害）。
         if [ -f "$rel/recovery-ramdisk.img" ]; then
             for slot in a b; do
-                cp "$rel/recovery-ramdisk.img" "$mnt/$mid/android/slot_$slot/"
+                cp "$rel/recovery-ramdisk.img" "$mnt/$mid/android/slot_$slot/" || { esp_fail "slot_$slot 的 recovery-ramdisk"; return 1; }
                 if [ "${GK3_ENABLE_RECOVERY_ENTRY:-0}" = 1 ]; then
                     sed -e "s|^initrd .*|initrd     /$mid/android/slot_$slot/recovery-ramdisk.img|" \
                         -e "s|^title .*|title      Recovery (gaokun3) — slot _$slot|" \
                         -e "s|^version .*|version    gaokun3-recovery-$slot|" \
                         -e "s|^sort-key .*|sort-key   zzrecovery$slot|" \
                         "$mnt/loader/entries/$mid-android-$slot.conf" \
-                        > "$mnt/loader/entries/$mid-recovery-$slot.conf"
+                        > "$mnt/loader/entries/$mid-recovery-$slot.conf" || { esp_fail "recovery 启动项"; return 1; }
                 fi
             done
         fi
@@ -845,20 +923,20 @@ ENTRY
         #    但 boot_control HAL 在 Android 第一次标记启动成功时就会把 default
         #    改写成 *-android-<槽>.conf（EspSlot.cpp:120-172）—— 那个选择只活到
         #    第一次开机，代价却是每个新用户第一次重启落进一个他不认识的系统。）
-        cat > "$mnt/loader/loader.conf" <<LOADER
+        cat > "$mnt/loader/loader.conf" <<LOADER || { esp_fail "loader.conf"; return 1; }
 timeout 15
 console-mode keep
 editor no
 default *-android-a.conf
 LOADER
         if [ "$rescue" = yes ]; then
-            mkdir -p "$mnt/$mid/rescue"
-            cp "$r_initrd" "$mnt/$mid/rescue/initramfs.img"
+            mkdir -p "$mnt/$mid/rescue" || { esp_fail "建救援目录"; return 1; }
+            cp "$r_initrd" "$mnt/$mid/rescue/initramfs.img" || { esp_fail "救援系统的 initramfs"; return 1; }
             # ⚠️ 标题用 ASCII：开机菜单由 UEFI 固件的字体画，一般不含中文（原先的"救援系统（Alpine，
             #    全内存）"从没在本机菜单上看过，取稳妥的一侧）。
             # 救援系统与 Android 共用内核与 dtb（docs/stage7-live-installer.md §2.3），
             # 只多一个 initramfs；cmdline 从 Android 那份派生（见 gk3__rescue_cmdline）
-            cat > "$mnt/loader/entries/$mid-rescue.conf" <<RESC
+            cat > "$mnt/loader/entries/$mid-rescue.conf" <<RESC || { esp_fail "救援启动项"; return 1; }
 title      gaokun3 rescue (runs from RAM)
 version    gaokun3-rescue
 sort-key   linux1
@@ -869,6 +947,16 @@ options    $(gk3__rescue_cmdline "$cmdline")
 RESC
         fi
         sync
+        # ★ 写完逐个核对：cp 没报错不等于文件是全的（介质可能在 sync 时才报错）
+        local -a wl; local w
+        mapfile -t wl < <(gk3__esp_files "$mid")
+        for w in "${wl[@]}"; do
+            cmp -s "$mnt/${w%%=*}" "${w#*=}" || { esp_fail "${w%%=*} 与源文件不一致（截断？）"; return 1; }
+        done
+        for slot in a b; do
+            [ -s "$mnt/loader/entries/$mid-android-$slot.conf" ] || { esp_fail "启动项 $mid-android-$slot.conf 是空的"; return 1; }
+        done
+        echo "ESP：目录 ${mid}，${#wl[@]} 个文件逐字节核对一致" >&2
     else
         echo "DRY: 往 $p_esp 写 systemd-boot、两个 Android 启动项（options=$cmdline …）、内核/dtb/ramdisk" >&2
     fi

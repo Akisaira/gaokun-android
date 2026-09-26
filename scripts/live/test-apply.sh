@@ -393,6 +393,44 @@ OUT=$(gk3_plan --disk "$DC" --mode reinstall --rescue no --esp /dev/null 2>&1)
 printf '%s' "$OUT" | grep -q '^PLANERR msg=reinstall-missing names=misc,metadata,boot_a,boot_b,super,userdata' \
     && ok "不是一套完整的安装：PLANERR 列出缺的分区" || bad "缺分区没被报出来：$OUT"
 mount "$ESPA" "$mk" && rm -f "$mk/filler.bin" && umount "$mk"
+# ★★ 2026-09-26 M4b 真机：live 的 machine-id 是每次开机现生成的，而这个测试一直导出同一个 GK3_MACHINE_ID ——
+#   所以没抓到"重新安装在 ESP 上另开一个目录、又写一整套内核"（真机上把 ESP 写满了，slot_b 的 ramdisk
+#   截断、启动项是空文件，安装却报告成功）。下面三条是那次的三个面。
+OTHER=fedcba9876543210fedcba9876543210
+GK3_MACHINE_ID=$OTHER gk3_apply --disk "$DA" --mode reinstall --rescue yes --release "$REL" --esp "$ESPA" >"$W/f3.log" 2>&1; rc=$?
+mount -o ro "$ESPA" "$mk"
+NA=$(ls "$mk"/loader/entries/*-android-a.conf 2>/dev/null | wc -l); NB=$(ls "$mk"/loader/entries/*-android-b.conf 2>/dev/null | wc -l)
+[ "$rc" = 0 ] && [ ! -e "$mk/$OTHER" ] && [ "$NA" = 1 ] && [ "$NB" = 1 ] && [ -s "$mk/loader/entries/$MID-android-b.conf" ] \
+    && ok "machine-id 换了（live 每次开机都换）：仍写进 ESP 上现有的目录，每个槽恰好一个启动项" \
+    || { bad "machine-id 换了：rc=$rc，新目录 $([ -e "$mk/$OTHER" ] && echo 有 || echo 无)，a=$NA b=$NB"; tail -5 "$W/f3.log" | sed 's/^/      /'; }
+umount "$mk"
+# 另一个目录下留着我们的启动项（M4b 那次留下的局面）：default 的通配会同时匹配 → 必须停用
+mount "$ESPA" "$mk" && cp "$mk/loader/entries/$MID-android-b.conf" "$mk/loader/entries/$OTHER-android-b.conf" && umount "$mk"
+gk3_apply --disk "$DA" --mode reinstall --rescue yes --release "$REL" --esp "$ESPA" --keep-data yes >"$W/f4.log" 2>&1; rc=$?
+mount -o ro "$ESPA" "$mk"
+[ "$rc" = 0 ] && [ ! -e "$mk/loader/entries/$OTHER-android-b.conf" ] && [ -e "$mk/loader/entries/$OTHER-android-b.conf.disabled" ] \
+    && [ "$(ls "$mk"/loader/entries/*-android-b.conf | wc -l)" = 1 ] \
+    && ok "别的目录下的 *-android-b.conf：改名停用（.disabled），default 的通配只剩一个匹配" || bad "重复的启动项没被停用（rc=$rc）"
+umount "$mk"
+# ESP 上没有我们的目录（要写一整套新文件）、空闲又少：旧的检查（重新安装只要 16 MiB）会放行，然后写满 ESP。
+# 两道新闸各验一次：① 放不下要写的量 ② 放得下，但装完之后 OTA postinstall 的门槛（空闲 + 槽里旧文件 > 56 MiB）过不了
+# （这里的测试内核只有 1 MiB 左右，所以①要把 ESP 塞到几乎满）
+esp_left() {   # $1=留多少 MiB 空闲
+    mount "$ESPA" "$mk" && rm -f "$mk/filler.bin" && rm -rf "$mk/$MID" "$mk"/loader/entries/*-android-* \
+        && dd if=/dev/zero of="$mk/filler.bin" bs=1M count=$(( $(df -m "$mk" | awk 'NR==2{print $4}') - $1 )) status=none; sync; umount "$mk"
+}
+SB=$(sha_head "$(gk3__bylabel "$DA" super)" 1048576)
+esp_left 0
+OUT=$(GK3_MACHINE_ID=$OTHER gk3_apply --disk "$DA" --mode reinstall --rescue yes --release "$REL" --esp "$ESPA" 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'ESP 空间不够：要写' && [ "$(sha_head "$(gk3__bylabel "$DA" super)" 1048576)" = "$SB" ] \
+    && ok "ESP 放不下一整套新文件：按真要写的量算，动盘之前拒绝（super 没被碰）" \
+    || { bad "ESP 不够却没在动盘前拦住（rc=${rc}）"; printf '%s\n' "$OUT" | tail -3 | sed 's/^/      /'; }
+esp_left 30
+OUT=$(GK3_MACHINE_ID=$OTHER gk3_apply --disk "$DA" --mode reinstall --rescue yes --release "$REL" --esp "$ESPA" 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '以后的系统更新（OTA）会因为 ESP 空间不够失败' && [ "$(sha_head "$(gk3__bylabel "$DA" super)" 1048576)" = "$SB" ] \
+    && ok "ESP 放得下但装完只剩约 27 MiB：OTA 的门槛过不了，同样动盘之前拒绝" \
+    || { bad "OTA 余量没拦住（rc=${rc}）"; printf '%s\n' "$OUT" | tail -3 | sed 's/^/      /'; }
+mount "$ESPA" "$mk" && rm -f "$mk/filler.bin" && umount "$mk"
 # ★ 真机的布局（2026-09-25 从设备的 sysfs 读的，按比例缩小）：misc 只有 1007 KiB、从第 34 扇区起
 #   （GPT 表之后那段空隙）；没有 gk3rescue；安装器从 p3（ubunturescue）上跑。第一版的方案按 MiB 比，
 #   把 misc 判成 0 MiB"太小"，重新安装在真机上整个走不通 —— 离线的测试盘都是我们自己的 4 MiB 布局，没抓到。
