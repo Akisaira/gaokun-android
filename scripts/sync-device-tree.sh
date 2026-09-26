@@ -51,8 +51,12 @@ PY
 ok "设备树 XML 全部可解析"
 
 echo "═══ 1. 同步受版本控制的部分（--delete 但排除四样不入库的构建输入）═══"
+# ★ 三个目录里的 README.md 受版本控制（第 4 步要逐字节对照），必须先 --include 放行 ——
+#   rsync 取第一条匹配的规则。2026-09-26 踩到：firmware/README.md 09-24 改过，而
+#   'firmware/**' 把它也挡住了，第 4 步于是永远报差异、同步本身又永远修不好它。
 rsync -a --delete \
       --exclude '._*' --exclude '.DS_Store' \
+      --include 'firmware/README.md' --include 'hexagonrpcd-root/README.md' --include 'prebuilt-boot/README.md' \
       --exclude 'adb_keys' --exclude 'firmware/**' --exclude 'hexagonrpcd-root/**' --exclude 'prebuilt-boot/**' \
       --exclude 'effects/prebuilt/**' \
       -e "$SSH" "$SRC/" "$DST/"
