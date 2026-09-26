@@ -6,7 +6,8 @@
 #   bash scripts/live/m0-internal.sh prepare    # 放文件 + 写启动项（★ 不重启、不改 default）
 #   bash scripts/boot-oneshot.sh gaokun3-m0.conf && adb -s "$SER" reboot    ← ⚠️ 要用户同意
 #   bash scripts/live/m0-internal.sh logs       # 回到 Android 之后：取回 p3:/gaokun3/diag/ → out/m0/diag/
-#   bash scripts/live/m0-internal.sh remove     # 撤掉启动项、initramfs 与 live.squashfs
+#   bash scripts/live/m0-internal.sh payload <发布目录>   # 安装载荷 → p3:/gaokun3/payload/（live 里就是"U 盘里的镜像"）
+#   bash scripts/live/m0-internal.sh remove     # 撤掉启动项、initramfs、live.squashfs 与 payload/
 #
 #   SER=192.168.10.239:5555 bash scripts/live/m0-internal.sh check      # 走 TCP adb 时
 #
@@ -209,6 +210,40 @@ EOF
 回到 Android 后取结果：bash scripts/live/m0-internal.sh logs
 EOF
     ;;
+payload)
+    # M4b（2026-09-26）：在内置盘上的 live 里"重新安装"，载荷放在介质（p3）上 —— live 把 p3 挂在 /media/gk3，
+    # gk3_release_info 找的正是 /media/gk3/gaokun3/payload（build-live.sh --payload 在 U 盘上放的同一个位置）。
+    # 发布目录 = release.sh 的安装产物：boot.img · super.img.zst · install-artifacts.sha256
+    REL=${2:?用法：$0 payload <发布目录>}
+    FILES="boot.img super.img.zst install-artifacts.sha256"
+    for f in $FILES; do [ -f "$REL/$f" ] || die "$REL 里没有 $f"; done
+    # 推之前先在本机核一遍：清单里的 OTA zip 本机没有，只核装机要用的两个
+    ( cd "$REL" && for f in boot.img super.img.zst; do
+        want=$(awk -v f="$f" '{sub(/^\*/, "", $2)} $2 == f {print $1}' install-artifacts.sha256)
+        [ -n "$want" ] && [ "$(shasum -a 256 "$f" | cut -d' ' -f1)" = "$want" ] || { echo "✗ 本机的 $f 与清单不符" >&2; exit 1; }
+      done ) || exit 1
+    ok "本机：boot.img / super.img.zst 与 install-artifacts.sha256 一致"
+    PART=$(find_part | tail -1); [ -n "$PART" ] || die "没找到放 live 的分区"
+    NEED_KB=$(( $(cat "$REL"/boot.img "$REL"/super.img.zst | wc -c) / 1024 + 65536 ))
+    S "mkdir -p $P3M; mount -t ext4 $PART $P3M && mkdir -p $P3M/gaokun3/payload" >/dev/null || die "p3 挂不成读写"
+    FREE_KB=$(S "df -k $P3M | tail -1 | awk '{print \$4}'" | tail -1)
+    # 已经有的同名文件不算占用（会被覆盖）
+    HAVE_KB=$(S "du -sk $P3M/gaokun3/payload | cut -f1" | tail -1)
+    [ $(( ${FREE_KB:-0} + ${HAVE_KB:-0} )) -gt "$NEED_KB" ] || die "p3 空闲 ${FREE_KB:-?} KiB，放不下（要 ${NEED_KB} KiB）"
+    for f in $FILES; do
+        want=$(shasum -a 256 "$REL/$f" | cut -d' ' -f1)
+        if [ "$(S "sha256sum $P3M/gaokun3/payload/$f 2>/dev/null" | cut -d' ' -f1)" = "$want" ]; then
+            ok "$f 已经在 p3 上且 sha256 一致，跳过"; continue
+        fi
+        adb -s "$SER" push "$REL/$f" "$P3M/gaokun3/payload/$f" >/dev/null || die "推 $f 失败"
+        # ★ 判据看产物（CLAUDE.md 运维坑 1）
+        [ "$(S "sha256sum $P3M/gaokun3/payload/$f" | cut -d' ' -f1)" = "$want" ] && ok "$f → p3:/gaokun3/payload/（sha256 一致）" \
+            || die "$f 推上去的 sha256 不对"
+    done
+    S "sync; umount $P3M" >/dev/null
+    ver=$(awk '{sub(/^\*/, "", $2)} $2 ~ /\.zip$/ {sub(/\.zip$/, "", $2); print $2; exit}' "$REL/install-artifacts.sha256")
+    ok "载荷就位：${ver:-?}。live 里选「使用 U 盘里的镜像」就是它"
+    ;;
 logs)
     PART=$(find_part | tail -1); [ -n "$PART" ] || die "没找到放 live 的分区"
     mkdir -p "$M0/diag"
@@ -224,8 +259,8 @@ remove)
     ok "ESP：删了 gaokun3-m0*.conf 与 $MID/live/"
     PART=$(find_part | tail -1)
     [ -n "$PART" ] && S "mkdir -p $P3M; mount -t ext4 $PART $P3M && rm -f $P3M/gaokun3/$SQ_NAME; sync; umount $P3M" >/dev/null \
-        && S "mkdir -p $P3M; mount -t ext4 $PART $P3M && rm -rf $P3M/gaokun3/firmware; sync; umount $P3M" >/dev/null \
-        && ok "p3：删了 gaokun3/$SQ_NAME 与 gaokun3/firmware/（diag/ 与 authorized_keys 留着）"
+        && S "mkdir -p $P3M; mount -t ext4 $PART $P3M && rm -rf $P3M/gaokun3/firmware $P3M/gaokun3/payload; sync; umount $P3M" >/dev/null \
+        && ok "p3：删了 gaokun3/$SQ_NAME、gaokun3/firmware/ 与 gaokun3/payload/（diag/ 与 authorized_keys 留着）"
     ;;
-*) die "用法：$0 check|prepare|logs|remove" ;;
+*) die "用法：$0 check|prepare|payload <发布目录>|logs|remove" ;;
 esac

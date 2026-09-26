@@ -310,7 +310,8 @@ bash scripts/live/m0-internal.sh check      # 只读：按内容找 p3、量 ESP
 bash scripts/live/m0-internal.sh prepare    # squashfs → p3:/gaokun3/live.squashfs，initramfs → ESP:<mid>/live/，写 5 个启动项，sha256 逐个核
 bash scripts/boot-oneshot.sh gaokun3-m0.conf && adb -s gaokun3 reboot     # ⚠️ 要你在场并同意
 bash scripts/live/m0-internal.sh logs       # 回到 Android 后取 p3:/gaokun3/diag/ → out/m0/diag/
-bash scripts/live/m0-internal.sh remove     # 撤掉启动项、initramfs、live.squashfs
+bash scripts/live/m0-internal.sh payload <发布目录>   # （M4b 加的）载荷 → p3:/gaokun3/payload/，推之前推之后各核一遍 sha256
+bash scripts/live/m0-internal.sh remove     # 撤掉启动项、initramfs、live.squashfs、payload/
 ```
 
 和 U 盘那条路的区别：

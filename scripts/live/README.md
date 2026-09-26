@@ -39,6 +39,8 @@ bash scripts/live/build-live.sh --profile rescue --boot-img <boot.img> --ssh-key
 **没有 U 盘时**：`m0-internal.sh check|prepare|logs|remove` 把同一套 squashfs 与 initramfs 放到内置盘
 （squashfs 进救援 Ubuntu 的 p3，initramfs 进 ESP），写同样 5 个**非默认**启动项，再用 `boot-oneshot.sh`
 一次性启动进去。`prepare` 不重启、不改 default。见 `docs/stage7-flutter-debian.md` §5.6b。
+`m0-internal.sh payload <发布目录>` 再把安装载荷（`boot.img` · `super.img.zst` · `install-artifacts.sha256`）放到
+p3 的 `gaokun3/payload/` —— live 里"使用 U 盘里的镜像"读的就是那里（M4b 用）。
 
 ## 几条不显然的设计
 
