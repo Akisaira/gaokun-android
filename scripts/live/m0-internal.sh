@@ -262,8 +262,8 @@ remove)
     ok "ESP：删了 gaokun3-live.conf、gaokun3-m0*.conf 与 $MID/live/"
     PART=$(find_part | tail -1)
     [ -n "$PART" ] && S "mkdir -p $P3M; mount -t ext4 $PART $P3M && rm -f $P3M/gaokun3/$SQ_NAME; sync; umount $P3M" >/dev/null \
-        && S "mkdir -p $P3M; mount -t ext4 $PART $P3M && rm -rf $P3M/gaokun3/firmware $P3M/gaokun3/payload; sync; umount $P3M" >/dev/null \
-        && ok "p3：删了 gaokun3/$SQ_NAME、gaokun3/firmware/ 与 gaokun3/payload/（diag/ 与 authorized_keys 留着）"
+        && S "mkdir -p $P3M; mount -t ext4 $PART $P3M && rm -rf $P3M/gaokun3/firmware $P3M/gaokun3/payload $P3M/gaokun3/variants.txt; sync; umount $P3M" >/dev/null \
+        && ok "p3：删了 gaokun3/$SQ_NAME、firmware/、payload/ 与 variants.txt（diag/ 与 authorized_keys 留着）"
     ;;
 *) die "用法：$0 check|prepare|payload <发布目录>|logs|remove" ;;
 esac
