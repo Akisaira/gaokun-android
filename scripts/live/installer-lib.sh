@@ -1576,6 +1576,24 @@ EOF
     echo "VARIANT id=latest name=$(gk3__enc "crDroid ${ver:-$name}") desc= base=$base size_mib=$(( size / 1048576 )) latest=yes"
 }
 
+# curl 的进度表 → PROGRESS 行（百分比变了才出一行）。$1=起点 $2=跨度 $3=文件名
+# ⚠️★ 2026-09-27 真机网络安装：原先是 tr '\r' '\n' | awk —— 1.2 GiB 下了两分半，进度一行也没出来，结束时才一起吐
+#   （屏幕上的进度条停在 5%、最后跳到 95%）。tr 往管道写是块缓冲的；换成 awk 自己按 \r 切也不行：
+#   mawk（Debian 的默认 awk）读管道同样攒块，实测三行进度全在最后一刻出来（-W interactive 又只认 \n）。
+#   bash 的 read 从管道逐字节读，读到一条就处理一条。curl 每次刷新是 "\r<一行>"，表头与最后一行带 \n
+gk3__curl_meter() {
+    local lo=$1 sp=$2 n=$3 rec line pct last=0
+    while IFS= read -r -d $'\r' rec || [ -n "$rec" ]; do
+        while IFS= read -r line; do
+            pct=${line#"${line%%[![:space:]]*}"}; pct=${pct%%[[:space:]]*}
+            case "$pct" in ''|*[!0-9]*) continue ;; esac
+            [ "$pct" -gt "$last" ] || continue
+            last=$pct
+            echo "PROGRESS $(( lo + pct * sp * 90 / 10000 )) 下载 ${n}（${pct}%）"
+        done <<< "$rec"
+    done
+}
+
 # 下载并校验。$1=url $2=目标文件 $3=期望 sha256（可空）[$4=进度起点 $5=进度跨度]
 # （起点/跨度让调用方把这一个文件的 0–100% 映射到总进度里的一段）
 gk3_net_fetch() {
@@ -1586,9 +1604,7 @@ gk3_net_fetch() {
         # ⚠️ 用 --continue-at 支持断点续传：这台机器的 WAN 只有 1–2 MB/s，
         #    1.2 GB 要十几分钟，中途断一次全部重来是不可接受的。
         curl -fL --retry 3 --retry-delay 2 ${1:+--continue-at "$1"} -o "$dst" "$url" 2>&1 \
-            | tr '\r' '\n' \
-            | awk -v lo="$lo" -v sp="$span" -v n="$name" \
-                '/^ *[0-9]/{ if ($1+0 > 0) { printf "PROGRESS %d 下载 %s（%d%%）\n", lo + $1*sp*90/10000, n, $1; fflush() } }' >&2
+            | gk3__curl_meter "$lo" "$span" "$name" >&2
         # ⚠️★ 取 curl 自己的退出码，不看管道尾巴（CLAUDE.md 运维坑 1）。原先只判
         #   [ -f "$dst" ] —— 断在 77% 的文件也"存在"，于是报下载完成。
         return "${PIPESTATUS[0]}"

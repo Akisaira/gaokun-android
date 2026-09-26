@@ -589,6 +589,19 @@ gk3_net_release http://127.0.0.1:18081/alt/ "$DL6" >/dev/null 2>&1; rc2=$?
 OUT=$(gk3_net_release http://127.0.0.1:18081/bad/ "$W/dl4" 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'boot.img 的 sha256 不符' \
     && ok "服务器上的 boot.img 被改过：拒绝" || bad "被改过的文件居然通过了（rc=${rc}）"
+# ★ 2026-09-27 真机：下载 1.2 GiB 的两分半里进度一行没出（tr / mawk 往管道攒块）。按 curl 的样子喂：表头带 \n、
+#   每次刷新 "\r<一行>"、同一个百分比重复、最后一行 \n 结尾 —— 第一行进度必须在下一次刷新之前就出来
+curl_like() {
+    printf '  %% Total    %% Received %% Xferd  Average Speed   Time\n                                 Dload  Upload   Total\n' >&2
+    for p in 0 10 10 20; do printf '\r %3d  1221M  %3d  122M    0     0  9000k      0  0:02:18 --:--:--  0:02:18 9000k' "$p" "$p" >&2; sleep 1; done
+    printf '\r100  1221M  100 1221M    0     0  9000k      0  0:02:18  0:02:18 --:--:-- 9000k\n' >&2
+}
+T0=$(date +%s%N)
+curl_like 2>&1 | gk3__curl_meter 5 95 super.img.zst | while read -r l; do echo "$(( ($(date +%s%N) - T0) / 1000000 )) $l"; done > "$W/meter.out"
+FIRST=$(head -1 "$W/meter.out" | cut -d' ' -f1)
+[ "${FIRST:-99999}" -lt 3000 ] && [ "$(cut -d' ' -f2- "$W/meter.out" | tr '\n' '|')" = "PROGRESS 13 下载 super.img.zst（10%）|PROGRESS 22 下载 super.img.zst（20%）|PROGRESS 90 下载 super.img.zst（100%）|" ] \
+    && ok "下载进度边下边出（第一行 ${FIRST} ms，不等 curl 结束）；重复的百分比只出一次；表头与结尾那行都认对" \
+    || { bad "进度过滤不对（第一行 ${FIRST:-?} ms）"; sed 's/^/      /' "$W/meter.out"; }
 # 版本列表：variants.txt 还没发布（真机上 404）→ 退回 OTA 清单，推出"最新发布"，base 指向 install/<zip 名>/
 ZN=crDroidAndroid-16.0-20260916-gaokun3-v12.11
 mkdir -p "$SRV/ota" "$SRV/install/$ZN"; cp "$SRV/good/"* "$SRV/install/$ZN/"
