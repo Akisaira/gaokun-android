@@ -43,6 +43,7 @@ while [ $# -gt 0 ]; do
         --cmdline)   CMDLINE=$2; shift 2 ;;
         --entry)     ENTRIES+=("$2"); shift 2 ;;
         --rescue-squashfs) RESCUE_SQ=$2; shift 2 ;;
+        --release-info) RELINFO=$2; shift 2 ;;
         --size)      SIZE_MIB=$2; shift 2 ;;
         --out)       OUT=$2; shift 2 ;;
         *) die "不认识的参数：$1" ;;
@@ -104,6 +105,7 @@ M "$DTB"       ::/gaokun3/gaokun3.dtb
 M "$INITRAMFS" ::/gaokun3/initramfs.img
 M "$SQUASH"    ::/gaokun3/rescue.squashfs
 ok "引导链 + 内核 + initramfs + squashfs"
+if [ -n "${RELINFO:-}" ]; then M "$RELINFO" ::/gaokun3/release.txt; ok "版本信息 gaokun3/release.txt（$(sed -n 's/^GK3_INSTALLER_VERSION=//p' "$RELINFO")）"; fi
 
 if [ -n "$RESCUE_SQ" ]; then
     mmd -i "$OUT@@$PART_OFF" ::/gaokun3/install-rescue

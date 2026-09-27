@@ -1,6 +1,15 @@
 # Installing
 
-> ### ⚠️ This erases the internal disk — Windows included.
+There are two installers:
+
+* **The graphical installer — preview** (new in v0.6.3). Touch-friendly, can
+  install **next to Windows**, and can start from Windows **without a USB
+  stick**. Parts of it have not been run on real hardware yet — see
+  [below](#graphical-installer-preview).
+* **The command-line installer** (sections 1–2). Erases the whole disk. This is
+  the path every release so far has been installed with.
+
+> ### ⚠️ The command-line installer erases the internal disk — Windows included.
 > There is no undo, and no image of the factory state exists anywhere. If you
 > want Windows back you will have to reinstall it yourself from Huawei's
 > recovery media. Read all of this before starting.
@@ -19,6 +28,66 @@
 
 You should be comfortable recovering a machine that will not boot. Nothing here
 is irreversible except the disk erase — but that one is.
+
+## Graphical installer (preview)
+
+Files on the release page: `gaokun3-installer-<version>-usb.img.xz` (a bootable
+USB image) and `gaokun3-installer-<version>-windows.zip` (start from Windows,
+no USB stick). `gaokun3-installer-<version>-SHA256SUMS` lists both, plus the
+decompressed USB image. The installer's version is shown at the bottom of its
+side bar and in `gaokun3/release.txt` on the medium — put it in bug reports.
+
+What it can do:
+
+| On the install-mode page | What happens | Tested on hardware |
+|---|---|---|
+| **Keep the current system** (dual boot) | Android goes into free space; nothing that exists is touched. Windows stays in the boot menu | ⬜ not yet (only on test disks) |
+| **Erase the whole disk** | As the command-line installer | ⬜ not yet (only on test disks) |
+| **Reinstall Android** (Android already on the disk) | Rewrites Android in its existing partitions; wipes data by default, or keeps it (*Keep user data*) | ✅ keeping data, same version, from the USB-medium payload and over the network |
+| **Adjust the disk** | Delete / shrink / grow / create / format partitions, one confirmed step at a time | ⬜ not yet (only on test disks) |
+
+The system image comes from the medium if it carries one, or is downloaded
+over Wi-Fi (the latest release, about 1.3 GB). A small rescue system (the
+installer itself) goes into its own 1 GiB partition, as a non-default boot
+entry.
+
+**Before you start, in Windows:** turn off *Fast Startup* (Control Panel →
+Power Options → *Choose what the power buttons do*) and shut down with *Shut
+down*, not *Hibernate*. A hibernated Windows volume must not be resized — the
+installer checks for this and refuses — and Windows cannot mount it safely
+afterwards either. If BitLocker / device encryption is on, have the recovery
+key at hand: changing the boot setup can make Windows ask for it.
+
+### From Windows, no USB stick
+
+1. Unzip `…-windows.zip`, double-click **`gaokun3-setup.cmd`** (it asks for
+   administrator rights) and read what it prints. It checks the model, UEFI and
+   Secure Boot, then asks you to type `YES` before touching the disk.
+2. It lets Windows shrink **D:** (by default 64 GiB for Android + 4 GiB for the
+   installer, always leaving Windows at least 10 GiB), creates a small FAT32
+   partition `GK3LIVE` with the installer, adds a boot entry, and sets the
+   **next** boot only to go into the installer. Options:
+   `gaokun3-setup.cmd -AndroidGiB 32`, `-ShrinkDrive C`, `-Wifi none`.
+3. Reboot. In the installer choose **Keep the current system**.
+
+If you change your mind before installing, run `gaokun3-setup.cmd -Uninstall`:
+it removes the partition and the boot entry and grows D: back. If the machine
+boots straight back into Windows (the firmware ignored the one-time boot —
+not yet verified on Huawei's firmware), run it again with
+`-UseFallbackPath`.
+
+⚠️ This script has been run end to end in a Windows 11 ARM virtual machine,
+not yet on a MateBook E Go.
+
+### From a USB stick
+
+Write the image to a USB stick of 1 GB or more (balenaEtcher and Rufus read
+`.xz` directly; on Linux:
+`xz -dc gaokun3-installer-<version>-usb.img.xz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress`),
+plug it in, and pick it from the firmware's boot menu. Secure Boot must be off.
+
+⚠️ The USB image of this installer has not been booted on hardware yet; the
+same system has, many times, from the internal disk.
 
 ## 1. Get the release
 

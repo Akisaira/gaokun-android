@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../l10n/app_localizations.dart';
 import '../model/model.dart';
+import '../version.dart';
 import 'theme.dart';
 
 /// 安装流程的七步。左侧导航按它标出"到哪了"（只是指示，不可点：导航只走 返回 / 下一步，
@@ -143,7 +144,7 @@ class _StepRail extends StatelessWidget {
           const Spacer(),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text('HUAWEI MateBook E Go', style: tt.bodySmall),
+            child: Text('HUAWEI MateBook E Go\n安装器 $kInstallerVersion', style: tt.bodySmall),
           ),
         ],
       ),

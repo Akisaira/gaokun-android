@@ -86,9 +86,21 @@ ENTRIES_FILE=$REPO/out/live/.entries
 : > "$ENTRIES_FILE"
 [ -n "$M0" ] && printf '%s\n' "${M0_ENTRIES[@]}" > "$ENTRIES_FILE"
 
+# 版本信息（2026-09-27）：安装器版本只从 pubspec.yaml 读（界面上的常量由 test/version_test.dart 核对与它一致）；
+# 另记 git 提交（工作区有改动就带 -dirty）与内核来源 boot.img 的 sha256 —— 进镜像的 /etc/gaokun3-release、
+# U 盘上的 gaokun3/release.txt 与 Windows 安装包，bug 报告与发布说明都按它对版本
+GK3_VERSION=$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' "$REPO/live/installer-flutter/pubspec.yaml")
+[ -n "$GK3_VERSION" ] || die "读不到 live/installer-flutter/pubspec.yaml 的 version"
+GK3_GIT=$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+[ -z "$(git -C "$REPO" status --porcelain 2>/dev/null)" ] || GK3_GIT="$GK3_GIT-dirty"
+GK3_BOOTSHA=$(shasum -a 256 "$BOOTIMG" 2>/dev/null | cut -d' ' -f1 || sha256sum "$BOOTIMG" | cut -d' ' -f1)
+GK3_BUILT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+echo "   安装器 $GK3_VERSION · git $GK3_GIT · 内核来自 boot.img ${GK3_BOOTSHA:0:16}…"
+
 say "在容器里构建（${PROFILE}）"
 docker run --rm --privileged "${MOUNTS[@]}" \
     -e PROFILE="$PROFILE" -e PAYLOAD="$PAYLOAD" -e HAVE_KEY="$SSH_KEY" -e HAVE_WIFI="$WIFI" -e WITH_RESCUE="$WITH_RESCUE" -e HAVE_FW="$FW" \
+    -e GK3_VERSION="$GK3_VERSION" -e GK3_GIT="$GK3_GIT" -e GK3_BOOTSHA="$GK3_BOOTSHA" -e GK3_BUILT="$GK3_BUILT" \
     ${GK3_DEBIAN_MIRROR:+-e GK3_DEBIAN_MIRROR="$GK3_DEBIAN_MIRROR"} ${GK3_SNAPSHOT:+-e GK3_SNAPSHOT="$GK3_SNAPSHOT"} \
     "$TAG" bash -euo pipefail -c '
     O=/build/out; mkdir -p $O /build/boot
@@ -105,17 +117,19 @@ docker run --rm --privileged "${MOUNTS[@]}" \
     fi
     bash /build/scripts/live/build-initramfs.sh --busybox $O/busybox.static --firmware $O/fw --out $O
     python3 /build/scripts/live/gk3-bootimg.py /in/boot.img /build/boot
+    printf "GK3_INSTALLER_VERSION=%s\nGK3_GIT=%s\nGK3_BUILT=%s\nGK3_BOOTIMG_SHA256=%s\nGK3_PROFILE=%s\n" \
+        "$GK3_VERSION" "$GK3_GIT" "$GK3_BUILT" "$GK3_BOOTSHA" "$PROFILE" > $O/release.txt
     EA=(); while IFS= read -r e; do [ -n "$e" ] && EA+=(--entry "$e"); done < /outlive/.entries
     bash /build/scripts/live/build-usb.sh --squashfs $O/gaokun3-$PROFILE.squashfs --initramfs $O/initramfs.img \
         --kernel /build/boot/Image --dtb /build/boot/gaokun3.dtb --sdboot $O/systemd-bootaa64.efi \
         --cmdline /build/boot/cmdline.txt ${PAYLOAD:+--payload /in/payload} ${RSQ:+--rescue-squashfs $RSQ} \
-        ${EA[@]+"${EA[@]}"} --out $O/gaokun3-live.img
-    cp $O/gaokun3-$PROFILE.squashfs $O/initramfs.img $O/gaokun3-live.img $O/packages-$PROFILE.lock /outlive/
+        ${EA[@]+"${EA[@]}"} --release-info $O/release.txt --out $O/gaokun3-live.img
+    cp $O/gaokun3-$PROFILE.squashfs $O/initramfs.img $O/gaokun3-live.img $O/packages-$PROFILE.lock $O/release.txt /outlive/
     # 免 U 盘安装（用户 2026-09-25）：给 Windows 用户的安装包 —— 同一套内核 / initramfs / squashfs
     if [ "$PROFILE" = live ]; then
         bash /build/scripts/windows/build-bundle.sh --squashfs $O/gaokun3-live.squashfs --initramfs $O/initramfs.img \
             --kernel /build/boot/Image --dtb /build/boot/gaokun3.dtb --sdboot $O/systemd-bootaa64.efi \
-            --cmdline /build/boot/cmdline.txt ${RSQ:+--rescue-squashfs $RSQ} --out $O/gaokun3-windows
+            --cmdline /build/boot/cmdline.txt ${RSQ:+--rescue-squashfs $RSQ} --release-info $O/release.txt --out $O/gaokun3-windows
         rm -rf /outlive/gaokun3-windows /outlive/gaokun3-windows.zip
         cp -a $O/gaokun3-windows $O/gaokun3-windows.zip /outlive/
     fi

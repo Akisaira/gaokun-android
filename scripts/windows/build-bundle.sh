@@ -31,6 +31,7 @@ while [ $# -gt 0 ]; do
         --sdboot) SDBOOT=$2; shift 2 ;;
         --cmdline) CMDLINE=$2; shift 2 ;;
         --rescue-squashfs) RSQ=$2; shift 2 ;;
+        --release-info) RELINFO=$2; shift 2 ;;
         --out) OUT=$2; shift 2 ;;
         *) die "不认识的参数：$1" ;;
     esac
@@ -66,6 +67,7 @@ initrd     /EFI/gaokun3/initramfs.img
 options    $OPTS
 EOF
 cp "$HERE/gaokun3-setup.ps1" "$HERE/gaokun3-setup.cmd" "$OUT/"
+[ -z "${RELINFO:-}" ] || cp "$RELINFO" "$OUT/release.txt"
 ( cd "$OUT" && find esp live -type f | LC_ALL=C sort | xargs sha256sum > SHA256SUMS )
 echo "   ✓ Windows 安装包 → $OUT（$(du -sh "$OUT" | cut -f1)，SHA256SUMS $(wc -l < "$OUT/SHA256SUMS") 个文件）"
 # zip：squashfs 本来就压过，存储即可；其余 deflate

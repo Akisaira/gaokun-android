@@ -520,6 +520,21 @@ M4b 那次"ESP 写满、却报告成功"之后，让一个独立的审查专找�
 同一轮还加了：**介质上的变体清单**（`/media/gk3/gaokun3/variants.txt`，局域网镜像 / 自建源 / 离线；线上两份都取不到时有它就够）——
 网络安装在真机上的第一次实测就靠它把开发机当下载源（设备 → 热点 → Mac 实测 9 MB/s）。
 
+### 5.11 发布：随 v0.6.3 发预览（用户 2026-09-27）
+
+* **B23 定①**：GPU zap shader 随 live 镜像与 Windows 安装包公开发，与 ROM 同待遇（仓库照旧不收固件）。
+* **随下一个小版本发，不单开发布线**（我的建议，用户同意）：live 用的就是 ROM 的内核 —— 拿那一版验过的 `boot.img` 造 live，
+  发的就是验过的那一份（与 `release.sh --no-build` 同一个道理）；一个 release 页面里 ROM、U 盘镜像、Windows 安装包全有；
+  单人维护，两条发布线要多一套版本号、说明与兼容矩阵。**标"预览"**：新用户的两个入口（U 盘启动、Windows 脚本）与双系统都还没上过真机。
+* **安装器自己的版本号** `0.1.0-preview`（与 ROM 版本无关：网络安装默认装最新版）。只从 `pubspec.yaml` 读：
+  界面侧栏底部显示（`lib/version.dart`，`test/version_test.dart` 核对一致）、启动时打进 `installer.log`、
+  镜像里 `/etc/gaokun3-release`、U 盘与 Windows 安装包里 `release.txt`（另记 git 提交与内核来源 `boot.img` 的 sha256）。
+* **`scripts/live/release-installer.sh`**（Mac 上跑）：工作区必须干净 → 用给的 `boot.img` 造（不带 `--m0`、**不带 `--with-rescue`**：
+  装进救援分区的就是 live 本身 —— 它在真机上起过十几次，单独的 rescue profile 一次没起过）→ 核版本 / 提交 / 内核来源 →
+  `gaokun3-installer-<版本>-{usb.img.xz,windows.zip,release.txt,SHA256SUMS}` → `--upload <tag>` 才传，传完按服务器上的字节数核对。
+* 用户文档：`docs/INSTALL.md` 开头改成"两个安装器"，加"Graphical installer (preview)"一节（哪些在真机上验过、哪些没有，逐项写明）；
+  `docs/relnotes/v0.6.3-alpha.md` 加一节，顺带删掉早已作废的"BIOS 必须 2.16"。
+
 ## 6. 风险（按"会不会让方案作废"排序）
 
 1. 🔴 mesa/freedreno 在 Debian arm64 用户态不可用 → 回落 `FLUTTER_LINUX_RENDERER=software`

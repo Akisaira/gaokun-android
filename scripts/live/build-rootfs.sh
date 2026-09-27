@@ -114,6 +114,10 @@ if [ -n "$FIRMWARE" ]; then
     for f in $GPU_FW; do [ -f "$FIRMWARE/$f" ] && install -Dm644 "$FIRMWARE/$f" "$ROOTFS/usr/lib/firmware/$f"; done
     ok "GPU 固件（来自 ${FIRMWARE}）"
 fi
+# 版本（build-live.sh 从 pubspec 读、从宿主取 git 提交后传进来）：gk3-installer-session 把它打进会话日志的开头
+printf 'GK3_INSTALLER_VERSION=%s\nGK3_GIT=%s\nGK3_BUILT=%s\nGK3_PROFILE=%s\n' \
+    "${GK3_VERSION:-unknown}" "${GK3_GIT:-unknown}" "${GK3_BUILT:-unknown}" "$PROFILE" > "$ROOTFS/etc/gaokun3-release"
+ok "/etc/gaokun3-release：${GK3_VERSION:-unknown}（git ${GK3_GIT:-unknown}）"
 HOST=gaokun3-$PROFILE
 echo "$HOST" > "$ROOTFS/etc/hostname"
 printf '127.0.0.1\tlocalhost\n127.0.1.1\t%s\n::1\t\tlocalhost ip6-localhost ip6-loopback\n' "$HOST" > "$ROOTFS/etc/hosts"
