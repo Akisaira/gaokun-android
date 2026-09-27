@@ -38,7 +38,7 @@ done
 VER=$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' "$REPO/live/installer-flutter/pubspec.yaml")
 [ -n "$VER" ] || die "读不到安装器版本（live/installer-flutter/pubspec.yaml）"
 OUT=$REPO/out/release-installer/$VER
-say "安装器 $VER（随 ROM $ROM）· git $(git -C "$REPO" rev-parse --short=12 HEAD)"
+say "安装器 ${VER}（随 ROM ${ROM}）· git $(git -C "$REPO" rev-parse --short=12 HEAD)"
 
 say "1. 构建"
 bash "$REPO/scripts/live/build-flutter.sh" >/dev/null || die "build-flutter.sh 失败"
@@ -74,19 +74,19 @@ ls -la "$OUT"; cat "$OUT/$B-SHA256SUMS"
 if [ -z "$UPLOAD" ]; then
     cat <<EOF
 
-造好了，没有上传。上传到 GitHub release $ROM（⚠️ 发布要用户点头）：
+造好了，没有上传。上传到 GitHub release ${ROM}（⚠️ 发布要用户点头）：
   bash scripts/live/release-installer.sh --boot-img $BOOTIMG --rom $ROM --firmware $FW --upload $ROM
 EOF
     exit 0
 fi
 
 say "4. 上传到 GitHub release $UPLOAD"
-gh release view "$UPLOAD" >/dev/null || die "GitHub 上没有 release $UPLOAD（先发 ROM：release.sh --no-build）"
+gh release view "$UPLOAD" >/dev/null || die "GitHub 上没有 release ${UPLOAD}（先发 ROM：release.sh --no-build）"
 gh release upload "$UPLOAD" --clobber "$OUT/$B-usb.img.xz" "$OUT/$B-windows.zip" "$OUT/$B-release.txt" "$OUT/$B-SHA256SUMS" \
     || die "gh release upload 失败"
 # ★ 判据看服务器上的字节数，不看 gh 的输出（CLAUDE.md 运维坑 1：gh release upload 报过 uploaded 而什么都没传）
 for f in "$B-usb.img.xz" "$B-windows.zip" "$B-release.txt" "$B-SHA256SUMS"; do
     want=$(wc -c < "$OUT/$f" | tr -d ' ')
     got=$(gh release view "$UPLOAD" --json assets --jq ".assets[] | select(.name == \"$f\") | .size")
-    [ "$got" = "$want" ] && ok "$f：服务器上 $got 字节" || die "$f：服务器上是 ${got:-没有}，本地 $want"
+    [ "$got" = "$want" ] && ok "${f}：服务器上 $got 字节" || die "${f}：服务器上是 ${got:-没有}，本地 $want"
 done

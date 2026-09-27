@@ -21,7 +21,7 @@ if [ "$(docker image inspect mcr.microsoft.com/powershell:latest --format '{{.Ar
         pwsh -NoProfile -File /w/test-setup.ps1 -Out /out/wpa.conf || die "test-setup.ps1 有失败项"
 elif [ -f "$REPO/out/tools/ps.tar.gz" ]; then
     H=$(shasum -a 256 "$REPO/scripts/live/test-env.Dockerfile" | cut -c1-12)
-    docker image inspect "gk3-test-env:$H" >/dev/null 2>&1 || die "没有 gk3-test-env:$H（先跑一次 scripts/live/test-in-container.sh）"
+    docker image inspect "gk3-test-env:$H" >/dev/null 2>&1 || die "没有 gk3-test-env:${H}（先跑一次 scripts/live/test-in-container.sh）"
     # 没装 ICU：用不变区域（本脚本只用到 UTF-8 与 Get-UICulture，够了）
     docker run --rm -e DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 -v "$REPO/scripts/windows:/w:ro" -v "$OUT:/out" \
         -v "$REPO/out/tools/ps.tar.gz:/ps.tar.gz:ro" "gk3-test-env:$H" \
@@ -39,7 +39,7 @@ docker run --rm -v "$OUT:/out:ro" gk3-bootsmoke:latest sh -c '
     ok() { echo "  ✓ $*"; }; no() { echo "  ✗ $*"; bad=1; }
     # PSK：PowerShell 自己实现的 PBKDF2 与 wpa_passphrase（wpa_supplicant 的实现）逐字相同
     want=$(wpa_passphrase SkipM4 12345678 | sed -n "s/^[[:space:]]*psk=\([0-9a-f]\{64\}\)$/\1/p")
-    grep -q "psk=$want" /out/wpa.conf && ok "WPA2 的 PSK 与 wpa_passphrase 算的一致（$want）" || no "PSK 与 wpa_passphrase 不一致"
+    grep -q "psk=$want" /out/wpa.conf && ok "WPA2 的 PSK 与 wpa_passphrase 算的一致（${want}）" || no "PSK 与 wpa_passphrase 不一致"
     # 解析：wpa_supplicant 先读配置、再初始化网卡 —— 网卡不存在无所谓，配置有错会报 Line N / Failed to read
     parse() { { printf "ctrl_interface=/tmp/wpa\nupdate_config=0\n"; cat "$1"; } > /tmp/w.conf
               wpa_supplicant -c /tmp/w.conf -i gk3test0 -D nl80211 2>&1 | grep -E "Line [0-9]+:|Failed to read or parse" || true; }

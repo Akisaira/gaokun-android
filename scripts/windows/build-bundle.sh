@@ -69,7 +69,7 @@ EOF
 cp "$HERE/gaokun3-setup.ps1" "$HERE/gaokun3-setup.cmd" "$OUT/"
 [ -z "${RELINFO:-}" ] || cp "$RELINFO" "$OUT/release.txt"
 ( cd "$OUT" && find esp live -type f | LC_ALL=C sort | xargs sha256sum > SHA256SUMS )
-echo "   ✓ Windows 安装包 → $OUT（$(du -sh "$OUT" | cut -f1)，SHA256SUMS $(wc -l < "$OUT/SHA256SUMS") 个文件）"
+echo "   ✓ Windows 安装包 → ${OUT}（$(du -sh "$OUT" | cut -f1)，SHA256SUMS $(wc -l < "$OUT/SHA256SUMS") 个文件）"
 # zip：squashfs 本来就压过，存储即可；其余 deflate
 python3 - "$OUT" "$OUT.zip" <<'PY'
 import os, sys, zipfile

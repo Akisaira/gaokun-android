@@ -540,7 +540,7 @@ gk3__verify_on() {
     done
     umount "$m"; rmdir "$m" 2>/dev/null
     [ -z "$bad" ] || { gk3_die "$dev 上的 $bad 与源文件不一致（读回来核对没过）"; return 1; }
-    echo "$dev：$# 个文件从介质读回核对一致" >&2
+    echo "${dev}：$# 个文件从介质读回核对一致" >&2
 }
 
 gk3_apply() {
@@ -863,7 +863,7 @@ EOF
     # 整盘清空：ESP 是刚格式化的，没有现成目录 → 用 machine-id
     [ -n "$mid" ] || mid=$(gk3__esp_pick_mid "$mnt" "$mid_fb")
     # ★ 每一个写 ESP 的动作都查结果（2026-09-26 M4b：ESP 写满，cp 失败被忽略，安装照样报告成功）
-    esp_fail() { gk3_die "写 ESP 失败：$1 —— ESP 空间不够，或者介质出了错（$p_esp）"; umount "$mnt" 2>/dev/null; rmdir "$mnt" 2>/dev/null; }
+    esp_fail() { gk3_die "写 ESP 失败：$1 —— ESP 空间不够，或者介质出了错（${p_esp}）"; umount "$mnt" 2>/dev/null; rmdir "$mnt" 2>/dev/null; }
 
     if [ "$DRY" != 1 ]; then
         mkdir -p "$mnt/EFI/BOOT" "$mnt/EFI/systemd" "$mnt/loader/entries" \
@@ -967,7 +967,7 @@ RESC
     else
         echo "DRY: 往 $p_esp 写 systemd-boot、两个 Android 启动项（options=$cmdline …）、内核/dtb/ramdisk" >&2
     fi
-    gk3__run umount "$mnt" || { gk3_die "ESP 卸不下来（$p_esp）—— 写进去的东西可能没落盘"; return 1; }
+    gk3__run umount "$mnt" || { gk3_die "ESP 卸不下来（${p_esp}）—— 写进去的东西可能没落盘"; return 1; }
     rmdir "$mnt" 2>/dev/null || true
     if [ "$DRY" != 1 ]; then
         # ★ 写完逐个核对（cp 没报错不等于文件是全的），从介质读回来
@@ -983,7 +983,7 @@ RESC
         gk3__run mount "$p_resc" "$rmnt" || return 1
         # ★ 每一步都查（2026-09-27 审查：原先全不查，救援系统坏了要等到真要用它的那天才知道；
         #   重新安装时分区刚被格式化过，写失败等于把一个好的救援系统换成了坏的）
-        resc_fail() { gk3_die "写救援分区失败：$1（$p_resc）"; umount "$rmnt" 2>/dev/null; rmdir "$rmnt" 2>/dev/null; }
+        resc_fail() { gk3_die "写救援分区失败：$1（${p_resc}）"; umount "$rmnt" 2>/dev/null; rmdir "$rmnt" 2>/dev/null; }
         local -a rfl=("gaokun3/rescue.squashfs=$r_squash")
         if [ "$DRY" != 1 ]; then
             mkdir -p "$rmnt/gaokun3" || { resc_fail "建目录"; return 1; }
@@ -1016,7 +1016,7 @@ RESC
             fi
             sync
         fi
-        gk3__run umount "$rmnt" || { gk3_die "救援分区卸不下来（$p_resc）"; return 1; }
+        gk3__run umount "$rmnt" || { gk3_die "救援分区卸不下来（${p_resc}）"; return 1; }
         rmdir "$rmnt" 2>/dev/null || true
         if [ "$DRY" != 1 ]; then
             gk3__verify_on "$p_resc" ext4 "${rfl[@]}" || return 1
@@ -1540,7 +1540,7 @@ gk3_net_manifest() {
     command -v curl >/dev/null || { gk3_die "没有 curl"; return 1; }
     if [ -f "$GK3_LOCAL_MANIFEST" ]; then
         local_n=$(grep -c '^VARIANT ' "$GK3_LOCAL_MANIFEST")
-        echo "介质上的变体清单 $GK3_LOCAL_MANIFEST：$local_n 个" >&2
+        echo "介质上的变体清单 ${GK3_LOCAL_MANIFEST}：$local_n 个" >&2
         grep '^VARIANT ' "$GK3_LOCAL_MANIFEST"
     fi
     if out=$(curl -fsSL --max-time 30 "$url" 2>/dev/null) && printf '%s\n' "$out" | grep -q '^VARIANT '; then
@@ -1798,7 +1798,7 @@ gk3__node_matches() {
     en=$(sgdisk -i "$n" "$disk" 2>/dev/null | awk '/^Last sector:/{print $3}')
     [ -n "$kst" ] && [ -n "$st" ] || return 0          # 读不到就不拦（不在这里制造新的失败）
     if [ "$kst" != $(( st * ss )) ] || [ "$ksz" != $(( (en - st + 1) * ss )) ]; then
-        gk3_die "内核看到的 $path（起点 ${kst}、${ksz} 扇区）与盘上的分区表（${st}–${en}）对不上 —— 新分区表没生效（有分区被占着？）。重启后再来"
+        gk3_die "内核看到的 ${path}（起点 ${kst}、${ksz} 扇区）与盘上的分区表（${st}–${en}）对不上 —— 新分区表没生效（有分区被占着？）。重启后再来"
         return 1
     fi
 }
@@ -1874,7 +1874,7 @@ EOF
     local num part
     num=$(sgdisk -p "$disk" 2>/dev/null | awk -v s="$st" '/^ *[0-9]+ /{ if ($2 == s) print $1 }')
     part=$(gk3_partpath "$disk" "$num")
-    [ -n "$num" ] && gk3__wait_node "$part" || { gk3_die "新分区的节点没出现（$part）"; return 1; }
+    [ -n "$num" ] && gk3__wait_node "$part" || { gk3_die "新分区的节点没出现（${part}）"; return 1; }
     if [ "$fs" != none ]; then
         gk3_prog 60 "格式化为 $fs"
         gk3__mkfs "$part" "$fs" || { gk3_die "格式化新分区 $part 失败（分区已建好）"; return 1; }
@@ -1938,10 +1938,10 @@ gk3__grow() {
     fi
     gk3__part_attr_restore "$disk" "$num" "$pattr" || return 1
     gk3__settle "$disk"
-    gk3__wait_node "$part" || { gk3_die "分区节点没回来（$part）"; return 1; }
+    gk3__wait_node "$part" || { gk3_die "分区节点没回来（${part}）"; return 1; }
     # 内核看到的必须已经是新大小 —— 否则 resize2fs / ntfsresize 会说"不用改"然后退出 0，报一个假的"扩大完成"
     [ "$(blockdev --getsize64 "$part" 2>/dev/null)" = "$(( target * 1048576 ))" ] \
-        || { gk3_die "内核还没看到新的分区大小（$part）—— 分区项已扩大，文件系统没动；重启后再扩一次"; return 1; }
+        || { gk3_die "内核还没看到新的分区大小（${part}）—— 分区项已扩大，文件系统没动；重启后再扩一次"; return 1; }
     gk3_prog 60 "扩大文件系统"
     case "$fs" in
         ntfs) ntfsresize --force "$part" >/dev/null 2>&1 </dev/null || { gk3_die "扩大 NTFS 失败（分区项已扩大，文件系统还是原来的大小，数据完好）"; return 1; } ;;

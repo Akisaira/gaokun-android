@@ -86,7 +86,7 @@ if gk3_shrink "$P2" 3072 >/dev/null 2>&1; then
     [ "$NEW" -le 3100 ] && ok "分区变成 ${NEW} MiB" || bad "分区还是 ${NEW} MiB"
     [ "$(uuid_of 2)" = "$U2" ] && ok "PARTUUID 未变" || bad "PARTUUID 变了！"
     [ "$(sgdisk -i 2 "$LOOP" 2>/dev/null | awk '/^Attribute flags:/{print $3}')" = "$A2" ] && [ "$A2" = 8000000000000001 ] \
-        && ok "GPT 属性位原样带过去了（$A2）" || bad "属性位丢了（原来 ${A2}）"
+        && ok "GPT 属性位原样带过去了（${A2}）" || bad "属性位丢了（原来 ${A2}）"
     check_files "$P2" ext4
 else
     bad "缩 ext4 失败"
@@ -113,7 +113,7 @@ I=$(gk3_shrink_info "$P1" 2>/dev/null)
 printf '%s' "$I" | grep -q 'can=no why=ntfs-hibernated' && ok "休眠（hiberfil.sys 开头 HIBR）：探测报 why=ntfs-hibernated" || bad "休眠没认出来：$I"
 OUT=$(gk3_shrink "$P1" 5500 2>&1) && bad "休眠的卷居然缩了" || ok "休眠：gk3_shrink 拒绝"
 OUT=$(gk3__ntfs_trial_mount "$P1" 2>&1); rc=$?
-[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '休眠' && ok "终审（ntfs-3g 读写挂一次）也认出休眠" || bad "ntfs-3g 终审没认出休眠（rc=$rc）：$OUT"
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '休眠' && ok "终审（ntfs-3g 读写挂一次）也认出休眠" || bad "ntfs-3g 终审没认出休眠（rc=${rc}）：$OUT"
 [ "$(blockdev --getsize64 "$P1")" = "$SZ1" ] && ok "分区大小没变" || bad "分区大小变了"
 check_files "$P1" "NTFS（被拒之后）"
 # ⚠️ 休眠的卷普通 mount 会退回只读，rm 静默失败 —— 得用 remove_hiberfile（真实世界里这等于丢掉 Windows 的休眠会话）

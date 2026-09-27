@@ -403,7 +403,7 @@ mount -o ro "$ESPA" "$mk"
 NA=$(ls "$mk"/loader/entries/*-android-a.conf 2>/dev/null | wc -l); NB=$(ls "$mk"/loader/entries/*-android-b.conf 2>/dev/null | wc -l)
 [ "$rc" = 0 ] && [ ! -e "$mk/$OTHER" ] && [ "$NA" = 1 ] && [ "$NB" = 1 ] && [ -s "$mk/loader/entries/$MID-android-b.conf" ] \
     && ok "machine-id 换了（live 每次开机都换）：仍写进 ESP 上现有的目录，每个槽恰好一个启动项" \
-    || { bad "machine-id 换了：rc=$rc，新目录 $([ -e "$mk/$OTHER" ] && echo 有 || echo 无)，a=$NA b=$NB"; tail -5 "$W/f3.log" | sed 's/^/      /'; }
+    || { bad "machine-id 换了：rc=${rc}，新目录 $([ -e "$mk/$OTHER" ] && echo 有 || echo 无)，a=$NA b=$NB"; tail -5 "$W/f3.log" | sed 's/^/      /'; }
 umount "$mk"
 # 另一个目录下留着我们的启动项（M4b 那次留下的局面）：default 的通配会同时匹配 → 必须停用
 mount "$ESPA" "$mk" && cp "$mk/loader/entries/$MID-android-b.conf" "$mk/loader/entries/$OTHER-android-b.conf" && umount "$mk"
@@ -411,7 +411,7 @@ gk3_apply --disk "$DA" --mode reinstall --rescue yes --release "$REL" --esp "$ES
 mount -o ro "$ESPA" "$mk"
 [ "$rc" = 0 ] && [ ! -e "$mk/loader/entries/$OTHER-android-b.conf" ] && [ -e "$mk/loader/entries/$OTHER-android-b.conf.disabled" ] \
     && [ "$(ls "$mk"/loader/entries/*-android-b.conf | wc -l)" = 1 ] \
-    && ok "别的目录下的 *-android-b.conf：改名停用（.disabled），default 的通配只剩一个匹配" || bad "重复的启动项没被停用（rc=$rc）"
+    && ok "别的目录下的 *-android-b.conf：改名停用（.disabled），default 的通配只剩一个匹配" || bad "重复的启动项没被停用（rc=${rc}）"
 umount "$mk"
 # ESP 上没有我们的目录（要写一整套新文件）、空闲又少：旧的检查（重新安装只要 16 MiB）会放行，然后写满 ESP。
 # 两道新闸各验一次：① 放不下要写的量 ② 放得下，但装完之后 OTA postinstall 的门槛（空闲 + 槽里旧文件 > 56 MiB）过不了
@@ -472,7 +472,7 @@ gfail() {   # $1=说明 $2=期望的报错片段 $3…=命令：必须失败、�
     local before out rc; before=$(sgdisk -p "$DG" | grep -v '^Disk identifier')
     out=$("$@" 2>&1); rc=$?
     if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q "$want" && [ "$(sgdisk -p "$DG" | grep -v '^Disk identifier')" = "$before" ]; then
-        ok "$what：拒绝且分区表没动"; else bad "$what：rc=$rc，或报错不对，或分区表变了"; printf '%s\n' "$out" | tail -2 | sed 's/^/      /'; fi
+        ok "${what}：拒绝且分区表没动"; else bad "${what}：rc=${rc}，或报错不对，或分区表变了"; printf '%s\n' "$out" | tail -2 | sed 's/^/      /'; fi
 }
 gfail "删 ESP" "EFI 系统分区" gk3_part_delete "${DG}p1"
 gfail "格式化 ESP" "EFI 系统分区" gk3_part_format "${DG}p1" ext4
@@ -485,7 +485,7 @@ gfail "新建时压到别的分区" "不在任何一段空闲区里" gk3_part_cr
 OUT=$(gk3_part_create --disk "$DG" --start "$FS" --size-mib 1024 --fs ext4 2>/dev/null); NP=$(printf '%s' "$OUT" | sed -n 's/^RESULT op=create part=\([^ ]*\).*/\1/p')
 [ -b "$NP" ] && [ "$(blkid -o value -s TYPE "$NP")" = ext4 ] && [ "$(( $(blockdev --getsize64 "$NP") >> 20 ))" = 1024 ] \
     && [ $(( $(sgdisk -i "$(cat /sys/class/block/$(basename "$NP")/partition)" "$DG" | awk '/^First sector:/{print $3}') % 2048 )) = 0 ] \
-    && ok "在空闲区新建 1 GiB ext4：$NP（对齐 1 MiB）" || bad "新建分区不对：$OUT"
+    && ok "在空闲区新建 1 GiB ext4：${NP}（对齐 1 MiB）" || bad "新建分区不对：$OUT"
 gk3_part_format "$NP" vfat >/dev/null 2>&1 && [ "$(blkid -o value -s TYPE "$NP")" = vfat ] \
     && sgdisk -i "$(cat /sys/class/block/$(basename "$NP")/partition)" "$DG" | grep -q 'EBD0A0A2' \
     && ok "格式化成 FAT32：类型也跟着改成 Basic data" || bad "格式化不对"
@@ -495,7 +495,7 @@ gk3_part_resize "$NP" 2048 >"$W/g2.log" 2>&1; rc=$?
 mount -o ro "$NP" "$mg"; SZ=$(df -m "$mg" | awk 'NR==2{print $2}'); GOT=$(sha "$mg/f.bin"); umount "$mg"
 [ "$rc" = 0 ] && [ "$(( $(blockdev --getsize64 "$NP") >> 20 ))" = 2048 ] && [ "$SZ" -gt 1900 ] && [ "$GOT" = "$X_SHA" ] \
     && [ "$(sgdisk -i "$(cat /sys/class/block/$(basename "$NP")/partition)" "$DG" | awk '/unique GUID/{print $4}')" = "$PUN" ] \
-    && ok "扩大 ext4 1 → 2 GiB：分区与文件系统都变大（df ${SZ} MiB），文件没变，PARTUUID 没变" || { bad "扩大 ext4 不对（rc=$rc df=$SZ）"; tail -3 "$W/g2.log"; }
+    && ok "扩大 ext4 1 → 2 GiB：分区与文件系统都变大（df ${SZ} MiB），文件没变，PARTUUID 没变" || { bad "扩大 ext4 不对（rc=$rc df=${SZ}）"; tail -3 "$W/g2.log"; }
 gk3_part_resize "$NP" 1024 >"$W/g3.log" 2>&1 && [ "$(( $(blockdev --getsize64 "$NP") >> 20 ))" = 1024 ] \
     && mount -o ro "$NP" "$mg" && [ "$(sha "$mg/f.bin")" = "$X_SHA" ] && umount "$mg" \
     && ok "缩小 ext4 2 → 1 GiB（走 gk3_shrink）：文件没变" || { bad "缩小不对"; tail -3 "$W/g3.log"; umount "$mg" 2>/dev/null; }
@@ -505,7 +505,7 @@ gk3_part_resize "${DG}p2" 4096 >"$W/g4.log" 2>&1; rc=$?
 ntfs-3g -o ro "${DG}p2" "$mg" && GOT=$(sha "$mg/win.bin") && NSZ=$(df -m "$mg" | awk 'NR==2{print $2}') && umount "$mg"
 [ "$rc" = 0 ] && [ "$(( $(blockdev --getsize64 "${DG}p2") >> 20 ))" = 4096 ] && [ "$GOT" = "$NT_SHA" ] && [ "$NSZ" -gt 3900 ] \
     && [ "$(sgdisk -i 2 "$DG" | awk '/unique GUID/{print $4}')" = "$PU2" ] \
-    && ok "扩大 NTFS 3 → 4 GiB：文件没变，PARTUUID 没变（Windows 的 BCD 靠它）" || { bad "扩大 NTFS 不对（rc=$rc df=$NSZ）"; tail -3 "$W/g4.log"; }
+    && ok "扩大 NTFS 3 → 4 GiB：文件没变，PARTUUID 没变（Windows 的 BCD 靠它）" || { bad "扩大 NTFS 不对（rc=$rc df=${NSZ}）"; tail -3 "$W/g4.log"; }
 gfail "扩到比后面的空闲还大" "紧挨着的空闲不够" gk3_part_resize "${DG}p2" 30000
 
 # ★ 2026-09-27 审查：partprobe 没生效（分区被占着）时内核还拿着旧分区表，同号节点指着旧起点 —— -b 看不出来
@@ -513,7 +513,7 @@ DS=$(new_disk s 2G); sgdisk -o -n 1:2048:+100M "$DS" >/dev/null 2>&1; partprobe 
 mkfs.ext4 -q -F "${DS}p1"; ms=$W/mnt-s; mkdir -p "$ms"; mount "${DS}p1" "$ms"
 sgdisk -d 1 -n 1:411648:+100M "$DS" >/dev/null 2>&1; partprobe "$DS" 2>/dev/null   # p1 挂着：内核改不了它
 OUT=$(gk3__node_matches "$DS" "${DS}p1" 2>&1); rc=$?
-[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '对不上' && ok "内核还拿着旧分区表：同号节点认出来是旧的（起点对不上）" || bad "旧节点没认出来（rc=$rc）"
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '对不上' && ok "内核还拿着旧分区表：同号节点认出来是旧的（起点对不上）" || bad "旧节点没认出来（rc=${rc}）"
 umount "$ms"; partprobe "$DS"; sleep 1
 gk3__node_matches "$DS" "${DS}p1" 2>/dev/null && ok "卸下、partprobe 生效之后：对上了" || bad "partprobe 之后还说对不上"
 
@@ -585,7 +585,7 @@ DL6=$W/dl6; gk3_net_release http://127.0.0.1:18081/good/ "$DL6" >/dev/null 2>&1
 gk3_net_release http://127.0.0.1:18081/alt/ "$DL6" >/dev/null 2>&1; rc1=$?
 gk3_net_release http://127.0.0.1:18081/alt/ "$DL6" >/dev/null 2>&1; rc2=$?
 [ "$rc1" != 0 ] && [ "$rc2" = 0 ] && [ "$(sha "$DL6/super.img.zst")" = "$(sha "$SRV/alt/super.img.zst")" ] \
-    && ok "同一目录换版本：第一次 sha256 不符并删掉，重试从头下、这次对了" || bad "换版本后卡住了（rc1=$rc1 rc2=$rc2）"
+    && ok "同一目录换版本：第一次 sha256 不符并删掉，重试从头下、这次对了" || bad "换版本后卡住了（rc1=$rc1 rc2=${rc2}）"
 OUT=$(gk3_net_release http://127.0.0.1:18081/bad/ "$W/dl4" 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'boot.img 的 sha256 不符' \
     && ok "服务器上的 boot.img 被改过：拒绝" || bad "被改过的文件居然通过了（rc=${rc}）"
@@ -609,7 +609,7 @@ printf '{"response":[{"filename":"%s.zip","download":"http://127.0.0.1:18081/bui
 VM=$(GK3_MANIFEST_URL=http://127.0.0.1:18081/installer/variants.txt GK3_OTA_JSON_URL=http://127.0.0.1:18081/ota/gaokun3.json gk3_net_manifest 2>"$W/vm.err"); rc=$?
 WANT_MIB=$(( ( $(stat -c%s "$REL/boot.img") + $(stat -c%s "$REL/super.img.zst") ) / 1048576 ))
 [ "$rc" = 0 ] && printf '%s' "$VM" | grep -q "^VARIANT id=latest name=crDroid%2012.11 .*base=http://127.0.0.1:18081/install/$ZN/ size_mib=$WANT_MIB latest=yes" \
-    && ok "版本清单 404 → 退回 OTA 清单：最新发布 v12.11，base 与大小（${WANT_MIB} MiB）都对" || { bad "OTA 退回不对（rc=$rc）：$VM"; tail -3 "$W/vm.err"; }
+    && ok "版本清单 404 → 退回 OTA 清单：最新发布 v12.11，base 与大小（${WANT_MIB} MiB）都对" || { bad "OTA 退回不对（rc=${rc}）：$VM"; tail -3 "$W/vm.err"; }
 BASE=$(printf '%s' "$VM" | sed -n 's/.* base=\([^ ]*\).*/\1/p'); DL5=$W/dl5
 gk3_net_release "$BASE" "$DL5" >/dev/null 2>&1 && [ "$(sha "$DL5/super.img.zst")" = "$(sha "$REL/super.img.zst")" ] \
     && ok "推出来的 base 能直接交给 gk3_net_release 下载（sha256 一致）" || bad "推出来的 base 下载不了"
@@ -619,10 +619,10 @@ OUT=$(GK3_MANIFEST_URL=http://127.0.0.1:18081/nope GK3_OTA_JSON_URL=http://127.0
 printf 'VARIANT id=lan name=%s desc= base=http://127.0.0.1:18081/install/%s/ size_mib=1\n' "LAN%20mirror" "$ZN" > "$W/local-variants.txt"
 VM=$(GK3_LOCAL_MANIFEST=$W/local-variants.txt GK3_MANIFEST_URL=http://127.0.0.1:18081/nope GK3_OTA_JSON_URL=http://127.0.0.1:18081/nope2 gk3_net_manifest 2>/dev/null); rc=$?
 [ "$rc" = 0 ] && [ "$(printf '%s\n' "$VM" | grep -c '^VARIANT ')" = 1 ] && printf '%s' "$VM" | grep -q '^VARIANT id=lan ' \
-    && ok "介质上有变体清单、线上两份都取不到：照样列出介质上的那个（rc=0）" || bad "介质清单没顶上（rc=$rc）：$VM"
+    && ok "介质上有变体清单、线上两份都取不到：照样列出介质上的那个（rc=0）" || bad "介质清单没顶上（rc=${rc}）：$VM"
 VM=$(GK3_LOCAL_MANIFEST=$W/local-variants.txt GK3_MANIFEST_URL=http://127.0.0.1:18081/installer/variants.txt GK3_OTA_JSON_URL=http://127.0.0.1:18081/ota/gaokun3.json gk3_net_manifest 2>/dev/null); rc=$?
 [ "$rc" = 0 ] && [ "$(printf '%s\n' "$VM" | head -1 | cut -d' ' -f2)" = id=lan ] && printf '%s' "$VM" | grep -q '^VARIANT id=latest ' \
-    && ok "介质清单与线上的都有：介质的排在前面，线上的最新发布也在" || bad "合并顺序不对（rc=$rc）：$VM"
+    && ok "介质清单与线上的都有：介质的排在前面，线上的最新发布也在" || bad "合并顺序不对（rc=${rc}）：$VM"
 kill $SRVPID1 $SRVPID2 2>/dev/null
 # 下载下来的目录交给 gk3_apply —— 网络安装与 U 盘安装是同一条写盘路径
 DN=$(new_disk n 40G); sgdisk -o "$DN" >/dev/null 2>&1

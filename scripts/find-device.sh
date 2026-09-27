@@ -65,7 +65,7 @@ for ip in $CANDS; do
         d=$(tmo 8 adb -s "$ip:5555" shell getprop ro.crdroid.device 2>/dev/null | tr -d '\r\n')
         if [ "$d" = gaokun3 ]; then echo "$ip"; exit 0; fi
         # 小米手机（pudding）等也开着 5555：把认出来的东西打到 stderr，好知道扫到了谁
-        [ -n "$d" ] && echo "  $ip 是 $d，不是 gaokun3" >&2
+        [ -n "$d" ] && echo "  $ip 是 ${d}，不是 gaokun3" >&2
         tmo 5 adb disconnect "$ip:5555" >/dev/null 2>&1
     else
         h=$(tmo 10 ssh -o BatchMode=yes -o StrictHostKeyChecking=no \

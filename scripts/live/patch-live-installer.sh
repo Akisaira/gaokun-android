@@ -22,7 +22,7 @@ ok()  { echo "   ✓ $*"; }
 BASE=${1:-$REPO/out/live/gaokun3-live.squashfs}
 APP=$REPO/out/installer-flutter-linux-arm64
 OUT=$REPO/out/live/gaokun3-live-patched.squashfs
-[ -f "$BASE" ] || die "没有底子 $BASE（先 build-live.sh 正式构建一次）"
+[ -f "$BASE" ] || die "没有底子 ${BASE}（先 build-live.sh 正式构建一次）"
 [ -x "$APP/gk3_installer" ] || die "没有新的安装器 $APP/gk3_installer（先 build-flutter.sh）"
 H=$(shasum -a 256 "$REPO/scripts/live/live-build.Dockerfile" | cut -c1-12)
 TAG="gk3-live-build:$H"
