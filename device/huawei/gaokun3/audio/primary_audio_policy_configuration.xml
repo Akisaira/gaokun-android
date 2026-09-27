@@ -46,14 +46,36 @@
              HAL 侧优先级不是原因：writer/out_0 都是 nice=-19，且有 CAP_SYS_NICE。
              不声明 MMAP 后 AAudio 会回落到普通共享路径：延迟变高，但不会断。
              ⚠️ 输入侧 mmap_no_irq_in 故意保留（游戏不录音，无证据说明它有问题）。 -->
+        <!-- ★★★ 输入剖面【只声明 48000】（2026-09-27）。这是修复，不是砍功能。
+             本机全部 PCM 都定频 48 kHz（tinypcminfo d0/d1 输出、d2/d3 采集一律
+             Rate: min=48000Hz max=48000Hz），没有任何硬件重采样。而 HAL 把上层给的
+             采样率【原样】塞进 ALSA（alsa/Utils.cpp: config.rate = context.getSampleRate()），
+             tinyalsa 又不会自动协商 ⇒ 真的按 44100 去开 hw:0,3，hw_params 直接被拒：
+                 proxy_open() pcm_is_ready() failed: cannot set hw params: Invalid argument
+             症状：录音产物恒为 44 字节空 WAV（只有 WAV 头）。
+
+             为什么原来会落到 44100：剖面里【列了】44100，App（如系统录音机）请求 44100
+             就成了 EXACT_MATCH，框架原样下发。删掉之后请求 44100 变成 inexact 匹配 ——
+             AudioProfileVectorHelper.cpp:checkCompatibleSamplingRate() 里
+             desiredRate=48000，48000/AUDIO_RESAMPLER_DOWN_RATIO_MAX(256)=187 <= 44100
+             ⇒ NO_ERROR，并把采样率改写成 48000 交给 HAL；AudioFlinger 的 RecordTrack
+             再把 48000 重采样回 App 要的 44100。16000/8000 同理。
+             所以上层仍可请求任意低采样率，只是物理层统一在 48 kHz 上工作。
+
+             ⚠️ 策略文件必须和 HAL 一起改，不能只改 HAL：AudioPolicyManager::
+             getInputForDevice() 有硬校验 —— profileSamplingRate != lConfig.sample_rate
+             就整条拒绝。
+
+             ⚠️ 输出剖面【刻意不动】：AudioOut_D / AudioOut_1D 实测都已经是 48000 Hz，
+             播放路径没坏，别改。 -->
         <mixPort name="primary input" role="sink">
             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
-                     samplingRates="8000 11025 16000 32000 44100 48000"
+                     samplingRates="48000"
                      channelMasks="AUDIO_CHANNEL_IN_MONO AUDIO_CHANNEL_IN_STEREO"/>
         </mixPort>
         <mixPort name="mmap_no_irq_in" role="sink" flags="AUDIO_INPUT_FLAG_MMAP_NOIRQ">
             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
-                             samplingRates="44100 48000"
+                             samplingRates="48000"
                              channelMasks="AUDIO_CHANNEL_IN_MONO AUDIO_CHANNEL_IN_STEREO"/>
         </mixPort>
         <mixPort name="telephony_tx" role="source">
