@@ -297,7 +297,10 @@ int readSceneProperty() {
  * limiter can absorb without working hard: at Histen's measured -5.4 dBFS
  * peaks it applies roughly 4 dB of gain reduction, and at ordinary listening
  * levels it does nothing at all.  0 dB is the "isolate the high-pass" test;
- * past about +9 dB the limiter starts compressing audibly. */
+ * past about +9 dB the limiter starts compressing audibly.
+ * Independently measured in PR #8 (measurement/analysis/win_vs_android.py): output
+ * peak 0.410 at +4 dB and 0.817 at +10 dB (x1.993 for +6 dB, i.e. still linear),
+ * so +4 dB sits 6.74 dB under the -1 dBFS ceiling -- consistent with the above. */
 constexpr float kDefaultMakeupDb = 4.0f;
 
 /* Float property with bounds checking.  `fallback` comes back when the property

@@ -27,6 +27,7 @@ Android 上一直没有对应物。
 | `gaokun_effect.cpp` | 自研 | AIDL effect 主体。继承 `EffectImpl`；开关 / 设备 / 格式的判定也在这里 |
 | `histen_chain.h` | 自研 | 与 Histen 引擎的适配层：dlopen/dlsym、参数下发、重分块、出错退回直通 |
 | `speaker_chain.h` | 自研 | 扬声器链：LR4 高通、makeup、限幅器、软削波（**没有 EQ**，EQ 在 Histen 里） |
+| `measurement/` | 作者（PR #8） | 与 Windows 的对照测量：离线扫 Histen 引擎（`eqscan`，不出声）、WASAPI loopback、比较与 EQ 求解脚本 + 2026-09-24 的数据。⚠️ 它的 README §四第 4 条是**候选参数**，不是部署默认（理由写在那里） |
 | `histen_scenes.h` | 生成 | 15 个 `SWS_SPK_*` 场景的参数表，由 `gen_histen_scenes.py` 从华为的 `sws_config.xml` 生成 |
 | `gen_histen_scenes.py` | 自研 | 上述生成器（换固件版本时重跑） |
 | `audio_effects_config.xml` | 配置 | effects HAL 读取的**唯一**配置 = crDroid 16.0 原版 + 我们的 `gaokun_histen` 条目 |
@@ -128,7 +129,9 @@ SELinux：`sepolicy/hal_audio_default.te` 让音频 HAL 读 `vendor_gaokun3_prop
 
 ⚠️ **低延迟（FAST）轨可能绕过这条链**：有 FastMixer 的输出上，框架不许在带 FAST 轨的会话上挂
 软件 effect（`Threads.cpp` 的 `checkEffectCompatibility_l`）。走低延迟通路的游戏可能根本不经过这里。
-⬜ 本机主输出有没有 FastMixer 还没查（`dumpsys media.audio_flinger`）。
+✅ 作者 2026-09-27 实测（PR #8 的评论；欢乐斗地主，只测了这一款）：本机两个输出线程都是 `type 0 (MIXER)`、
+`No FastMixer`，游戏的 BGM / 音效照常出 `meter:` ⇒ 这条路径在本机**目前不会触发**（不是"挂上了"，是没有 FastMixer 可撞）。
+⬜ 我们没复核；换了输出配置后复查：`dumpsys media.audio_flinger | grep -E 'Output thread|FastMixer'`。
 
 ---
 
@@ -141,7 +144,7 @@ SELinux：`sepolicy/hal_audio_default.te` 让音频 HAL 读 `vendor_gaokun3_prop
 |---|---|---|---|
 | `…engine` | `0` / `1`（默认 1） | `0` = 不让 Histen 进链、**只跑扬声器链**（A/B 对照用；不是逐比特直通，直通请关总开关） | 下一次播放 |
 | `…scene` | `0`–`14` | 选 `SWS_SPK_*` 场景（索引同 `histen_scenes.h` 顺序） | 下一次播放 |
-| `…eq.N` | `N`=0–10，值 −128…255 | **绝对覆盖**场景表的第 N 个 EQ 槽（Histen 里的）。⚠️ 空 = 回落场景基线，所以**切场景前先清空 `eq.*`** | 约 1 秒 |
+| `…eq.N` | `N`=0–10，值 0…203（**无符号**） | **绝对覆盖**场景表的第 N 个 EQ 槽（Histen 里的）。约 0.08 dB/单位；槽 1..8 有效，0/9/10 改不动；≥204 引擎 Init 失败，effect 钳到 203（PR #8 的 eqscan 在场景 3 上标定，见下）。⚠️ 空 = 回落场景基线，所以**切场景前先清空 `eq.*`** | 约 1 秒 |
 | `…ben.{on,thr,gain,freq,a,b}` | 原样透传 | Histen 低音增强（BEN）分字段覆盖，便于逐项扫描 | 约 1 秒 |
 | `…vol.{ana,dig}` | 原样透传 | Histen 的模拟/数字音量字段 | 约 1 秒 |
 | `…hpf` | Hz（默认 150，`0` = 关） | LR4 高通拐点 | 约 1 秒 |
@@ -154,6 +157,16 @@ SELinux：`sepolicy/hal_audio_default.te` 让音频 HAL 读 `vendor_gaokun3_prop
 
 > ★ **整体增益要走功放（PA），不要走 `makeup`**：PA 在 DAC 之后、是纯线性的，
 > 不消耗限幅器余量；`makeup` 走链内会直接顶限幅器，听感上是「不干净」。
+> ⚠️ 补两句（2026-09-27，PR #8 审阅）：PA 有**内核上限 23**（`patches/0015`，+9 dB，是器件允许的一半，理由见补丁说明），
+> `audio-route.sh` 写 21；"不消耗限幅器余量"的另一面是限幅器的 −1 dBFS 天花板**管不到** PA 之后的声压，
+> 低频冲程跟着涨。在 21..23 之间试，先看 `/sys/class/hwmon/*/temp1_input`。
+> 限幅器余量的实测（PR #8）：makeup +4 时输出峰值 0.410，离 −1 dBFS（0.891）还有 **6.74 dB**；
+> +10 时 0.817（+6 dB → ×1.993，线性）—— 与 `gaokun_effect.cpp` 里"+9 dB 以上限幅器开始明显压缩"对得上。
+
+> **EQ 槽的语义**（PR #8 的 `measurement/android/eqscan.c`，场景 3 = `SWS_SPK_LANDSCAPE_TWO`，R² ≥ 0.999）：
+> 值按无符号读（−128 存进去就是 128），约 0.0801 dB/单位；槽 1..8 的中心依次是
+> 120 / 560 / 2200 / 3700 / 4600 / 1100 / 220 / 14000 Hz（= 场景表 idx(96+n)），槽 0/9/10 改不动；值 ≥204 时 Init 返回 −145。
+> ⚠️ 部署默认是**场景 0**，它的 idx96.. 是另一组频率、没扫过 —— 预设值别跨场景套用。
 
 > 旧名字 `persist.gaokun3.histen.*`（PR 原版）已**全部作废**：那是 `default_prop`，
 > vendor 进程在 enforcing 下永远读不到。设备上残留的旧值无害，但也不再起作用。
@@ -237,7 +250,9 @@ adb shell su -c 'logcat -d -s gaokun_effect' | tail -40
    走低延迟 FAST 通路的游戏可能也不经过（第四节）。
 2. 场景 `SWS_SPK_*` 的**几何含义**（LANDSCAPE_ONE 对应哪种摆放）由原厂配置决定，
    只做了参数搬运，未逐一实听确认；也不随屏幕方向切换。
-3. `eq.N` 的**符号约定**来自作者的实测扫描，不是文档：先小步扫描，别凭直觉设值。
+3. ~~`eq.N` 的**符号约定**来自作者的实测扫描，不是文档：先小步扫描，别凭直觉设值。~~
+   ✅ 2026-09-27 由 PR #8 的 eqscan 定下来了（第五节"EQ 槽的语义"）：无符号、约 0.08 dB/单位、≥204 让 Init 失败（已钳位）。
+   仍然只在场景 3 上标定过。
 4. 进 Histen 之前信号被量化到 16 位（高半字）并硬限在 ±1.0，出来再丢掉低 16 位 —— 外放听不出来，但不是无损的。
 5. 在**本机扬声器（WSA 双单元）**上调的参数，不具备跨机型通用性。
 6. ✅ **2026-09-26 编译验证通过**（构建机独立 `OUT_DIR=out-pr7`，不碰 `out/`）：effect 在 `-Werror -Wthread-safety -Wextra` 下编过、导出 `createEffect / queryEffect / destroyEffect`、字符串里只有新属性名；Parts 的 APK 带 `SpeakerFxSettingsActivity`（注入 `ia.sound`）；`selinux_policy`（含 neverallow）与 `vendor_property_contexts`（前缀检查）通过；引擎 / 配置 / `histen.rc` 三份拷贝与源文件一致。★ 第一轮编译抓到一处我自己的错：`get_prop(hal_audio_default, system_prop)` 撞 neverallow（`system_prop` 是 `core_property_type`），于是改成 init 镜像（`etc/histen.rc`）。

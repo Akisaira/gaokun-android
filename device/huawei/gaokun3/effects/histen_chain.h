@@ -243,8 +243,8 @@ inline uint16_t extU16(long v) {
  * So idx60..70 is the working EQ gain array.  Each property writes one slot,
  * packed into both halves:
  *
- *     setprop persist.vendor.gaokun3.histen.eq.0  180     # -> 0xb4b4 (L=R=180)
- *     ...through eq.10 (11 slots: idx60..idx70)
+ *     setprop persist.vendor.gaokun3.histen.eq.1  180     # -> 0xb4b4 (L=R=180)
+ *     ...eq.0 through eq.10 (11 slots: idx60..idx70; 0..203, unsigned)
  *
  * Unset = keep the scene value.  Re-read about once a second, same as ext.
  *
@@ -252,9 +252,23 @@ inline uint16_t extU16(long v) {
  * looks like 0.1 dB (ONE's idx61 = 0xb4 = 180 -> -7.6 dB if signed, +18.0 if
  * unsigned) and BOTH readings are plausible.  Guessing would bake a wrong unit
  * into every number we publish, so the sweep has to tell us the sign convention.
+ *
+ * ✅ The sweep has now told us (PR #8, measurement/android/eqscan.c, offline on the
+ * device, scene 3 = SWS_SPK_LANDSCAPE_TWO, fits R^2 >= 0.999):
+ *   - the byte is read UNSIGNED -- a first sweep at -128 / +127 gave two nearly
+ *     identical curves, because those store as 128 and 127;
+ *   - about 0.0801 dB per unit;
+ *   - slots 1..8 act, centred at the scene's idx(96+n) frequencies
+ *     (120/560/2200/3700/4600/1100/220/14000 Hz in scene 3); slots 0, 9, 10 do nothing;
+ *   - a value >= 204 makes ImediaHistenInit return -145.
+ * The last point is why buildP3() clamps to 0..203: an out-of-range knob would
+ * otherwise fail Init, and a failed Init silently drops the whole Histen stage
+ * for that stream (init() returns false and only the speaker chain runs).
+ * Only scene 3 was swept; the default scene 0 has different idx96.. values.
  * ------------------------------------------------------------------------- */
 constexpr int kEqBase = 60;    /* idx60                                      */
 constexpr int kEqLen = 11;     /* idx60..70                                  */
+constexpr long kEqMax = 203;   /* >= 204 -> Init returns -145 (PR #8)         */
 
 /* Scene p3 first, then any eq.N that is set.  Each slot is written to BOTH
  * halves so L and R stay identical -- the scene tables do the same. */
@@ -265,9 +279,11 @@ inline void buildP3(uint16_t *out, const uint16_t *base) {
     for (int i = 0; i < kEqLen; i++) {
         std::snprintf(name, sizeof(name), GAOKUN_HISTEN_PROP("eq.%d"), i);
         if (!readExtProp(name, v)) continue;
-        if (v < -128) v = -128;
-        if (v > 255) v = 255;
-        const uint16_t b = static_cast<uint16_t>(v & 0xFF);
+        /* Unsigned, and Init rejects >= 204 (see above).  A negative value used
+         * to wrap into 128..255 here, i.e. into the range that fails Init. */
+        if (v < 0) v = 0;
+        if (v > kEqMax) v = kEqMax;
+        const uint16_t b = static_cast<uint16_t>(v);
         out[kEqBase + i] = static_cast<uint16_t>((b << 8) | b);
     }
 }
