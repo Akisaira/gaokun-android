@@ -30,7 +30,7 @@
  *   in  : ((int32)(clamp(f,-1,1) * 32767)) << 16
  *   out :  (int16)(v >> 16)
  *
- *   这是本文件唯一踩过的坑，而且踩得很痛：第一版照 tools/tests/test_histen3.c
+ *   这是本文件唯一踩过的坑，而且踩得很痛：第一版照 tools/tests/test_histen3.c（作者工作区，不在本仓）
  *   用纯 int16，在设备上**必崩**（SIGSEGV @ libhw_histen_processing.so 的
  *   ImediaSwsS2F，读一个野指针，tombstone 里 x2=480 正是我们的块长）。
  *   histen_chain.h 早就写明了：「喂纯 int16 会让样本流减半、输出白噪声，
@@ -70,7 +70,12 @@ typedef int (*FN_Apply)(void *, void *, int, void *);
 #define DUR     5.0
 #define FRAMES  ((int)(SR * DUR))
 #define AMP     0.10
-#define LIB     "/system/lib64/soundfx/libhw_histen_processing.so"
+/* 维护者注（2026-09-27）：本仓的 ROM 构建把引擎装在 /vendor（device.mk，effects/prebuilt/ 里有文件时）；
+ * /system 那条是作者 KernelSU overlay 的布局。与 histen_chain.h 的 kHistenLibPaths 同一个顺序。 */
+static const char *const kLibPaths[] = {
+    "/vendor/lib64/soundfx/libhw_histen_processing.so",
+    "/system/lib64/soundfx/libhw_histen_processing.so",
+};
 #define EQBASE  60
 #define EQLEN   11
 #define BLK     480
@@ -177,8 +182,13 @@ int main(int argc, char **argv) {
         printf("  [OK] 输入参考 -> %s\n", path);
     }
 
-    void *h = dlopen(LIB, RTLD_NOW);
-    if (!h) { printf("[FAIL] dlopen %s: %s\n", LIB, dlerror()); return 1; }
+    void *h = NULL;
+    for (size_t i = 0; i < sizeof(kLibPaths) / sizeof(kLibPaths[0]) && !h; i++) {
+        h = dlopen(kLibPaths[i], RTLD_NOW);
+        if (!h) printf("  [..] dlopen %s: %s\n", kLibPaths[i], dlerror());
+        else    printf("  [OK] 引擎：%s\n", kLibPaths[i]);
+    }
+    if (!h) { printf("[FAIL] 两个位置都没有 libhw_histen_processing.so\n"); return 1; }
     FN_GetSize   GetSize   = (FN_GetSize)dlsym(h, "ImediaHistenGetSize");
     FN_Init      Init      = (FN_Init)dlsym(h, "ImediaHistenInit");
     FN_SetParams SetParams = (FN_SetParams)dlsym(h, "ImediaHistenSetParams");

@@ -23,16 +23,16 @@
 
 输入
 ----
-  --win  : tools/digital_response.py --csv 出来的 CSV（abs_gain_dB / rel_1kHz_dB）
+  --win  : windows/digital_response.py --csv 出来的 CSV（abs_gain_dB / rel_1kHz_dB）
   --and  : eqscan_report.py 出来的 eqscan_curves.csv
            （base_db_rel_input + sK_VVV 列，sK_VVV 是该槽设成 VVV 时相对基线的变化）
   --base : eqscan 的 base_eq.txt（基线槽值 + 中心频率）
 
 用法
 ----
-  py -3 tools/win_vs_android.py --win analysis/audio/m3/win-digital-response.csv \
-        --and artifacts/eqscan-20260924/eqscan_curves.csv \
-        --base artifacts/eqscan-20260924/base_eq.txt
+  python3 analysis/win_vs_android.py --win data/win-digital-response.csv \
+        --and data/eqscan-curves.csv --base data/base_eq.txt --hpf 150
+  （路径相对 measurement/；原稿里的 tools/、analysis/audio/m3/、artifacts/ 是作者工作区的布局）
 """
 
 import argparse
@@ -615,28 +615,48 @@ def main():
                       for i, k in enumerate(keys)])
     print("  域=%s，HPF=%d，G=%+.1f" % ("shape" if USE_SHAPE else "abs", hpf_best, gbest))
     resid_table(grid, tgt_best, base_best + gbest + A @ x_sol, a.low_guard, "★ 本次求解目标")
-    print('  1) bash tools/_tmp/histen-ab.sh hpf %d' % hpf_best)
-    print('  2) bash tools/_tmp/histen-ab.sh preset "%s"' % " ".join(preset))
+    # 维护者注（2026-09-27，PR #8 审阅）：下面原来打印的是作者工作区的 tools/_tmp/histen-ab.sh
+    # （不在本仓），换成本仓 effect 的旋钮（gaokun_effect.cpp / histen_chain.h）。
+    # 另外三处：①基线数据是哪个场景就先切到哪个场景（部署默认是场景 0，EQ 槽的中心频率随场景变）；
+    # ②HPF 低于部署值 150 Hz 时先看 §九 并做 THD；③PA 的建议值不超过内核上限 23（patches/0015）。
+    def knob(name, val):
+        print('     adb shell su -c "setprop persist.vendor.gaokun3.histen.%s %s"' % (name, val))
+    scene_no = scene.split()[1] if scene.startswith("scene ") and len(scene.split()) > 1 else ""
+    if scene_no:
+        print('  0) 基线是 %s —— 预设只对这个场景成立（部署默认场景 0，EQ 槽中心频率不同）：' % scene)
+        knob("scene", scene_no)
+    print('  1) HPF：')
+    knob("hpf", "%d" % hpf_best)
+    if hpf_best < 150:
+        print('     ⚠ 低于部署默认 150 Hz。先加 --low-lift "<部署时的槽值>" --low-lift-hpf 150 看 §九：')
+        print('       60 Hz 以下净抬升 >8 dB 就必须先做一次麦克风近场 THD 测量再下发。')
+        print('       注意本脚本在 --grid-lo（默认 90 Hz）以下不计分、也没有失真项，')
+        print('       所以把 --hpf-scan 往低放，它会一直选更低的 HPF —— 那不是最优，是看不见。')
+    print('  2) EQ 槽（eq.N 直接写无符号值，引擎在 ≥204 时 Init 失败，effect 已钳到 0..203）：')
+    for kv in preset:
+        k, v = kv.split("=")
+        knob("eq.%s" % k, v)
     make_rec = 4.0 + gbest
     if abs(gbest) > 0.05:
         if make_rec <= 4.0 + a.headroom:
-            print('  3) bash tools/_tmp/histen-ab.sh makeup %.0f   # +%.1f dB（当前 +4 dB，'
-                  '在 %.1f dB 预算内）' % (make_rec, gbest, a.headroom))
+            print('  3) makeup（当前部署 +4 dB，本解 %+.1f dB，在 %.1f dB 预算内）：' % (gbest, a.headroom))
+            knob("makeup", "%.0f" % make_rec)
         else:
             print('  3) ⚠ 本解想要 makeup %+.1f dB，但预算只有 %.1f dB ⇒ 会被限幅器压。'
                   '建议 makeup 停在 +%.0f。' % (gbest, a.headroom, 4.0 + a.headroom))
     else:
         print('  3) makeup 保持 +4 dB 不动（本解不需要额外平增益）')
     print()
-    print('  ★ 若还要更响：**走 PA Volume，不要走 makeup**。')
-    print('     PA 在 DAC 之后、完全线性，不消耗上面的 %.1f dB 预算、不改音色：' % a.headroom)
-    print('       bash tools/_tmp/histen-ab.sh pa 25    # +3 dB（23→25，一档 1.5 dB）')
-    print('       bash tools/_tmp/histen-ab.sh pa 27    # +6 dB，再往上要先确认 <200 Hz 打底')
+    print('  ★ PA Volume：本仓 audio-route.sh 写 21（+6 dB），内核上限 23（+9 dB，patches/0015，')
+    print('     = 器件允许的一半；理由：没有出厂校准、两颗 WSA 的 SoundWire Alert 没人服务、同设置隔几分钟漂 7.5 dB）。')
+    print('     PA 在限幅器【之后】：它不吃上面的 %.1f dB 预算，也意味着 −1 dBFS 天花板管不到最终声压，' % a.headroom)
+    print('     低频冲程跟着一起涨。要试就在 21..23 之间、先看 /sys/class/hwmon/*/temp1_input：')
+    print('       adb shell su -c \'tinymix -D 0 "SpkrLeft PA Volume" 23; tinymix -D 0 "SpkrRight PA Volume" 23\'')
     print()
-    print('  回滚（预设 A，用户验证过「干净」的那组）：')
-    print('    bash tools/_tmp/histen-ab.sh hpf 150')
-    print('    bash tools/_tmp/histen-ab.sh makeup 4')
-    print('    bash tools/_tmp/histen-ab.sh preset "1=120 7=100 2=50 6=120 3=140 4=140 5=120 8=140"')
+    print('  回到部署默认（场景 0、hpf 150、makeup +4、EQ 用场景表）：把上面设过的属性清空，例如')
+    print("""     adb shell su -c 'setprop persist.vendor.gaokun3.histen.eq.1 ""'   # 空值 = 不覆盖，用场景表""")
+    print('  作者的「预设 A」（用户验证过「干净」，hpf 150 + makeup 4，场景 3）：')
+    print('     eq: 1=120 7=100 2=50 6=120 3=140 4=140 5=120 8=140')
 
     if a.png:
         # 用**现场 HPF** 重建曲线，这样图里就是最终方案的样子。
