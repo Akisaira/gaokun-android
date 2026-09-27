@@ -64,4 +64,4 @@ Windows 的分区序号（`PartitionNumber`）在撤销后变了（中间重启�
 3. ~~`Resize-Partition` / `New-Partition -Offset` / `Format-Volume -FileSystem FAT32` / `mountvol /S`~~ ✅ 虚拟机里验过（上表）。
 4. `Get-NetConnectionProfile` 的网络名与 `netsh` 导出的配置名是否一致（虚拟机没有 WiFi，验不了；不一致时带不上 WiFi，安装器里再连即可）。
 
-⚠️ 安装包里的 squashfs 带着华为专有的 GPU zap shader —— **不能公开发布**，除非用户定了 `docs/TODO.md` 的 B23。
+ⓘ 安装包里的 squashfs 带着华为专有的 GPU zap shader —— 随包公开发布（用户 2026-09-27 定 B23 ①：随镜像发，与 ROM 同待遇 —— 已发布的 ROM 的 vendor 里本来就带着它）（`docs/TODO.md` 的 B23）。

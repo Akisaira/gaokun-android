@@ -17,7 +17,7 @@
 #   （installer-lib.sh 的 gk3_release_info），而这条路上内核与 initramfs 本来只在 ESP 上。
 # ★ 启动项【不】带 gk3.dev：Windows 那边不知道 Linux 给分区起什么名字；initramfs 会逐个分区找
 #   /gaokun3/live.squashfs（GK3LIVE 是 FAT32，只读挂载无副作用；BitLocker 卷挂不上，自然跳过）。
-# ⚠️ squashfs 里带着华为专有的 GPU zap shader —— 这个包【不能公开发布】，除非用户定了 TODO B23。
+# ⓘ squashfs 里带着华为专有的 GPU zap shader —— 随包公开发布（用户 2026-09-27 定 B23 ①：随镜像发，与 ROM 同待遇 —— 已发布的 ROM 的 vendor 里本来就带着它）。
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 die() { echo "!! $*" >&2; exit 1; }
@@ -80,4 +80,4 @@ with zipfile.ZipFile(dst, 'w') as z:
             arc = os.path.join(top, os.path.relpath(p, src))
             z.write(p, arc, zipfile.ZIP_STORED if f.endswith('.squashfs') else zipfile.ZIP_DEFLATED)
 PY
-echo "   ✓ $OUT.zip（$(du -h "$OUT.zip" | cut -f1)）—— ⚠️ 带华为专有固件，TODO B23 定之前不能公开发布"
+echo "   ✓ $OUT.zip（$(du -h "$OUT.zip" | cut -f1)）（带华为 GPU 固件，与 ROM 同待遇，TODO B23）"

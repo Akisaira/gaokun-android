@@ -11,7 +11,7 @@
 #               （docs/stage7-live-installer.md §2.3）。给 --release 时默认用里面的 boot.img
 #   --firmware  GPU 固件的来源，形如 /vendor/firmware 的目录：adb pull /vendor/firmware out/vendor-firmware
 #               live 必需（cage 要 GPU；zap shader 是华为专有的，Debian 的固件包里没有 —— 见 build-rootfs.sh 的 GPU_FW）
-#               ⚠️ 带了它的镜像【不能公开发布】，除非用户定了再分发的做法（docs/TODO.md 的 B23）
+#               带着它的镜像可以公开发布（用户 2026-09-27 定 B23 ①：随镜像发，与 ROM 同待遇 —— 已发布的 ROM 的 vendor 里本来就带着它）
 #   换源：GK3_DEBIAN_MIRROR=http://mirrors.ustc.edu.cn/debian bash scripts/live/build-live.sh …
 #               （2026-09-25：换网之后 colima 里连 deb.debian.org 卡死，中科大镜像 0.3 秒；透传进容器给 build-rootfs.sh）
 #   --payload   把 --release 目录整个放进 U 盘（/gaokun3/payload/），装机就不用联网

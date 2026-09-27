@@ -37,9 +37,9 @@ OUT= ; SSH_KEY= ; WIFI_CONF= ; INSTALLER= ; KEEP= ; FIRMWARE=
 #   Android 那边也是从设备树的 firmware/ 目录装进 vendor 的（device/huawei/gaokun3/device.mk 的"固件双路安装"）。
 # ⚠️ M0 第一轮（2026-09-25）镜像里没有它们：a660_sqe.fw 加载 -2 → freedreno 建不了 pipe → cage 的 EGL 起不来
 #    —— C 版安装器画 dumb buffer、从不碰 GPU，所以 live 以前从没缺过这几个。
-# ⚠️★ 再分发：zap shader 是华为专有固件，本仓的规矩是【不可公开再分发】（.gitignore 的固件一节、
-#    device/huawei/gaokun3/firmware/README.md）。现在造的都是私人镜像，所以 live 暂定"必须给 --firmware"；
-#    【公开发布 live 镜像之前】要用户定：镜像里带不带它（docs/TODO.md 的 B23）。
+# ★ 再分发：zap shader 是华为专有固件。【仓库里】照旧不收（.gitignore 的固件一节、
+#    device/huawei/gaokun3/firmware/README.md）；【镜像里】带着它公开发布（用户 2026-09-27 定 B23 ①：随镜像发，与 ROM 同待遇 —— 已发布的 ROM 的 vendor 里本来就带着它）。
+#    所以 live 必须给 --firmware：固件从设备的 /vendor/firmware 取，不从网上找。
 GPU_FW="qcom/a660_sqe.fw qcom/a660_gmu.bin qcom/sc8280xp/HUAWEI/gaokun3/qcdxkmsuc8280.mbn"
 die() { echo "!! $*" >&2; exit 1; }
 say() { echo; echo "══ $*"; }
