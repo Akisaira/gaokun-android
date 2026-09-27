@@ -1,0 +1,25 @@
+diff --git a/audio/aidl/default/XsdcConversion.cpp b/audio/aidl/default/XsdcConversion.cpp
+index 1a5f7f3c9d..e722f4ccde 100644
+--- a/audio/aidl/default/XsdcConversion.cpp
++++ b/audio/aidl/default/XsdcConversion.cpp
+@@ -236,9 +236,18 @@ ConversionResult<AudioDevice> createAudioDevice(
+                                ? AudioDeviceAddress::make<AudioDeviceAddress::Tag::id>(
+                                          xDevicePort.getAddress())
+                                : AudioDeviceAddress{}};
+-    if (device.type.type == AudioDeviceType::IN_MICROPHONE && device.type.connection.empty()) {
++    // Only fall back to the legacy platform default when the audio policy configuration does
++    // not specify an address. Overwriting an explicit address unconditionally makes it
++    // impossible for a device to route its built-in microphone to a dedicated ALSA PCM, because
++    // the address carries the "CARD_<n>_DEV_<m>" selector consumed by
++    // StreamPrimary::getCardAndDeviceId(). When it is lost the primary stream silently falls
++    // back to the default card/device, which is a playback-only PCM, so every capture attempt
++    // fails with -EINVAL.
++    const bool addressSpecified = xDevicePort.hasAddress() && !xDevicePort.getAddress().empty();
++    if (!addressSpecified && device.type.type == AudioDeviceType::IN_MICROPHONE &&
++            device.type.connection.empty()) {
+         device.address = "bottom";
+-    } else if (device.type.type == AudioDeviceType::IN_MICROPHONE_BACK &&
++    } else if (!addressSpecified && device.type.type == AudioDeviceType::IN_MICROPHONE_BACK &&
+                device.type.connection.empty()) {
+         device.address = "back";
+     }

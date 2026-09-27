@@ -495,6 +495,9 @@ def main():
     print(" [12] audio AIDL primary 接受外部设备连接: " + apply_patch_file(
         tree, "hardware/interfaces",
         "0010-audio-aidl-primary-accept-external-device-connect.patch"))
+    print(" [13] audio AIDL HAL 尊重策略给出的麦克风 address: " + apply_patch_file(
+        tree, "hardware/interfaces",
+        "0051-audio-aidl-honour-explicit-mic-address.patch"))
 
 if __name__ == "__main__":
     main()
