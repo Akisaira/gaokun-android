@@ -95,8 +95,9 @@
 > ⚠️★★ **不要用 `-user` 变体构建本机的 ROM** —— user 构建的 init 强制 enforcing
 > （忽略 `androidboot.selinux=permissive`，`selinux.cpp:112-116`），而我们的策略还不完整，
 > 结果是**装上去起不来**。本机一直用 `lineage_gaokun3-bp4a-userdebug`。案卷 #117 §15。
-> **v0.6.2-alpha 已全部发布**（2026-09-16）：R2 清单已更新（设备侧抓取 200）、
-> GitHub release 5 个附件服务端字节数逐一核对并标 Latest、仓库已推送。说明见 `docs/relnotes/v0.6.2-alpha.md`。
+> **v0.7.0-alpha 已全部发布**（2026-09-29 01:06，戳 `1790605865`）：`release.sh --no-build` 传 R2、清单最后传（设备侧抓取 200、timestamp = 戳）；
+> GitHub release 9 个附件（ROM 5 个从构建机经 R2 取回后传、安装器 `0.1.0-preview` 4 个从本机传）服务端字节数逐一核对并标 Latest，tag `v0.7.0-alpha` = `a39dcdf`；
+> 发版说明发布前经 workflow 逐条核对（改了 20 余处）。说明见 `docs/relnotes/v0.7.0-alpha.md`。上一版 v0.6.2-alpha（2026-09-16）。
 
 ---
 

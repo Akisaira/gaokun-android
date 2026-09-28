@@ -66,7 +66,7 @@
   8. ☐ **真实待机**（要用户拔线）：临时 `setprop persist.vendor.gaokun3.allow_suspend 1` → 拔 USB → 息屏等它睡 → 电源键唤醒 →
      `suspend_stats/success` 涨了、TCP adb 回来 → 插回 USB、adb 回来（顺带验 USB 插拔）→ 改回 0
   9. ☐ `dumpsys connectivity | grep TcpBufferSizes` 含 `8388608`
-* 全过 ⇒ 推仓库 → `release.sh --no-build`（R2 + 清单）→ GitHub release v0.7.0-alpha（说明 `docs/relnotes/v0.7.0-alpha.md`）→ 安装器 `release-installer.sh`。
+* ✅ **2026-09-29 已发布**：推仓库 → `release.sh --no-build`（R2 + 清单，设备侧抓取 200）→ GitHub release v0.7.0-alpha（9 个附件字节数核对、Latest）→ 安装器 `0.1.0-preview` 随附。⬜ 用户轮换 R2 密钥（发版期间在会话输出里误显示过一次）。
 
 ### ⏸ 发版暂停（用户 2026-09-28）："暂时先不发，待会会有 iris 修复，可能直接 0.7.0"
 * **候选版 `1790206017` 不发。** 它编于 PR #10（内置麦克风，B24）合并之前，不含那项修复；下一版要从 main 重新构建。
