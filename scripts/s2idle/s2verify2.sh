@@ -24,7 +24,7 @@ for i in 1 2 3; do
     sleep 75                    # 40 秒睡 + 余量
     S1=$(cat /sys/power/suspend_stats/success)
     DT=$(( $(date +%s) - B4 ))
-    if [ "$S1" -gt "$S0" ]; then OK=$((OK+1)); say "★ 第$i/3 挂起成功（success $S0→${S1}，墙钟 ${DT}s）role 现在=[$(cat $S)]"
+    if [ "$S1" -gt "$S0" ]; then OK=$((OK+1)); say "★ 第$i/3 挂起成功（success ${S0}→${S1}，墙钟 ${DT}s）role 现在=[$(cat $S)]"
     else say "  第$i/3 没成功（success 仍 ${S0}，墙钟 ${DT}s）fail=$(cat /sys/power/suspend_stats/fail) dev=[$(cat /sys/power/suspend_stats/last_failed_dev)]"; fi
     dmesg | grep -iE "PM: suspend entry|PM: suspend exit" | tail -2 >> $R
     sync; sleep 5

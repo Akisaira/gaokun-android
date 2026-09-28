@@ -60,7 +60,7 @@ say "  模式 : $([ $APPLY = 1 ] && echo APPLY || echo 干跑)"
 say ""
 say "── 0. 前置检查 ──"
 for t in meson ninja python3 pkg-config; do
-    command -v "$t" >/dev/null 2>&1 && ok "$t" || bad "缺 $t（apt install meson ninja-build pkg-config）"
+    command -v "$t" >/dev/null 2>&1 && ok "$t" || bad "缺 ${t}（apt install meson ninja-build pkg-config）"
 done
 python3 -c "import ply" 2>/dev/null && ok "python3-ply" \
     || bad "缺 python3-ply（mojo 生成器要它；缺了会在 meson configure 最后一步才炸）"
@@ -258,7 +258,7 @@ if [ -f "$BP" ]; then
         bad "合同检查：bp 引用了不存在的生成物 ——$miss"
     fi
 else
-    warn "找不到 $BP，跳过合同检查"
+    warn "找不到 ${BP}，跳过合同检查"
 fi
 
 say ""
