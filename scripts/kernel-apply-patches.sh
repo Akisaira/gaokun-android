@@ -44,7 +44,7 @@ UPATCHES=(
 )
 
 # ⚠️ 只列内核补丁。其余的归属别处：0003 AOSP glslang、0004/0005/0006 mesa、
-#    0008 tinyalsa、0010 AOSP audio HAL —— 别往内核树上打。
+#    0008 tinyalsa、0010 / 0051 / 0052 AOSP audio HAL —— 别往内核树上打。
 KPATCHES=(
     0001-efi-pstore-register-backend-when-efivars-ops-arrive-.patch
     0002-arm64-dts-gaokun3-drive-ts-mode-gpio174-low.patch

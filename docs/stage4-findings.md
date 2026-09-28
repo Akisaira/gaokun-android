@@ -9962,3 +9962,59 @@ storaged / system_server）—— hangdump 取证读跨 uid 的 `wchan` 那条�
 * ⬜ 然后才是**真 enforcing 开机**：oneshot 一个只加了 `androidboot.selinux=enforcing` 的启动项（userdebug 认这个参数），
   起不来下一次重启回 permissive 默认项。⚠️ 重启，要用户点头、要有人能按电源键。
 * 这一轮之后 B1 已经没有"加规则解决不了"的阻塞了 —— 剩下的是验证。
+
+## #127 ★★★ 内置麦克风：App 录音一直是 44 字节空文件、修掉之后又周期性丢块 —— ALSA 之上三个独立根因（Issue #9 / PR #10，2026-09-28 合并）
+
+#40 修好了 ALSA 层（`tinycap -c 2` 录到真实音频），README 于是写了"已修"。**但走 `AudioRecord` 的 App 从来没录到过东西**：
+系统录音机的产物恒为 44 字节（只有 WAV 头）。贡献者 mashen11 定位到三个互相独立的根因（前两个叠加造成空文件，第三个造成丢块）、在 bind-mount 的 HAL 上逐个验过（Issue #9），
+提了 PR #10。维护者按**构建机上真实的 crDroid 树**（`hardware/interfaces` 在 "Merge lineage-23.2 into 16.0"）逐条核对后合并，
+并补了两处（下面的 ② ③）。行号指那棵树里的原文件。
+
+### 1. 三个根因
+1. **HAL 把策略给的麦克风 address 覆盖成 "bottom"**（`patches/0051`）。`XsdcConversion.cpp:235-244` 对 `IN_MICROPHONE` + 空 connection
+   不看 address、一律写 "bottom"，冲掉了本机策略里的 `"bottom CARD_0_DEV_3"`。而尾部的 `CARD_/DEV_` 是
+   `StreamPrimary::getCardAndDeviceId()`（`StreamPrimary.cpp:184-189`）选 ALSA 卡 / 设备的唯一依据：找不到就回落到
+   `kDefaultCardAndDeviceId = (0,0)`（`StreamPrimary.h:61-62`），而本机 `hw:0,0` 只有播放节点（本文件 #40）⇒ 采集**打不开**。
+2. **策略的输入剖面列着硬件开不了的配置**（XML）。HAL 把采样率与声道数**原样**交给 ALSA（`alsa/Utils.cpp:339, 349`），
+   内置设备走 `openProxyForAttachedDevice` 不协商（`Utils.cpp:367-386`）。
+   * **采样率**：剖面列了 44100，App 请求 44100 就是精确匹配、原样下发，hw_params 拒掉。只留 48000 之后，
+     `AudioProfileVectorHelper.cpp:220-227` 把 44100 / 16000 / 8000 改写成 48000（`48000 / 256 = 187 ≤` 请求值）交给 HAL。
+   * ★ **声道**（维护者补；**从代码推断、未上机实测**）：两个采集 PCM 都是 `channels min=2 max=2`（#40，`tinycap -c 1` 实测
+     `cannot set hw params`），剖面却还列着 MONO —— 单声道请求是精确匹配、原样下发（`AudioProfileVectorHelper.cpp:258-262`），
+     推断 VoIP / 语音识别 / 默认单声道的录音 App 仍会录出空文件。只留 STEREO 之后，策略（getInputProfile → checkCompatibleChannelMask，
+     录音 mixPort 走近似匹配）把 MONO 配到 STEREO（1000 分，`:309-315`）。PR 唯一一次走 App 路径的实测（R2）是在 MONO 还列着时录成的，
+     说明那次客户端请求的不是单声道 —— 所以没撞上。
+3. **MonoPipe 写端节流让采集线程跑不满实时**（`patches/0052`）：录音能出声之后，**大约每 8 块就有整整一块（4096 帧）是静音**
+   （PR 实测 30 s 丢帧率 13.653% = 48 块；按下面的机制算，间隔是 7 块与 8 块交替，平均约 654 ms，不是固定周期）。
+   * ★ 真实机制（维护者按 `MonoPipe.cpp` 重写了注释 —— PR 原注释说 `audio_utils_fifo` 预留一格、4096 只能用 4095，
+     **不对**：`fifo.h:63-64` 写明 frameCount 就是可用容量）：阻塞写端（采集线程）每写一块后按管道深度睡觉，
+     setpoint = reqFrames × 11 / 16 = **2816**（`MonoPipe.cpp:41`）。写完一整块 filled = 4096，落在"高于 setpoint"那一档
+     （> 5/4 × 2816 = 3520、≤ 3/2 × 2816 = 4224），睡 1.15 倍块时长 ≈ **98.1 ms，而一块只有 85.3 ms 音频** ⇒ 采集线程只能跑到实时的
+     **87%**，读端（`transfer()`）周期性拿不到整块、用静音补。容量翻倍后 setpoint = 5632，同样的 filled 落在 0.75× 档（`:104-106`），跟得上。
+   * ★ **维护者改成只对采集翻倍**：`makeSink(mIsInput)`（`StreamAlsa.cpp:131`）两个方向都调用，而**播放方向的写端不阻塞、
+     节流根本不跑**（`MonoPipe.cpp:83-85` 写一次就 `break`）—— 对播放翻倍毫无必要，只会让管道里的积压上限翻倍，
+     而这段积压**不进任何上报**（`latencyMs` 只算 ALSA，`StreamAlsa.cpp:189`；`refinePosition` 是空实现，`StreamPrimary.cpp:132-136`），
+     框架没法做音画同步补偿 —— 游戏声音全走这条路。
+
+### 2. 维护者这一轮顺带改的
+* `scripts/crdroid-tree-fixes.py` 有一步打不上就 **exit 1**（原先只打印、退出码仍是 0 —— 以后 repo sync 让 [13]/[14] 打不上时，
+  空录音 / 整块静音会悄悄回来）。
+* `mmap_no_irq_in` **删掉**（照 `mmap_no_irq_out` 的先例）：`ModulePrimary.cpp:107-110` 对 MMAP 输入一律建 `StreamInMmapStub`
+  （注释自己写着 "no support for MMAP audio I/O on CVD"），不打开 ALSA —— 走 AAudio 低延迟独占输入的 App 录不到真麦克风。
+  删掉后 AAudio 回落到普通路径。
+* 策略 XML 里一条原有的错误注释（说耳机麦靠 0010 的"按设备类型回落"表解决 —— 0010 是"primary 模块接受外部设备连接"，没有那张表）。
+
+### 3. 还没做的（TODO B24）
+* ⬜ **v0.6.3 不含这项修复**（候选版 `1790206017` 编于合并之前，`release.sh --no-build` 发的就是它）。
+* ⬜ 下一版构建上机验收：tree-fixes 的 [13]/[14] "已应用"；logcat（DEBUG）"parsed with card id 0, device id 3"、采集
+  "MonoPipe capacity 8192"、播放 4096；MIC 44.1k 单声道与 VOICE_COMMUNICATION 16k 单声道各录一段看大小与 RMS、有无
+  "incomplete data received"；游戏播放回归；Oboe 独占低延迟输入确认不再有 MMAP_CAPTURE 线程且 RMS 非零。
+* ⓘ 贡献者的验证是在 bind-mount 的 HAL 上做的，而且那个二进制带了额外日志（提交 4463983 引用的 before 日志
+  "parsed … device id 0" 不可能出自原版代码：address 为 "bottom" 时 `StreamPrimary.cpp:184-189` 在打这行之前就返回了）——
+  所以要按本仓配方重新构建、重新验。
+
+### 4. 教训
+* ★ **"已修"要说清修到了哪一层**。#40 修的是 ALSA，README 写成了"麦克风已修"，于是 App 录音一直是坏的却没人发现 ——
+  直到一位用户真的去录音。
+* ★ **修复有效 ≠ 解释正确**。0052 实测有效，但注释里的机制是错的、作用范围也写错了（"播放不动"），照着那段注释维护的人会被带偏。
+  审 PR 时按真实源码核对每一条"因为"，不只核对"结果对不对"。

@@ -1,5 +1,16 @@
+audio AIDL HAL（XsdcConversion）：策略给了内置麦的 address 就别覆盖成 "bottom"
+
+应用到 AOSP 树的 hardware/interfaces，由 scripts/crdroid-tree-fixes.py 第 13 条
+自动应用（幂等）。⚠️ 别往内核树上打。
+
+来自 PR #10（mashen11，Issue #9）。本机策略给内置麦的 address 是 "bottom CARD_0_DEV_3"，
+尾部的 CARD_/DEV_ 是 StreamPrimary::getCardAndDeviceId() 选 ALSA 卡 / 设备的唯一依据；
+被覆盖成 "bottom" 后回落到 (0,0)，而本机 card0/dev0 只有播放节点（pcmC0D0p），采集打不开。
+维护者 2026-09-28：注释改成与设备无关的说法（原注释说失败是 -EINVAL —— 那是另一个问题：
+44100 或单声道被 hw_params 拒掉；这里的失败是打不开节点）。
+
 diff --git a/audio/aidl/default/XsdcConversion.cpp b/audio/aidl/default/XsdcConversion.cpp
-index 1a5f7f3c9d..e722f4ccde 100644
+index 1a5f7f3c9d..2c7cceced5 100644
 --- a/audio/aidl/default/XsdcConversion.cpp
 +++ b/audio/aidl/default/XsdcConversion.cpp
 @@ -236,9 +236,18 @@ ConversionResult<AudioDevice> createAudioDevice(
@@ -12,8 +23,8 @@ index 1a5f7f3c9d..e722f4ccde 100644
 +    // impossible for a device to route its built-in microphone to a dedicated ALSA PCM, because
 +    // the address carries the "CARD_<n>_DEV_<m>" selector consumed by
 +    // StreamPrimary::getCardAndDeviceId(). When it is lost the primary stream silently falls
-+    // back to the default card/device, which is a playback-only PCM, so every capture attempt
-+    // fails with -EINVAL.
++    // back to the default card/device, which on some platforms has no capture PCM at all, so
++    // capture fails to open.
 +    const bool addressSpecified = xDevicePort.hasAddress() && !xDevicePort.getAddress().empty();
 +    if (!addressSpecified && device.type.type == AudioDeviceType::IN_MICROPHONE &&
 +            device.type.connection.empty()) {

@@ -408,7 +408,7 @@ def apply_patch_file(tree: pathlib.Path, project: str, patch_name: str) -> str:
     """把 <repo>/patches/<patch_name> 用 git apply 打进 AOSP 树的 <project>（幂等）。
 
     ★ 为什么要有这个助手：本仓 `patches/` 里的 **AOSP 侧**补丁（0003 glslang、
-    0010 audio HAL、0019 v4l2_codec2）**一直没有任何消费者** —— 全靠人手动
+    0010 audio HAL、0019 v4l2_codec2；后来又有 0008 tinyalsa、0051 / 0052 audio HAL）**一直没有任何消费者** —— 全靠人手动
     `git apply`。而本仓已经为"没有消费者的配置一定会漂"付过三次账
     （M13 的 BOARD_KERNEL_CMDLINE、M17 的上游 Venus 补丁集、以及 2026-09-12
     抢救回来的那一整批 08-24 工作）。内核那边有 kernel-apply-patches.sh，
@@ -475,32 +475,47 @@ def main():
     if not (tree / "build/envsetup.sh").exists():
         print(f"✗ {tree} 看起来不是 Android 源码树"); sys.exit(1)
     print(f"树: {tree}")
-    print("  [1] SPOOF_SAFETYNET: " + patch_spoof_safetynet(tree))
-    print("  [2] hexagonfs CR 截断: " + patch_hexagonfs_cr(tree))
-    print("  [3] v4l2_codec2 输入分辨率: " + patch_v4l2_input_size(tree))
-    print("  [4] GApps 冲突: " + patch_gapps_conflicts(tree))
-    print("  [5] v4l2_codec2 初始输出队列: " + patch_v4l2_initial_output(tree))
-    print("  [6] 关闭桌面窗口模式: " + patch_disable_desktop_mode(tree))
-    print("  [7] v4l2_codec2 设备扫描范围: " + patch_v4l2_device_scan_range(tree))
-    print("  [8] v4l2_codec2 HEVC CSD 合并: " + apply_patch_file(
+    failed = []
+
+    def step(label: str, result: str) -> None:
+        print(label + result)
+        # 以 ✗ 或 ⚠️ 开头的结果都是"没做成"：补丁打不上 / 应用失败 / 仓库里缺补丁文件，以及直接改文本的那几条
+        # 找不到锚点（上游改了写法）。都不能悄悄过去 —— 2026-09-28 PR #10 审查：以后 repo sync 让 [13]/[14] 打不上时，
+        # 空录音 / 整块静音会悄悄回来；[2] 失效就是传感器全没，[3][5][7] 失效就是硬解悄悄回落软解。
+        # 原先这里只打印、退出码照样是 0；现在与 kernel-apply-patches.sh 的"有失败就 exit 1"一致。
+        # "跳过（找不到 …）"不算失败：那是树里没有这个项目或文件（例如不装 GApps 时的 [4]），照常打印
+        if result.startswith(("✗", "⚠️")):
+            failed.append(label.strip())
+    step("  [1] SPOOF_SAFETYNET: ", patch_spoof_safetynet(tree))
+    step("  [2] hexagonfs CR 截断: ", patch_hexagonfs_cr(tree))
+    step("  [3] v4l2_codec2 输入分辨率: ", patch_v4l2_input_size(tree))
+    step("  [4] GApps 冲突: ", patch_gapps_conflicts(tree))
+    step("  [5] v4l2_codec2 初始输出队列: ", patch_v4l2_initial_output(tree))
+    step("  [6] 关闭桌面窗口模式: ", patch_disable_desktop_mode(tree))
+    step("  [7] v4l2_codec2 设备扫描范围: ", patch_v4l2_device_scan_range(tree))
+    step("  [8] v4l2_codec2 HEVC CSD 合并: ", apply_patch_file(
         tree, "external/v4l2_codec2",
         "0019-v4l2-codec2-merge-hevc-csd-into-first-frame.patch"))
-    print("  [9] glslang host 端 glslangValidator: " + apply_patch_file(
+    step("  [9] glslang host 端 glslangValidator: ", apply_patch_file(
         tree, "external/deqp-deps/glslang",
         "0003-aosp-glslang-add-host-glslangValidator-binary.patch"))
-    print(" [10] tinyalsa sw_params 取自 refined hw_params: " + apply_patch_file(
+    step(" [10] tinyalsa sw_params 取自 refined hw_params: ", apply_patch_file(
         tree, "external/tinyalsa_new",
         "0008-tinyalsa-derive-sw-params-from-refined-hw-params.patch"))
-    print(" [11] 关掉 connected-displays flag: " + patch_connected_displays_flag(tree))
-    print(" [12] audio AIDL primary 接受外部设备连接: " + apply_patch_file(
+    step(" [11] 关掉 connected-displays flag: ", patch_connected_displays_flag(tree))
+    step(" [12] audio AIDL primary 接受外部设备连接: ", apply_patch_file(
         tree, "hardware/interfaces",
         "0010-audio-aidl-primary-accept-external-device-connect.patch"))
-    print(" [13] audio AIDL HAL 尊重策略给出的麦克风 address: " + apply_patch_file(
+    step(" [13] audio AIDL HAL 尊重策略给出的麦克风 address: ", apply_patch_file(
         tree, "hardware/interfaces",
         "0051-audio-aidl-honour-explicit-mic-address.patch"))
-    print(" [14] audio AIDL HAL MonoPipe 容量翻倍（消除周期性插静音）: " + apply_patch_file(
+    step(" [14] audio AIDL HAL 采集方向 MonoPipe 容量翻倍（消除周期性插静音）: ", apply_patch_file(
         tree, "hardware/interfaces",
         "0052-audio-aidl-monopipe-capacity.patch"))
+    if failed:
+        print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

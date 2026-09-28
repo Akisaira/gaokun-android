@@ -45,7 +45,10 @@
              （而音乐播放器走普通 AudioTrack 路径、4096 帧 / 85 ms 缓冲，一直正常）。
              HAL 侧优先级不是原因：writer/out_0 都是 nice=-19，且有 CAP_SYS_NICE。
              不声明 MMAP 后 AAudio 会回落到普通共享路径：延迟变高，但不会断。
-             ⚠️ 输入侧 mmap_no_irq_in 故意保留（游戏不录音，无证据说明它有问题）。 -->
+             ★ 输入侧 mmap_no_irq_in 也已删除（2026-09-28，PR #10 审查）：原先说"故意保留、无证据说明它有问题"，
+             但 HAL 对 MMAP 输入一律建 StreamInMmapStub（ModulePrimary.cpp:107-110，注释写着
+             "no support for MMAP audio I/O on CVD"），根本不打开 ALSA —— 走 AAudio 低延迟独占输入的
+             App 录不到真麦克风。删掉后 AAudio 回落到普通共享路径（docs/stage4-findings.md #127）。 -->
         <!-- ★★★ 输入剖面【只声明 48000】（2026-09-27）。这是修复，不是砍功能。
              本机全部 PCM 都定频 48 kHz（tinypcminfo d0/d1 输出、d2/d3 采集一律
              Rate: min=48000Hz max=48000Hz），没有任何硬件重采样。而 HAL 把上层给的
@@ -62,21 +65,25 @@
              再把 48000 重采样回 App 要的 44100。16000/8000 同理。
              所以上层仍可请求任意低采样率，只是物理层统一在 48 kHz 上工作。
 
-             ⚠️ 策略文件必须和 HAL 一起改，不能只改 HAL：AudioPolicyManager::
-             getInputForDevice() 有硬校验 —— profileSamplingRate != lConfig.sample_rate
-             就整条拒绝。
+             ⚠️ 采样率这一项只靠本文件就够（HAL 的 patches/0051 修的是"打开哪个 PCM"，
+             是另一个根因）。这里列的值会被 HAL 原样交给 ALSA（alsa/Utils.cpp:349），开不了
+             要到开始录音（StreamAlsa::start()）才失败 —— 那时策略早已放行，结果是悄悄录出空文件；
+             而 getInputForDevice() 在 open 之后的比对又不允许 HAL 自己换成别的配置 ——
+             所以只能在本文件里只列硬件真能开的值（维护者 2026-09-28 按源码核对后改写）。
 
              ⚠️ 输出剖面【刻意不动】：AudioOut_D / AudioOut_1D 实测都已经是 48000 Hz，
              播放路径没坏，别改。 -->
+        <!-- ★ 声道同理【只声明 STEREO】（维护者 2026-09-28，从代码推断、未上机实测）：
+             两个采集 PCM 都是 channels min=2 max=2（docs/stage4-findings.md #40，
+             tinycap -c 1 实测 cannot set hw params），而 HAL 把声道数也原样交给 ALSA
+             （alsa/Utils.cpp:339）。列着 MONO 时单声道请求是精确匹配、原样下发，
+             推断同样会被 hw_params 拒掉；只列 STEREO 时策略（getInputProfile →
+             checkCompatibleChannelMask，录音 mixPort 走近似匹配，score 1000）把 MONO
+             配到 STEREO，由 AudioFlinger 下混。 -->
         <mixPort name="primary input" role="sink">
             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
                      samplingRates="48000"
-                     channelMasks="AUDIO_CHANNEL_IN_MONO AUDIO_CHANNEL_IN_STEREO"/>
-        </mixPort>
-        <mixPort name="mmap_no_irq_in" role="sink" flags="AUDIO_INPUT_FLAG_MMAP_NOIRQ">
-            <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
-                             samplingRates="48000"
-                             channelMasks="AUDIO_CHANNEL_IN_MONO AUDIO_CHANNEL_IN_STEREO"/>
+                     channelMasks="AUDIO_CHANNEL_IN_STEREO"/>
         </mixPort>
         <mixPort name="telephony_tx" role="source">
             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
@@ -139,8 +146,8 @@
              hw:0,0 正是 RX_CODEC_DMA_RX_0（MultiMedia1）耳机后端；
              扬声器在另一个后端（WSA / MultiMedia2 / hw:0,1），两者不争用，
              切换发生在 PCM 层面。
-             ⚠️ 耳机麦要的是 hw:0,2，回落成 (0,0) 会失败 —— 那一条靠
-             patches/0010 给 HAL 加的"按设备类型回落"表解决。
+             ⚠️ 耳机麦要的是 hw:0,2，回落成 (0,0) 会失败 —— "按设备类型回落"【还没做】
+             （patches/0010 只让 primary 模块接受外部设备连接，没有这张表；见下面耳机麦那段）。
 
              Profile 显式写出而不留空：Speaker 留空能行是因为它开机就 attached，
              可插拔设备留空会走"连接时问 HAL"那条没验证过的路。
@@ -184,8 +191,6 @@
         <route type="mix" sink="Wired Headset"
                sources="primary output,compressed_offload"/>
         <route type="mix" sink="primary input"
-               sources="Built-In Mic"/>
-        <route type="mix" sink="mmap_no_irq_in"
                sources="Built-In Mic"/>
 
         <route type="mix" sink="telephony_rx"
