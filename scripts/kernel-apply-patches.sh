@@ -176,6 +176,9 @@ KPATCHES=(
     # 0065：【本地】解码中 CAPTURE streamoff 除分辨率切换外一律发 HFI_FLUSH_ALL（与 venus 同）。上游发的
     #    HFI_FLUSH_OUTPUT 让华为固件卡死（k5 A/B：8/11 vs 0/15），之后断电永远跳过、硬解全挂到重启（#128 §9）。
     0065-media-iris-flush-all-on-capture-streamoff-except-drc.patch
+    # 0066：【本地】gen1 解码器的 seek 三选一（0644 qcom_iris.seek_mode，默认 0 = 上游）。上游 seek 是同一会话
+    #    STOP 后重新 START，华为固件断言（video_decoder_utils.c:3056，#128 §12）。⬜ A/B 定了之后再改默认值。
+    0066-media-iris-gen1-decoder-seek-mode-switch.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，

@@ -10414,3 +10414,17 @@ SFR：`Err_Fatal - video_decoder_utils.c:3056:2c594`；调试队列：`WaitForHW
 另：iris 在这条重启路径上从不发 RELEASE_BUFFERS（venus 收尾时发 3 次），是另一个可能的触发点 —— 未分离。
 ⬜ 修法二选一（或做成开关一次开机 A/B）：① gen1 解码器的 seek 学 venus：OUTPUT streamoff 在 INPUT_STREAMING 且会话已启动时发 FLUSH 而不 STOP、保留 LOAD_RESOURCES，
 重新 streamon 时跳过属性 / 内部缓冲 / START；② 保留 STOP 路径，但 STOP 后先 RELEASE_BUFFERS 释放内部缓冲再重配。
+
+### 13. iris-k9：0066 的 seek_mode A/B —— 学 venus（1）能 seek；跨分辨率变化的 seek 还不行（2026-09-28）
+k9 = 全配方（含 0066，默认 seek_mode=0）+ 0064，`2489c3b9…`，本机 `out/iris-k9/`（`seek-ab.sh`、`k9-ab.txt`、`host-kmsg.txt`）。一次开机，顺序 1 → 2 → 0：
+| seek_mode | seek AVC / HEVC / VP9（4 次 seek + 跳到片尾播到 EOS） | 分辨率变化 + seek（drc-avc seek:3:30） | 中途 stop / drain / HEVC 分辨率变化 drain |
+|---|---|---|---|
+| **1 学 venus** | **3 / 3 PASS**（stop 10–21 ms） | ✗ 第一次 seek 后 29 帧，片尾 0 帧、无 EOS，**无 SYS_ERROR** | 3 / 3 PASS |
+| 2 先释放旧的输入内部缓冲 | 0 / 3（seek 后 0 帧，无 SYS_ERROR） | ✗ | 3 / 3 PASS |
+| 0 上游 | SYS_ERROR（同 §12） | ✗ | 后面全坏（见下） |
+
+* **venus 对照（#24）**：drc-avc seek:3:30 **3 / 3 PASS**、drc-vp9 seek:3:30 PASS ⇒ 跨分辨率的 seek 是 iris 模式 1 还没解决的真问题（自适应码流的播放器会碰到）。
+  k9 那次 hfi_trace 关着，看不出卡在哪一步 ⇒ ⬜ 下一次开机开 `hfi_trace=1 fw_debug=0x1c` 单跑这一项。
+* ⚠️ **SYS_ERROR 之后的自救不可靠**：模式 0 的 SYS_ERROR 之后，iris 重启固件时报 `invalid setting for uc_region` → `core init failed`
+  （0059 把这个错误如实报出来），之后每次 open 都一样，要重启（k8 那次 SYS_ERROR 后也打了这一行；k6 / k7 那几次却救回来了）⇒ 固件一旦崩，现在没有可靠的恢复手段。
+* 0066 默认仍是 0。定下来之后改成 1（先解决跨分辨率 seek），并把模式 2 删掉。
