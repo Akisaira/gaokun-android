@@ -28,13 +28,22 @@
 * 内核 = iris 候选 `56f9b66a`（全配方 0053–0057、0059–0061、0065–0067 + 0050，不带诊断）+ dtb `bad0cd6e`；候选内核上机验收过：
   解码 15/15、相机前后、host 角色 5 次待机 0 复位（#128 §16–§17）。ROM：`lunch lineage_gaokun3-bp4a-userdebug` + 一次 `m bacon superimage`
   （构建机 `~/iris-work/rom-build.sh`，tree-fixes 15 条含 0063），`release.sh --dry-run --no-build` 断言。
-* **装机验收清单**（装进 `_b`，`install-ota-local.sh --check` → `--go`，oneshot 启动）：
+* ✅/❌ **第一个候选版 `1790597477`（incremental `20260928121116`）的结果**（2026-09-28 21–22 点，装在 `_b`，ESP default 已切到 `_b`）：
+  1、2（解码 15/15、verify-hw-codec2 19/0）、3、4（A1–A5，#127 §7）、6、7、8、9 全过；**5 / B2 不过 ⇒ 这一版不发**（用户定：修好 Histen 再发）。
+  * 6：开机 8 分钟普查 `out/v070-accept/census/`，`audit_lost` 0，全程只有 5 条：HID 键盘 `country` ×3、`com.android.se` 数据目录（#126 §3 "上游缺口，不修"）、
+    `vendor_init` 写 `/proc/sys/kernel/printk`（`init.gaokun3.rc:5`，单条，⬜ 以后补）。第六轮查出的 20 余处一条都没再出现。
+  * 8：force-idle 后 `success` 涨到 2、不复位；插回 USB adb 回来。
+  * **B2（Histen）**：开关打开也没效果 —— effect HAL 在 vendor APEX 里，链接器命名空间不许从 `/vendor/lib64/soundfx` 加载，
+    重启 effect HAL 抓到原话 `dlopen failed … is not accessible for the namespace`（`out/v070-accept/b2-diag/`，effects/README §九）。
+    ⇒ **补丁 0068**（音频 APEX 的 `linker.config.pb` 加 `permittedPaths /vendor/${LIB}/soundfx`，tree-fixes 第 16 条），重编 ROM、全部重验。
+  * ESP 上的 `slot_iris/` 与 `gaokun3-iris-test.conf` 已删（空余 30 → 45 MB）；安装器预览包按这一版的 boot.img 造过一次（`out/release-installer/0.1.0-preview/`，未上传）⇒ ⬜ 重编的那一版验收过后**按新的 boot.img 重造**（它记着 boot.img 的 sha256 与 git 提交）。
+* **装机验收清单**（装进 `_b`，`install-ota-local.sh --check` → `--go`，oneshot 启动）。重编的那一版：全部重跑，5 换成 gaokun-android-90 给的 B2-0…B2-5（`out/v070-accept/b2-checklist.md`），外加 A1–A2、A4：
   1. ☐ 构建戳 = 这次的 `ro.build.date.utc`；`ro.build.characteristics=tablet`；`/proc/version` 是候选内核
   2. ☐ 硬解：`scripts/verify-hw-codec2.sh`（3 个解码组件、没有 VP8）+ `out/iris-rc/rc-accept.sh` 的 15 项（播完后 seek、seek、分辨率变化、stop、drain）
   3. ☐ 相机：`gaokun3-ncam-smoke` 后 / `front`
   4. ☐ 麦克风（会话 gaokun-android-90 的新预期）：`/data/local/tmp/micverify/gaokun3-mic-smoke -r 48000 -c 2 -t 5 -T` 开头静音 0 ms、
      交付延迟 D ≈ 1 ms、时间戳误差 E ≈ 21 ms；logcat 有 DEBUG "first capture block ready …ms after start"（≈142–147 ms）、没有 "incomplete data received"
-  5. ☐ 扬声器增强：设置 › 声音里有开关、默认关；关着时音频正常（Histen 引擎关着也会被加载）
+  5. ☐ 扬声器增强：设置 › 声音里有开关、默认关；关着时音频正常；effect 真的注册上（B2-0：maps 里有 `libgaokunhisteneffect.so`、没有 `not accessible for the namespace`）
   6. ☐ SELinux 第六轮：开机 ≥8 分钟后 denial 普查（`scripts/selinux/`，#126 的清单）—— 仍 permissive，看有没有新的大面积 denial / 重标签副作用
   7. ☐ NTP：`settings delete global ntp_server`（开发机手动设过）后时间能对上
   8. ☐ **真实待机**（要用户拔线）：临时 `setprop persist.vendor.gaokun3.allow_suspend 1` → 拔 USB → 息屏等它睡 → 电源键唤醒 →
