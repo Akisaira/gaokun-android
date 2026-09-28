@@ -12,18 +12,20 @@
  *   又读不了 system_prop（它是 core_property_type，sepolicy/hal_audio_default.te
  *   里记着 2026-09-26 的编译失败）。两头都堵死，只有 init 两边都能碰。
  *
- * 写法照抄 KeyboardSettingsActivity（同一套 layout / 平台 preference）。
+ * 写法照抄 KeyboardSettingsActivity（同一套 SettingsLib 页面与开关）。
  */
 package com.huawei.gaokun3.parts;
 
-import android.app.Activity;
 import android.os.Bundle;
 import android.os.SystemProperties;
-import android.preference.Preference;
-import android.preference.PreferenceFragment;
-import android.preference.SwitchPreference;
 
-public class SpeakerFxSettingsActivity extends Activity {
+import androidx.preference.Preference;
+import androidx.preference.SwitchPreferenceCompat;
+
+import com.android.settingslib.collapsingtoolbar.CollapsingToolbarBaseActivity;
+import com.android.settingslib.widget.SettingsBasePreferenceFragment;
+
+public class SpeakerFxSettingsActivity extends CollapsingToolbarBaseActivity {
 
     /** effect 读的总开关。只有 "1" 算开；没设过 = 关。 */
     private static final String PROP = "persist.sys.gaokun3.histen";
@@ -31,25 +33,24 @@ public class SpeakerFxSettingsActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // 必须用带 fitsSystemWindows 的 layout，理由见 settings_activity.xml。
-        setContentView(R.layout.settings_activity);
+        // 内容放进 CollapsingToolbarBaseActivity 的 content_frame（edge-to-edge 由它处理）。
         if (savedInstanceState == null) {
-            getFragmentManager().beginTransaction()
-                    .replace(R.id.container, new SpeakerFxFragment())
+            getSupportFragmentManager().beginTransaction()
+                    .replace(com.android.settingslib.collapsingtoolbar.R.id.content_frame,
+                            new SpeakerFxFragment())
                     .commit();
         }
     }
 
-    public static class SpeakerFxFragment extends PreferenceFragment
+    public static class SpeakerFxFragment extends SettingsBasePreferenceFragment
             implements Preference.OnPreferenceChangeListener {
 
-        private SwitchPreference mSwitch;
+        private SwitchPreferenceCompat mSwitch;
 
         @Override
-        public void onCreate(Bundle savedInstanceState) {
-            super.onCreate(savedInstanceState);
-            addPreferencesFromResource(R.xml.speaker_fx_prefs);
-            mSwitch = (SwitchPreference) findPreference("speaker_fx_enabled");
+        public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
+            setPreferencesFromResource(R.xml.speaker_fx_prefs, rootKey);
+            mSwitch = findPreference("speaker_fx_enabled");
             // 与 effect 的判据一致：只有 "1" 是开。试验功能永远默认关。
             mSwitch.setChecked("1".equals(SystemProperties.get(PROP, "0")));
             mSwitch.setOnPreferenceChangeListener(this);

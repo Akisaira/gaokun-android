@@ -9,6 +9,9 @@
     （实测这个 ROM 里根本没装 org.lineageos.lineageparts）。
     好处是每次跟 ROM 升级不会冲突，全部代码留在设备树里。
 
+  ★ 主题用 SettingsLib 的 Theme.SubSettingsBase：Activity 继承 CollapsingToolbarBaseActivity，
+    它在 onCreate 里再换成 Theme_SubSettingsBase_Expressive（与系统设置的子页一样，见 Android.bp）。
+
   ⚠️ sharedUserId=android.uid.system 是必需的：要写 persist.sys.* 属性
      （上下文 system_prop），只有 system uid 的应用有这个权限。
 -->
@@ -20,7 +23,7 @@
         android:label="@string/app_name"
         android:icon="@drawable/ic_keyboard"
         android:allowBackup="false"
-        android:theme="@android:style/Theme.DeviceDefault.Settings">
+        android:theme="@style/Theme.SubSettingsBase">
 
         <!-- ⚠️ 写【全限定类名】而不是 ".KeyboardSettingsActivity"：
              2026-08-22 实测 `am start -n .../.KeyboardSettingsActivity` 报

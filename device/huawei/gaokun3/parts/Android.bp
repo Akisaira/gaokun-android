@@ -1,5 +1,6 @@
 //
 // gaokun3 设备设置：磁吸键盘开关 + 扬声器增强（试验功能）开关。
+// 2026-09-28 用户要求：开关换成系统设置同款的 Material 3 Expressive 样式 ⇒ 改用 androidx.preference + SettingsLib。
 //
 // ★ platform_apis + certificate: "platform" 两个都必需：
 //   前者才能用 android.os.SystemProperties（@hide），
@@ -24,6 +25,18 @@ android_app {
 
     platform_apis: true,
     certificate: "platform",
+
+    // 界面用 SettingsLib 那一套（与系统设置同一个观感，Material 3 Expressive）：
+    // CollapsingToolbarBaseActivity 自己套 Theme_SubSettingsBase_Expressive、处理 edge-to-edge；
+    // SettingsBasePreferenceFragment 给出圆角分组卡片；SwitchPreferenceCompat 在这个主题下是
+    // MaterialSwitch（SettingsTheme/res/values-v36/styles_preference_expressive.xml）。
+    // crDroid 16 的 SettingsThemeHelper.isExpressiveTheme() 恒为 true（2026-09-28 读源码）。
+    static_libs: [
+        "SettingsLibCollapsingToolbarBaseActivity",
+        "SettingsLibFooterPreference",
+        "SettingsLibSettingsTheme",
+        "androidx.preference_preference",
+    ],
     // ⚠️ 不设 privileged：我们没申请任何特权权限，
     //    放 priv-app 只会多一层 privapp 白名单约束。
 

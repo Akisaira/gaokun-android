@@ -9,20 +9,22 @@
  *   /sys/class/input 的权限，而 init 触发器是 Android 里做这件事的标准通路，
  *   将来转 SELinux enforcing 也不用为这个 app 开特权。
  *
- * ★ 用【平台自带】的 android.preference 而不是 androidx：这个应用在设备树里编，
- *   少一个静态库依赖就少一处构建失败的可能。它确实已废弃，但功能完整，
- *   而且这个界面只有一个开关。
+ * ★ 界面用 androidx.preference + SettingsLib（2026-09-28 用户要求换成系统设置同款的
+ *   Material 3 Expressive 开关）。此前用的是平台自带、已废弃的 android.preference ——
+ *   少一个静态库依赖，但开关是旧样式，页面也和系统设置对不上。依赖见 Android.bp。
  */
 package com.huawei.gaokun3.parts;
 
-import android.app.Activity;
 import android.os.Bundle;
 import android.os.SystemProperties;
-import android.preference.Preference;
-import android.preference.PreferenceFragment;
-import android.preference.SwitchPreference;
 
-public class KeyboardSettingsActivity extends Activity {
+import androidx.preference.Preference;
+import androidx.preference.SwitchPreferenceCompat;
+
+import com.android.settingslib.collapsingtoolbar.CollapsingToolbarBaseActivity;
+import com.android.settingslib.widget.SettingsBasePreferenceFragment;
+
+public class KeyboardSettingsActivity extends CollapsingToolbarBaseActivity {
 
     /** init 触发器监听的属性。persist.sys.* 的上下文是 system_prop，系统应用可写。 */
     private static final String PROP = "persist.sys.gaokun3.keyboard";
@@ -30,27 +32,25 @@ public class KeyboardSettingsActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // ⚠️ 必须用自己的 layout（带 fitsSystemWindows），不能直接塞
-        //    android.R.id.content：targetSdk 35+ 强制 edge-to-edge，
-        //    那样开关会被画到标题栏底下，界面看起来"没有开关"。
-        setContentView(R.layout.settings_activity);
+        // 不再需要自己带 fitsSystemWindows 的 layout：CollapsingToolbarBaseActivity 自己处理 edge-to-edge，
+        // 内容放进它的 content_frame。
         if (savedInstanceState == null) {
-            getFragmentManager().beginTransaction()
-                    .replace(R.id.container, new KeyboardFragment())
+            getSupportFragmentManager().beginTransaction()
+                    .replace(com.android.settingslib.collapsingtoolbar.R.id.content_frame,
+                            new KeyboardFragment())
                     .commit();
         }
     }
 
-    public static class KeyboardFragment extends PreferenceFragment
+    public static class KeyboardFragment extends SettingsBasePreferenceFragment
             implements Preference.OnPreferenceChangeListener {
 
-        private SwitchPreference mSwitch;
+        private SwitchPreferenceCompat mSwitch;
 
         @Override
-        public void onCreate(Bundle savedInstanceState) {
-            super.onCreate(savedInstanceState);
-            addPreferencesFromResource(R.xml.keyboard_prefs);
-            mSwitch = (SwitchPreference) findPreference("keyboard_enabled");
+        public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
+            setPreferencesFromResource(R.xml.keyboard_prefs, rootKey);
+            mSwitch = findPreference("keyboard_enabled");
             // 属性没设过 = 键盘开着。默认永远偏向"能用"——写坏了也不至于把
             // 用户唯一的输入设备锁死。
             mSwitch.setChecked(!"0".equals(SystemProperties.get(PROP, "1")));
