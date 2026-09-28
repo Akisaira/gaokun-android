@@ -24,6 +24,24 @@
 等用户点头的对外动作 **5** 条 · 明确搁置 **4** 条。下面按"下一步是什么"分组，
 详情见各自的条目。
 
+### ▶ v0.7.0-alpha（用户 2026-09-28 定：名字 v0.7.0-alpha、带 SELinux 第六轮、验收全过就推仓库 + 发版 + 发安装器预览）
+* 内核 = iris 候选 `56f9b66a`（全配方 0053–0057、0059–0061、0065–0067 + 0050，不带诊断）+ dtb `bad0cd6e`；候选内核上机验收过：
+  解码 15/15、相机前后、host 角色 5 次待机 0 复位（#128 §16–§17）。ROM：`lunch lineage_gaokun3-bp4a-userdebug` + 一次 `m bacon superimage`
+  （构建机 `~/iris-work/rom-build.sh`，tree-fixes 15 条含 0063），`release.sh --dry-run --no-build` 断言。
+* **装机验收清单**（装进 `_b`，`install-ota-local.sh --check` → `--go`，oneshot 启动）：
+  1. ☐ 构建戳 = 这次的 `ro.build.date.utc`；`ro.build.characteristics=tablet`；`/proc/version` 是候选内核
+  2. ☐ 硬解：`scripts/verify-hw-codec2.sh`（3 个解码组件、没有 VP8）+ `out/iris-rc/rc-accept.sh` 的 15 项（播完后 seek、seek、分辨率变化、stop、drain）
+  3. ☐ 相机：`gaokun3-ncam-smoke` 后 / `front`
+  4. ☐ 麦克风（会话 gaokun-android-90 的新预期）：`/data/local/tmp/micverify/gaokun3-mic-smoke -r 48000 -c 2 -t 5 -T` 开头静音 0 ms、
+     交付延迟 D ≈ 1 ms、时间戳误差 E ≈ 21 ms；logcat 有 DEBUG "first capture block ready …ms after start"（≈142–147 ms）、没有 "incomplete data received"
+  5. ☐ 扬声器增强：设置 › 声音里有开关、默认关；关着时音频正常（Histen 引擎关着也会被加载）
+  6. ☐ SELinux 第六轮：开机 ≥8 分钟后 denial 普查（`scripts/selinux/`，#126 的清单）—— 仍 permissive，看有没有新的大面积 denial / 重标签副作用
+  7. ☐ NTP：`settings delete global ntp_server`（开发机手动设过）后时间能对上
+  8. ☐ **真实待机**（要用户拔线）：临时 `setprop persist.vendor.gaokun3.allow_suspend 1` → 拔 USB → 息屏等它睡 → 电源键唤醒 →
+     `suspend_stats/success` 涨了、TCP adb 回来 → 插回 USB、adb 回来（顺带验 USB 插拔）→ 改回 0
+  9. ☐ `dumpsys connectivity | grep TcpBufferSizes` 含 `8388608`
+* 全过 ⇒ 推仓库 → `release.sh --no-build`（R2 + 清单）→ GitHub release v0.7.0-alpha（说明 `docs/relnotes/v0.7.0-alpha.md`）→ 安装器 `release-installer.sh`。
+
 ### ⏸ 发版暂停（用户 2026-09-28）："暂时先不发，待会会有 iris 修复，可能直接 0.7.0"
 * **候选版 `1790206017` 不发。** 它编于 PR #10（内置麦克风，B24）合并之前，不含那项修复；下一版要从 main 重新构建。
 * 下一版（可能直接 **v0.7.0**）要带：B24 麦克风修复、用户说的 iris 修复；图形安装器预览（`0.1.0-preview`，stage7 §5.11）跟着它发。
