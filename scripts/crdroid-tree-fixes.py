@@ -516,6 +516,10 @@ def main():
     step(" [15] audio AIDL HAL 采集改成数据驱动交付（去掉开头静音与常驻延迟）: ", apply_patch_file(
         tree, "hardware/interfaces",
         "0063-audio-aidl-primary-capture-data-driven.patch"))
+    # 不依赖前面几条（只动 audio/aidl/default/apex/）。v0.7.0 验收 B2：effect HAL 在 vendor APEX 里，加载不了 /vendor/lib64/soundfx 的 Histen
+    step(" [16] audio APEX 链接器命名空间放行 /vendor/${LIB}/soundfx（Histen 效果库）: ", apply_patch_file(
+        tree, "hardware/interfaces",
+        "0068-audio-aidl-apex-permit-vendor-soundfx.patch"))
     if failed:
         print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))
         sys.exit(1)
