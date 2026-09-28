@@ -256,6 +256,24 @@ adb shell su -c 'logcat -d -s gaokun_effect' | tail -40
 4. 进 Histen 之前信号被量化到 16 位（高半字）并硬限在 ±1.0，出来再丢掉低 16 位 —— 外放听不出来，但不是无损的。
 5. 在**本机扬声器（WSA 双单元）**上调的参数，不具备跨机型通用性。
 6. ✅ **2026-09-26 编译验证通过**（构建机独立 `OUT_DIR=out-pr7`，不碰 `out/`）：effect 在 `-Werror -Wthread-safety -Wextra` 下编过、导出 `createEffect / queryEffect / destroyEffect`、字符串里只有新属性名；Parts 的 APK 带 `SpeakerFxSettingsActivity`（注入 `ia.sound`）；`selinux_policy`（含 neverallow）与 `vendor_property_contexts`（前缀检查）通过；引擎 / 配置 / `histen.rc` 三份拷贝与源文件一致。★ 第一轮编译抓到一处我自己的错：`get_prop(hal_audio_default, system_prop)` 撞 neverallow（`system_prop` 是 `core_property_type`），于是改成 init 镜像（`etc/histen.rc`）。
-   ⬜ **还没上机**。要看的：开关关时只有一行 `bypass`；打开后 `getprop vendor.gaokun3.histen.on` = 1、外放有 `meter:`；插耳机立刻 `bypass: output is not the built-in speaker`；「设置 → 声音」里有这一项；enforcing 下没有 `hal_audio_default` / `vendor_init` 的 avc。
+   ❌ **2026-09-28 第一次上机（v0.7.0 候选版 `1790597477`）：效果根本没挂上播放链。**
+   * 开关本身是通的：「设置 → 声音」里有这一项，打开后 `persist.sys.gaokun3.histen=1`、`vendor.gaokun3.histen.on=1`。
+   * 但开、关两种状态下放音乐都既没有 `bypass` 也没有 `meter:`；effect factory 只创建过 AudioFX 的三个效果，从没创建 `gaokun_histen`（b7e4c9a2-…）。
+   * effect HAL 进程的 maps 里没有这两个库；它加载的 soundfx 库全在 `/apex/com.android.hardware.audio/lib64/soundfx/` 下。
+   * 放音一直正常，没有崩溃。
+   **根因（基本坐实，间接证据；dlopen 的报错本身因为 logcat 回卷没看到）**：effect HAL 跑在 vendor APEX `com.android.hardware.audio` 里。
+   * 它的链接器命名空间是隔离的：`/linkerconfig/com.android.hardware.audio/ld.config.txt` 里 `namespace.default.isolated = true`，
+     permitted.paths 只有 APEX 自己的 `${LIB}`、`/system/${LIB}`、`/system_ext/${LIB}`。
+   * effect 服务和 libeffectconfig 都用普通 dlopen，所以 `/vendor/lib64/soundfx/` 下的库能被 access() 看到，却会被命名空间拒掉。
+   * 引擎走的 `histen_chain` 路径同理。
+   * 原作者是用 KSU 装在 `/system/lib64/soundfx/` 的，正好在 permitted 里，所以他那边能跑。
+   （iris 会话代查，原始输出在本机 `out/v070-accept/b2-diag/`。）
+   ⬜ 修法（都要重编 vendor / APEX）：
+   * ① 把 effect 库和引擎一起打进 APEX 的 soundfx，最正；
+   * ② 改用 vendor 侧的加载接口（例如 `AApexSupport_loadLibrary` 一类，⬜ 接口名要对照源码核实）；
+   * ③ 改 linkerconfig，不推荐；
+   * 放 `/system` 能跑，但分区归属不对。
+   下次开机前先 `logcat -G 16M`，把 dlopen 的报错直接抓下来坐实。
+   原来的上机检查项在修好之后照旧要做：开关关时只有一行 `bypass`；打开后外放有 `meter:`；插耳机立刻 `bypass: output is not the built-in speaker`；enforcing 下没有 `hal_audio_default` / `vendor_init` 的 avc。
    开关开 + 外放有 `meter:`；插耳机立刻 `bypass: output is not the built-in speaker`；
    enforcing 下没有 `hal_audio_default` 读属性的 avc。
