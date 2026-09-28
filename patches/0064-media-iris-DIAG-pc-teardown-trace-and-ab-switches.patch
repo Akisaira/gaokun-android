@@ -19,6 +19,8 @@ A/B 开关（/sys/module/qcom_iris/parameters/，0644，默认值 = 打了 0065 
   fw_debug         SYS_DEBUG_CONFIG 掩码（venus 发 0x18；k5 上 0x18 什么也没吐）
   pc_mode          1 = 先按 venus 顺序关 MVS0 再 PC_PREP，2 = 拒绝断电
   preset_mask / no_arg3 / bus_reset_only / ahb_reset(9dc5f705) / db_rx_req / read_core_pwr
+  poll_on_timeout  Y = 等会话回复超时时先读空一次消息队列再判失败（#128 §14：k9 上回复躺在队列里、中断没来）
+  （超时时的转储还会打印中断描述符 depth / disabled / masked / inprogress / threads_active 与中断线程的栈）
   recover_skips=N  没有实例时连续 N 次跳过断电 ⇒ 关固件（PAS shutdown）并断电，下次 open 冷启动。
                    ⚠️ k5 实测：同一次开机里救回 7 次，第 8 次冷启动失败（CTRL_STATUS 一直是 0，
                    "error booting up iris firmware"），之后每次 open 都一样 ⇒ 只能当临时止血，不是修复。
@@ -297,15 +299,19 @@ index bfd7495..ed5f1ff 100644
  	}
  }
 diff --git a/drivers/media/platform/qcom/iris/iris_hfi_queue.c b/drivers/media/platform/qcom/iris/iris_hfi_queue.c
-index bf6db23..dc92b67 100644
+index bf6db23..ff8c95f 100644
 --- a/drivers/media/platform/qcom/iris/iris_hfi_queue.c
 +++ b/drivers/media/platform/qcom/iris/iris_hfi_queue.c
-@@ -3,11 +3,143 @@
+@@ -3,11 +3,166 @@
   * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
   */
  
++#include <linux/interrupt.h>
++#include <linux/irq.h>
++#include <linux/irqdesc.h>
 +#include <linux/moduleparam.h>
  #include <linux/pm_runtime.h>
++#include <linux/sched/debug.h>
 +#include <linux/slab.h>
  
  #include "iris_core.h"
@@ -351,6 +357,10 @@ index bf6db23..dc92b67 100644
 +module_param_named(read_core_pwr, iris_read_core_pwr, bool, 0644);
 +MODULE_PARM_DESC(read_core_pwr, "gaokun3 diag: include WRAPPER_CORE_POWER_STATUS (0xb0080, wrapper block) in state dumps");
 +
++bool iris_poll_on_timeout;
++module_param_named(poll_on_timeout, iris_poll_on_timeout, bool, 0644);
++MODULE_PARM_DESC(poll_on_timeout, "gaokun3 A/B: when a session reply times out, drain the message queue once and re-check before failing (#128 §14: the reply was sitting in the queue with no interrupt)");
++
 +static void iris_dbg_qhdr(struct iris_core *core, const char *name,
 +			  struct iris_iface_q_info *q)
 +{
@@ -392,6 +402,21 @@ index bf6db23..dc92b67 100644
 +	/* SFR: u32 buffer size, then text written by the firmware on a fatal error */
 +	if (sfr && sfr[1])
 +		dev_info(core->dev, "pcdbg:   sfr: %.200s\n", (char *)&sfr[1]);
++
++	/* #128 §14: is the line off, or is the IRQ thread stuck somewhere? (unlocked peek, diag only) */
++	if (core->irq > 0) {
++		struct irq_desc *desc = irq_to_desc(core->irq);
++
++		if (desc) {
++			dev_info(core->dev,
++				 "pcdbg:   irq %d: depth=%u disabled=%d masked=%d inprogress=%d threads_active=%d\n",
++				 core->irq, desc->depth, irqd_irq_disabled(&desc->irq_data),
++				 irqd_irq_masked(&desc->irq_data), irqd_irq_inprogress(&desc->irq_data),
++				 atomic_read(&desc->threads_active));
++			if (desc->action && desc->action->thread)
++				sched_show_task(desc->action->thread);
++		}
++	}
 +
 +	if (!core->hw_powered)
 +		return;
@@ -444,7 +469,7 @@ index bf6db23..dc92b67 100644
  
  static int iris_hfi_queue_write(struct iris_iface_q_info *qinfo, void *packet, u32 packet_size)
  {
-@@ -112,12 +244,23 @@ static int iris_hfi_queue_read(struct iris_iface_q_info *qinfo, void *packet)
+@@ -112,12 +267,23 @@ static int iris_hfi_queue_read(struct iris_iface_q_info *qinfo, void *packet)
  int iris_hfi_queue_cmd_write_locked(struct iris_core *core, void *pkt, u32 pkt_size)
  {
  	struct iris_iface_q_info *q_info = &core->command_queue;
@@ -469,7 +494,7 @@ index bf6db23..dc92b67 100644
  	} else {
  		dev_err(core->dev, "queue full\n");
  		return -ENODATA;
-@@ -168,6 +311,15 @@ int iris_hfi_queue_msg_read(struct iris_core *core, void *pkt)
+@@ -168,6 +334,15 @@ int iris_hfi_queue_msg_read(struct iris_core *core, void *pkt)
  		goto unlock;
  	}
  
@@ -486,10 +511,10 @@ index bf6db23..dc92b67 100644
  	mutex_unlock(&core->lock);
  
 diff --git a/drivers/media/platform/qcom/iris/iris_hfi_queue.h b/drivers/media/platform/qcom/iris/iris_hfi_queue.h
-index 2174fc5..c791583 100644
+index 2174fc5..500c99d 100644
 --- a/drivers/media/platform/qcom/iris/iris_hfi_queue.h
 +++ b/drivers/media/platform/qcom/iris/iris_hfi_queue.h
-@@ -179,4 +179,26 @@ int iris_hfi_queue_cmd_write(struct iris_core *core, void *pkt, u32 pkt_size);
+@@ -179,4 +179,27 @@ int iris_hfi_queue_cmd_write(struct iris_core *core, void *pkt, u32 pkt_size);
  int iris_hfi_queue_msg_read(struct iris_core *core, void *pkt);
  int iris_hfi_queue_dbg_read(struct iris_core *core, void *pkt);
  
@@ -510,6 +535,7 @@ index 2174fc5..c791583 100644
 +extern unsigned int iris_pc_mode;
 +extern unsigned int iris_recover_skips;
 +extern bool iris_read_core_pwr;
++extern bool iris_poll_on_timeout;
 +
 +void iris_dbg_dump_locked(struct iris_core *core, const char *why);
 +void iris_dbg_dump(struct iris_core *core, const char *why);
@@ -517,10 +543,27 @@ index 2174fc5..c791583 100644
 +
  #endif
 diff --git a/drivers/media/platform/qcom/iris/iris_utils.c b/drivers/media/platform/qcom/iris/iris_utils.c
-index ba5c8dc..a661779 100644
+index ba5c8dc..33d96d4 100644
 --- a/drivers/media/platform/qcom/iris/iris_utils.c
 +++ b/drivers/media/platform/qcom/iris/iris_utils.c
-@@ -79,6 +79,14 @@ int iris_wait_for_session_response(struct iris_inst *inst, bool is_flush)
+@@ -76,9 +76,29 @@ int iris_wait_for_session_response(struct iris_inst *inst, bool is_flush)
+ 
+ 	mutex_unlock(&inst->lock);
+ 	ret = wait_for_completion_timeout(done, msecs_to_jiffies(HW_RESPONSE_TIMEOUT_VALUE));
++	if (!ret && iris_pcdbg)
++		/* before anything else: the state of the line and of the IRQ thread right now */
++		iris_dbg_dump(inst->core, is_flush ? "flush timeout" : "command timeout");
++	if (!ret && READ_ONCE(iris_poll_on_timeout)) {
++		/* #128 §14: the reply may be in the message queue with no interrupt raised */
++		inst->core->hfi_sys_ops->sys_hfi_response_handler(inst->core);
++		if (try_wait_for_completion(done)) {
++			dev_warn(inst->core->dev,
++				 "pcdbg: session %#x: %s reply found by polling after %d ms without an interrupt\n",
++				 inst->session_id, is_flush ? "flush" : "command",
++				 HW_RESPONSE_TIMEOUT_VALUE);
++			ret = 1;
++		}
++	}
  	mutex_lock(&inst->lock);
  	if (!ret) {
  		iris_inst_change_state(inst, IRIS_INST_ERROR);
@@ -528,8 +571,6 @@ index ba5c8dc..a661779 100644
 +			dev_err(inst->core->dev, "pcdbg: session %#x: no %s response in %d ms\n",
 +				inst->session_id, is_flush ? "flush" : "command",
 +				HW_RESPONSE_TIMEOUT_VALUE);
-+			/* lock order inst->lock -> core->lock, as on every command write */
-+			iris_dbg_dump(inst->core, is_flush ? "flush timeout" : "command timeout");
 +			iris_dbg_drain_dbgq(inst->core, "timeout");
 +		}
  		return -ETIMEDOUT;
