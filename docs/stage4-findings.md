@@ -10478,3 +10478,13 @@ k12 = 全配方（0065 + 0066 + 0067 + 0050）+ 0064，`e701d903…`，本机 `o
 之后收尾（不再上机）：0066 默认改成 1、删掉 A/B 里证明无效的模式 2（草稿树上 0065 → 0066 → 0067 → 0064 逐个干净打上、与 k12 的源码只差这两处）。
 ⬜ 还没做：不带诊断的全配方编译（0066 改了默认值后要编一次确认）；`venus_compat_gfmt=N`（k6 上疑似整机复位，没复测）；
 HAL 的 POLLPRI 空转；SYS_ERROR 后固件重启的 `invalid uc_region`；换 prebuilt-boot、编 ROM；待机复位（发版阻断，与 iris 无关）。
+
+### 17. 更正：§11 的"候选版一待机就整机复位"是测试方法造成的误报（2026-09-28）
+§11 的三次待机都是插着 USB 线跑 adb（USB role = device）、直接 `echo mem > /sys/power/state`。直接写 state 不看用户态 wakelock
+（没写过 `/sys/power/wakeup_count` 时 `pm_wakeup_pending()` 不拦），于是绕过了 `gaokun3_usbrole` —— 而 **device 角色下挂起整板复位**
+正是 #52 / #54 / #56 的已知问题，`gaokun3-usbrole.sh` 的不变量就是"除非确认 role=host，否则一直持有 wakelock"。
+* 第一次改成手动切 host（`s2host.sh`）：第 1 次待机通过，第 2 次复位 —— 常驻的 `gaokun3_usbfollow`（follow 模式：host 下 ~6 s 没有下游设备、
+  对面是 PC ⇒ 切 device）在两次之间把角色切回了 device。开发机 `allow_suspend=0`，它不会让开。
+* 停掉 usbfollow（`setprop ctl.stop gaokun3_usbfollow`）、每次待机前确认 `role=host`：#24 上 **5 次真实待机（RTC +20 s）4 次 rc=0、1 次 1 s 返回的 -EBUSY
+  （s2idle README 的"计数陷阱"），0 次复位**，uptime 连续。
+⇒ 待机在正确的 USB 角色下是好的；TODO 顶部那条阻断撤掉。真实用户路径（allow_suspend=1、拔线、息屏自动睡、电源键唤醒）⬜ 发版前再验一次。

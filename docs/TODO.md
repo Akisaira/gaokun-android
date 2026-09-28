@@ -36,11 +36,13 @@
     ✅ 0066 默认已改 1、模式 2 已删。⬜ 不带诊断的全配方编一次（确认编得过）→ 换 prebuilt-boot、编 ROM → 上机验收；
     ⬜ 顺手：`venus_compat_gfmt=N` 复测、HAL 的 POLLPRI 空转、SYS_ERROR 后 `invalid uc_region`
     → ⬜ 换 prebuilt-boot、编 ROM（VP8 撤掉要 ROM 才生效）→ ⬜ 删 ESP 上的 `slot_iris/` 与测试条目（k5 还在）。
-* ❌❌ **发版阻断：候选版一待机就整机复位**（2026-09-28 实测，#128 §11）。`#24`（候选版 `1790206017` 的内核，venus）上
-  `echo +30 > /sys/class/rtc/rtc0/wakealarm; echo mem > /sys/power/state`：进入 s2idle 后 **12–17 s、闹钟之前**就复位，pstore 空；
-  iris 的 k6（含 0050）、k7（不含 0050）一模一样 ⇒ 与 iris、指纹都无关，是候选版本身的。开发机一直是 `allow_suspend=0`，所以从没暴露；
-  **而候选版默认 1（S1）⇒ 用户装上后第一次息屏待机就会重启。** 第一步：用 `scripts/s2idle/` 那套（`pm_test=devices` 逐级）找出是哪一级 / 哪个设备，
-  与 v0.3.0（M16 修好待机时）以后新加的东西（SLPI、相机、指纹 fw 缓存……）逐个排除。在修好之前，S1 的"改回 1"不能发。
+* ~~❌❌ 发版阻断：候选版一待机就整机复位~~ ✅ **2026-09-28 查清是误报（测试方法错）**（#128 §17）：那几次都是插着 USB 线
+  （device 角色）直接 `echo mem`，绕过了 `gaokun3_usbrole` 的 wakelock —— 而 device 角色下挂起会整板复位正是 #52 的已知问题，
+  Android 侧的不变量就是"绝不带着 device 角色挂起"（插着主机不睡，拔线才切 host 放行）。第一次改成手动切 host 时又被常驻的
+  `gaokun3_usbfollow` 在 ~6 s 后切回 device（开发机 allow_suspend=0 时它不让开），第二次待机照样复位。
+  停掉 usbfollow、每次待机前确认 role=host：**#24 上 5 次真实待机 4 次 rc=0、1 次 -EBUSY（计数陷阱），0 次复位**。
+  ⚠️ 以后手动测待机：`setprop ctl.stop gaokun3_usbfollow` + 切 host + 每次前查 role（`/data/local/tmp/s2host.sh` 的写法）。
+  ⬜ 发版前仍要按用户的真实路径验一次：allow_suspend=1、拔掉 USB、息屏等它睡、按电源键唤醒（要用户动手拔线）。
 * ⚠️ **发之前要用户定的**：从 main 构建会一起带上 **SELinux 第六轮**（#126，只编译过、没上过机）与 **扬声器增强试验功能**（PR #7/#8）。
   后者的 Histen 引擎 `libhw_histen_processing.so` 是华为专有、**未获再分发授权**、还被二进制改过的库，而 `device.mk` 的写法是
   "构建机上有就装进 `/vendor`"（`sync-device-tree.sh` 会把它带过去并断言它在）⇒ **不处理的话公开的 ROM 就带着它**。
