@@ -10428,3 +10428,22 @@ k9 = 全配方（含 0066，默认 seek_mode=0）+ 0064，`2489c3b9…`，本机
 * ⚠️ **SYS_ERROR 之后的自救不可靠**：模式 0 的 SYS_ERROR 之后，iris 重启固件时报 `invalid setting for uc_region` → `core init failed`
   （0059 把这个错误如实报出来），之后每次 open 都一样，要重启（k8 那次 SYS_ERROR 后也打了这一行；k6 / k7 那几次却救回来了）⇒ 固件一旦崩，现在没有可靠的恢复手段。
 * 0066 默认仍是 0。定下来之后改成 1（先解决跨分辨率 seek），并把模式 2 删掉。
+
+### 14. iris-k10：跨分辨率 seek 失败 ≠ 分辨率问题 —— 是"EOS 之后的第一次 seek 没有输出"；k9 的"丢中断"是诊断开关自己造成的（2026-09-28）
+k10 = k9 + 诊断增补（超时时打印中断描述符与中断线程的栈；`poll_on_timeout` 开关），`e32e0fb8…`，本机 `out/iris-k10/`。
+* **"丢中断"是假象**：超时转储 `irq 297: depth=1 disabled=1 masked=1 threads_active=1`，中断线程栈停在
+  `iris_hfi_gen1_response_handler → iris_hfi_gen1_flush_debug_queue → iris_hfi_queue_dbg_read → mutex_lock`。
+  开着 `fw_debug=0x1c` 时，调试队列积压好几 KB，每条都 `dev_info` 到控制台（命令行 `loglevel=7`），中断线程打印就耗掉约 1 s，
+  排在后面的 flush 完成被判超时。**`fw_debug=0` 时 0 次超时**（k10 跑了 17 次）⇒ 不是驱动缺陷，`poll_on_timeout` 用不着；
+  ⚠️ 以后开 `fw_debug` 抓日志，要记得它本身会把时序拖慢到超时。
+* **真正的失败**：drc-avc.ts 是三个单独编码的 TS 直接 `cat` 起来的（时间戳每段从头开始），抽取器把时长读成 1966 ms，
+  `seek:3:30` 里好几段一 seek 就碰到"文件尾"（EOS）。模式很固定：**EOS 之后的第一次 seek 0 帧，下一次 seek 又正常**。
+  用普通片子复现（`seek:1:400`：先解到 EOS，再 seek 到中间）：**AVC / HEVC / VP9 三个都 0 帧**；**venus 同一测试 PASS**。
+  v4l2 tracepoint（`v4l2_qbuf` / `v4l2_dqbuf`，不用重编）显示：LAST 缓冲交给应用之后，**HAL 6.5 s 里一个缓冲都没排**（输入输出都没有），
+  直到下一次 seek。HAL 只打了"There are remaining works except EOS work. abandon them."，没有 ioctl 失败。
+  ⬜ 下一步：查 v4l2_codec2 在"drain 完成 → flush"之后等的是什么（venus 与 iris 在 LAST / EOS 事件 / `v4l2_m2m_mark_stopped`
+  上的差别：iris 在 LAST 时调 `v4l2_m2m_mark_stopped()` 却从不 `v4l2_m2m_clear_state()`，venus 两样都不做；iris 另外会在 EOS 时自动发 FLUSH_OUTPUT）。
+  这对应实际使用里"播完再拖回开头重看"，必须修。
+
+**现在的状态**：0065（收尾不卡）+ 0066 模式 1（seek 不断言）⇒ 解码中途停止、播到结尾、普通 seek、分辨率变化都正常；
+剩"EOS 之后的第一次 seek"一个已知缺陷。0066 默认值仍是 0，还没改成 1。
