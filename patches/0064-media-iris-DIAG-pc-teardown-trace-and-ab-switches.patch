@@ -11,7 +11,7 @@ Subject: [PATCH] media: iris: DIAG —— 收尾 / 断电全程跟踪 + A/B 开�
 冷启动 / 断电 / 热恢复各一行结果；CTRL_INIT 前后的 CTRL_STATUS 与 ARG3；0xb0088 改写前后；每次 streamoff 的
 flush 类型与耗时；PC_PREP 之后多少 us 就绪。
 ⚠️ hfi_trace 每帧 4 行，一段 30 帧的片子就能冲掉 128 KiB 的内核日志环 —— 抓日志要从 /dev/kmsg 实时落盘。
-断电被跳过或等会话回复超时时：dump 三个队列头与 SFR（DDR），并【仅在 core->lock 内且 hw_powered 时】读
+断电被跳过、等会话回复超时、或固件报 SYS_ERROR 时（后者还会读空固件调试队列）：dump 三个队列头与 SFR（DDR），并【仅在 core->lock 内且 hw_powered 时】读
 CTRL_STATUS / ARG3 / TZ_CPU_STATUS / INTR_STATUS / INTR_MASK / 0xb0088 —— 从不碰 vcodec 块（可能已被硬件模式断电）。
 
 A/B 开关（/sys/module/qcom_iris/parameters/，0644，默认值 = 打了 0065 的行为）：
@@ -270,10 +270,21 @@ index f00748b..c92a83e 100644
  		} else if (inst->sub_state & IRIS_INST_SUB_LOAD_RESOURCES) {
  			reinit_completion(&inst->completion);
 diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen1_response.c b/drivers/media/platform/qcom/iris/iris_hfi_gen1_response.c
-index bfd7495..09d029b 100644
+index bfd7495..ed5f1ff 100644
 --- a/drivers/media/platform/qcom/iris/iris_hfi_gen1_response.c
 +++ b/drivers/media/platform/qcom/iris/iris_hfi_gen1_response.c
-@@ -683,7 +683,10 @@ static void iris_hfi_gen1_flush_debug_queue(struct iris_core *core, u8 *packet)
+@@ -225,6 +225,10 @@ iris_hfi_gen1_sys_event_notify(struct iris_core *core, void *packet)
+ 			pkt->event_id, pkt->shdr.session_id, pkt->event_data1,
+ 			pkt->event_data2);
+ 
++	/* gaokun3 0064: the firmware's own reason (SFR text, debug queue) for #128 §10 */
++	iris_dbg_dump(core, "sys error");
++	iris_dbg_drain_dbgq(core, "sys error");
++
+ 	core->state = IRIS_CORE_ERROR;
+ 
+ 	mutex_lock(&core->lock);
+@@ -683,7 +687,10 @@ static void iris_hfi_gen1_flush_debug_queue(struct iris_core *core, u8 *packet)
  			struct hfi_msg_sys_debug_pkt *pkt =
  				(struct hfi_msg_sys_debug_pkt *)packet;
  

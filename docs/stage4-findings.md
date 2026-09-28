@@ -10343,3 +10343,52 @@ STREAMOFF 不清 ⇒ "drain 中途 seek、播到结尾再发 STOP"时 `sub_state
 3. `venus_compat_gfmt=N`、一次 s2idle、带 0050 的整链（PAS 与 scm DMA 掩码）；
 4. ROM 侧（VP8 的 XML 撤掉后要重编 ROM 才生效）。
 测完删 ESP 上的 `slot_iris/` 与 `gaokun3-iris-test.conf`（k5 还放在那里）。
+
+### 10. iris-k6（全配方：0065 + 0050 指纹，不带诊断）：收尾与 drain 都好了；三次出事都撞在 SLPI 的 60 s 重启上（2026-09-28，用户在旁）
+k6 = `vmlinuz.efi 40daec12…`，dtb 不变；配置与 k5 逐行相同。测试脚本与日志在本机 `out/iris-k6/`。
+seek / drain 用一个 NDK 单独编的工具 `iris-seek-test`（`out/iris-k6/iris-seek-test.cpp`，NDK r27c `aarch64-linux-android34-clang++ -static-libstdc++ … -lmediandk -landroid -ldl`，不进 ROM）：
+`drain` 解到 EOS 再 stop；`seek:K:N` 解 N 帧后 K 次 `AMediaCodec_flush` + seek（交替到中间 / 开头），最后跳到片尾前 1 s 播完。
+分辨率中途变化的片子用构建机的 ffmpeg 生成（360p → 720p → 360p）：AVC 用 TS 封装，HEVC 用 MKV（TS 里的 HEVC Android 抽取器不认），VP9 用 WebM。
+⚠️ 第一版工具忘了 `-static-libstdc++`，设备上没有 `libc++_shared.so` ⇒ 第一轮那 10 个"失败"是工具没起来，iris 根本没被调用。
+
+**venus 对照（#24，同一工具、同一批片子）**：seek 4 次 + 片尾 drain、AVC / HEVC / VP9 分辨率变化全部 PASS。
+
+| k6 | 结果 |
+|---|---|
+| 解码中途 stop（原来 8/11 卡死的那条） | **5 / 5**（AVC ×3、HEVC 1080、VP9 1080），每次断电 |
+| 播到结尾（drain）后 stop | **3 / 3**（AVC 300 帧、HEVC、VP9） |
+| seek | ✗ 第一次 flush 返回 0（1 ms），之后 0 帧；stop 3.3 s；固件 `sys error (type: 1, session id:ff, data1:1, data2:deadbead)`；iris 自己重载固件恢复，但 **v4l2 HAL 在用户态死锁**（13 个线程全在 futex 上），之后所有 `c2.v4l2.*` 创建都 abort（`Codec2 AIDL service "default" inaccessible`）。杀掉 HAL 让 init 拉起后，普通解码恢复、能断电 |
+| 分辨率变化 / gfmt=N | 被上面那次 HAL 死锁和整机复位挡住，没测成 |
+| s2idle（RTC 30 s） | ✗ **整机复位**（进入 s2idle 后约 10–15 s，在闹钟之前，pstore 空） |
+
+★ **三次出事的共同点**：SLPI 从开机起**每 60 秒崩溃重启一次**（`2400000.remoteproc: Handover signaled, but it already happened`，62.8 / 122.9 / 183.0 / 243.2 / 303.3 s …，#24 上同样如此 —— B21 的现形）。
+* 第二轮的 SYS_ERROR 在 **62.86 s**，比 SLPI 那一行晚 **53 ms**；seek 测试恰好在 62.5 s 开始。
+* 第一轮的整机复位按开机时刻推算落在 ~62 s。
+* s2idle 进入的同一刻，kworker 在加载 `qcslpi8280.mbn`（SLPI 正在重启）。
+* **k5（不带 0050）** 的 A/B 循环跨过了 303 / 363 / 423 s 等多次 SLPI 重启，**0 次 SYS_ERROR、0 次复位**。
+⇒ ~~头号嫌疑：**0050 把 `scm->dev` 的 coherent DMA 掩码整体收到 32 位**~~（❌ 被 §11 的 k7 推翻：SYS_ERROR 是 seek 本身触发的，待机复位是候选版本身的）（`qcom_scm_qseecom_init()`）—— 这不只影响 QSEECOM，SLPI 重启时 PAS 加载固件用的 TZ 缓冲也跟着变了。
+#128 §5 当时就写了"0050 与 iris 都走 PAS，合在一起要另测"。seek 本身可能无辜（它开始的时刻正是 62.5 s）。
+这是从时间吻合推出来的，**未证实**：对照 k7 = k6 去掉 0050（`178ec39f…`，本机 `out/iris-k7/`），脚本 `out/iris-k7/slpi-overlap.sh` 从开机 40 s 连续解码到 200 s、跨三次 SLPI 重启，再做一次 s2idle；k7 干净再回 k6 跑同一脚本。
+
+顺带：`gaokun3-decode-test` 退出时偶发 `FORTIFY: pthread_mutex_lock called on a destroyed mutex` 是工具自己的退出竞态（k3 / k4 的日志里也有）；新工具用 `_exit()` 绕开。
+
+### 11. 对照：venus #24、k7（不带 0050）⇒ seek 是 iris 自己的缺陷；待机复位是候选版本身的（2026-09-28）
+同一脚本 `out/iris-k7/slpi-overlap.sh`（普通解码 / seek:4:20 / 分辨率变化 drain / HEVC seek / VP9 drain 轮转，连续跑，跨 SLPI 的 60 s 重启）：
+| 内核 | 结果 |
+|---|---|
+| **#24 venus** | **192 / 192 PASS**（uptime 735–885 s，跨两次 SLPI 重启） |
+| **k7**（k6 − 0050，`178ec39f…`） | 普通解码 PASS；**每一次 seek 都 FAIL**，SYS_ERROR 在 32.58 / 80.77 / 127.74 s —— 都在 seek 测试开始后 ~0.36 s（第一次 flush 那一刻），**与 SLPI（63.1 / 123.3 s）无关**。drain 类的 FAIL 是脚本重启 HAL 后只等 3 s、HAL 还没起来 |
+
+⇒ **seek（`MediaCodec.flush` → v4l2_codec2 `V4L2Decoder::flush()`：streamoff CAPTURE、streamoff OUTPUT、再 streamon 两个）让华为固件 SYS_ERROR**（`type 1, session ff, data2 deadbead`）。
+iris 随后重载固件自救成功，但 v4l2 HAL 在用户态死锁，要杀掉 HAL 才恢复。k6 那次"撞在 62 s"是巧合。
+与 venus 的差别（从源码，⬜ 待诊断内核证实）：venus 的 seek 是 `vdec_stop_capture` FLUSH_ALL + `vdec_stop_output` FLUSH_ALL → 状态 SEEK，
+会话一直在跑，streamon 时直接继续（`vdec_start_output` 的 SEEK 分支）；iris gen1 在 CAPTURE streamoff 后进 INPUT_STREAMING，
+OUTPUT streamoff 发 **STOP + RELEASE_RESOURCES**，再 streamon 时同一会话里重发 **LOAD_RESOURCES + START** —— 华为固件看来不接受会话内重启。
+诊断内核 **k8** = 全配方 + 0064（新增：SYS_ERROR 时转储 SFR 文字与固件调试队列），`8bdc80ff…`，本机 `out/iris-k8/`，⬜ 未上机。
+
+**待机（s2idle，RTC +30 s，`echo mem > /sys/power/state`）**：k6、k7、**#24 venus 三个内核都在进入后 12–17 s、闹钟之前整机复位**，pstore 都是空的。
+进入那一刻 kworker 读 `qcslpi8280.mbn` 是固件加载器在 suspend prepare 时的缓存（不是 SLPI 重启）。
+⇒ **与 iris / 0050 无关，是候选版 `1790206017` 本身的问题**；开发机常年 `allow_suspend=0` 所以没暴露，而候选版默认 1（S1）⇒ **发版阻断**，已进 `docs/TODO.md`。
+⬜ 用 `scripts/s2idle/` 的 `pm_test=devices` 逐级定位。
+
+**SLPI 每 60 s 崩溃重启一次**（`2400000.remoteproc: Handover signaled, but it already happened`，两种内核都是）：本案里它与 iris 的故障无关，但它是 B21 的现形，值得单独查。

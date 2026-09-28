@@ -30,8 +30,14 @@
   * **iris（[#128](stage4-findings.md)）**：视频编解码 qcom-venus → qcom-iris，补丁 0053–0057、0059–0061、**0065**（0058、0062 已否、不列入）、配置 IRIS=y / VENUS=n 已入配方。
     ✅ 上机（k3 / k4 / k5，2026-09-28）：解码与断电本身都好；**收尾卡死的根因查清** —— 上游 iris 在 CAPTURE streamoff 时发 HFI_FLUSH_OUTPUT，
     华为固件读走后就再也不读命令（A/B 8/11 卡死），改成与 venus 一样的 FLUSH_ALL 后 0/15（**0065**，#128 §9）。
-    ⬜ 全配方（含 0050 + 0065、不带诊断）编一版 → 上机补测：**播到结尾后 stop**、seek、分辨率中途变化、`venus_compat_gfmt=N`、s2idle（#128 §9 末）
+    ✅ 全配方 k6（含 0050 + 0065）：中途停止 5/5、播到结尾 3/3。❌ **seek 让固件 SYS_ERROR → v4l2 HAL 死锁**（k7 去掉 0050 照旧 ⇒ iris 自己的缺陷，#128 §11）。
+    ⬜ 诊断内核 k8（`out/iris-k8/`）上机抓 seek 时的 HFI 序列与 SFR → 修（大概率要让 gen1 的 seek 像 venus 那样 flush 后继续，而不是 STOP / 重新 START）→ 再补测分辨率中途变化、`venus_compat_gfmt=N`
     → ⬜ 换 prebuilt-boot、编 ROM（VP8 撤掉要 ROM 才生效）→ ⬜ 删 ESP 上的 `slot_iris/` 与测试条目（k5 还在）。
+* ❌❌ **发版阻断：候选版一待机就整机复位**（2026-09-28 实测，#128 §11）。`#24`（候选版 `1790206017` 的内核，venus）上
+  `echo +30 > /sys/class/rtc/rtc0/wakealarm; echo mem > /sys/power/state`：进入 s2idle 后 **12–17 s、闹钟之前**就复位，pstore 空；
+  iris 的 k6（含 0050）、k7（不含 0050）一模一样 ⇒ 与 iris、指纹都无关，是候选版本身的。开发机一直是 `allow_suspend=0`，所以从没暴露；
+  **而候选版默认 1（S1）⇒ 用户装上后第一次息屏待机就会重启。** 第一步：用 `scripts/s2idle/` 那套（`pm_test=devices` 逐级）找出是哪一级 / 哪个设备，
+  与 v0.3.0（M16 修好待机时）以后新加的东西（SLPI、相机、指纹 fw 缓存……）逐个排除。在修好之前，S1 的"改回 1"不能发。
 * ⚠️ **发之前要用户定的**：从 main 构建会一起带上 **SELinux 第六轮**（#126，只编译过、没上过机）与 **扬声器增强试验功能**（PR #7/#8）。
   后者的 Histen 引擎 `libhw_histen_processing.so` 是华为专有、**未获再分发授权**、还被二进制改过的库，而 `device.mk` 的写法是
   "构建机上有就装进 `/vendor`"（`sync-device-tree.sh` 会把它带过去并断言它在）⇒ **不处理的话公开的 ROM 就带着它**。
