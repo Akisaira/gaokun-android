@@ -99,7 +99,7 @@ if [ "$got" = "$HISTEN_SHA" ]; then
 elif [ "${GK3_ALLOW_NO_HISTEN:-0}" = 1 ]; then
     echo "· Histen 引擎不在或不符（${got:-缺失}），GK3_ALLOW_NO_HISTEN=1 ⇒ 这一版的扬声器增强只有扬声器链"
 else
-    if [ -n "$got" ]; then why="sha256 不符（$got）"; else why="缺失"; fi
+    if [ -n "$got" ]; then why="sha256 不符（${got}）"; else why="缺失"; fi
     die "构建机上的 Histen 引擎$why —— 见 effects/prebuilt/README.md；确实不要它就设 GK3_ALLOW_NO_HISTEN=1"
 fi
 

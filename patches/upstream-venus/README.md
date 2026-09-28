@@ -1,5 +1,22 @@
 # 上游 Venus 补丁集（sc8280xp 硬件视频编解码）
 
+> ## ❌ 2026-09-28 起不再使用 —— 视频编解码换成了 qcom-iris（案卷 docs/stage4-findings.md #128）
+>
+> 这一套从 `scripts/kernel-apply-patches.sh` 里撤掉了，替代品是 `patches/0053`–`0060`。文件留在这里作案卷。
+>
+> ⚠️★ 本文下面有两句话**是错的**，保留原文、在这里更正：
+> 1. "iris 的 of_match 里没有 sc8280xp，永远服务不了本机" —— **错**。v7.2-rc2 的 `iris_probe.c:372`
+>    就认 `"qcom,sm8250-venus"`，而上游 v7.3 给 sc8280xp 的节点写的是
+>    `"qcom,sc8280xp-iris", "qcom,sm8250-venus"`：靠回落串直接用 `sm8250_data`，驱动一行不用加
+>    （Dmitry Baryshkov 的 "enable SM8350 and SC8280XP support" v7；binding 也已在 v7.2-rc2 里）。
+>    当年只看了 of_match 的前几条。
+> 2. "compatible 选 sc8280xp 而不是 sm8350" —— **本仓入库的 0019 从来都是 `qcom,sm8350-venus`**，
+>    发出去的 DTB 里也是它（`strings prebuilt-boot/dtb/*.dtb`），所以设备一直跑的是 `sm8350_res`。
+>    影响近乎为零（`freq_tbl` 只在 DT 没有 OPP 表时兜底），但文档说的不是事实。
+> 3. 另查出一个 venus 时代的潜伏缺陷（不再修，随 venus 一起退役）：0017/0018 设了
+>    `opp_pmdomain = {"mx", NULL}` 却没设 `opp_pmdomain_num`，于是 venus 从来没投过 MX 电压票；
+>    MMCX 则根本不在节点里，全靠显示 / 相机把它顶在 TURBO_L1。0019 的 OPP 频点也没有按 videocc 的 ÷3 换算。
+
 **来源**：上游 sc8280xp Venus 使能系列，编号沿用作者原始的 0013–0020。
 本目录**不改写它们** —— 上游补丁保持原样，方便日后和上游对齐。
 

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Venus 硬件视频【解码】（Android 侧）验收。在宿主机跑（走 adb）。
+# 硬件视频【解码】（Android 侧）验收。在宿主机跑（走 adb）。
+# 内核驱动 2026-09-28 起是 qcom-iris（#128；此前是 qcom-venus，本脚本原名 verify-venus-codec2.sh）。
 #
-# 用法: [SERIAL=xxx] bash scripts/verify-venus-codec2.sh [测试视频.mp4]
+# 用法: [SERIAL=xxx] bash scripts/verify-hw-codec2.sh [测试视频.mp4 [组件名]]
 #   不给视频就只做静态检查；给了就真解一遍（这才是唯一算数的判据）。
+#   组件名默认 c2.v4l2.avc.decoder；HEVC / VP9 的片子要显式给 c2.v4l2.hevc.decoder / c2.v4l2.vp9.decoder。
 #
 # 每一项都对应一个真实踩过的失败模式，别删：
 #   门控属性        —— ★最阴：不设 = 服务在、IComponentStore 也在、但零个组件，
@@ -10,11 +12,15 @@
 #   /dev/video* 属主 —— 服务跑 user media，默认 root:root 0600 打不开
 #   扩展 seccomp     —— 不装就在真干活时被 SIGSYS 打死（blocked syscall: eventfd2）
 #   编码器【必须没有】—— 它走不通 surface 输入，开着会让应用失败而不是回退软编
+#   VP8【必须没有】  —— iris gen1 不解 VP8（iris_platform_vpu2.c 的解码格式表只有 H264/HEVC/VP9），
+#                      门控开着的话组件建得出来、start() 失败，应用拿到的是失败而不是回退软解
+#   按名字找节点     —— camss 占了 video0-31，编解码节点的编号取决于谁先 probe，不能写死 video0
 #   ★ 真解一段     —— 组件"在列表里"只证明能实例化，不证明能解码
 set -u
 export MSYS_NO_PATHCONV=1
 A="adb ${SERIAL:+-s $SERIAL}"
 VIDEO=${1:-}
+COMP=${2:-c2.v4l2.avc.decoder}
 PASS=0; FAIL=0
 ok()  { echo "  [OK]   $*"; PASS=$((PASS + 1)); }
 bad() { echo "  [FAIL] $*"; FAIL=$((FAIL + 1)); }
@@ -22,11 +28,11 @@ bad() { echo "  [FAIL] $*"; FAIL=$((FAIL + 1)); }
 $A wait-for-device
 
 echo "═══ 1. 门控属性 ═══"
-for k in h264 hevc vp8 vp9; do
+for k in h264 hevc vp9; do
     v=$($A shell getprop "ro.vendor.v4l2_codec2.decoder.supported.$k" | tr -d '\r')
     [ "$v" = true ] && ok "decoder.$k = true" || bad "decoder.$k = [$v]（应为 true）"
 done
-for k in decoder.supported.av1 encoder.supported.h264 encoder.supported.vp8 encoder.supported.vp9; do
+for k in decoder.supported.vp8 decoder.supported.av1 encoder.supported.h264 encoder.supported.vp8 encoder.supported.vp9; do
     v=$($A shell getprop "ro.vendor.v4l2_codec2.$k" | tr -d '\r')
     if [ -z "$v" ] || [ "$v" = false ]; then ok "$k 未启用（有意为之）"; else bad "$k = [$v]，不该启用"; fi
 done
@@ -36,8 +42,16 @@ v=$($A shell getprop debug.stagefright.c2inputsurface | tr -d '\r')
 [ "$v" = "-1" ] && ok "c2inputsurface = -1（绕开框架的空指针崩溃）" || bad "c2inputsurface = [$v]，应为 -1"
 
 echo; echo "═══ 2. 设备节点与 seccomp 策略 ═══"
-o=$($A shell 'stat -c %U:%G /dev/video0' | tr -d '\r')
-[ "$o" = "media:media" ] && ok "/dev/video0 属主 $o" || bad "/dev/video0 属主 [$o]，应为 media:media"
+# 按 sysfs 名字找解码节点（iris_probe.c 注册的名字），再查属主（ueventd.gaokun3.rc 的 /dev/video* 规则）。
+DEC=$($A shell 'for v in /sys/class/video4linux/video*; do [ "$(cat $v/name)" = qcom-iris-decoder ] && echo /dev/${v##*/}; done' | tr -d '\r')
+if [ -z "$DEC" ]; then
+    bad "找不到名为 qcom-iris-decoder 的 video 节点（iris 没绑上？看 dmesg | grep aa00000）"
+else
+    o=$($A shell "stat -c %U:%G $DEC" | tr -d '\r')
+    [ "$o" = "media:camera" ] && ok "${DEC}（qcom-iris-decoder）属主 ${o}" || bad "${DEC} 属主 [${o}]，应为 media:camera"
+fi
+v=$($A shell 'cat /sys/module/qcom_iris/parameters/venus_compat_gfmt 2>/dev/null' | tr -d '\r')
+echo "  [INFO] qcom_iris.venus_compat_gfmt = [${v}]（Y = 与 venus 同一条路，patches/0060）"
 $A shell 'test -f /vendor/etc/seccomp_policy/android.hardware.media.c2-extended-seccomp_policy' \
     && ok "扩展 seccomp 策略已装" || bad "缺扩展 seccomp 策略（会在解码时 SIGSYS）"
 
@@ -53,7 +67,8 @@ echo; echo "═══ 4. MediaCodecList 里的硬件组件 ═══"
 LIST=$($A shell 'dumpsys media.player 2>/dev/null' | grep -oE 'c2\.v4l2\.[a-z0-9.]+' | sort -u)
 echo "$LIST" | sed 's/^/  /'
 N=$(echo "$LIST" | grep -c 'decoder' || true)
-[ "$N" -ge 4 ] && ok "$N 个解码组件已注册" || bad "只有 $N 个解码组件（期望 4）"
+[ "$N" -eq 3 ] && ok "$N 个解码组件已注册（avc / hevc / vp9）" || bad "$N 个解码组件（期望恰好 3：avc / hevc / vp9）"
+echo "$LIST" | grep -q 'vp8' && bad "居然有 VP8 组件（iris 不解 VP8，应被属性与 XML 关掉）" || ok "没有 VP8 组件（有意为之）"
 echo "$LIST" | grep -q encoder && bad "居然有编码组件（应该被属性关掉）" || ok "没有编码组件（有意为之）"
 
 echo; echo "═══ 5. ★ 真解一段（唯一算数的判据）═══"
@@ -62,7 +77,7 @@ if [ -z "$VIDEO" ]; then
 else
     $A push "$VIDEO" /data/local/tmp/dt.mp4 >/dev/null 2>&1
     $A shell 'logcat -c' >/dev/null 2>&1
-    OUT=$($A shell '/system/bin/gaokun3-decode-test /data/local/tmp/dt.mp4 c2.v4l2.avc.decoder 2>&1')
+    OUT=$($A shell "/system/bin/gaokun3-decode-test /data/local/tmp/dt.mp4 $COMP 2>&1")
     echo "$OUT" | sed 's/^/  /'
     case "$OUT" in
         *"通过：真的解出了帧"*) ok "★ 硬件解码器真的解出了帧" ;;
@@ -74,8 +89,11 @@ else
 fi
 
 echo; echo "═══ 6. 内核侧有没有报错 ═══"
-E=$($A shell 'dmesg | grep -ciE "venus.*(error|fail|timeout)"' | tr -d '\r')
-[ "${E:-0}" = 0 ] && ok "venus 无报错" || bad "venus 有 $E 行报错"
+# iris 的 dev_err 都带设备名 aa00000.video-codec；另有 arm-smmu 对它的流 ID 报的 context fault ——
+# iommus 是 <0x2a00 0x400>（掩码 0x400），SID 0x2a00 与 0x2e00 都落在这个上下文里，两个都要认。
+# （arm-smmu 报两行：Unhandled context fault … cbfrsynra=… 与 SID=…；不放宽到整个 15000000.iommu —— 显示 / 相机也挂在它上面。）
+E=$($A shell 'dmesg | grep -iE "aa00000\.video-codec.*(error|fail|timeout|invalid|watchdog|unsupported)|cbfrsynra=0x2[ae]00|SID=0x2[ae]00" | wc -l' | tr -d '\r')
+[ "${E:-0}" = 0 ] && ok "iris 无报错" || { bad "iris 有 $E 行报错："; $A shell 'dmesg | grep -iE "aa00000\.video-codec.*(error|fail|timeout|invalid|watchdog|unsupported)|cbfrsynra=0x2[ae]00|SID=0x2[ae]00" | tail -8' | sed 's/^/    /'; }
 
 echo; echo "═══ 小结：通过 $PASS · 失败 $FAIL ═══"
 [ "$FAIL" -eq 0 ]

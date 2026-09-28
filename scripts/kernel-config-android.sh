@@ -208,22 +208,20 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 #   依赖 EFI_GENERIC_STUB（本机已 =y）。
 ./scripts/config --file "$OUT/.config" --enable EFI_ZBOOT
 
-# ⚠️★ 必须【关掉】CONFIG_VIDEO_QCOM_IRIS —— 否则 Venus 编不过，而报错完全
-#   看不出跟它有关。主线 v7.2 引入了新的 iris 驱动接管 IRIS2 世代，于是 venus
-#   里这些东西被条件编译掉了：
-#     drivers/media/platform/qcom/venus/core.c:1017
-#       #if (!IS_ENABLED(CONFIG_VIDEO_QCOM_IRIS))
-#       这道守卫之后是 sm8250_freq_table / sm8250_bw_table_enc /
-#       sm8250_bw_table_dec / sm8350_reg_preset
-#     drivers/media/platform/qcom/venus/core.h:58 连 VPU_VERSION_IRIS2 也没了
-#   而 sc8280xp_res 正好引用其中四个 → 一串 "undeclared here" 报在 core.c 里，
-#   读起来像是补丁打错了。
-#   ★ 关它是对的，不是权宜：iris 的 of_match 里只有 qcs8300 / sm8550 / sm8650 /
-#     sm8750 / x1p42100，**没有 sc8280xp 也没有 sm8350** —— 它永远服务不了本机，
-#     却把本机需要的代码删掉了。而且它是 =m，Android 压根不加载模块。
-./scripts/config --file "$OUT/.config" --disable VIDEO_QCOM_IRIS
+# ★★ 2026-09-28 起（#128）视频编解码走 qcom-iris，【关掉】qcom-venus。
+#   ⚠️ 此处原来写的是反的（"必须关 IRIS，它永远服务不了本机"），那句话**错了**：
+#   v7.2-rc2 的 iris_probe.c:372 就认 "qcom,sm8250-venus"，而上游 v7.3 给 sc8280xp 的节点
+#   写的是 "qcom,sc8280xp-iris", "qcom,sm8250-venus" —— 靠回落串直接用 sm8250_data。
+#   当年只查了 of_match 的前几条，漏看了 sm8250-venus 那一条（它在 v7.2-rc2 里是有的）。
+#   为什么 VENUS 必须关、不能两个都留着：
+#     · 我们 venus 时代的 upstream-venus/0017/0018 在 IRIS=y 时编不过
+#       （venus/core.c 的 #if (!IS_ENABLED(CONFIG_VIDEO_QCOM_IRIS)) 把它们引用的表编掉了）；
+#     · 不打那两个，VENUS=y 虽能编过但永远绑不上新节点 —— 留着只是一个会误导人的 =y；
+#     · 反过来的陷阱更糟：VENUS=y + IRIS=n + 新 DT，venus 会用 sm8250_res 去绑（没有 cp_* 配置）。
+#   所以 VENUS 进 MUST_N，驱动选择在 .config 里一眼可见。
+./scripts/config --file "$OUT/.config" --disable VIDEO_QCOM_VENUS
 
-# ─── Stage 6 M14: Venus 硬件视频编解码（V4L2 M2M）───
+# ─── Stage 6 M14: 硬件视频编解码（V4L2 M2M；M14 时是 Venus，#128 起是 iris）───
 # ★ 为什么现在能做：三个前提本地核实过，一个都不缺。
 #   1. 时钟控制器【主线已有】：drivers/clk/qcom/videocc-sm8350.c 自己就认
 #      "qcom,sc8280xp-videocc"（该文件 :537 和 :572 两处），不需要新驱动。
@@ -237,7 +235,7 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 #      CONFIG_MEDIA_SUPPORT=m   VIDEO_DEV=m   VIDEOBUF2_DMA_CONTIG=m
 #      V4L2_MEM2MEM_DEV=m       SM_VIDEOCC_8350=m
 #   Android 不加载任何模块（/vendor/lib/modules 不存在、lsmod 为空），
-#   所以就算 --enable VIDEO_QCOM_VENUS，整条链照样静默缺席。
+#   所以就算 --enable 了驱动本身（当时是 VIDEO_QCOM_VENUS），整条链照样静默缺席。
 #   全部拉成 =y，并且下面 MUST_Y 里逐个断言 —— 这个坑本仓已经踩了 13 次。
 #
 # 依赖关系（drivers/media/platform/qcom/venus/Kconfig 原文）：
@@ -245,10 +243,15 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 #              ARM64 && IOMMU_API
 #   select OF_DYNAMIC / QCOM_MDT_LOADER / QCOM_SCM / VIDEOBUF2_DMA_CONTIG /
 #          V4L2_MEM2MEM_DEV
+# iris（drivers/media/platform/qcom/iris/Kconfig，v7.2-rc2）：
+#   depends on VIDEO_DEV / ARCH_QCOM
+#   select V4L2_MEM2MEM_DEV / QCOM_MDT_LOADER / QCOM_SCM / QCOM_UBWC_CONFIG / VIDEOBUF2_DMA_CONTIG
+# ⚠️ iris 还有一个 Kconfig 里看不出来的硬依赖：PM_DEVFREQ。没有它 devfreq_recommended_opp()
+#    是返回 -EINVAL 的桩（include/linux/devfreq.h），每次上电都失败。#24 里本来就是 =y，下面断言它。
 # ⚠️ SM_VIDEOCC_8350 会 `select SM_GCC_8350`（drivers/clk/qcom/Kconfig:1365），
 #    于是 SM8350 的 gcc 也会被编进来。无害（compatible 不匹配、永不 probe），
 #    但看到它出现在 .config 里不要当成配错了。
-./scripts/config --file "$OUT/.config"     --enable MEDIA_SUPPORT     --enable MEDIA_PLATFORM_SUPPORT     --enable VIDEO_DEV     --enable V4L_MEM2MEM_DRIVERS     --enable VIDEOBUF2_DMA_CONTIG     --enable V4L2_MEM2MEM_DEV     --enable SM_VIDEOCC_8350     --enable VIDEO_QCOM_VENUS
+./scripts/config --file "$OUT/.config"     --enable MEDIA_SUPPORT     --enable MEDIA_PLATFORM_SUPPORT     --enable VIDEO_DEV     --enable V4L_MEM2MEM_DRIVERS     --enable VIDEOBUF2_DMA_CONTIG     --enable V4L2_MEM2MEM_DEV     --enable SM_VIDEOCC_8350     --enable VIDEO_QCOM_IRIS
 
 # ─── Stage 6 M22: 相机（CAMSS + 前摄 hi846）───
 # 目标是【前摄】。上游作者自己在 camera.dtsi:158-166 写明后摄 s5k3l6 "画质差、
@@ -389,7 +392,8 @@ SND_SOC_LPASS_WSA_MACRO SND_SOC_QDSP6 QCOM_PD_MAPPER
 FUSE_FS IIO QCOM_SPMI_ADC5 QCOM_FASTRPC
 CPUSETS_V1 MEMCG_V1 UCLAMP_TASK UCLAMP_TASK_GROUP EFI_ZBOOT EFI_STUB EFI_GENERIC_STUB
 MEDIA_SUPPORT MEDIA_PLATFORM_SUPPORT VIDEO_DEV V4L_MEM2MEM_DRIVERS
-VIDEOBUF2_DMA_CONTIG V4L2_MEM2MEM_DEV SM_VIDEOCC_8350 VIDEO_QCOM_VENUS
+VIDEOBUF2_DMA_CONTIG V4L2_MEM2MEM_DEV SM_VIDEOCC_8350 VIDEO_QCOM_IRIS
+PM_DEVFREQ PM_OPP PM_GENERIC_DOMAINS_OF QCOM_UBWC_CONFIG QCOM_MDT_LOADER QCOM_SCM INTERCONNECT_QCOM_SC8280XP QCOM_RPMHPD
 VIDEO_QCOM_CAMSS VIDEO_HI846 VIDEO_OV13B10 VIDEO_DW9714 I2C_QCOM_CCI SC_CAMCC_8280XP LEDS_GPIO LEDS_CLASS_FLASH LEDS_QCOM_FLASH
 VIDEOBUF2_DMA_SG MEDIA_CAMERA_SUPPORT V4L_PLATFORM_DRIVERS VIDEO_CAMERA_SENSOR
 EXPERT PM_DEBUG PM_SLEEP_DEBUG PM_ADVANCED_DEBUG DPM_WATCHDOG
@@ -412,7 +416,7 @@ for s in $MUST_Y; do
     esac
 done
 # 反向断言：这些**必须关**，开着会主动破坏 Android
-MUST_N="RT_GROUP_SCHED VIDEO_QCOM_IRIS"
+MUST_N="RT_GROUP_SCHED VIDEO_QCOM_VENUS"
 for s in $MUST_N; do
     if grep -qE "^CONFIG_$s=(y|m)" "$OUT/.config"; then
         echo "  ✗ CONFIG_$s 开着 —— 必须 =n（见脚本内注释）"; bad=1

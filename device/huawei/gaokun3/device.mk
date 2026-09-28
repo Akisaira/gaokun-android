@@ -700,10 +700,12 @@ PRODUCT_PACKAGES += \
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/gaokun3-ota-postinstall.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-ota-postinstall.sh
 
-# ═══════════ Venus 硬件视频编解码：Android 这一半（external/v4l2_codec2）═══════════
+# ═══════════ 硬件视频编解码：Android 这一半（external/v4l2_codec2）═══════════
 #
-# 内核那一半 M14 就通了（/dev/video0 = qcom-venus-decoder、
-# /dev/video1 = qcom-venus-encoder，见 docs/stage4-findings.md #41）。
+# 内核那一半 M14 就通了（当时是 qcom-venus：qcom-venus-decoder / -encoder，
+# 见 docs/stage4-findings.md #41）。★ 2026-09-28 起内核驱动换成 qcom-iris（#128）：
+# 节点名 qcom-iris-decoder / qcom-iris-encoder，编号随 probe 顺序（camss 占了 video0-31）。
+# v4l2_codec2 按 ENUM_FMT + caps 找节点、不看驱动名，所以这一半不用为换驱动改代码。
 # 缺的一直是一个跟 V4L2 说话的 Codec2 组件，所以 66 个解码器全是软解。
 #
 # ⚠️★ 上游 README 有三处会把人带沟里，逐条对着源码核过：
@@ -733,15 +735,17 @@ PRODUCT_PACKAGES += \
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/etc/media_codecs_c2.xml:$(TARGET_COPY_OUT_VENDOR)/etc/media_codecs_c2.xml
 
-# ★ 每一条都对应 tools/v4l2-probe 的实测结果，不是照抄模板：
-#   解码器认 H264 VP80 VP90 HEVC MPG2；编码器只出 H264 VP80 HEVC。
-#   → av1 没有硬件；vp9 编码没有硬件；MPEG-2 与 HEVC 编码硬件有、
-#     但 v4l2_codec2 没有对应组件（v4l2/V4L2ComponentCommon.cpp）。
+# ★ 每一条都对应驱动实际能做的事，不是照抄模板：
+#   venus 时代 tools/v4l2-probe 实测：解码器认 H264 VP80 VP90 HEVC MPG2；编码器出 H264 VP80 HEVC。
+#   ★ iris（#128）的 gen1 解码格式表只有 H264 / HEVC / VP9（iris_platform_vpu2.c，
+#     iris_instance.h 的 enum 里根本没有 VP8），编码只有 H264 / HEVC。
+#   → VP8 硬解随换驱动【丢了】，门控必须关：开着的话组件建得出来、start() 失败，
+#     应用拿到的是失败而不是回退软解（与下面编码器同一个道理）。VP8 回到 c2.android 软解。
+#   → av1 没有硬件；vp9 编码没有硬件；MPEG-2 v4l2_codec2 没有组件（v4l2/V4L2ComponentCommon.cpp）。
 #   → secure 变体全关：本机没有安全播放。
 PRODUCT_VENDOR_PROPERTIES += \
     ro.vendor.v4l2_codec2.decoder.supported.h264=true \
     ro.vendor.v4l2_codec2.decoder.supported.hevc=true \
-    ro.vendor.v4l2_codec2.decoder.supported.vp8=true \
     ro.vendor.v4l2_codec2.decoder.supported.vp9=true \
     ro.vendor.v4l2_codec2.decode_concurrent_instances=8
 
@@ -754,10 +758,16 @@ PRODUCT_VENDOR_PROPERTIES += \
 #            BufferUsage::CPU_* usage.
 #   SurfaceFlinger 给的是 RGBX_8888/IMPLEMENTATION_DEFINED，而 Venus 编码器要
 #   NV12，v4l2_codec2 的 EncodeComponent 不做这个转换 —— 不是配置能解决的。
-#   录屏/录像继续走软编（能用）。要复测就把这两行加回上面的属性块：
-#     ro.vendor.v4l2_codec2.encoder.supported.h264=true
-#     ro.vendor.v4l2_codec2.encoder.supported.vp8=true
-#     ro.vendor.v4l2_codec2.encode_concurrent_instances=8
+#   （换成 iris 后编码器同样只收 NV12 / QC08C，这条结论不变。）
+#   录屏/录像继续走软编（能用）。要复测，三处都要动（少一处就会悄悄测成软编）：
+#     ① 把这两行加回上面的属性块：
+#        ro.vendor.v4l2_codec2.encoder.supported.h264=true
+#        ro.vendor.v4l2_codec2.encode_concurrent_instances=8
+#     ② etc/media_codecs_c2.xml 里加回 <Encoders><MediaCodec name="c2.v4l2.avc.encoder" type="video/avc">
+#        （XML 里没有的组件 MediaCodecList 直接跳过，Codec2InfoBuilder.cpp:543）；
+#     ③ scripts/verify-hw-codec2.sh 的"必须没有编码组件"断言那一次要反过来。
+#   ⚠️ iris 没有 VP8 编码；且 v4l2_codec2 首帧会设 FORCE_KEY_FRAME，v7.2-rc2 的 iris 不认这个控件
+#      （上游 v7.3 的 6f62dce 才加）—— 复测编码前先 backport 它，见 #128。
 
 # Codec2 的 pool mask：BLOB(19) 那一档。见上面第 3 条。
 PRODUCT_VENDOR_PROPERTIES += \

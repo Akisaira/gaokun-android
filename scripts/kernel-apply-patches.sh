@@ -29,19 +29,12 @@ MODE=${2:-apply}
 [ -f "$TREE/Makefile" ] && [ -d "$TREE/kernel" ] || {
     echo "✗ $TREE 看着不像内核树（缺 Makefile 或 kernel/）" >&2; exit 2; }
 
-# ★ 上游 Venus 补丁集先打 —— 本仓的 0011 依赖 0019 提供的 `venus` label。
-#   2026-08-22 实测：少了它 DTB 直接编不过（"Label or path venus not found"），
-#   而在此之前这一套【只活在构建机工作区里】。详见 patches/upstream-venus/README.md。
-#   ⚠️ 0014 故意不列：纯格式清理、主线已分叉（M14 就决定跳过）。
-UPATCHES=(
-    upstream-venus/0013-media-dt-bindings-Document-SC8280XP-SM8350-Venus.patch
-    upstream-venus/0015-media-venus-hfi_venus-Support-only-updating-certain-bits-with-presets.patch
-    upstream-venus/0016-media-platform-venus-Add-optional-LLCC-path.patch
-    upstream-venus/0017-media-venus-core-Add-SM8350-resource-struct.patch
-    upstream-venus/0018-media-venus-core-Add-SC8280XP-resource-struct.patch
-    upstream-venus/0019-arm64-dts-qcom-sc8280xp-Add-Venus.patch
-    upstream-venus/0020-arm64-dts-qcom-sc8280xp-huawei-gaokun3-Enable-Venus.patch
-)
+# ❌ 上游 Venus 补丁集（patches/upstream-venus/0013–0020）从 2026-09-28 起【不再列入】：
+#   视频编解码从 qcom-venus 换成了 qcom-iris（案卷 #128，补丁 0053–0060）。
+#   0017/0018 在 VIDEO_QCOM_IRIS=y 时根本编不过（venus/core.c 的 #if !IS_ENABLED(IRIS) 把它们
+#   引用的表编掉了），0019 的节点 iris 不认。文件留在原处作案卷，README 里写了为什么换。
+#   ⚠️ 这里原来是一个 UPATCHES 数组。别留一个空数组：本机（macOS）的 bash 3.2 在 set -u 下
+#      展开空数组 "${A[@]}" 会报 unbound variable（与提交 5013189 同一类）。
 
 # ⚠️ 只列内核补丁。其余的归属别处：0003 AOSP glslang、0004/0005/0006 mesa、
 #    0008 tinyalsa、0010 / 0051 / 0052 AOSP audio HAL —— 别往内核树上打。
@@ -153,6 +146,31 @@ KPATCHES=(
     #    只碰 drivers/firmware/qcom/qcom_scm.c 与其头文件（与相机/触摸/USB 补丁互不相干）。
     #    编译通过；LOAD 未在硬件验证（首次发 LOAD SMC 需人在设备旁，有硬挂风险）。
     0050-firmware-qcom-scm-qseecom-app-load-shutdown-listener.patch
+    # ★★ 0053–0060（#128）：视频编解码 qcom-venus → qcom-iris。iris 靠 DT 的回落 compatible
+    #    "qcom,sc8280xp-iris", "qcom,sm8250-venus" 直接用 v7.2-rc2 自带的 sm8250_data，驱动不用加平台。
+    #    ⚠️ 需要 .config 里 VIDEO_QCOM_IRIS=y、VIDEO_QCOM_VENUS 不设（kernel-config-android.sh 已断言）。
+    # 0053：sc8280xp.dtsi 加 iris + videocc 节点 + pil_video_mem（上游 v7.3 3a52eef16b97 的 backport）。
+    #    ⚠️ 上下文按构建树生成（buildbot upstream/0002 多一行 qcom,scm.h）。树上还打着
+    #    upstream-venus 时，fuzz 回落能把它硬打成两份节点 —— 所以下面进循环前先拒绝 venus 残留、打完再断言。
+    0053-arm64-dts-qcom-sc8280xp-add-iris-and-videocc.patch
+    # 0054：gaokun3 打开 &iris，firmware-name 指向华为签名的 qcvss8280.mbn。依赖 0053 的 iris label。
+    0054-arm64-dts-gaokun3-enable-iris.patch
+    # 0055 / 0057：上游 v7.3 的 iris 修复（f87d7ed / 75d7987），v7.2-rc2 没有。
+    0055-media-iris-fix-runtime-PM-reference-leaks.patch
+    # 0056：【本地】代替上游 b9c2215。b9c2215 在持 core->lock 断电时 disable_irq() 等中断线程，
+    #    而线程开头就要这把锁 ⇒ 死锁；原版 nosync 又会让线程在断电后碰寄存器（本机 = 静默死机）。
+    #    这里保留 nosync，线程拿到锁后看 core->hw_powered，断电了就不碰硬件。
+    0056-media-iris-irq-thread-skips-hw-access-after-power-off.patch
+    0057-media-iris-handle-runtime-PM-resume-failure-in-core-deinit.patch
+    # ❌ 0058（上游 0ac05c4）故意【不列】：在 gen1 上 LOAD_RESOURCES 位一直置着，v7.2-rc2 原版的
+    #    `!= DRAIN` 才让"drain 中途 seek 后的 STOP"照常放行；0058 反而把它变成 -EBUSY。见 0058 头部横幅、#128 §3。
+    # 0059：上游 v7.4 队列的 cff20ea4 —— UC_REGION 配置被拒时如实报错，而不是"启动成功"后挂死。
+    0059-media-iris-fail-firmware-boot-on-invalid-uc_region.patch
+    # 0060：【本地】解码器在第一次 SOURCE_CHANGE 前拒绝 CAPTURE G_FMT，让 v4l2_codec2 走 venus 时代
+    #    验过的那条路。0644 模块参数 qcom_iris.venus_compat_gfmt（默认 Y），写 N 即上游行为。
+    0060-media-iris-venus-compatible-decoder-capture-g_fmt.patch
+    # 0061：上游 v7.4 队列的 e2e2bc05 —— 遍历实例链表时拿 core->lock（Codec2 探能力时的 open/close 会撞上）。
+    0061-media-iris-take-core-lock-when-scanning-the-instance-list.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
@@ -249,7 +267,7 @@ if [ "$MODE" = "--verify" ]; then
     echo "内核树: ${TREE}（HEAD $(git -C "$TREE" rev-parse --short HEAD)）"
     echo "重放到: $WT"
     fails=0; fuzzed=0
-    for p in "${UPATCHES[@]}" "${KPATCHES[@]}"; do
+    for p in "${KPATCHES[@]}"; do
         f="$REPO/patches/$p"
         [ -f "$f" ] || { echo "✗ 缺文件 $p"; fails=$((fails + 1)); continue; }
         if git -C "$WT" apply "$f" 2>/dev/null; then
@@ -261,7 +279,7 @@ if [ "$MODE" = "--verify" ]; then
         fi
     done
     # 被任何补丁碰过的文件，逐个比
-    files=$(for p in "${UPATCHES[@]}" "${KPATCHES[@]}"; do
+    files=$(for p in "${KPATCHES[@]}"; do
                 grep -hE '^\+\+\+ b/' "$REPO/patches/$p" 2>/dev/null; done | sed 's|^+++ b/||' | sort -u)
     diffs=0; same=0
     for ff in $files; do
@@ -287,8 +305,26 @@ echo "内核树: $TREE"
 echo "版本:   $(make kernelversion 2>/dev/null || echo 未知)"
 echo
 
+# ★★ venus 时代的树不能直接往上打 iris（#128）。
+#   upstream-venus/0019 当年是 fuzz 打进去的，0053 在那样的树上 git apply 会失败 ——
+#   可下面的回落逻辑会改用 patch --fuzz=3 把它【硬打进去】，得到两份 videocc / pil_video_mem、
+#   两个 video-codec@aa00000，脚本还照样报成功（审查 2026-09-28 实测推出来的，不是假想）。
+#   所以在进循环之前就拦下来。0017/0018 还在的话 IRIS=y 也根本编不过。
+DTSI=arch/arm64/boot/dts/qcom/sc8280xp.dtsi
+GK3=arch/arm64/boot/dts/qcom/sc8280xp-huawei-gaokun3.dts
+if grep -q 'compatible = "qcom,sm8350-venus"' "$DTSI" 2>/dev/null \
+   || grep -q '^&venus {' "$GK3" 2>/dev/null \
+   || grep -q 'sc8280xp_res\|sm8350_res' drivers/media/platform/qcom/venus/core.c 2>/dev/null; then
+    echo "✗ 这棵树上还打着 patches/upstream-venus（venus 时代的节点 / 资源结构体）。" >&2
+    echo "  从 2026-09-28 起视频编解码走 iris（0053–0060），两者不能叠。做法（二选一）：" >&2
+    echo "  ① 推荐：git -C $TREE worktree add --detach <新路径> HEAD，在新 worktree 上跑本脚本（再接 KernelSU）；" >&2
+    echo "  ② 就地撤：倒序撤 upstream-venus 的 0020 0019 0018 0017 0016 0015 0013 ——" >&2
+    echo "     0017/0018/0019 当年用了 fuzz，要 patch -R -p1 --fuzz=3；其余 git apply -R。别用 git checkout（CLAUDE.md 运维坑 4）。" >&2
+    exit 1
+fi
+
 applied=0; skipped=0; failed=0; fuzzed=0
-for p in "${UPATCHES[@]}" "${KPATCHES[@]}"; do
+for p in "${KPATCHES[@]}"; do
     f="$REPO/patches/$p"
     [ -f "$f" ] || { echo "✗ 缺文件 $p"; failed=$((failed + 1)); continue; }
 
@@ -318,9 +354,9 @@ for p in "${UPATCHES[@]}" "${KPATCHES[@]}"; do
         skipped=$((skipped + 1)); continue
     fi
     if ! git apply --check "$f" 2>/dev/null; then
-        # ★ 回落到模糊匹配。0019 就需要这个（上下文里的 #include 列表与
-        #   v7.2-rc2 差一行 qcom,scm.h）。⚠️ 用了 fuzz 必须【明说】，
-        #   静默的模糊匹配是灾难的开始。
+        # ★ 回落到模糊匹配。当年 upstream-venus/0019 就需要这个（上下文里的 #include 列表与
+        #   v7.2-rc2 差一行 qcom,scm.h；它已随 #128 退役，现役列表零 fuzz）。⚠️ 用了 fuzz 必须【明说】，
+        #   静默的模糊匹配是灾难的开始 —— 0053 在 venus 旧树上就会被它硬打成两份节点，所以上面才有那道拦截。
         if patch -p1 -d "$TREE" --dry-run --fuzz=3 < "$f" >/dev/null 2>&1; then
             if [ "$MODE" = "--check" ]; then
                 echo "→ 可应用【需 fuzz=3】（--check 模式，未改动）  $p"
@@ -345,3 +381,18 @@ done
 echo
 echo "可应用/已应用 $applied · 跳过 $skipped · 失败 $failed · 其中用了 fuzz $fuzzed"
 [ "$failed" -eq 0 ] || exit 1
+
+# ★ 打完之后断言 iris 的 DT 状态（#128）。指纹判据和 fuzz 回落都可能让 0053/0054 "看起来打上了"
+#   而实际没有 —— 0054 唯一的指纹行 firmware-name = "...qcvss8280.mbn" 在旧的 &venus 块里一字不差。
+#   这里直接看结果：恰好一个 videocc、一个 iris 节点、gaokun3 里 &iris 打开了、没有任何 venus 节点。
+if [ "$MODE" != "--check" ]; then
+    n_vcc=$(grep -c 'videocc: clock-controller@abf0000' "$DTSI")
+    n_iris=$(grep -c 'iris: video-codec@aa00000' "$DTSI")
+    if [ "$n_vcc" != 1 ] || [ "$n_iris" != 1 ] || grep -q 'venus: video-codec' "$DTSI" \
+       || ! grep -A2 '^&iris {' "$GK3" | grep -q 'status = "okay"'; then
+        echo "✗ iris 的 DT 状态不对：videocc 节点 ${n_vcc} 个、iris 节点 ${n_iris} 个（都应为 1），" >&2
+        echo "  且 gaokun3 里要有 &iris { ... status = \"okay\"; }、sc8280xp.dtsi 里不能有 venus 节点。见 #128。" >&2
+        exit 1
+    fi
+    echo "✓ iris DT 状态：1 个 videocc、1 个 iris 节点，gaokun3 已打开 &iris"
+fi

@@ -10057,3 +10057,105 @@ HAL 文件与正在跑的进程 `/proc/<pid>/exe` 都是 `ad7c5c92…`、`/proc/
 现在脚本先停 HAL 再卸、失败就用 `umount -l`，按"init 命名空间里的文件 + 正在跑的 HAL 的 exe"核对，对不上就以非零退出。
 原始输出在本机 `out/micverify/20260928-123113/`（不入库）。
 
+
+## #128 ★★★ 视频编解码 qcom-venus → qcom-iris：上游其实已支持本机，只缺 DT 节点；内核编好、只读预检过了，⬜ 未上机（2026-09-28）
+
+**用户要求**（2026-09-28）："venus 的驱动太不稳定了，将 gpu 驱动换成 iris"。这里的 venus / iris 是
+**视频编解码（VPU）驱动**，不是 GPU（GPU 是 freedreno / turnip）。
+⚠️ 触发这次要求的是一份抖音崩溃日志（用户转来的第三方报告，v0.6.2 `20260916145759`）：
+27 秒日志里**没有一行 Venus / V4L2 / MediaCodec / Codec2**，崩的是抖音自带的**软件**解码器
+`libbyteVC2dec.so`（ByteVC2，字节自研编码，没有硬件能解），线程 `VDecod2-V2`，SEGV_MAPERR 读，
+寄存器形态像运动补偿读参考帧（`x1=x3=0x580` 行跨度、`x4 = pc−4` 跳转表、fault = `x2` 源指针，崩前两次 `decoder flush`）。
+⇒ **换 iris 不会影响这次崩溃**，已告诉用户，用户仍选择换（为 v0.7.0）。
+顺带记下一个真实存在但【未证实与此相关】的平台差异：Android GKI 是 39 位用户地址空间
+（`android16-6.12` 的 `gki_defconfig:64` `CONFIG_ARM64_VA_BITS_39=y`），我们是 48 位
+（`CONFIG_ARM64_VA_BITS_48=y`）⇒ 崩溃地址 `0xe96571c7f830` 在手机上不可能出现。所有闭源 App 只在 39 位下测过。
+
+### 1. 结论翻案：iris 早就能服务本机
+本仓此前写着"iris 的 of_match 里没有 sc8280xp，永远服务不了本机"（#41、`patches/upstream-venus/README.md`、
+`kernel-config-android.sh` 注释）—— **错**。v7.2-rc2 的 `iris_probe.c:371-374` 就认 `"qcom,sm8250-venus"` → `sm8250_data`，
+binding `qcom,sm8250-venus.yaml:20-27` 也已经列了 `"qcom,sc8280xp-iris", "qcom,sm8250-venus"`。
+上游 Dmitry Baryshkov 的 "media: iris: enable SM8350 and SC8280XP support"（v1–v7，2026-01 ~ 05-15）在 v4 起去掉了驱动补丁，
+只加 DT 节点（v7.3-rc1 `3a52eef16b97`，`sc8280xp.dtsi:4236-4325`），X13s 用 Windows 的 qcvss8280.mbn 解码验过。
+`sm8250_data` 与我们 venus 时代的 `sc8280xp_res` 逐项相同（IRIS2 / HFI 6xx gen1 / 4 VPP pipe / 同一套 cp_* 与带宽表）。
+当年只看了 of_match 的前几条。
+
+另查出三件 venus 时代的事（随 venus 退役，不再修）：
+* 设备一直绑的是 **`qcom,sm8350-venus`**（`strings prebuilt-boot/dtb/*.dtb`；本仓入库的 0019 从来都是它），不是文档写的 sc8280xp-venus。
+* 0017/0018 设了 `opp_pmdomain = {"mx", NULL}` 却没设 `opp_pmdomain_num` ⇒ venus 从未投过 MX 电压票；MMCX 不在节点里。
+* 0019 的 OPP（720–1332 MHz）没按 videocc 的 ÷3 换算（Konrad 在上游评审里指出过）。
+
+### 2. 补丁（`patches/0053`–`0061`，替代 `upstream-venus/0013–0020` 与 `0011`）
+| 补丁 | 内容 | 来源 |
+|---|---|---|
+| 0053 | sc8280xp.dtsi：iris + videocc 节点 + pil_video_mem、3 个 include | 上游 v7.3 3a52eef16b97（按构建树生成上下文） |
+| 0054 | gaokun3：`&iris { firmware-name = ".../qcvss8280.mbn"; status = "okay"; }` | 照 X13s |
+| 0055 | runtime PM 引用泄漏；`iris_enable_power_domains` 在已 active 时返回 1 被当失败 | 上游 v7.3 f87d7ed |
+| 0056 | **本地**：中断线程拿到锁时若已断电就不碰寄存器（代替上游 b9c2215，见 §3） | 本地 |
+| 0057 | core deinit 时 resume 失败的处理 | 上游 v7.3 75d7987 |
+| ~~0058~~ | ❌ **已否、不列入**：`iris_allow_cmd()` 位掩码判断 —— 在 gen1 上只带来回归（§3） | 上游 v7.3 0ac05c4 |
+| 0059 | UC_REGION 被拒时如实报错（原先"启动成功"后挂死） | 上游 v7.4 队列 cff20ea4 |
+| 0060 | **本地**：解码器在第一次 SOURCE_CHANGE 前拒绝 CAPTURE G_FMT（与 venus 同一条路），0644 模块参数 `qcom_iris.venus_compat_gfmt` 默认 Y | 本地 |
+| 0061 | 遍历实例链表拿 core->lock（UAF） | 上游 v7.4 队列 e2e2bc05 |
+
+配置：`VIDEO_QCOM_IRIS=y`、`VIDEO_QCOM_VENUS` 不设（MUST_N）。VENUS 必须关：0017/0018 在 IRIS=y 时编不过；
+反过来 VENUS=y + IRIS=n + 新 DT 会让 venus 拿 sm8250_res（没有 cp_*）去绑。`PM_DEVFREQ` 是 iris 在 Kconfig 里看不出的硬依赖
+（没有它 `devfreq_recommended_opp()` 是返回 -EINVAL 的桩），#24 里本来就是 y，已加进 MUST_Y。
+**实测 .config 相对 #24 只变两行**（IRIS / VENUS）。
+
+### 3. 0056：上游 b9c2215 在这把锁下会死锁
+v7.2-rc2 的中断线程开头就 `mutex_lock(&core->lock)`（`iris_hfi_common.c:107`），而 `iris_vpu_power_off()` 的所有调用者都持着这把锁
+（runtime suspend `iris_probe.c:320-328` → `iris_hfi_common.c:135`、core deinit、core init 出错路径）。
+* 原版 `disable_irq_nosync()`：断电前到达的中断，线程在断电**之后**拿到锁，`iris_vpu_clear_interrupt()` 读写已断电的寄存器块 ——
+  本机上这就是 external abort、内核静默死亡（CLAUDE.md 操作禁忌第 2 条）。
+* 上游 b9c2215 `disable_irq()`：持锁等线程，线程等锁 ⇒ **死锁**。v7.3-rc5 也是这个写法 —— 上游缺陷，不是回移漏依赖（从源码推出，未复现；报不报上游等用户定）。
+* 0056：保留 nosync，加 `core->hw_powered`（只在锁内读写：上电在 `enable_irq` 前置位、断电第一步清零）；线程拿到锁后已断电就不清中断、
+  不跑响应处理（`iris_hfi_queue_cmd_write` 会敲门铃寄存器 `iris_hfi_queue.c:120`），只做那一次 `enable_irq` 抵消上半部的 disable。
+
+**0058 为什么撤**（审查验证）：gen1 在输入队列 STREAMON 时置 `IRIS_INST_SUB_LOAD_RESOURCES`（`iris_hfi_gen1_command.c:185`），
+输入队列在跑就一直在。v4l2_codec2 的 flush 是两个队列 STREAMOFF + STREAMON、不发 START（`V4L2Decoder.cpp:545-611`），而 DRAIN 位
+STREAMOFF 不清 ⇒ "drain 中途 seek、播到结尾再发 STOP"时 `sub_state = 0x88`：v7.2-rc2 原版 `!= DRAIN` 放行（与 venus 一样），
+0058 的 `!(& DRAIN)` 拒绝 → `-EBUSY` → `onError()`。它想拦的"第二次 STOP"v4l2_codec2 在用户态就挡了（`:404-409`）。
+⚠️ 以后 rebase 到 v7.3+（已含 0ac05c4）要配本地补丁：解码器 OUTPUT STREAMOFF 时清 DRAIN | DRAIN_LAST。
+
+### 4. Android 侧
+* v4l2_codec2 按 ENUM_FMT + caps 找节点、不看驱动名（节点名变成 `qcom-iris-decoder` / `-encoder`，编号随 probe，camss 占 0-31）。
+* 调研时从 **AOSP main** 的 v4l2_codec2 推出两个"阻塞"（输入 sizeimage 被 iris 改成 6.75 MiB 而客户端只给 2 MiB；S_FMT 在 STREAMOFF 之前）——
+  **在 crDroid 那份（LineageOS fork）上都不成立**：输入缓冲 ≥16 MB（`components/DecodeInterface.cpp:29-41,100-106`），
+  `startOutputQueue` 先 STREAMOFF + 释放再 S_FMT（`v4l2/V4L2Decoder.cpp:302-330`）。所以没加对应的内核补丁。
+  ⚠️ 教训：**对 crDroid 的判断要看构建机上 `~/crdroid/external/v4l2_codec2` 那一份**，AOSP main 不是它。
+* 剩下的真实差异是 G_FMT：venus 在第一个事件前返回 -EINVAL（`vdec_check_src_change()`），iris 从不失败 ⇒ v4l2_codec2 会改走
+  "预建最小输出队列 + EOS 缓冲、首个事件变 DRC"那条本机没跑过的路。0060 默认让它走 venus 那条；`echo N > /sys/module/qcom_iris/parameters/venus_compat_gfmt` 即上游行为，可 A/B。
+* **VP8 硬解丢了**：iris gen1 只有 H264 / HEVC / VP9（`iris_platform_vpu2.c` 格式表）。`device.mk` 的 vp8 门控与 XML 里的 vp8 组件已撤（**要重编 ROM 才生效**；
+  用现有 ROM 测时 VP8 会失败而不是回退软解，只看 H264/HEVC/VP9）。
+* 编码器仍然故意不启用；iris 没有 VP8 编码，且 v4l2_codec2 首帧设 FORCE_KEY_FRAME，v7.2-rc2 的 iris 不认（上游 v7.3 6f62dce）—— 复测编码前先 backport。
+* 验收脚本 `scripts/verify-venus-codec2.sh` → **`scripts/verify-hw-codec2.sh`**（按名字找节点、期望 3 个解码组件、VP8 必须没有、SMMU SID 0x2a00/0x2e00）。
+
+### 5. 构建与只读预检
+* 构建机：`~/gk3-kernel` 的 HEAD 上**新建 worktree** `~/gk3-kernel-iris`（旧树打着 upstream-venus，不能直接往上打 —— 见 §6），
+  新配方 41 个补丁零 fuzz；**测试内核撤掉了 0050（指纹）**，保证只有 iris 一个变量（0050 改了 PAS 所用的 scm DMA 掩码，而 iris 加载固件正是走 PAS，两者合在一起要另测）。
+  `--verify` 只在 0050 的两个文件上不一致（有意为之）。KernelSU 钉同一个 commit。
+* 产物 **iris-k3**：`vmlinuz.efi c6d471c2…`、dtb `bad0cd6e…`（本机 `out/iris-k3/`）。内嵌配置 IRIS=y / VENUS 未设 / KSU=y；iris 30 个目标文件、venus 0 个；
+  `W=1` 编 iris 目录无警告。DT 源码两棵树之间只差 sc8280xp.dtsi 与 gaokun3.dts（后者恰好是 `&venus` → `&iris`）。
+  作废的两版：iris-k1 `5f335017…`（带上游 b9c2215，会死锁）、iris-k2 `d24d18eb…`（还带着 0058）。
+* **÷3 实测确认**（debugfs 缓存值，无 MMIO，#24 上）：`video_cc_mvs0_clk_src` 1599 MHz → `video_cc_mvs0_div_clk_src` 533 MHz（÷3）；
+  `mvs1` 19.2 → 6.4 MHz（÷3）；`mvs0c_div2` 799.5 MHz（÷2）⇒ 上游 240–560 MHz 的 OPP 表在本机单位正确。
+* ESP：剩 46380 KiB；测试放 `<MID>/android/slot_iris/`，条目 `gaokun3-iris-test.conf`（参数照抄 `_a` + `androidboot.init_fatal_panic=true loglevel=7 panic=10`，
+  ramdisk 用 slot_a 的）。`slot_a` / `slot_b` / default 都不动。
+
+### 6. 老构建树的坑（审查实测）
+`~/gk3-kernel` 的工作区还打着 upstream-venus（0017/0018/0019 当年是 fuzz 打的）。直接在上面跑新配方：0053 的 `git apply` 失败，
+但 `kernel-apply-patches.sh` 的 fuzz 回落会把它硬打进去 ⇒ 两份 videocc / pil_video_mem、两个 `video-codec@aa00000`，脚本还报成功。
+现在脚本进循环前检查 venus 残留并拒绝（给出迁移办法），打完后断言"恰好一个 videocc、一个 iris、gaokun3 已打开 &iris"。两条都在构建机上实测过。
+
+### 7. ⬜ 上机验收（要用户同意 + 有人能按电源键）
+单次启动 `boot-oneshot.sh gaokun3-iris-test.conf`，失败任何一次重启都回 #24。判据：
+1. `aa00000.video-codec` 绑在 `qcom-iris`，`devices_deferred` 为空；两个节点 `qcom-iris-decoder` / `-encoder`。
+2. 固件在【第一次 open】时加载（不是 probe）：无 "firmware download failed" / "auth and reset failed" / "invalid setting for uc_region" / "error booting up iris firmware" / "power on failed"。
+3. runtime suspend 能进（关闭 ~1.5 s 后）、不挂（断电时 iris 会写 WRAPPER_TZ 0xc0014/0xc0018，venus 从没写过 —— 若华为 TZ 保护了它们，这里可能挂）。
+4. `verify-hw-codec2.sh` + 真解：avc 360p / 4K、hevc（merge_csd 1 与 0）、vp9；无 "pic_struct" 拒流（华为固件若不报 PIC_STRUCT 会全拒）、无 SMMU fault。
+5. seek 与"片尾附近 seek 再播完"（撤 0058 的依据，要实机确认 STOP 被接受）；`venus_compat_gfmt=N` 再跑一遍。
+   0056 的判据：用完 ~1.5 s 后 `/sys/devices/platform/soc@0/aa00000.video-codec/power/runtime_status` 变 `suspended`，
+   没有任务卡在 `synchronize_irq` / iris 里的 `__mutex_lock`（本机 `DPM_WATCHDOG` 超时 10 s 就 panic）。
+6. 相机前后摄（MMCX 与相机/显示共用，iris 现在会自己投票）、一次 s2idle（临时 allow_suspend=1 再改回 0）、`/sys/fs/pstore/` 为空。
+7. 测完删 `slot_iris/` 与条目，ESP 回到 ~46 MiB。
