@@ -408,7 +408,7 @@ def apply_patch_file(tree: pathlib.Path, project: str, patch_name: str) -> str:
     """把 <repo>/patches/<patch_name> 用 git apply 打进 AOSP 树的 <project>（幂等）。
 
     ★ 为什么要有这个助手：本仓 `patches/` 里的 **AOSP 侧**补丁（0003 glslang、
-    0010 audio HAL、0019 v4l2_codec2；后来又有 0008 tinyalsa、0051 / 0052 audio HAL）**一直没有任何消费者** —— 全靠人手动
+    0010 audio HAL、0019 v4l2_codec2；后来又有 0008 tinyalsa、0051 / 0052 / 0063 audio HAL）**一直没有任何消费者** —— 全靠人手动
     `git apply`。而本仓已经为"没有消费者的配置一定会漂"付过三次账
     （M13 的 BOARD_KERNEL_CMDLINE、M17 的上游 Venus 补丁集、以及 2026-09-12
     抢救回来的那一整批 08-24 工作）。内核那边有 kernel-apply-patches.sh，
@@ -512,6 +512,10 @@ def main():
     step(" [14] audio AIDL HAL 采集方向 MonoPipe 容量翻倍（消除周期性插静音）: ", apply_patch_file(
         tree, "hardware/interfaces",
         "0052-audio-aidl-monopipe-capacity.patch"))
+    # 依赖 [14]（采集管道要能放 2 块），所以排在它后面。#127 §6/§7：去掉开头 170 ms 静音与常驻 2 块延迟
+    step(" [15] audio AIDL HAL 采集改成数据驱动交付（去掉开头静音与常驻延迟）: ", apply_patch_file(
+        tree, "hardware/interfaces",
+        "0063-audio-aidl-primary-capture-data-driven.patch"))
     if failed:
         print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))
         sys.exit(1)

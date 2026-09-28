@@ -10010,7 +10010,7 @@ storaged / system_server）—— hangdump 取证读跨 uid 的 `wchan` 那条�
 * ⬜ 下一版**构建出来的镜像**上再验一次（§5 用的是 bind-mount，不是镜像）：tree-fixes 的 [13]/[14] "已应用" 且退出码 0；
   `scripts/audio/mic-verify.sh` 的四个用例；游戏播放回归（`dumpsys media.audio_flinger` 的 latency 不变）；
   `AudioRecord.getActiveMicrophones()` 对得上内置麦。
-* ⬜ 开头 170.7 ms 的静音（§5 ③）：**查清了，是常驻的采集延迟、不上报**（§6）；修复 0063 已写，⬜ 编译 + 静默 A/B 上机 + 接进 tree-fixes。
+* ✅ 开头 170.7 ms 的静音（§5 ③）：**查清了，是常驻的采集延迟、不上报**（§6）；修复 0063 静默 A/B 通过，已接进 tree-fixes 第 15 条（§7）。⬜ 下一版镜像上再验一次。
 * ⓘ 贡献者的验证是在 bind-mount 的 HAL 上做的，而且那个二进制带了额外日志（提交 4463983 引用的 before 日志
   "parsed … device id 0" 不可能出自原版代码：address 为 "bottom" 时 `StreamPrimary.cpp:184-189` 在打这行之前就返回了）——
   所以要按本仓配方重新构建、重新验。
@@ -10057,9 +10057,10 @@ HAL 文件与正在跑的进程 `/proc/<pid>/exe` 都是 `ad7c5c92…`、`/proc/
 现在脚本先停 HAL 再卸、失败就用 `umount -l`，按"init 命名空间里的文件 + 正在跑的 HAL 的 exe"核对，对不上就以非零退出。
 原始输出在本机 `out/micverify/20260928-123113/`（不入库）。
 
-### 6. 2026-09-28 查源码：开头那 170 ms 不只是静音，而是贯穿整个流的采集延迟 —— 修复 0063 已写，⬜ 未编译、未上机
+### 6. 2026-09-28 查源码：开头那 170 ms 不只是静音，而是贯穿整个流的采集延迟 —— 修复 0063（上机结果见 §7）
 **方法**：只读源码加 §5 的日志，没有新上机。源码有四份：
-* hardware/interfaces：crDroid 16.0 `71d60a4`，打上 0010/0051/0052 后，与构建机那棵逐行对得上（ModulePrimary.cpp:107-110 等引用行号一致）；
+* hardware/interfaces：GitHub 上 crDroid 16.0 的 `71d60a4`。构建机那棵的 HEAD 是 `6e2d52e8`，提交说明同样是 "Merge 'lineage-23.2' into 16.0"、哈希不同；
+  但打上 0010/0051/0052 后，`audio/aidl/default` 下 150 个源文件与构建机逐字节相同（2026-09-28 sha256 核对）；
 * frameworks/av：16.0 `432c191`；
 * system/media：lineage-23.2；
 * tinyalsa_new：打了 0008。
@@ -10083,6 +10084,7 @@ HAL 文件与正在跑的进程 `/proc/<pid>/exe` 都是 `ad7c5c92…`、`/proc/
 
 ③ **量级（存疑）**：流序号偏移精确是 170.7 ms。物理上端到端多出多少，取决于两个没测的量：采集 period 是 1024 还是 1440（1440 是播放方向的实测值），以及硬件起采时延。
    硬约束是 85–171 ms，推断在 124–171 ms 之间。
+   **§7 实测**：交付延迟 D（数据在 ALSA 可读 → 交给 App）中位数 122–125 ms，App 时间戳误差 E 142–146 ms；采集 period 实际是 **1920 帧**（40 ms），既不是 1024 也不是 1440。
 
 ④ **不上报（成立）**：burst reply 的 observable = {含静音的累计帧数, 回复时刻}；`refinePosition` 是空实现（`StreamPrimary.cpp:132-136`）；`xrunFrames` 从不赋值。
    framework 一路原样传到 `AudioRecord` / AAudio 的 getTimestamp（`StreamHalAidl.cpp:963-987`、`Threads.cpp:8736-8767`、`Tracks.cpp:3224-3252`）⇒ App 看不到这段延迟。
@@ -10091,9 +10093,9 @@ HAL 文件与正在跑的进程 `/proc/<pid>/exe` 都是 `ad7c5c92…`、`/proc/
 ⑤ **与 0052 无关（成立，源码层面，无对照数据）**：原版（只打 0051）开头同样补 2 块，因为第一次写管道之前容量不参与任何计算。
    0052 不让偏移翻倍，只把积压上限从 1 块提到 2 块。
 
-⑥ **更糟的尾巴（有源码支撑，未实测）**：
+⑥ **更糟的尾巴（有源码支撑；棘轮部分 §7 已在 H1 上实测）**：
    * 读端停顿超过 1 块，或某块晚到（余量最坏只有 14–17 ms），skip 分支就会再补一块零，偏移永久 +1 块。
-     此前以为之后会"稳定地多 85 ms"，但被推翻了：ALSA 环只有 4 个 period（约 1 块），棘轮之后会反复被静默覆盖、出毛刺。
+     此前以为之后会"稳定地多 85 ms"，但被推翻了：ALSA 环只有 4 个 period（实测 7680 帧 ≈ 1.9 块），棘轮之后可能被静默覆盖、出毛刺。
    * 长会话里 ADC 与 CLOCK_MONOTONIC 之间的漂移会让延迟呈锯齿形变化。
    * tinyalsa 的 XRUN 恢复不打日志（`ta/src/pcm.c:1681-1693`），所以日志里没有 `Error reading from ALSA`，并不能排除 ALSA 层丢过帧。
 
@@ -10104,11 +10106,11 @@ HAL 文件与正在跑的进程 `/proc/<pid>/exe` 都是 `ad7c5c92…`、`/proc/
    * `inputIoThread` 部分写之后，续写从 `&buffer[0]` 重新开始（`StreamAlsa.cpp:278`）—— 0063 顺带修了；
    * `getPcmConfig` 的 `struct pcm_config config;` 没初始化（`alsa/Utils.cpp:338`）。它的阈值目前不会传给 `pcm_open`（proxy 已被 memset，`Utils.cpp:51`），所以碰不到。
 
-**修复 `patches/0063-audio-aidl-primary-capture-data-driven.patch`**（排在 0052 之后、依赖 0052；**还没接进 tree-fixes**）：
+**修复 `patches/0063-audio-aidl-primary-capture-data-driven.patch`**（排在 0052 之后、依赖 0052；§7 A/B 通过后接进 tree-fixes 第 15 条）：
 * 采集方向不再走墙钟定拍，改成管道里够一块就交付，1 ms 轮询（与 `outputIoThread` 相同）。
 * start 之后的第一块最多等 500 ms，之后每块最多等 3 个块时长；超时就按实时速率补静音，这样设备卡死时 framework 仍能按节拍拿到数据。
 * 播放方向与 stub 流一行不动。
-* 预期效果：开头静音 0；偏移 0；时间戳误差只剩 DMA 流水线加 period 量化；卡一下之后积压会被立刻取走，不再有棘轮。
+* 预期效果：开头静音 0；偏移 0；时间戳误差只剩 DMA 流水线加 period 量化；卡一下之后积压会被立刻取走，不再有棘轮。—— §7 实测全部成立。
 
 比较过、没选的方案：
 * 读端直接阻塞 `pcm_read`，去掉 in_0 和管道：结构更干净，但 DSP 卡死时 framework 会跟着卡住；
@@ -10116,7 +10118,7 @@ HAL 文件与正在跑的进程 `/proc/<pid>/exe` 都是 `ad7c5c92…`、`/proc/
 * 只改时间戳：延迟本身不变；
 * 采集块缩到 1024 帧：VoIP 的下一步，必须放在 0063 之后，而且要先测出 period。
 
-⬜ **静默 A/B 方案**（H1 = `out/micverify/hal-0051-0052.bin`，H2 = 再加 0063 的 HAL；bind-mount 做法照 `mic-verify.sh`）：
+✅ **静默 A/B 方案**（已做，结果与修正见 §7；其中"HAL 进程 `kill -STOP`"这一项本身会丢帧，判据要改，见 §7 教训）（H1 = `out/micverify/hal-0051-0052.bin`，H2 = 再加 0063 的 HAL；bind-mount 做法照 `mic-verify.sh`）：
 * 录音时读 `/proc/asound/card0/pcm3c/sub0/{hw_params,status}`，拿到 period 的实际值；
 * `gaokun3-mic-smoke` 加计时：`AAudioStream_getTimestamp` 加上轮询 ALSA status 的 hw_ptr/tstamp，算出交付延迟和时间戳误差；
 * 用例：原有 4 个，加 120 s 长录（看漂移）、启停 20 次、HAL 进程 `kill -STOP` 0.12 s / 0.3 s（棘轮 A/B，不放音）；
@@ -10124,6 +10126,58 @@ HAL 文件与正在跑的进程 `/proc/<pid>/exe` 都是 `ad7c5c92…`、`/proc/
 * 回归：`dumpsys media.audio_flinger` 的输入、输出线程都不变；看 HAL reader 线程的 CPU 占用；
 * 需要：构建机 ≥ D16 单编 `com.android.hardware.audio`。⚠️ crdroid 树是共用的，打上 0063 编完要立刻 `git apply -R`，别让它混进别人的发版构建；设备时间要和别的会话错开。
 
+
+### 7. 2026-09-28 静默 A/B：0063 上机通过 —— 开头静音 171→0 ms、交付延迟 124→1 ms、卡顿之后不再留延迟；已接进 tree-fixes [15]
+**方法**：`SER=gaokun3 HAL_B=… EXTRA=1 bash scripts/audio/mic-verify.sh …`，bind-mount，不刷机、不重启、不出声。设备在 #24（槽 `_a`）。
+* H1 = 0051+0052（`c46c0fc3`）；
+* H2 = 再加 0063 修订版（`a5803b1d`）。首版 `c411834e` 在同样用例上的结果与它一致，修订内容见下面的审查。
+* 录音工具 `gaokun3-mic-smoke -T`：每 1 ms 读一次 `/proc/asound/card0/pcm3c/sub0/status`（hw_ptr / appl_ptr / tstamp），回调里记每块到达的时刻，每 5 ms 调一次 `AAudioStream_getTimestamp`。由此算出：
+  * D = 回调时刻 − 该块最后一帧在 ALSA 可读的时刻；
+  * E = AAudio 时间戳 − 真实采集时刻；
+  * 两者都按时间分 10 段报中位数。
+* 最终一轮的原始输出在本机 `out/micverify/20260928-165125/`（不入库）。
+
+**硬件事实**：采集节点 hw:0,3 的 `hw_params` 是 `period_size 1920 · buffer_size 7680`（4 × 40 ms）；
+`sw_params` 是 `start_threshold 1`、`stop_threshold 76800`（10 × buffer）、`tstamp_mode ENABLE`。
+
+| | H1（0051+0052） | H2（+0063） |
+|---|---|---|
+| 开头静音：4 个用例 + 启停 20 次 | 每次 171 ms，每次 2 条 incomplete | **每次 0 ms，0 条** |
+| 第一次含真实数据的回调（相对 requestStart） | ≈ 264 ms | ≈ 152 ms（HAL 日志：首块在 start 后 142–147 ms 到） |
+| D 中位数：5 s / 120 s | 122–125 ms | **1.0–1.2 ms** |
+| E 中位数 | 142–146 ms | **21 ms** |
+| 120 s 长录：10 段 D / E | D 121–122、E 142–143，全程平直 | D 1.0–1.2、E 20–22，全程平直 |
+| ADC 相对 CLOCK_MONOTONIC（120 s） | +0 ± 0 ppm | +1 ± 1 ppm |
+| **audioserver 停 0.12 s + 0.2 s**（干净的棘轮测试） | 0.12 s 没触发（取决于相位）；0.2 s 触发 1 条 skipping、1 个 85 ms 的洞，之后 D 124 → 210、E 146 → 231 **永久**，ALSA 积压从 0 变成约 90–100 ms 常驻 | **0 个洞，0 条 incomplete / skipping**；D 全程约 1 ms、E 约 21 ms，ALSA 积压 0 |
+| HAL 进程停 0.12 s + 0.3 s（只看会不会挂死、有几个洞） | 2 个洞、4 条 skipping，之后 ALSA 积压约 270 ms 常驻 | 1 个洞：0.3 s 超过 3 块期限（256 ms）时补的那一块，在设计之内；没有挂死 |
+
+* E 剩下的约 21 ms 是 period 量化：块边界（4096）落在 40 ms 的 period 中间，平均差半个 period。这是 4096 块配 1920 period 的固有量，不是 HAL 积压。
+* 设备上 SLPI 每 60 s 崩溃重启一次（iris 会话同日发现），120 s 的 10 段数据里看不到它的影响。
+* 漂移只有 ±1 ppm（120 s），§6 ⑥ 担心的锯齿形延迟在这个量级上可以忽略。
+
+**审查**（2026-09-28，0063 与测试工具两路，10 条发现，复核成立 8 条，全是 minor 或测试设计）：
+* 0063 修了两处：
+  * F1：`gotBlock` 改按 `StreamAlsa::transfer` 实际读到的帧数判断，不再用等待结束时的快照；
+  * F2(a)：读端自己被拖住、醒来时截止时刻已过，也给 in_0 留 1/8 块的宽限。
+* 测试工具改了五处：
+  * HAL 停顿组只看洞数；
+  * 数 framework 侧的丢帧；
+  * "trigger → hw_ptr 第一次前进"原来取错了样本；
+  * 结果表按用例头锚定；
+  * ppm 附标准误。
+
+**教训**：
+* ★ **扰动手段本身可能制造你要测的现象。** 停 HAL 进程时，in_0 正阻塞在 `pcm_read` 里，被信号打断后读返回不完整
+  （审查时对照本地 v7.3-rc5 的 `sound/core/pcm_lib.c` 核过：返回已传的部分帧数）。tinyalsa 把它当 `-EIO`，proxy 整块重读，已拷的 L 帧（0 ≤ L < 4096）就静默丢了。
+  按帧号算的延迟会因此"涨"L/48 ms：第一轮里 H2 看起来"卡顿后 +80 ms"，其实是丢了 2 个 period。
+  要测"积压能不能追回来"，得停 audioserver，让 HAL 线程照常跑。
+* ★ **测量的对齐方式会抵消被测的效应。** 只按开头静音算的固定偏移，会把 H1 中途补进的那一块抵消掉，棘轮就看不见了。现在改成按每个洞累加偏移。
+* ★ **判据阈值要高于测量本身的量化噪声。** 原先的"≥40 ms 阶跃"恰好等于 period 宽度，H2 报出的阶跃全是假的。现在改成分段中位数。
+
+⬜ 还剩：
+* 下一版镜像上再跑一次 `mic-verify.sh`：这时"修复后"那一栏应该就是 H2 的数；
+* 起采脉冲（§6 ⑦）；
+* 把采集块缩到 1024 帧：在 period 1920 下，块会一串一串地到，好处被 40 ms 的 period 封顶，要重新评估值不值得做。
 
 ## #128 ★★★ 视频编解码 qcom-venus → qcom-iris：上游其实已支持本机，只缺 DT 节点；上机查出收尾卡死的根因（HFI_FLUSH_OUTPUT），修复 0065，⬜ 待整链复测（2026-09-28）
 
