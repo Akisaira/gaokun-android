@@ -10125,7 +10125,7 @@ HAL 文件与正在跑的进程 `/proc/<pid>/exe` 都是 `ad7c5c92…`、`/proc/
 * 需要：构建机 ≥ D16 单编 `com.android.hardware.audio`。⚠️ crdroid 树是共用的，打上 0063 编完要立刻 `git apply -R`，别让它混进别人的发版构建；设备时间要和别的会话错开。
 
 
-## #128 ★★★ 视频编解码 qcom-venus → qcom-iris：上游其实已支持本机，只缺 DT 节点；内核编好、只读预检过了，⬜ 未上机（2026-09-28）
+## #128 ★★★ 视频编解码 qcom-venus → qcom-iris：上游其实已支持本机，只缺 DT 节点；上机查出收尾卡死的根因（HFI_FLUSH_OUTPUT），修复 0065，⬜ 待整链复测（2026-09-28）
 
 **用户要求**（2026-09-28）："venus 的驱动太不稳定了，将 gpu 驱动换成 iris"。这里的 venus / iris 是
 **视频编解码（VPU）驱动**，不是 GPU（GPU 是 freedreno / turnip）。
@@ -10164,6 +10164,9 @@ binding `qcom,sm8250-venus.yaml:20-27` 也已经列了 `"qcom,sc8280xp-iris", "q
 | 0059 | UC_REGION 被拒时如实报错（原先"启动成功"后挂死） | 上游 v7.4 队列 cff20ea4 |
 | 0060 | **本地**：解码器在第一次 SOURCE_CHANGE 前拒绝 CAPTURE G_FMT（与 venus 同一条路），0644 模块参数 `qcom_iris.venus_compat_gfmt` 默认 Y | 本地 |
 | 0061 | 遍历实例链表拿 core->lock（UAF） | 上游 v7.4 队列 e2e2bc05 |
+| ~~0062~~ | ❌ **已否、不列入**：放宽 PC_READY 轮询窗口 —— 前提被 k5 推翻（§9） | 本地 |
+| 0065 | **本地**：解码中 CAPTURE streamoff 除 DRC 外一律发 HFI_FLUSH_ALL（与 venus 同）—— **收尾卡死的根因修复**（§9） | 本地 |
+| 0064 | 诊断（只在 `--with-diag`）：HFI 全量跟踪 + 断电 / 收尾结果 + A/B 开关（§8–§9） | 本地 |
 
 配置：`VIDEO_QCOM_IRIS=y`、`VIDEO_QCOM_VENUS` 不设（MUST_N）。VENUS 必须关：0017/0018 在 IRIS=y 时编不过；
 反过来 VENUS=y + IRIS=n + 新 DT 会让 venus 拿 sm8250_res（没有 cp_*）去绑。`PM_DEVFREQ` 是 iris 在 Kconfig 里看不出的硬依赖
@@ -10215,7 +10218,8 @@ STREAMOFF 不清 ⇒ "drain 中途 seek、播到结尾再发 STOP"时 `sub_state
 但 `kernel-apply-patches.sh` 的 fuzz 回落会把它硬打进去 ⇒ 两份 videocc / pil_video_mem、两个 `video-codec@aa00000`，脚本还报成功。
 现在脚本进循环前检查 venus 残留并拒绝（给出迁移办法），打完后断言"恰好一个 videocc、一个 iris、gaokun3 已打开 &iris"。两条都在构建机上实测过。
 
-### 7. ⬜ 上机验收（要用户同意 + 有人能按电源键）
+### 7. 上机验收（要用户同意 + 有人能按电源键）
+▶ k3 / k4 / k5 已跑了 1–4 与 6 的相机部分，结果见 §8–§9；还没跑的列在 §9 末尾。
 单次启动 `boot-oneshot.sh gaokun3-iris-test.conf`，失败任何一次重启都回 #24。判据：
 1. `aa00000.video-codec` 绑在 `qcom-iris`，`devices_deferred` 为空；两个节点 `qcom-iris-decoder` / `-encoder`。
 2. 固件在【第一次 open】时加载（不是 probe）：无 "firmware download failed" / "auth and reset failed" / "invalid setting for uc_region" / "error booting up iris firmware" / "power on failed"。
@@ -10226,3 +10230,62 @@ STREAMOFF 不清 ⇒ "drain 中途 seek、播到结尾再发 STOP"时 `sub_state
    没有任务卡在 `synchronize_irq` / iris 里的 `__mutex_lock`（本机 `DPM_WATCHDOG` 超时 10 s 就 panic）。
 6. 相机前后摄（MMCX 与相机/显示共用，iris 现在会自己投票）、一次 s2idle（临时 allow_suspend=1 再改回 0）、`/sys/fs/pstore/` 为空。
 7. 测完删 `slot_iris/` 与条目，ESP 回到 ~46 MiB。
+
+### 8. iris-k3 / k4 上机：第一次收尾就把固件卡死（2026-09-28）
+* **k3**（`c6d471c2`，用户在旁）：绑定、第一次 open 冷启动固件、avc720 解满 30 帧都正常；随后每 ~1.8 s 一条
+  `skip power collapse, wfi=0x1, idle=0x40000000, pcr=0x0, ctrl=0x40000001)` + `failed to suspend`，第二次解码 `session open failed`，钉 `power/control=on` 也救不回，只能重启。
+  当时按"等 PC_READY 的窗口太窄"理解，写了 0062（放宽到 venus 的 150 ms）→ **k4**（`cd6a799f`）：一模一样。日志 `out/iris-k3|k4/dmesg-wedged.txt`、`logcat-wedged.txt`。
+* ★ **重读 k4 的 logcat（kernel 缓冲从开机起完整）改写了时间线**：实例在 stop 之后 **1.031 s** 进 ERROR（= 1000 ms 的 `HW_RESPONSE_TIMEOUT`），
+  Codec2 的 stop 在 binder 上卡 4102 ms、close 卡 1112 ms（FLUSH / STOP / RELEASE_RESOURCES / SESSION_END 各超时 1 s），
+  **第一次 PC_PREP 在那之后约 4 s 才发** ⇒ 固件在**第一条收尾命令**就不应答了，断电失败只是后果；"几次 PC 之后才打不开"量的只是测试者隔了多久。
+  0062 不可能有用。
+* **两个驱动在这条命令上不一样**：v4l2_codec2 析构时先 streamoff CAPTURE（`V4L2Decoder.cpp:98-106`）。iris 在 STREAMING 状态对 CAPTURE 发
+  `HFI_FLUSH_OUTPUT`（`iris_hfi_gen1_command.c:196-214`，不看 DRC）；venus 发 `HFI_FLUSH_ALL`，FLUSH_OUTPUT 只在 DRC 用（`venus/vdec.c:1232-1250`）。
+  分离模式（NV12 输出）下 HFI 的 OUTPUT 口挂的是固件内部 DPB，客户端缓冲在 OUTPUT2。
+* **venus 对照，零重编零重启**（#24 带 kprobe：`out/iris-k5/device-logs/venus-kprobe-trace-run.sh`，结果 `vpc-trace.txt`）：同一份固件、同一段 decode-test，
+  收尾 `FLUSH_ALL` 0.3 ms 回完成、再一次 FLUSH_ALL 也立即完成，STOP → RELEASE_RESOURCES → 3 次 RELEASE_BUFFERS → SESSION_END 各 <1 ms，MVS0 切回软件控制；
+  2.4 s 后 runtime suspend **真的发了 PC_PREP**，一个轮询间隔（1.5 ms）内就 `set_remote_state(0)`。
+  ⇒ 这份固件的断电握手是好的；"venus 靠 PC_READY 早已置位的捷径断电"的猜测被推翻。
+* 据此写诊断补丁 0064（当时叫 0063，与另一条线的 0063 撞号后改名），编 **iris-k5**（`5802c031…`，dtb 与 k4 相同 `bad0cd6e…`，仍不含 0050）。
+
+### 9. iris-k5：根因确认，修复 0065（2026-09-28，用户在旁，一次开机）
+全部靠 0064 的运行时开关，同一次开机里 A/B；测试片是设备上 8 月留下的那批，`gaokun3-decode-test` 解满 30 帧就停（即"解码中途 stop"）。
+日志与脚本在本机 `out/iris-k5/device-logs/`（`k5-test.sh` 四段、`ab.sh` 交替 A/B；内核日志从 `/dev/kmsg` 实时落盘 —— hfi_trace 每帧 4 行，一段片子就冲掉 128 KiB 的日志环）。
+
+| 段 | 做了什么 | 结果 |
+|---|---|---|
+| 开机 | 零会话断电 | 冷启动 81 次轮询就绪，`SYS_INIT done`；PC_PREP **1 us** 就绪，断电成功 |
+| fix | `flush_all=1`，avc720 ×2 | 两遍都出帧、都断电。收尾：`FLUSH 0x1000004` → **20.7 ms** 回完成 → STOP 0.7 ms → RELEASE_RESOURCES 0.9 ms → SESSION_END 0.7 ms；1.5 s 后 PC_PREP **3 us** 就绪；热启动 5–10 ms |
+| codecs | `flush_all=1`：HEVC 720 / 1080、VP9 1080、AVC 1080 / 720 | 全部出帧；5 次握手 / 5 次断电 / 5 次热启动，0 超时、0 跳过、0 SMMU |
+| repro + A/B | `flush_all=0`（上游）与 `=1` 交替 10 轮，`recover_skips=3` | 见下表 |
+| 相机 | `gaokun3-ncam-smoke` 后 / 前 | 后摄 150 个结果、前摄 22 个，0 帧失败，无 camss / SMMU 报错 |
+
+| 收尾发的 flush | 卡死 | flush 耗时 |
+|---|---|---|
+| `HFI_FLUSH_ALL`（venus 的做法） | **0 / 15** | 0.45–1.5 ms（A/B 里）、20.7 ms（fix 段带全量跟踪） |
+| `HFI_FLUSH_OUTPUT`（上游 iris） | **8 / 11**（交替 10 轮里 7 / 8） | 卡死的每一次都是 ~1.02 s 后 `-110` |
+
+* **卡死的形态**（hfi_trace）：固件读走 FLUSH 命令（命令队列读指针 14473 → 14477），把在途的几帧 EBD / FBD 交完，之后**再也不读任何命令**
+  （读指针停在 14477，后面的 SESSION_END / STOP / RELEASE_RESOURCES / PC_PREP 只在写指针上累加）；SFR 是 "Init SFR msg, NOT an error"，
+  CTRL_STATUS `0x40000001`（空闲 + WFI）、没有错误位。不是主机漏读消息（H2 排除）。
+* 一对样本的对比（**只是猜测**）：没卡的那次，flush 时固件手里还有一个没解完的输入包，它先把 18 个 DPB 空着退回来再回 flush 完成；
+  卡住的那次，flush 之前输入已经全部吃完。
+* **`recover_skips` 不是修复**：卡死后连续 3 次跳过断电 ⇒ PAS shutdown，下一次 open 冷启动、照常解码 —— 同一次开机里救回 7 次，
+  **第 8 次冷启动失败**（CTRL_STATUS 一直是 0，`error booting up iris firmware`），之后每次 open 都一样，要重启。
+* 其他：`fw_debug=0x18` 什么也没吐；`avc2160.mp4` 在建解码器之前就"没找到视频轨"（抽取器，与驱动无关，片子待查）；
+  decode-test 退出时约三成打 `FORTIFY: pthread_mutex_lock called on a destroyed mutex`（客户端进程，k3/k4 的日志里也有，工具自己的退出竞态，不影响结果）。
+  测完重启回 #24，pstore 为空。
+
+**据此改配方**：
+* **0065**：CAPTURE streamoff 在 STREAMING 且不在 DRC（`IRIS_INST_SUB_DRC | _DRC_LAST`）时发 `HFI_FLUSH_ALL`，DRC 时仍发 FLUSH_OUTPUT —— 与 `vdec_stop_capture()` 一一对应。
+  v4l2_codec2 只在 `startOutputQueue()`（分辨率切换后重配图像缓冲）单独关 CAPTURE 且要保住码流；析构与 seek（`flush()`，`:571/:588`）都是紧接着再关 OUTPUT。
+* **0062 撤出**（文件留档加横幅）：健康固件 1–3 us 就就绪，上游 2.5 ms 足够。
+* **0064 重做在 0065 之上**：`flush_all` 换成 `upstream_flush`（默认 N；Y = 回到上游 FLUSH_OUTPUT，用来重现），其余开关不变。
+  草稿树上验过：基线（0061，不含 0058 / 0062）→ 0065 → 0064 逐个干净打上。⬜ 还没在构建机上编译。
+
+⬜ **还没测**（下一版整链内核 = 全配方含 0050 + 0065、不带诊断）：
+1. **播到结尾（drain 完成）后再 stop** —— venus 在 DRAIN 状态根本不发 flush，iris 现在会发 FLUSH_ALL，没实测过；
+2. seek（含"片尾附近 seek 再播完"，撤 0058 的依据）与分辨率中途变化（DRC 路径本身没改，但也没实测）；
+3. `venus_compat_gfmt=N`、一次 s2idle、带 0050 的整链（PAS 与 scm DMA 掩码）；
+4. ROM 侧（VP8 的 XML 撤掉后要重编 ROM 才生效）。
+测完删 ESP 上的 `slot_iris/` 与 `gaokun3-iris-test.conf`（k5 还放在那里）。

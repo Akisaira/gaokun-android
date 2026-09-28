@@ -146,7 +146,7 @@ KPATCHES=(
     #    只碰 drivers/firmware/qcom/qcom_scm.c 与其头文件（与相机/触摸/USB 补丁互不相干）。
     #    编译通过；LOAD 未在硬件验证（首次发 LOAD SMC 需人在设备旁，有硬挂风险）。
     0050-firmware-qcom-scm-qseecom-app-load-shutdown-listener.patch
-    # ★★ 0053–0060（#128）：视频编解码 qcom-venus → qcom-iris。iris 靠 DT 的回落 compatible
+    # ★★ 0053–0065（#128；0058、0062 不列）：视频编解码 qcom-venus → qcom-iris。iris 靠 DT 的回落 compatible
     #    "qcom,sc8280xp-iris", "qcom,sm8250-venus" 直接用 v7.2-rc2 自带的 sm8250_data，驱动不用加平台。
     #    ⚠️ 需要 .config 里 VIDEO_QCOM_IRIS=y、VIDEO_QCOM_VENUS 不设（kernel-config-android.sh 已断言）。
     # 0053：sc8280xp.dtsi 加 iris + videocc 节点 + pil_video_mem（上游 v7.3 3a52eef16b97 的 backport）。
@@ -171,6 +171,11 @@ KPATCHES=(
     0060-media-iris-venus-compatible-decoder-capture-g_fmt.patch
     # 0061：上游 v7.4 队列的 e2e2bc05 —— 遍历实例链表时拿 core->lock（Codec2 探能力时的 open/close 会撞上）。
     0061-media-iris-take-core-lock-when-scanning-the-instance-list.patch
+    # ❌ 0062（放宽 PC_READY 轮询窗口）故意【不列】：前提被 iris-k5 推翻 —— 健康的固件 PC_PREP 之后 1–3 us 就就绪，
+    #    "断电被跳过"是固件已经卡死的后果（根因见 0065）。留着只会让卡死时持 core->lock 从 2.5 ms 变成 150 ms。#128 §9。
+    # 0065：【本地】解码中 CAPTURE streamoff 除分辨率切换外一律发 HFI_FLUSH_ALL（与 venus 同）。上游发的
+    #    HFI_FLUSH_OUTPUT 让华为固件卡死（k5 A/B：8/11 vs 0/15），之后断电永远跳过、硬解全挂到重启（#128 §9）。
+    0065-media-iris-flush-all-on-capture-streamoff-except-drc.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
@@ -182,6 +187,8 @@ DIAG_PATCHES=(
     0028-clk-qcom-gdsc-debugfs-init-raw-and-wait-override.patch
     0029-clk-qcom-gdsc-debugfs-raw-toggle-flags-mask-pre-off-delay.patch
     0030-media-camss-dbg-skip-per-block-stream-power.patch
+    # 0064（#128 §8–§9）：iris 收尾 / 断电全程跟踪 + A/B 开关。独立于上面四个（只动 iris 目录），打在 0065 之上。
+    0064-media-iris-DIAG-pc-teardown-trace-and-ab-switches.patch
 )
 WITH_DIAG=0
 for a in "$@"; do [ "$a" = "--with-diag" ] && WITH_DIAG=1; done
