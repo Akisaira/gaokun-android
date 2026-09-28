@@ -1,0 +1,31 @@
+diff --git a/audio/aidl/default/alsa/StreamAlsa.cpp b/audio/aidl/default/alsa/StreamAlsa.cpp
+index 7a44cc78ac..66f59262e1 100644
+--- a/audio/aidl/default/alsa/StreamAlsa.cpp
++++ b/audio/aidl/default/alsa/StreamAlsa.cpp
+@@ -53,7 +53,25 @@ StreamAlsa::~StreamAlsa() {
+ 
+ ::android::sp<::android::MonoPipe> StreamAlsa::makeSink(bool writeCanBlock) {
+     const ::android::NBAIO_Format format = getPipeFormat();
+-    auto sink = ::android::sp<::android::MonoPipe>::make(mBufferSizeFrames, format, writeCanBlock);
++    // Pad the MonoPipe FIFO to twice the transfer block size.
++    //
++    // MonoPipe derives its writer throttle setpoint as (reqFrames * 11 / 16), and
++    // audio_utils_fifo reserves one slot. A FIFO sized exactly to the transfer block
++    // (mBufferSizeFrames) can therefore never hold a whole block:
++    //
++    //   capacity 4096 -> usable 4095 (one slot reserved), setpoint 2816 (< block 4096)
++    //
++    // The steady-state pipe depth settles below the block size, so the reader
++    // (transfer()) periodically observes a short FIFO, and StreamAlsa::transfer() logs
++    // "incomplete data received" and fills a whole block of frames with silence. On a
++    // 4096-frame block at 48 kHz that is one 85 ms hole every 682.6 ms.
++    //
++    // Doubling the capacity raises the setpoint to (11/16 * 8192) = 5632, i.e. above
++    // the block size, so the reader always gets a full block.
++    const size_t capacityFrames = mBufferSizeFrames * 2;
++    auto sink = ::android::sp<::android::MonoPipe>::make(capacityFrames, format, writeCanBlock);
++    LOG(INFO) << __func__ << ": MonoPipe capacity " << capacityFrames << " frames, block "
++              << mBufferSizeFrames << " frames, writeCanBlock " << writeCanBlock;
+     const ::android::NBAIO_Format offers[1] = {format};
+     size_t numCounterOffers = 0;
+     ssize_t index = sink->negotiate(offers, 1, nullptr, numCounterOffers);
