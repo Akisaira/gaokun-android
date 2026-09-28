@@ -517,6 +517,8 @@ def main():
         tree, "hardware/interfaces",
         "0063-audio-aidl-primary-capture-data-driven.patch"))
     # 不依赖前面几条（只动 audio/aidl/default/apex/）。v0.7.0 验收 B2：effect HAL 在 vendor APEX 里，加载不了 /vendor/lib64/soundfx 的 Histen
+    # ⚠️ 这是唯一一条会【新建】文件的 AOSP 补丁（linker.config.json，未跟踪）：把 hardware/interfaces 还原成上游时
+    #    `git checkout -- .` / `reset --hard` 删不掉它，要再 `git clean -f audio/aidl/default/apex/`，否则这一条报"打不上"（2026-09-29 审查）
     step(" [16] audio APEX 链接器命名空间放行 /vendor/${LIB}/soundfx（Histen 效果库）: ", apply_patch_file(
         tree, "hardware/interfaces",
         "0068-audio-aidl-apex-permit-vendor-soundfx.patch"))

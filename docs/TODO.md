@@ -37,6 +37,23 @@
     重启 effect HAL 抓到原话 `dlopen failed … is not accessible for the namespace`（`out/v070-accept/b2-diag/`，effects/README §九）。
     ⇒ **补丁 0068**（音频 APEX 的 `linker.config.pb` 加 `permittedPaths /vendor/${LIB}/soundfx`，tree-fixes 第 16 条），重编 ROM、全部重验。
   * ESP 上的 `slot_iris/` 与 `gaokun3-iris-test.conf` 已删（空余 30 → 45 MB）；安装器预览包按这一版的 boot.img 造过一次（`out/release-installer/0.1.0-preview/`，未上传）⇒ ⬜ 重编的那一版验收过后**按新的 boot.img 重造**（它记着 boot.img 的 sha256 与 git 提交）。
+* ✅ **重编候选版 `1790605865`（incremental `20260928143105`，0068 + Parts 换 M3E 样式 768397f）= v0.7.0-alpha 发的就是它**
+  （2026-09-29 00:10 装进 `_a`、oneshot 起来 50 秒；验收过后 ESP default 改成 `_a`，`_a` 已 marked successful；旧的 `_b` = 1790597477 留作回落）。
+  用户定：**第 8 项的 USB 回插失败写成已知问题照发**（见下）。结果全在 `out/v070b-accept/`：
+  * 1 ✅ 戳 / tablet / `_a` / 内核 #13 · 9 ✅ `8388608` · 7 ✅ `ntp.aliyun.com`（与 Mac 差 1 秒）
+  * 2 ✅ verify-hw-codec2 19/0 + rc-accept 解码 15/15 · 3 ✅ 前后摄 PASS、camss/smmu 0
+  * 4 ✅ A1 HAL `a5803b1d`、策略 `d65299db` · A2 四组开头静音 0、洞 0，48 k 两组 D 中位 1.0 / 1.1 ms、E 21.6 / 22.0 ms，first capture block 145–148 ms · A4 同上次
+  * 5 / B2 ✅（gaokun-android-90 的 B2-0…B2-5；开关都是在新的 Parts 页面上点的）：开机就把 `libgaokunhisteneffect.so` 加载进 effect HAL（没有 `not accessible`）、`queryEffect: ok`；
+    关：`bit-exact passthrough, nothing loaded` + `bypass: master switch off`；开：`Histen engine loaded from /vendor/lib64/soundfx/libhw_histen_processing.so`、`Histen chain up: scene=0 of 15`、
+    `processing: built-in speaker, Histen + speaker chain`、`meter:`；放音途中 AudioOut_D **1 Effect Chains**（`Gaokun Histen`，uuid `b7e4c9a2…`）、maps 里两个库都在；再关回 bypass；crash 0。B2-4（耳机）没耳机、未测
+  * Parts 两页截图 `out/v070b-accept/ui/`：M3E 开关（开 = 拇指里有 ✓、关 = ✕）、圆角卡片、大标题 + 圆形返回、说明在页脚（info 图标）
+  * 6 ✅（按判据：没有新的大面积 denial）：`audit_lost` 0。这次开机跑过相机 / 解码 / 录音 / 应用，新增的都是零星几条：`hal_audio_default → hal_audio_default` binder call
+    （核心音频 HAL 调 effect HAL，录音期间，0068 之前有没有不确定 —— 许可模式下同一三元组只记一次）、相机链读 `vendor_default_prop` / `vendor_minigbm_debug_prop`、mediacodec 读 `vendor_gaokun3_prop`、untrusted_app 的常规探测。⬜ 切 enforcing 前补规则
+  * 8 ⚠️ **待机本身过**（拔线 → 息屏 → force-idle → 真睡约 3.5 分钟：printk 只走 2.2 秒、boottime 走 220 秒；电源键唤醒、不复位、TCP adb 回来；`success` 0 → 2）；
+    ❌ **插回 USB 后 USB-C 口坏掉**：回插后第一次切 device 就 `udc a600000.usb: failed to start g1: -524`，切 host `Host halt failed, -110` —— A6 的老签名，而 DT 里 0048 的
+    `qcom,select-utmi-as-pipe-clk` 在。时间线（logd kernel 缓冲）：拔线 → host 好 → 待机 / 唤醒 → host→device 好 → device→host 好 → 回插 host→device **坏**。第一个候选版（同内核同 dtb）同一步过了一次 ⇒ 间歇性、不是这次重编引入。
+    发版说明写进已知问题；⬜ 跟进见 A6。另：force-idle 期间 GMS 崩 4 次（`PasswordCheckup.ZERO_PARTY_API is not available on this device`，未认证设备，与本版改动无关）
+  * 独立审查（workflow，两名审查 + 每条两名反驳）：0068 两条 minor 都被 0/2 驳回、Parts 0 条；0068 的 enforcing 路径（linkerconfig 读 `linkerconfig_file`、hal_audio_default 加载 vendor_file）有源码出处确认
 * **装机验收清单**（装进 `_b`，`install-ota-local.sh --check` → `--go`，oneshot 启动）。重编的那一版：全部重跑，5 换成 gaokun-android-90 给的 B2-0…B2-5（`out/v070-accept/b2-checklist.md`），外加 A1–A2、A4：
   1. ☐ 构建戳 = 这次的 `ro.build.date.utc`；`ro.build.characteristics=tablet`；`/proc/version` 是候选内核
   2. ☐ 硬解：`scripts/verify-hw-codec2.sh`（3 个解码组件、没有 VP8）+ `out/iris-rc/rc-accept.sh` 的 15 项（播完后 seek、seek、分辨率变化、stop、drain）
@@ -127,7 +144,7 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 | **T4** | **息屏 USB adb 断** | `usbrole.sh` v2（插着主机不睡）**应已在 v0.6.2 里**；但在 S1 定下来之前默认根本不睡，这条暂时无感 | 原生化要先修 UCSI 的数据角色（A6，现在是反的） |
 | **A1** | 音频/蓝牙长期运行后死锁 | 用户报过，我们从未复现 | 设备在线时先 `ls /data/vendor/gaokun3/` 看开发机自己有没有抓到过 `hangdump-*`；否则等下次死锁把目录要过来 |
 | **T5** 🆕 | **声明本机是平板**（[issue #5](https://github.com/vahiru/gaokun-android/issues/5)） | `ro.build.characteristics` 是 `default` ⇒ QQ 不给平板模式登录。原因：从没设过 `PRODUCT_CHARACTERISTICS`，而 `common_full_tablet_wifionly.mk` 也不设它 | ✅ 已写 `lineage_gaokun3.mk`：`PRODUCT_CHARACTERISTICS := tablet`（依据 `build/make/core/product_config.mk:425-428`）。⬜ 下次构建后 `grep ro.build.characteristics …/system/build.prop` 验；请报告者实机测 QQ。⚠️ issue 里「网页把设备认成 Linux」**不一定**跟着好 —— Android 的 UA 本来就含 `Linux; Android`，网页是否给平板版由浏览器决定，不看这个属性（未验证） |
-| **A6** 🔺 | **USB 角色 / #27 拔插后 adb 不回来** | ★ 2026-09-23 真凶查到（[#118](stage4-findings.md) §7）：port0 控制器**任何一次**角色切换后都坏 —— host 时 xhci `Host halt failed, -110`，切回 device 后 gadget `-524`、只能重启。与 0012 记过的 pipe 时钟 -110 同签名，缺 `qcom,select-utmi-as-pipe-clk` ⇒ `patches/0048` —— ✅ **2026-09-23 上机验证**：来回切三次 xhci 200 ms 绑上、UDC 400 ms `configured`，`-110`/`-524` 各 0 次（[#118](stage4-findings.md) §8）。角色策略：用户态 `follow`（电气探测，不信 EC）A/B 两场景实测通过、C 只测了状态机。本机 `slot_a` 的 dtb 已手工换成 0048 版（备份 `.pre0048`）；⬜ 随下次构建进镜像（prebuilt-boot 的 dtb 已换）；⬜ hub/U 盘/充电器真机场景仍未测（用户手边没有）。另：2026-09-23 直接问 EC（[#118](stage4-findings.md) §6）：插着主机时 `partner_type=2`（UFP，应为 1），**没插也是 2** ⇒ 可能是常数；EC 端口数据里没有角色位 | **要用户插拔**：U 盘 / 纯充电器 / 扩展坞各跑一次 `scripts/usb/ucsi-snapshot.sh`，看 partner_type 与 pwr_dir 怎么变，再定 quirk（扩展坞会 DR_Swap，不能盲用"受电⇒对方是主机"） |
+| **A6** 🔺 | **USB 角色 / #27 拔插后 adb 不回来** | ★ 2026-09-23 真凶查到（[#118](stage4-findings.md) §7）：port0 控制器**任何一次**角色切换后都坏 —— host 时 xhci `Host halt failed, -110`，切回 device 后 gadget `-524`、只能重启。与 0012 记过的 pipe 时钟 -110 同签名，缺 `qcom,select-utmi-as-pipe-clk` ⇒ `patches/0048` —— ✅ **2026-09-23 上机验证**：来回切三次 xhci 200 ms 绑上、UDC 400 ms `configured`，`-110`/`-524` 各 0 次（[#118](stage4-findings.md) §8）。角色策略：用户态 `follow`（电气探测，不信 EC）A/B 两场景实测通过、C 只测了状态机。本机 `slot_a` 的 dtb 已手工换成 0048 版（备份 `.pre0048`）；⬜ 随下次构建进镜像（prebuilt-boot 的 dtb 已换）；⬜ hub/U 盘/充电器真机场景仍未测（用户手边没有）。❌ **2026-09-29 v0.7.0 验收：待机之后再回插，port0 又坏了**（`-524` / `-110`，0048 在 DT 里；那次开机角色切了 4 次、第 4 次坏，之前三次都好；第一个候选版同样的步骤过了一次）⇒ 0048 没盖住"待机 / 唤醒之后"这一种；发版说明已写已知问题。⬜ 复现：待机前后各切一次角色看是哪一步坏、查 dwc3 / QMP PHY 的 resume 路径。另：2026-09-23 直接问 EC（[#118](stage4-findings.md) §6）：插着主机时 `partner_type=2`（UFP，应为 1），**没插也是 2** ⇒ 可能是常数；EC 端口数据里没有角色位 | **要用户插拔**：U 盘 / 纯充电器 / 扩展坞各跑一次 `scripts/usb/ucsi-snapshot.sh`，看 partner_type 与 pwr_dir 怎么变，再定 quirk（扩展坞会 DR_Swap，不能盲用"受电⇒对方是主机"） |
 | **A3** 🔄 | **自动亮度** | ★★ 2026-09-24（[#121](stage4-findings.md)）：激活光感 = **SLPI 的 sensor_process 整个崩溃**（`sns_stream_service.c:436` fatal），`08 04` 只是死前最后一条消息；Windows 在本机用的**也是 QRD 那套 JSON**（INF 按 `SUBSYS_QRD08280` 装）⇒ 差别只剩 DSP 自己写的 registry。**下一步：让 hexagonrpcd 可写**（FadyAckad `sp11-sensors` 分支；psacal 称加写入桩后 ~408 lux，未复现）。以下是旧记录 —— ★ 2026-09-23：`tcs3701`（ams AG）**注册出来了、芯片应答**（[#118](stage4-findings.md) §5，#72 时是"没有提供者"）。但使能后只回一条 `msg_id=130`、载荷 `08 04`，0 条读数；513/514 三种请求同一回应 ⇒ 传感器侧拒绝激活 | 查 130/4 的语义与 libssc 怎么使能光感；最像的差别是 registry（我们是空文件、只读，psacal 拷的是本机 Windows 生成的）。为什么现在应答：候选 L2C，未做对照 |
 | **A5** | 恢复出厂设置不起作用 | 走 misc+recovery，而本机 recovery 起不来 | 依赖 B3（自研 EFI 加载器）或让 recovery 能启动 |
 
