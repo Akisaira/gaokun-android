@@ -10392,3 +10392,25 @@ OUTPUT streamoff 发 **STOP + RELEASE_RESOURCES**，再 streamon 时同一会话
 ⬜ 用 `scripts/s2idle/` 的 `pm_test=devices` 逐级定位。
 
 **SLPI 每 60 s 崩溃重启一次**（`2400000.remoteproc: Handover signaled, but it already happened`，两种内核都是）：本案里它与 iris 的故障无关，但它是 B21 的现形，值得单独查。
+
+### 12. iris-k8（诊断）：seek 的根因 —— 同一会话里 STOP 再重新 START，固件断言（2026-09-28）
+k8 = 全配方 + 0064（`8bdc80ff…`），`hfi_trace=1 fw_debug=0x1c`，一次 `seek:1:20`；日志 `out/iris-k8/seek-trace.txt`（主机侧 `/dev/kmsg`）。
+固件自报 `video-firmware.1.1-e736ad69…`，`OEM_IMAGE_VERSION_STRING=pwlabld93`，`BUILD_DATE=Nov 18 2021`。
+
+v4l2_codec2 `flush()` = streamoff CAPTURE → streamoff OUTPUT → streamon OUTPUT → streamon CAPTURE，iris gen1 发出的是：
+| 时刻 | 命令（主机） | 固件 |
+|---|---|---|
+| 42.823 | FLUSH `0x1000004`（0065 之后的 FLUSH_ALL） | 24 ms 回完成 ✓ |
+| 42.850 | **STOP** `0x211003`（OUTPUT streamoff，状态已是 INPUT_STREAMING → `session_stop` 的 LOAD_RESOURCES 分支） | **750 ms** 才回 |
+| 43.603 | RELEASE_RESOURCES `0x21100c` | ✓ |
+| 43.606–.626 | 15 条 SET_PROPERTY `0x11001` + SET_BUFFERS `0x11002` ×2（`iris_vdec_streamon_input` 重发属性与内部缓冲） | |
+| 43.630 / .632 | **LOAD_RESOURCES + START**（`iris_hfi_gen1_session_start`：STOP 清掉了 LOAD_RESOURCES 位，于是重发） | ✓ |
+| 43.645– | 输出端 SET_PROPERTY（`iris_vdec_streamon_output`） | **43.651 SYS_ERROR** |
+SFR：`Err_Fatal - video_decoder_utils.c:3056:2c594`；调试队列：`WaitForHWidle(417): VENUS is idle, no HW is running` → `assert_loop(444): FW Assertion - video_decoder_utils.c:3056`。
+（START 回完成前固件还打了 `work mode 2 set for small res (1280x720), bin may overflow!`，两遍都有。）
+
+⇒ **华为固件不接受"同一会话 STOP 之后重新 LOAD_RESOURCES / START 再配输出端"**。venus 的 seek 从不 STOP：`vdec_stop_capture` 与 `vdec_stop_output` 各发一次 FLUSH_ALL，
+状态进 SEEK，streamon 时走 `vdec_start_output` 的 SEEK 分支直接继续、不重发属性（同一份固件上 192/192）。
+另：iris 在这条重启路径上从不发 RELEASE_BUFFERS（venus 收尾时发 3 次），是另一个可能的触发点 —— 未分离。
+⬜ 修法二选一（或做成开关一次开机 A/B）：① gen1 解码器的 seek 学 venus：OUTPUT streamoff 在 INPUT_STREAMING 且会话已启动时发 FLUSH 而不 STOP、保留 LOAD_RESOURCES，
+重新 streamon 时跳过属性 / 内部缓冲 / START；② 保留 STOP 路径，但 STOP 后先 RELEASE_BUFFERS 释放内部缓冲再重配。
