@@ -19,6 +19,8 @@
 #   android       blank 上真装一遍之后（"已经装过"：双系统应被 partlabel-conflict 拒绝；重新安装可行）
 #   windows-live  免 U 盘装双系统（用户 2026-09-25）：出厂盘缩出空闲区 + 一个放 live 的 FAT32 分区，
 #                 安装器就从这块盘上跑（介质与目标同盘）—— 整盘清空要被拦、双系统要放行、介质分区不可缩
+#   windows-setup 2026-09-27 起 Windows 脚本的默认：只缩出 512 MiB 放 GK3LIVE、没有空闲 → 在安装器里缩 Data
+#   windows-setup-shrunk  上面那块盘在安装器里真缩了一次 Data 之后 → 走双系统
 set -u
 cd "$(dirname "$0")/../.."
 [ "$(id -u)" = 0 ] || { echo "要 root（用 scripts/live/test-in-container.sh 跑）"; exit 2; }
@@ -41,6 +43,14 @@ cleanup() {
 trap cleanup EXIT
 new_disk() { truncate -s "$2" "$W/$1.img"; local l; l=$(losetup -fP --show "$W/$1.img"); LOOPS+=("$l"); echo "$l"; }
 settle() { partprobe "$1" 2>/dev/null; udevadm settle 2>/dev/null; sleep 1; }
+# 一个场景录完就把它的盘整个放掉：每个场景真装一遍会往 488 GB 的稀疏盘里实写约 12 GiB 的 super，
+# 攒到最后 docker 的盘（98G，2026-09-27 实测剩 49G）就满了 —— 加了 windows-setup 那一次就是这样死在最后一节
+drop_disk() {
+    local l=$1 f m
+    f=$(losetup -n -O BACK-FILE "$l" 2>/dev/null)
+    for m in $(findmnt -rno TARGET,SOURCE | awk -v l="$l" 'index($2, l) == 1 {print $1}' | sort -r); do umount "$m" 2>/dev/null; done
+    losetup -d "$l" 2>/dev/null; [ -n "$f" ] && rm -f "$f"
+}
 
 # ── 安装介质：一个假 U 盘挂在 /media/gk3，好让 gk3_probe 真的报出 medium=yes ────
 STICK=$(new_disk stick 7680M)
@@ -82,7 +92,7 @@ rec() {
     [ -n "$real" ] || real=$(printf '%s' "$call" | sed "s#/dev/nvme0n1#$d#g")
     python3 scripts/live/record-fixture.py "$dir/$name" \
         --sub "${STICK}p=/dev/sda" --sub "$STICK=/dev/sda" --sub "$d=/dev/nvme0n1" \
-        --sub "gpt-backup-$(basename "$d")-=gpt-backup-nvme0n1-" \
+        --sub "-$(basename "$d")-=-nvme0n1-" \
         --sub "$REL=/media/gk3/gaokun3/payload" --sub "$W=/tmp" \
         -- bash -c ". scripts/live/installer-lib.sh && $real"
     printf '%-78s %s\n' "$call" "$name" >> "$dir/index.txt"
@@ -172,6 +182,7 @@ rec windows-free "$DF" apply-along.txt \
     "gk3_apply --disk /dev/nvme0n1 --mode alongside --rescue yes --release /media/gk3/gaokun3/payload --region-start $RS --region-end $RE --esp /dev/nvme0n1p1" \
     "gk3_apply --disk $DF --mode alongside --rescue yes --release $REL --region-start $RS --region-end $RE --esp ${DF}p1"
 echo "gk3_apply *                                                                    apply-along.txt" >> "$OUT/windows-free/index.txt"
+drop_disk "$DF"
 
 echo "═══ windows-live ═══"
 # 免 U 盘装双系统的目标流程：Windows 里先"压缩卷"缩出空闲区、再在空闲区开头建一个 FAT32 小分区放 live，
@@ -180,6 +191,9 @@ echo "═══ windows-live ═══"
 DL=$(new_disk winlive 488386M); make_factory "$DL"
 DATA_MIB=$(( $(blockdev --getsize64 "${DL}p4") / 1048576 ))
 gk3_shrink "${DL}p4" $(( DATA_MIB - 81920 )) >/dev/null 2>&1 || { echo "windows-live：缩 Data 失败"; exit 1; }
+# ⚠️ ntfsresize 缩完会【故意】置上 dirty 位，让 Windows 下次开机跑一遍 chkdsk（ntfs-3g ntfsresize.c:2987）；
+#   Windows 自己的"压缩卷"不会。这里是在【代替 Windows】，所以把它清掉 —— 不清的话下一次缩会被（正确地）拒绝
+ntfsfix -d "${DL}p4" >/dev/null 2>&1
 settle "$DL"
 LF=$(bash -c ". scripts/live/installer-lib.sh && $(probe_of "$DL" nostick)" | grep '^FREE ' | sort -t= -k5 -n | tail -1)
 LS=$(gk3__f "$LF" start)
@@ -203,6 +217,56 @@ rec windows-live "$DL" apply-along.txt \
     "gk3_apply --disk $DL --mode alongside --rescue yes --release $REL --region-start $RS --region-end $RE --esp ${DL}p1"
 echo "gk3_apply *                                                                    apply-along.txt" >> "$OUT/windows-live/index.txt"
 umount /media/gk3 && mount "${STICK}p1" /media/gk3
+drop_disk "$DL"
+
+echo "═══ windows-setup ═══"
+# ★ 2026-09-27 起 Windows 脚本的默认（用户："安装安装器应该仅划分自己需要的空间"）：Windows 只从 Data 缩出 GK3LIVE 要的
+#   那一点（gaokun3-setup.ps1 的 Get-LiveMiB，不带载荷时 512 MiB），GK3LIVE 紧挨在 Data 后面、【没有空闲】——
+#   给 Android 的空间在安装器里缩 Data。这里同样用 gk3_shrink 代替 Windows 的压缩卷。
+DS=$(new_disk winsetup 488386M); make_factory "$DS"
+DATA_MIB=$(( $(blockdev --getsize64 "${DS}p4") / 1048576 ))
+gk3_shrink "${DS}p4" $(( DATA_MIB - 512 )) >/dev/null 2>&1 || { echo "windows-setup：缩 Data 失败"; exit 1; }
+# ⚠️ ntfsresize 缩完会【故意】置上 dirty 位，让 Windows 下次开机跑一遍 chkdsk（ntfs-3g ntfsresize.c:2987）；
+#   Windows 自己的"压缩卷"不会。这里是在【代替 Windows】，所以把它清掉 —— 不清的话下一次缩会被（正确地）拒绝
+ntfsfix -d "${DS}p4" >/dev/null 2>&1
+settle "$DS"
+LF=$(bash -c ". scripts/live/installer-lib.sh && $(probe_of "$DS" nostick)" | grep '^FREE ' | sort -t= -k5 -n | tail -1)
+sgdisk -n 8:"$(gk3__f "$LF" start)":"$(gk3__f "$LF" end)" -t 8:0700 -c 8:"Basic data partition" "$DS" >/dev/null 2>&1; settle "$DS"
+mkfs.vfat -F 32 -n GK3LIVE "${DS}p8" >/dev/null
+umount /media/gk3 && mount "${DS}p8" /media/gk3 && mkdir -p /media/gk3/gaokun3
+for n in rescue.squashfs initramfs.img live.squashfs; do head -c 65536 /dev/urandom > "/media/gk3/gaokun3/$n"; done
+header windows-setup "Windows 脚本的默认：只缩出 512 MiB 放 GK3LIVE（紧挨在 Data 后面），没有空闲 —— 在安装器里缩 Data 腾地方"
+rec windows-setup "$DS" probe.txt       "gk3_probe" "$(probe_of "$DS" nostick)"
+rec windows-setup "$DS" esp_info.txt    "gk3_esp_info /dev/nvme0n1p1"
+rec windows-setup "$DS" shrink_scan.txt "gk3_shrink_scan /dev/nvme0n1"
+for r in yes no; do
+  rec windows-setup "$DS" "plan-along-empty-$r.txt" \
+      "gk3_plan --disk /dev/nvme0n1 --mode alongside --rescue $r --region-start 0 --region-end 0 --esp /dev/nvme0n1p1"
+done
+rec windows-setup "$DS" plan-wipe-rescue.txt "gk3_plan --disk /dev/nvme0n1 --mode wipe --rescue yes"
+DATA_MIB=$(( $(blockdev --getsize64 "${DS}p4") / 1048576 ))
+rec windows-setup "$DS" shrink.txt "gk3_shrink /dev/nvme0n1p4 $(( DATA_MIB - 81920 ))"
+echo "gk3_shrink *                                                                   shrink.txt" >> "$OUT/windows-setup/index.txt"
+echo "@next gk3_shrink windows-setup-shrunk" >> "$OUT/windows-setup/index.txt"
+
+echo "═══ windows-setup-shrunk ═══"
+header windows-setup-shrunk "windows-setup 上在安装器里真缩了一次 Data（80 GiB）之后：空闲在 Data 与 GK3LIVE 之间 —— 走双系统"
+rec windows-setup-shrunk "$DS" probe.txt       "gk3_probe" "$(probe_of "$DS" nostick)"
+rec windows-setup-shrunk "$DS" esp_info.txt    "gk3_esp_info /dev/nvme0n1p1"
+rec windows-setup-shrunk "$DS" shrink_scan.txt "gk3_shrink_scan /dev/nvme0n1"
+LF=$(bash -c ". scripts/live/installer-lib.sh && $(probe_of "$DS" nostick)" | grep '^FREE ' | sort -t= -k5 -n | tail -1)
+RS=$(gk3__f "$LF" start); RE=$(gk3__f "$LF" end)
+for r in yes no; do
+  rec windows-setup-shrunk "$DS" "plan-along-rescue-$r.txt" \
+      "gk3_plan --disk /dev/nvme0n1 --mode alongside --rescue $r --region-start $RS --region-end $RE --esp /dev/nvme0n1p1"
+done
+rec windows-setup-shrunk "$DS" plan-wipe-rescue.txt "gk3_plan --disk /dev/nvme0n1 --mode wipe --rescue yes"
+rec windows-setup-shrunk "$DS" apply-along.txt \
+    "gk3_apply --disk /dev/nvme0n1 --mode alongside --rescue yes --release /media/gk3/gaokun3/payload --region-start $RS --region-end $RE --esp /dev/nvme0n1p1" \
+    "gk3_apply --disk $DS --mode alongside --rescue yes --release $REL --region-start $RS --region-end $RE --esp ${DS}p1"
+echo "gk3_apply *                                                                    apply-along.txt" >> "$OUT/windows-setup-shrunk/index.txt"
+umount /media/gk3 && mount "${STICK}p1" /media/gk3
+drop_disk "$DS"
 
 echo "═══ blank ═══"
 DB=$(new_disk blank 488386M); sgdisk -o "$DB" >/dev/null 2>&1; settle "$DB"
@@ -336,9 +400,29 @@ EOF
 
 # 录：手动调整磁盘的四个操作（用户 2026-09-25）—— 在另一块出厂布局的盘上真做一遍。放 common/（任何场景都能用），
 # 界面按 '<函数> *' 取；做完之后界面会重新探测，拿到的仍是各场景自己那份 probe（测试只核对发出去的调用）
+# 录：C: 与 D: 加了密（BitLocker / Windows 的设备加密）的出厂盘 —— 安装器缩不了，要报 why=bitlocker（2026-09-27）。
+# 容器里造不出真 BitLocker 卷，按 util-linux 2.41 libblkid 的判据造卷头（与 test-shrink.sh 第 7 节同一份），
+# 让真 blkid 认、真后端报。只给流程测试按文件名用（overrides），不进 index 的调用映射 —— 否则别的场景会落到它身上
+DK=$(new_disk bitlocker 488386M); make_factory "$DK"
+for n in 3 4; do python3 - "${DK}p$n" <<'PYEOF'
+import sys, struct
+META = 0x10000
+with open(sys.argv[1], 'r+b') as f:
+    b = bytearray(512); b[0:11] = b'\xeb\x58\x90-FVE-FS-'
+    struct.pack_into('<H', b, 11, 512); b[13] = 8; struct.pack_into('<Q', b, 176, META); b[510:512] = b'\x55\xaa'
+    f.write(b)
+    m = bytearray(64 + 48); m[0:8] = b'-FVE-FS-'; struct.pack_into('<H', m, 10, 2); struct.pack_into('<IIII', m, 64, 48, 1, 48, 48)
+    f.seek(META); f.write(m)
+PYEOF
+done
+python3 scripts/live/record-fixture.py "$C/shrink_scan-bitlocker.txt" --sub "${DK}p=/dev/nvme0n1p" --sub "$DK=/dev/nvme0n1" \
+    -- bash -c ". scripts/live/installer-lib.sh && gk3_shrink_scan $DK"
+echo "# shrink_scan-bitlocker.txt   gk3_shrink_scan：出厂盘、C: 与 D: 是 BitLocker 卷头（录；只给测试按文件名用）" >> "$C/index.txt"
+drop_disk "$DK"
+
 DE=$(new_disk edit 488386M); make_factory "$DE"
 recc() {   # 和 rec 一样，但录进 common/；$1=文件名 $2=界面发出的调用（nvme0n1）$3=实际执行的命令
-    python3 scripts/live/record-fixture.py "$C/$1" --sub "${DE}p=/dev/nvme0n1p" --sub "$DE=/dev/nvme0n1" --sub "$W=/tmp" \
+    python3 scripts/live/record-fixture.py "$C/$1" --sub "${DE}p=/dev/nvme0n1p" --sub "$DE=/dev/nvme0n1" --sub "-$(basename "$DE")-=-nvme0n1-" --sub "$W=/tmp" \
         -- bash -c ". scripts/live/installer-lib.sh && $3"
     printf '%-78s %s\n' "$2" "$1   # 录（出厂布局的另一块盘上真做）" >> "$C/index.txt"
 }

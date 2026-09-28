@@ -535,6 +535,21 @@ M4b 那次"ESP 写满、却报告成功"之后，让一个独立的审查专找�
 * 用户文档：`docs/INSTALL.md` 开头改成"两个安装器"，加"Graphical installer (preview)"一节（哪些在真机上验过、哪些没有，逐项写明）；
   `docs/relnotes/v0.6.3-alpha.md` 加一节，顺带删掉早已作废的"BIOS 必须 2.16"。
 
+### 5.12 Windows 脚本只划自己的空间，给 Android 的空间在安装器里分（用户 2026-09-27）
+
+用户："更改磁盘这个操作应该在安装操作的时候进行，安装安装器应该仅划分自己需要的空间"。原先脚本一次从 D: 缩出 64 GiB 给 Android + 4 GiB 给安装器。
+* 脚本默认只缩出 GK3LIVE 要的（`Get-LiveMiB`：安装包内容 ×1.25 + 128 MiB，按 256 MiB 取整，至少 512 MiB），紧挨在 D: 后面；
+  用户在安装器里"缩小现有分区腾出空间"缩 D:，Android 装进 D: 与 GK3LIVE 之间。`-AndroidGiB <N>` 照旧可以一次缩好。
+* **代价是 BitLocker**：加密的卷安装器缩不了（当初把缩交给 Windows 就是为这个）。用户选"脚本认出来再问"：
+  D: 的 `VolumeStatus` 不是 `FullyDecrypted`（设备加密"等待激活"也算）且没给 `-AndroidGiB` ⇒ 问"现在就缩多少"（回车 64，0 = 不缩）。
+  安装器那边认出 BitLocker 卷（blkid `TYPE=BitLocker` → `why=bitlocker`），界面写明回 Windows 怎么做 —— 原先报"文件系统不支持无损缩小"，是误导。
+* **快速启动**：这条路上它成了头号拦路虎（D: 停在休眠状态 → 安装器拒绝缩）⇒ 脚本说明、确认后关掉，`-Uninstall` 恢复。
+* ★ 录 fixture 时抓到：**ntfsresize 缩完会故意置 dirty 位**（让 Windows 下次开机跑 chkdsk，`ntfsresize.c:2987`）—— 以前的 `--force` 把这一点盖住了。
+  于是安装器缩过一次 D: 之后，再缩要等 Windows 开机检查一遍（这是对的）；fixture 里"代替 Windows 压缩"那一步要 `ntfsfix -d`。INSTALL.md 写明"Windows 下次开机会先检查磁盘"。
+* 测试：`test-setup.ps1` +14（39/39）；`test-shrink.sh` +2（造出 libblkid 认得的 BitLocker 卷头 → 19/19）；fixture 新场景 `windows-setup` / `windows-setup-shrunk`
+  （真后端录；BitLocker 那份也是录的）+ 流程测试 2 条 → 界面 63/63。生成 fixture 时 docker 的盘写满过一次（每个场景真装一遍实写约 12 GiB）⇒ 场景录完即 `drop_disk`。
+* ⚠️ 新路径（自动算大小、加密卷提问、关快速启动）只有单元测试，没在虚拟机里重跑；真机上的双系统依旧没装过。
+
 ## 6. 风险（按"会不会让方案作废"排序）
 
 1. 🔴 mesa/freedreno 在 Debian arm64 用户态不可用 → 回落 `FLUTTER_LINUX_RENDERER=software`

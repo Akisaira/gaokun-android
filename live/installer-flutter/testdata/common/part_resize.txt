@@ -1,9 +1,11 @@
-E 分区 4 身份：PARTUUID=B0430AEA-45E8-4F1C-BBC0-EC02096432A1 类型=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7 名字=Basic data partition
+D 52
+E 分区 4 身份：PARTUUID=D4C59373-DBF7-496D-986C-B49029318EB3 类型=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7 名字=Basic data partition 属性=0000000000000000
 E PROGRESS 5 备份分区表
-E 分区表备份：/media/gk3/gaokun3/gpt-before-shrink-20260925-151406.bin（还原：sgdisk --load-backup=/media/gk3/gaokun3/gpt-before-shrink-20260925-151406.bin /dev/nvme0n1）
+E 分区表备份：/media/gk3/gaokun3/gpt-before-shrink-nvme0n1-20260928-020614.bin（还原：sgdisk --load-backup=/media/gk3/gaokun3/gpt-before-shrink-nvme0n1-20260928-020614.bin /dev/nvme0n1）
 E PROGRESS 15 演练缩小文件系统
+D 140
 E PROGRESS 30 缩小 NTFS
-D 738
+D 735
 E PROGRESS 70 改分区表
 D 1500
 E PROGRESS 90 复核

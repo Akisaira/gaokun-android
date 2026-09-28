@@ -63,21 +63,32 @@ key at hand: changing the boot setup can make Windows ask for it.
 1. Unzip `…-windows.zip`, double-click **`gaokun3-setup.cmd`** (it asks for
    administrator rights) and read what it prints. It checks the model, UEFI and
    Secure Boot, then asks you to type `YES` before touching the disk.
-2. It lets Windows shrink **D:** (by default 64 GiB for Android + 4 GiB for the
-   installer, always leaving Windows at least 10 GiB), creates a small FAT32
-   partition `GK3LIVE` with the installer, adds a boot entry, and sets the
-   **next** boot only to go into the installer. Options:
-   `gaokun3-setup.cmd -AndroidGiB 32`, `-ShrinkDrive C`, `-Wifi none`.
-3. Reboot. In the installer choose **Keep the current system**.
+2. It lets Windows shrink **D:** by only what the installer itself needs
+   (about 0.5–2 GB), creates a small FAT32 partition `GK3LIVE` with the
+   installer, adds a boot entry, and sets the **next** boot only to go into the
+   installer. The space for Android is chosen later, in the installer.
+   Two exceptions it asks about: if Fast Startup is on it offers to turn it off
+   (the installer refuses to shrink a partition Windows left hibernated), and
+   if D: is encrypted with BitLocker / device encryption — which the installer
+   cannot shrink — it offers to free the space for Android right now instead.
+   Options: `-AndroidGiB 64` (free that much for Android now), `-ShrinkDrive C`,
+   `-Wifi none`.
+3. Reboot. In the installer choose **Shrink an existing partition to make
+   room** (D:), then **Keep the current system**. (If the space for Android was
+   already freed in Windows, go straight to the latter.)
+   The next time Windows starts after the installer shrank D:, it runs a disk
+   check first — that is expected: the resize tool asks for it on purpose.
 
 If you change your mind before installing, run `gaokun3-setup.cmd -Uninstall`:
-it removes the partition and the boot entry and grows D: back. If the machine
+it removes the partition and the boot entry, grows D: back and restores Fast
+Startup if it turned it off. If the machine
 boots straight back into Windows (the firmware ignored the one-time boot —
 not yet verified on Huawei's firmware), run it again with
 `-UseFallbackPath`.
 
 ⚠️ This script has been run end to end in a Windows 11 ARM virtual machine,
-not yet on a MateBook E Go.
+not yet on a MateBook E Go (and the "only its own space" default, the
+encryption question and the Fast Startup step so far only in unit tests).
 
 ### From a USB stick
 

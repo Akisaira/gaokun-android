@@ -6,12 +6,14 @@
 .DESCRIPTION
   以管理员身份运行（双击同目录的 gaokun3-setup.cmd）。每一步之前先检查、先说清楚，真动盘之前要你输入 YES：
     1. 预检：型号 GK-W7X、Windows on ARM、UEFI、安全启动已关；BitLocker 开着时先要你确认拿得到恢复密钥
-    2. 让 Windows 自己"压缩卷"（默认 D:），缩出 Android 要的空间 + 一个放安装器的小分区
-       —— 由 Windows 来缩，是因为它能处理 BitLocker / 设备加密、不可移动的文件；Linux 的 ntfsresize 对加密卷无能为力
+    2. 让 Windows 自己"压缩卷"（默认 D:），【只】缩出安装器自己要的那一点（按安装包的实际内容算，约 0.5–2 GiB）。
+       给 Android 的空间到安装器里再分（用户 2026-09-27："更改磁盘应该在安装的时候进行，安装安装器应该仅划分自己需要的空间"）。
+       例外：D: 加了密（BitLocker / 设备加密）时安装器缩不了它、只有 Windows 能 —— 那时会问你要不要现在就缩出给 Android 的空间。
+       安装器要缩 D: 的话 Windows 的"快速启动"必须关（它让分区停在休眠状态，安装器会拒绝缩）—— 开着就问你、关掉，-Uninstall 恢复
     3. 在缩出来的空间【开头】建 FAT32 分区 GK3LIVE，放 live 系统（和可选的安装载荷、WiFi 配置）
     4. ESP 上放 systemd-boot、内核、dtb、initramfs 和一个启动项（\EFI\gaokun3\、\loader\entries\gaokun3-live.conf）
     5. bcdedit 设"只下一次"从它启动 —— 不改默认启动项；不想装了，重启就回 Windows
-  之后安装器里选"保留现有系统"，Android 装进 GK3LIVE 后面那段空闲区。
+  之后在安装器里先"缩小现有分区腾出空间"（缩 D:），再选"保留现有系统"；已经替 Android 缩出了空间的话直接选后者。
 
   -Uninstall 撤掉以上全部（在 Android 装上之前；装上之后只撤启动项与 ESP 上的安装器文件）。
 
@@ -25,12 +27,13 @@
 #>
 [CmdletBinding()]
 param(
-    # 给 Android 的空间（GiB）。安装器的双系统至少要约 21.2 GiB（gk3_plan 实测，含救援分区）
-    [ValidateRange(24, 2048)][int]$AndroidGiB = 64,
+    # 现在就替 Android 缩出多少 GiB。默认 0：只划安装器自己的空间，Android 的到安装器里分（用户 2026-09-27）。
+    # 不给这个参数、而 D: 加了密时会问（安装器缩不了加密卷）。给的话至少 24（双系统约要 21.2 GiB，gk3_plan 实测）
+    [ValidateScript({ $_ -eq 0 -or ($_ -ge 24 -and $_ -le 2048) })][int]$AndroidGiB = 0,
     # 从哪个卷缩。出厂有独立的 D:（Data，336.6 GiB，docs/hw-inventory.md 第 8 节），缩它比缩 C: 稳
     [ValidatePattern('^[A-Za-z]$')][string]$ShrinkDrive = 'D',
-    # 安装器分区（GK3LIVE）的大小：live 185 MiB + 救援 104 MiB + 可选载荷 1.2 GiB
-    [ValidateRange(1024, 16384)][int]$LiveMiB = 4096,
+    # 安装器分区（GK3LIVE）的大小（MiB）。默认 0 = 按安装包里的实际内容算（Get-LiveMiB：live 约 210 MiB，带载荷再加 1.3 GiB）
+    [ValidateScript({ $_ -eq 0 -or ($_ -ge 256 -and $_ -le 16384) })][int]$LiveMiB = 0,
     # current：只带当前连着的 WiFi；all：带上所有保存过的；none：不带（到安装器里再连）
     [ValidateSet('current', 'all', 'none')][string]$Wifi = 'current',
     # 不用 bcdedit 的"只下一次"，改为接管 ESP 的回落路径 \EFI\Boot\bootaa64.efi（原件留 .before-gaokun3）
@@ -45,6 +48,8 @@ param(
 )
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
+# 函数里的 $PSBoundParameters 是函数自己的 —— 在脚本层先记下"用户有没有给 -AndroidGiB"
+$script:AndroidGiBGiven = $PSBoundParameters.ContainsKey('AndroidGiB')
 
 $script:UseZh = (Get-UICulture).Name -like 'zh*'
 $EspType    = '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
@@ -58,6 +63,8 @@ $WindowsKeepGiB = 10
 # C:\ProgramData\gaokun3（用 .NET 取而不用 $env:ProgramData：后者在 Linux 上是空的，容器里的单元测试一 dot-source 就会炸）
 $DataDir    = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'gaokun3'
 $StateFile  = Join-Path $DataDir 'windows-setup.json'
+# 快速启动的开关（1 = 开）。关掉它不影响休眠本身
+$FastStartupKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power'
 
 # ── 纯逻辑（test-setup.ps1 在容器里测这些）──────────────────────────────────
 
@@ -75,6 +82,30 @@ function Get-ShrinkTarget([long]$CurrentBytes, [long]$MinBytes, [long]$WantBytes
     $target = [long]([math]::Floor(($CurrentBytes - $WantBytes) / 1MB)) * 1MB
     if ($target -lt ($MinBytes + $KeepBytes)) { return $null }
     return $target
+}
+
+function Get-LiveMiB([long]$ContentBytes) {
+    # GK3LIVE 只要装得下自己：内容 ×1.25（FAT32 的簇、以后写回的日志与分区表备份）+ 128 MiB，按 256 MiB 向上取整，至少 512 MiB
+    $mib = [math]::Ceiling(($ContentBytes * 1.25 / 1MB + 128) / 256) * 256
+    if ($mib -lt 512) { $mib = 512 }
+    return [int]$mib
+}
+
+function Test-VolumeEncrypted($BitLockerVolume) {
+    # 只要不是"完全解密"，卷上就是 BitLocker 的格式 —— 设备加密"等待激活"时也是（保护是关的，数据已经加密）。
+    # 那样的卷 Linux 那边 blkid 认作 BitLocker，安装器缩不了（installer-lib.sh 的 why=bitlocker）
+    if (-not $BitLockerVolume) { return $false }
+    return ([string]$BitLockerVolume.VolumeStatus -ne 'FullyDecrypted')
+}
+
+function ConvertFrom-AndroidGiBAnswer([string]$Answer, [int]$Default) {
+    # 问"现在缩多少 GiB 给 Android"的回答：空 = 默认；0 = 现在不缩；24–2048；别的返回 $null（再问一次）
+    $a = $Answer.Trim()
+    if ($a -eq '') { return $Default }
+    $n = 0
+    if (-not [int]::TryParse($a, [ref]$n)) { return $null }
+    if ($n -eq 0 -or ($n -ge 24 -and $n -le 2048)) { return $n }
+    return $null
 }
 
 function ConvertTo-HexString([byte[]]$Bytes) {
@@ -250,6 +281,10 @@ function Invoke-Uninstall {
         }
         Say 'ESP 上的安装器文件已删' 'installer files removed from the ESP'
     } finally { Dismount-Esp $esp }
+    if ($state -and $state.PSObject.Properties['fastStartupWas'] -and $state.fastStartupWas -eq 1) {
+        Set-ItemProperty -Path $FastStartupKey -Name HiberbootEnabled -Value 1
+        Say '快速启动已恢复成开着' 'Fast Startup is back on'
+    }
     $drive = $ShrinkDrive
     if ($state -and $state.shrinkDrive) { $drive = $state.shrinkDrive }
     if ($android) {
@@ -303,6 +338,28 @@ function Invoke-Setup {
     if ($shr.DiskNumber -ne $disk) { Fail "$($ShrinkDrive): 不在系统盘上" "$($ShrinkDrive): is not on the system disk" }
     if ((Get-Disk -Number $disk).PartitionStyle -ne 'GPT') { Fail '系统盘不是 GPT' 'the system disk is not GPT' }
 
+    # 安装器分区只要装得下自己：按安装包里的实际内容算
+    if ($LiveMiB -eq 0) {
+        $content = [long]0
+        foreach ($d in (Join-Path $here 'live'), (Join-Path $here 'payload')) {
+            if (Test-Path $d) { $content += [long](Get-ChildItem -Recurse -File $d | Measure-Object -Property Length -Sum).Sum }
+        }
+        $script:LiveMiB = Get-LiveMiB $content
+    }
+    # 要缩的卷加了密：安装器缩不了它（只有 Windows 能）—— 没给 -AndroidGiB 的话问一次要不要现在就缩
+    $tbl = $null
+    try { $tbl = Get-BitLockerVolume -MountPoint "$($ShrinkDrive):" -ErrorAction Stop } catch { }
+    if (Test-VolumeEncrypted $tbl) {
+        Warn "$($ShrinkDrive): 加了密（BitLocker / 设备加密，状态 $($tbl.VolumeStatus)）—— 安装器缩不了加密的卷，只有 Windows 能。" "$($ShrinkDrive): is encrypted (BitLocker / device encryption, status $($tbl.VolumeStatus)) - the installer cannot shrink an encrypted volume; only Windows can."
+        if (-not $script:AndroidGiBGiven -and -not $Yes) {
+            do {
+                $n = ConvertFrom-AndroidGiBAnswer (Read-Host (T "现在就让 Windows 从 $($ShrinkDrive): 缩出多少 GiB 给 Android？直接回车 = 64；输入 0 = 现在不缩（安装器里会告诉你怎么回来处理）" "How many GiB should Windows free on $($ShrinkDrive): for Android now? Enter = 64; 0 = not now (the installer will tell you what to do)")) 64
+                if ($null -eq $n) { Warn '要 0，或者 24–2048 之间的整数' 'enter 0 or a whole number from 24 to 2048' }
+            } while ($null -eq $n)
+            $script:AndroidGiB = $n
+        }
+    }
+
     # ⚠️ 不在 try 里 exit：finally 不保证跑，ESP 会一直挂在那个盘符上 —— 先卸载、再判
     $esp = Mount-Esp
     try {
@@ -319,10 +376,23 @@ function Invoke-Setup {
     Say "ESP 空闲 $freeMiB MiB（要 $EspNeedMiB）" "ESP free $freeMiB MiB (need $EspNeedMiB)"
 
     $live = Get-Volume -FileSystemLabel $LiveLabel -ErrorAction SilentlyContinue
-    $state = [ordered]@{ version = 1; shrinkDrive = $ShrinkDrive; shrunkBytes = 0; bcd = $null; fallback = [bool]$UseFallbackPath; loaderConfCreated = $false }
+    $state = [ordered]@{ version = 1; shrinkDrive = $ShrinkDrive; shrunkBytes = 0; bcd = $null; fallback = [bool]$UseFallbackPath; loaderConfCreated = $false; fastStartupWas = $null }
     if (Test-Path $StateFile) {
         $old = Get-Content $StateFile -Raw | ConvertFrom-Json
-        foreach ($k in 'shrunkBytes', 'bcd', 'loaderConfCreated') { if ($old.PSObject.Properties[$k]) { $state[$k] = $old.$k } }
+        foreach ($k in 'shrunkBytes', 'bcd', 'loaderConfCreated', 'fastStartupWas') { if ($old.PSObject.Properties[$k]) { $state[$k] = $old.$k } }
+    }
+
+    # 给 Android 的空间要到安装器里缩 D: 的话，快速启动必须关：它关机时让分区停在休眠状态，
+    # 安装器为了不损坏 Windows 的数据会拒绝缩（installer-lib.sh 的 gk3__ntfs_trial_mount / why=ntfs-hibernated）
+    $fsOn = $null
+    try { $fsOn = (Get-ItemProperty -Path $FastStartupKey -Name HiberbootEnabled -ErrorAction Stop).HiberbootEnabled } catch { }
+    if ($AndroidGiB -eq 0 -and $fsOn -eq 1) {
+        Warn 'Windows 的“快速启动”开着：它关机时让 Windows 的分区停在休眠状态 —— 那样的分区安装器会拒绝缩（缩了会损坏 Windows 的数据）。' "Windows' Fast Startup is on: shutting down leaves Windows' partitions hibernated - the installer refuses to shrink those (it would corrupt Windows' data)."
+        Confirm-Yes '关掉快速启动（休眠本身不受影响；-Uninstall 会恢复）。' 'Turn off Fast Startup (hibernation itself is unaffected; -Uninstall restores it).'
+        Set-ItemProperty -Path $FastStartupKey -Name HiberbootEnabled -Value 0
+        if ($null -eq $state.fastStartupWas) { $state.fastStartupWas = 1 }
+        Save-State $state
+        Say '快速启动已关' 'Fast Startup is off'
     }
 
     if ($live) {
@@ -340,8 +410,13 @@ function Invoke-Setup {
             $can = [math]::Floor(($shr.Size - $sup.SizeMin - [long]$WindowsKeepGiB * 1GB) / 1GB)
             Fail "$($ShrinkDrive): 缩不出 $AndroidGiB GiB + $LiveMiB MiB（最多约 $can GiB，还要给 Windows 留 $WindowsKeepGiB GiB）。可以用 -AndroidGiB 调小，或先清理 $($ShrinkDrive):" "cannot shrink $($ShrinkDrive): by that much (about $can GiB at most, keeping $WindowsKeepGiB GiB for Windows). Use a smaller -AndroidGiB"
         }
-        Say ("{0}: {1:N1} GiB -> {2:N1} GiB；缩出 {3} GiB 给 Android + {4} MiB 给安装器" -f $ShrinkDrive, ($shr.Size / 1GB), ($target / 1GB), $AndroidGiB, $LiveMiB) `
-            ("{0}: {1:N1} GiB -> {2:N1} GiB; {3} GiB for Android + {4} MiB for the installer" -f $ShrinkDrive, ($shr.Size / 1GB), ($target / 1GB), $AndroidGiB, $LiveMiB)
+        if ($AndroidGiB -gt 0) {
+            Say ("{0}: {1:N1} GiB -> {2:N1} GiB；缩出 {3} GiB 给 Android + {4} MiB 给安装器" -f $ShrinkDrive, ($shr.Size / 1GB), ($target / 1GB), $AndroidGiB, $LiveMiB) `
+                ("{0}: {1:N1} GiB -> {2:N1} GiB; {3} GiB for Android + {4} MiB for the installer" -f $ShrinkDrive, ($shr.Size / 1GB), ($target / 1GB), $AndroidGiB, $LiveMiB)
+        } else {
+            Say ("{0}: {1:N1} GiB -> {2:N1} GiB；只缩出 {3} MiB 给安装器 —— 给 Android 的空间到安装器里再分" -f $ShrinkDrive, ($shr.Size / 1GB), ($target / 1GB), $LiveMiB) `
+                ("{0}: {1:N1} GiB -> {2:N1} GiB; only {3} MiB for the installer - space for Android is decided in the installer" -f $ShrinkDrive, ($shr.Size / 1GB), ($target / 1GB), $LiveMiB)
+        }
         Confirm-Yes "即将压缩 $($ShrinkDrive):（Windows 自己的“压缩卷”，不删文件），并新建分区 $LiveLabel。建议先备份重要数据。" "About to shrink $($ShrinkDrive): (Windows' own Shrink Volume; no files are deleted) and create partition $LiveLabel. Back up important data first."
         Resize-Partition -DriveLetter $ShrinkDrive -Size $target
         $state.shrunkBytes = $shr.Size - $target
@@ -432,7 +507,12 @@ function Invoke-Setup {
         Say "只有下一次开机进安装器（固件启动项 $($state.bcd)）；默认启动项没动。" "Only the next boot goes to the installer (firmware entry $($state.bcd)); the default is unchanged."
         Warn 'bcdedit 的"只下一次"在这台机器的固件上还没验证过。重启后如果直接进了 Windows，改用 -UseFallbackPath 再运行一次。' "bcdedit's one-time boot has not been verified on this machine's firmware. If the next boot goes straight to Windows, run again with -UseFallbackPath."
     }
-    Say '在安装器里选"保留现有系统"。不想装了：直接重启回 Windows，再运行本脚本加 -Uninstall。' 'In the installer choose "Keep the current system". Changed your mind: reboot into Windows and run this with -Uninstall.'
+    if ($AndroidGiB -gt 0) {
+        Say '在安装器里选"保留现有系统"。' 'In the installer choose "Keep the current system".'
+    } else {
+        Say "在安装器里先选“缩小现有分区腾出空间”缩 $($ShrinkDrive):，再选“保留现有系统”。" "In the installer choose ""Shrink an existing partition to make room"" for $($ShrinkDrive):, then ""Keep the current system""."
+    }
+    Say '不想装了：直接重启回 Windows，再运行本脚本加 -Uninstall。' 'Changed your mind: reboot into Windows and run this with -Uninstall.'
     if (-not $NoReboot) {
         $a = Read-Host (T '现在重启吗？(y/N)' 'Restart now? (y/N)')
         if ($a -eq 'y' -or $a -eq 'Y') { Restart-Computer }

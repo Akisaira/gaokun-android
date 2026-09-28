@@ -120,6 +120,31 @@ check_files "$P1" "NTFS（被拒之后）"
 mount -t ntfs-3g -o remove_hiberfile "$P1" /tmp/sm && { [ ! -e /tmp/sm/hiberfil.sys ] || rm -f /tmp/sm/hiberfil.sys; umount /tmp/sm; }
 gk3__ntfs_trial_mount "$P1" 2>/dev/null && ok "干净的卷：终审放行" || bad "干净的卷被终审拦住了"
 
+# ★ 2026-09-27：Windows 11 的"设备加密"常常默认开着，而 Android 的空间改到安装器里缩（用户：安装安装器只划自己的空间）——
+#   加密的 D: 是那条路上最常见的"缩不了"，原因必须报对（原先报 fs-not-shrinkable，界面说"文件系统不支持"）
+echo "═══ 7. BitLocker 卷：报 why=bitlocker ═══"
+BIMG=/tmp/bitlocker-test.img; rm -f "$BIMG"; truncate -s 64M "$BIMG"; BL=$(losetup -fP --show "$BIMG")
+python3 - "$BL" <<'PYEOF'
+# 造一个 libblkid 认得出的 BitLocker（Win7+）卷头：util-linux 2.41 libblkid/src/superblocks/bitlocker.c 的判据 ——
+# 偏移 0 是 "\xeb\x58\x90-FVE-FS-"，偏移 176 是 FVE 元数据的位置（非 0、64 对齐），那里再有一个 "-FVE-FS-" 块头
+import sys, struct
+META = 0x10000
+with open(sys.argv[1], 'r+b') as f:
+    b = bytearray(512)
+    b[0:11] = b'\xeb\x58\x90-FVE-FS-'
+    struct.pack_into('<H', b, 11, 512); b[13] = 8
+    struct.pack_into('<Q', b, 176, META)
+    b[510:512] = b'\x55\xaa'
+    f.write(b)
+    m = bytearray(64 + 48)
+    m[0:8] = b'-FVE-FS-'; struct.pack_into('<H', m, 10, 2)
+    struct.pack_into('<IIII', m, 64, 48, 1, 48, 48)
+    f.seek(META); f.write(m)
+PYEOF
+[ "$(blkid -p -o value -s TYPE "$BL")" = BitLocker ] && ok "造的卷头 blkid 认作 BitLocker" || bad "blkid 没认出造的 BitLocker 卷头"
+gk3_shrink_info "$BL" 2>/dev/null | grep -q 'fs=BitLocker .*can=no why=bitlocker' && ok "gk3_shrink_info：can=no why=bitlocker" || bad "BitLocker 卷的原因不对：$(gk3_shrink_info "$BL" 2>&1)"
+losetup -d "$BL"; rm -f "$BIMG"
+
 echo
 echo "═══ 通过 $PASS · 失败 $FAIL ═══"
 [ "$FAIL" -eq 0 ]

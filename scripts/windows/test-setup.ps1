@@ -101,6 +101,26 @@ Check '结果按 1 MiB 对齐' ((Get-ShrinkTarget (100 * $G + 12345) 0 (10 * $G)
 Check '会压到"最小值 + 给 Windows 留的余量"以下 → $null' ($null -eq (Get-ShrinkTarget (80 * $G) (20 * $G) (64 * $G) (10 * $G)))
 Check '刚好卡在余量线上 → 放行' ((Get-ShrinkTarget (100 * $G) (20 * $G) (70 * $G) (10 * $G)) -eq 30 * $G)
 
+Write-Host '═══ 安装器分区只划自己要的（用户 2026-09-27）═══'
+Check 'live 约 210 MiB → 512 MiB（最少 512）' ((Get-LiveMiB (210 * $M)) -eq 512)
+Check '带 1.3 GiB 载荷（共约 1.5 GiB）→ 2048 MiB' ((Get-LiveMiB (1536 * $M)) -eq 2048)
+Check '按 256 MiB 向上取整' ((Get-LiveMiB (1000 * $M)) % 256 -eq 0)
+Check '空安装包也给 512' ((Get-LiveMiB 0) -eq 512)
+
+Write-Host '═══ 要缩的卷加没加密（安装器缩不了加密卷）═══'
+Check '完全解密 → 没加密' (-not (Test-VolumeEncrypted ([pscustomobject]@{ VolumeStatus = 'FullyDecrypted'; ProtectionStatus = 'Off' })))
+Check '加密着 → 加密' (Test-VolumeEncrypted ([pscustomobject]@{ VolumeStatus = 'FullyEncrypted'; ProtectionStatus = 'On' }))
+Check '设备加密"等待激活"（保护关、数据已加密）→ 加密' (Test-VolumeEncrypted ([pscustomobject]@{ VolumeStatus = 'FullyEncrypted'; ProtectionStatus = 'Off' }))
+Check '正在加密 → 加密' (Test-VolumeEncrypted ([pscustomobject]@{ VolumeStatus = 'EncryptionInProgress'; ProtectionStatus = 'Off' }))
+Check '读不到 BitLocker 信息（家庭版没有这个模块）→ 按没加密' (-not (Test-VolumeEncrypted $null))
+
+Write-Host '═══ "现在缩多少 GiB 给 Android" 的回答 ═══'
+Check '回车 → 默认 64' ((ConvertFrom-AndroidGiBAnswer '' 64) -eq 64)
+Check '0 → 现在不缩' ((ConvertFrom-AndroidGiBAnswer ' 0 ' 64) -eq 0)
+Check '32 → 32' ((ConvertFrom-AndroidGiBAnswer '32' 64) -eq 32)
+Check '10（不到 24）→ 再问' ($null -eq (ConvertFrom-AndroidGiBAnswer '10' 64))
+Check 'abc → 再问' ($null -eq (ConvertFrom-AndroidGiBAnswer 'abc' 64))
+
 Write-Host '═══ loader.conf ═══'
 $lc = Format-LoaderConf
 Check 'default 指向安装器、有超时（Windows 在菜单里）、编辑器关' ($lc -match '(?m)^default gaokun3-live\.conf$' -and $lc -match '(?m)^timeout [1-9]' -and $lc -match '(?m)^editor no$')

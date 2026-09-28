@@ -1252,6 +1252,10 @@ gk3_shrink_info() {
                 fi
             fi ;;
         "") why=no-filesystem ;;
+        # 加密的卷（BitLocker / Windows 11 的"设备加密"，blkid 报 TYPE=BitLocker）：这边读不了里面的 NTFS，
+        # 只有 Windows 能缩它 —— 单列一个原因，界面上说清楚回 Windows 怎么做（原先报 fs-not-shrinkable，
+        # 界面说"这种文件系统不支持无损缩小"，是误导）
+        BitLocker) why=bitlocker ;;
         *)  why=fs-not-shrinkable ;;
     esac
     echo "SHRINK part=$part fs=${fs:-none} cur_mib=$cur_mib min_mib=${min_mib:-0} can=$can why=$why"

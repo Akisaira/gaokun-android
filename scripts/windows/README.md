@@ -7,7 +7,7 @@
 | 文件 | 是什么 |
 |---|---|
 | `gaokun3-setup.cmd` | 给用户双击的入口：以管理员身份运行同目录的 `.ps1`，参数原样传过去 |
-| `gaokun3-setup.ps1` | 预检 → 让 Windows 自己压缩 D: → 建 FAT32 分区 GK3LIVE 放 live → ESP 放 systemd-boot 与启动项 → bcdedit 设"只下一次"。`-Uninstall` 撤销 |
+| `gaokun3-setup.ps1` | 预检 → 让 Windows 自己压缩 D:，**只缩出安装器自己要的**（按安装包内容算，约 0.5–2 GiB）→ 建 FAT32 分区 GK3LIVE 放 live → ESP 放 systemd-boot 与启动项 → bcdedit 设"只下一次"。给 Android 的空间在安装器里缩。`-Uninstall` 撤销 |
 | `build-bundle.sh` | 造安装包目录 + zip（`build-live.sh` 在构建容器里调它）→ `out/live/gaokun3-windows{,.zip}` |
 | `test-setup.ps1` / `test-setup.sh` | 测试：PowerShell 容器里测语法、编码、5.1 兼容与全部纯逻辑；再拿 live 镜像里的真 wpa_supplicant 解析生成的 WiFi 配置 |
 
@@ -18,8 +18,15 @@ bash scripts/windows/test-setup.sh
 
 ## 几个不显然的决定
 
-* **压缩交给 Windows**（`Resize-Partition`），不在 live 里用 `ntfsresize`：Windows 能处理 BitLocker / 设备加密、
-  脏卷、不可移动的文件，`ntfsresize` 对加密卷无能为力。live 里的 `gk3_shrink` 留给从 U 盘启动的人。
+* **脚本只划安装器自己要的空间，给 Android 的空间到安装器里分**（用户 2026-09-27："更改磁盘应该在安装的时候进行，
+  安装安装器应该仅划分自己需要的空间"）。原先是脚本一次缩出 64 GiB 给 Android + 4 GiB 给安装器。现在：
+  * GK3LIVE 按安装包内容算（`Get-LiveMiB`：内容 ×1.25 + 128 MiB，按 256 MiB 取整，至少 512 MiB）；`-LiveMiB` 可覆盖
+  * 给 Android 的空间在安装器里"缩小现有分区腾出空间"—— 那边的 `gk3_shrink` 拒绝休眠 / 快速启动 / 脏卷（§5.10 的 #1）
+  * **例外：要缩的卷加了密**（BitLocker / 设备加密，`VolumeStatus` 不是 `FullyDecrypted`，"等待激活"也算）：安装器缩不了
+    （blkid 认作 BitLocker，`why=bitlocker`），只有 Windows 能 ⇒ 没给 `-AndroidGiB` 时问一次"现在就缩多少"（回车 64，0 = 不缩）
+  * **快速启动**：要到安装器里缩 D: 的话必须关（它让分区停在休眠状态，安装器会拒绝缩）⇒ 开着就说明、确认后把
+    `HiberbootEnabled` 设 0，旧值记进状态文件，`-Uninstall` 恢复。只在这条路上动它，替 Android 缩过了就不碰
+  * `-AndroidGiB <N>`（≥24）照旧可以让 Windows 一次缩好
 * **live 放在新建的 FAT32 分区上**，不放 ESP（出厂 ESP 只剩约 188 MiB，Android 自己要 150）、不放 C:（可能是加密的）。
   分区建在缩出来那段的**开头**，Android 装在它后面 —— 与 fixture 场景 `windows-live` 的布局一致。
 * **进安装器用 `bcdedit /set {fwbootmgr} bootsequence`**（只下一次），不改默认启动项；不想装了重启就回 Windows。
@@ -62,6 +69,8 @@ Windows 的分区序号（`PartitionNumber`）在撤销后变了（中间重启�
    要用户先确认拿得到恢复密钥 —— 但会不会触发、触发几次，没实测过。
 2. **华为固件认不认 `bootsequence`**（UEFI 的 BootNext）。Parallels 的固件认；华为的没验。不认的话会直接进 Windows，脚本提示改用 `-UseFallbackPath`。
 3. ~~`Resize-Partition` / `New-Partition -Offset` / `Format-Volume -FileSystem FAT32` / `mountvol /S`~~ ✅ 虚拟机里验过（上表）。
+   ⚠️ 但 2026-09-27 改成"只划自己的空间"之后的新路径（自动算 GK3LIVE 大小、加密卷的提问、关快速启动）只有 `test-setup.ps1`
+   的单元测试（39/39），没在虚拟机里重跑过 —— 虚拟机测试脚本 `vmtest/run-setup.ps1` 仍给 `-AndroidGiB 24`，走的是老路径
 4. `Get-NetConnectionProfile` 的网络名与 `netsh` 导出的配置名是否一致（虚拟机没有 WiFi，验不了；不一致时带不上 WiFi，安装器里再连即可）。
 
 ⓘ 安装包里的 squashfs 带着华为专有的 GPU zap shader —— 随包公开发布（用户 2026-09-27 定 B23 ①：随镜像发，与 ROM 同待遇 —— 已发布的 ROM 的 vendor 里本来就带着它）（`docs/TODO.md` 的 B23）。

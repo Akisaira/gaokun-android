@@ -416,6 +416,7 @@ class _ShrinkPageState extends State<ShrinkPage> {
     return switch (s.why) {
       'ntfs-dirty' => l.shrinkWhyDirty,
       'ntfs-hibernated' => l.shrinkWhyHibernated,
+      'bitlocker' => l.shrinkWhyBitlocker,
       'mounted' => l.shrinkWhyMounted,
       _ => l.shrinkWhyFs,
     };
@@ -424,7 +425,7 @@ class _ShrinkPageState extends State<ShrinkPage> {
   @override
   Widget build(BuildContext context) {
     final s = context.session, l = context.l, tt = Theme.of(context).textTheme;
-    final list = (s.shrinkables ?? []).where((x) => x.fs == 'ntfs' || x.fs.startsWith('ext') || x.why == 'ntfs-dirty' || x.why == 'ntfs-hibernated').toList()
+    final list = (s.shrinkables ?? []).where((x) => x.fs == 'ntfs' || x.fs.startsWith('ext') || x.why == 'ntfs-dirty' || x.why == 'ntfs-hibernated' || x.why == 'bitlocker').toList()
       ..sort((a, b) => b.curMib.compareTo(a.curMib));
     final labels = {for (final p in s.disk?.parts ?? <Part>[]) p.path: p.label};
     if (_running) {

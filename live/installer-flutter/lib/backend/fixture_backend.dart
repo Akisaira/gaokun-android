@@ -15,7 +15,7 @@ class FixtureBackend extends Gk3Backend {
       : _scenario = scenario,
         _bundle = bundle ?? rootBundle;
 
-  static const scenarios = ['factory', 'windows-free', 'windows-live', 'blank', 'android'];
+  static const scenarios = ['factory', 'windows-free', 'windows-live', 'windows-setup', 'windows-setup-shrunk', 'blank', 'android'];
 
   String _scenario;
   String get scenario => _scenario;

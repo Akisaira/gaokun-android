@@ -40,6 +40,37 @@ void main() {
     expect(a, contains('--release /media/gk3/gaokun3/payload'));
   });
 
+  testWidgets('windows-setup（2026-09-27 起 Windows 脚本的默认：只划了 GK3LIVE、没有空闲）→ 在安装器里缩 Data → 双系统装进 Data 与 GK3LIVE 之间', (t) async {
+    final rec = await pumpApp(t, 'windows-setup');
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await see(t, find.text(l.modeTitle));
+    // 没有空闲：双系统报"至少要多少"（后端的数），缩分区可选
+    await see(t, find.textContaining('至少需要 ${fmtMib(21668)}'));
+    expect(find.text(l.modeAlongOk), findsNothing);
+    await tap(t, find.text(l.modeShrinkTitle));
+    await next(t);
+    await see(t, find.text(l.shrinkTitle));
+    await tap(t, find.textContaining('Data'));
+    await hold(t, l.shrinkGo);
+    expect(rec.last('gk3_shrink')!.first, 'gk3_shrink');
+    expect(rec.last('gk3_shrink')![1], '/dev/nvme0n1p4');
+    // 缩完回到方式页（场景换成 windows-setup-shrunk）：双系统可行
+    await see(t, find.text(l.modeTitle));
+    await see(t, find.text(l.modeAlongOk));
+    await tap(t, find.text(l.modeAlongTitle));
+    await next(t);
+    await next(t); // 来源
+    await next(t); // 选项
+    await see(t, find.text(l.confirmAlongHead));
+    await hold(t, l.confirmHoldIdle);
+    await see(t, find.text(l.doneTitle));
+    final a = rec.last('gk3_apply')!.join(' ');
+    expect(a, contains('--mode alongside'));
+    expect(a, contains('--region-start 789448704 --region-end 957220863')); // Data 缩出来的那段，紧挨在 GK3LIVE 前面
+  });
+
   testWidgets('windows-live（免 U 盘装双系统）：安装器跑在内置盘上 → 盘可选、整盘清空禁用、双系统一路装完', (t) async {
     final rec = await pumpApp(t, 'windows-live');
     await tap(t, find.text(l.btnStart));
@@ -92,6 +123,18 @@ void main() {
     // 缩完回到方式页：场景已经换成 windows-free，双系统可行、并且替用户选上了
     await see(t, find.text(l.modeTitle));
     await see(t, find.text(l.modeAlongOk));
+  });
+
+  testWidgets('factory、C: 与 D: 都加了密（BitLocker / 设备加密）：缩分区页写明"只有 Windows 能缩"，不说"文件系统不支持"', (t) async {
+    await pumpApp(t, 'factory', overrides: {'gk3_shrink_scan': 'shrink_scan-bitlocker.txt'});
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await tap(t, find.text(l.modeShrinkTitle));
+    await next(t);
+    await see(t, find.text(l.shrinkTitle));
+    await see(t, find.text(l.shrinkWhyBitlocker), findsWidgets); // 两个加密卷各一条
+    expect(find.text(l.shrinkWhyFs), findsNothing);
   });
 
   testWidgets('blank：整盘安装；确认页如实说"没有任何分区"', (t) async {

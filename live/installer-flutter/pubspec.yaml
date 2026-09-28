@@ -34,6 +34,8 @@ flutter:
     - testdata/factory/
     - testdata/windows-free/
     - testdata/windows-live/
+    - testdata/windows-setup/
+    - testdata/windows-setup-shrunk/
     - testdata/blank/
     - testdata/android/
   # ★ MD3 的两套字体打包进应用（lib/ui/theme.dart 的说明）。文件不入库：python3 tool/fetch-fonts.py
