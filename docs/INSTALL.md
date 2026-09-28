@@ -2,7 +2,7 @@
 
 There are two installers:
 
-* **The graphical installer — preview** (not released yet; it will ship with the next release). Touch-friendly, can
+* **The graphical installer — preview** (first released with v0.7.0-alpha). Touch-friendly, can
   install **next to Windows**, and can start from Windows **without a USB
   stick**. Parts of it have not been run on real hardware yet — see
   [below](#graphical-installer-preview).
