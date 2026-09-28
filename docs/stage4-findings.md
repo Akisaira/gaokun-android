@@ -10447,3 +10447,34 @@ k10 = k9 + 诊断增补（超时时打印中断描述符与中断线程的栈；
 
 **现在的状态**：0065（收尾不卡）+ 0066 模式 1（seek 不断言）⇒ 解码中途停止、播到结尾、普通 seek、分辨率变化都正常；
 剩"EOS 之后的第一次 seek"一个已知缺陷。0066 默认值仍是 0，还没改成 1。
+
+### 15. 根因：drain 之后 iris 既收走了 DPB、又不重置 LAST 状态 ⇒ 0067（2026-09-28）
+**strace 对比**（HAL `android.hardware.media.c2-service-v4l2`，同一个 `iris-seek-test avc720 seek:1:400`；#24 venus 与 k10 iris；本机 `out/iris-strace/`）：
+两边都是 DECODER_CMD STOP → DQBUF LAST → 把那个空缓冲重新 QBUF → DECODER_CMD START。之后的 seek：v4l2_codec2 已经 Idle，
+`V4L2Decoder::flush()` 开头 `if (mState == State::Idle) return;` ⇒ **V4L2 层什么都不做**，直接送新输入。
+venus 接着出帧；iris 上新输入照样被消费（OUTPUT DQBUF 都回来）、CAPTURE 一帧不出，直到下一次真正 streamoff / streamon。
+（另：iris 上 HAL 调了 97 次 `DQEVENT` 拿 `ENOENT`，venus 只有 3 次 —— iris 的 poll 在没有事件时也报 POLLPRI，HAL 空转；⬜ 另查。）
+* **第一处**：`iris_hfi_gen1_session_ftb_done()` 收到 EOS、长度 0 的输出缓冲时自动发 **HFI_FLUSH_OUTPUT**，固件把 DPB（stream 0）全部退回；
+  gen1 没有 `session_resume_drain`，`V4L2_DEC_CMD_START`（`iris_vdec_start_cmd`）只清驱动里的状态位 ⇒ 谁也不把 DPB 再交给固件。
+  k10 的 HFI 跟踪：EOS 那条 FLUSH_OUTPUT 之后一串 stream 0 的空 FBD，直到下一次 CAPTURE streamon 才又有 6 条 stream 0 的 FTB。venus 在 EOS 时不 flush。
+* **第二处**（修掉第一处后在 k11 上查出）：每隔一次 drain 收不到 EOS。`inst->last_buffer_dequeued` 交出 LAST 时置位、上游只在 streamon 时清 ⇒
+  不 streamoff 就接着解时，下一个 EOS 缓冲不会被标 LAST（`ftb_done` 里的 `!inst->last_buffer_dequeued`），HAL 等不到 LAST。
+  v4l2 tracepoint 数：`seek:2:400` 的 4 次 drain 只出 2 个 LAST。同样 `v4l2_m2m_mark_stopped()` 置上的"已停止"上游从不清。
+* **0067**：EOS 时不发这条 FLUSH_OUTPUT（0644 `qcom_iris.eos_flush`，默认 N，Y = 上游）；`iris_vdec_start_cmd()` 离开 drain / DRC 时清
+  `last_buffer_dequeued` 并 `v4l2_m2m_clear_state()`。顺带：除了分辨率切换那一处，gen1 解码器不再发 FLUSH_OUTPUT。
+
+### 16. iris-k12：回归全过（2026-09-28）
+k12 = 全配方（0065 + 0066 + 0067 + 0050）+ 0064，`e701d903…`，本机 `out/iris-k12/`（`eos-ab.sh`、`k12.txt`）。`seek_mode=1`：
+| 项 | `eos_flush=N`（0067） |
+|---|---|
+| 播完后 seek：AVC / HEVC / VP9 | ✅ 3 / 3 |
+| 连续 2 次、4 次"播完再 seek"（AVC、VP9） | ✅ 3 / 3（tail 都见到 EOS） |
+| 每次 drain 都出 LAST（`seek:4:400` = 6 次 drain） | ✅ **6 / 6** |
+| 分辨率变化 TS + seek:3:30 | ✅ |
+| 普通 seek AVC / HEVC、中途 stop AVC / VP9、drain AVC、分辨率变化 drain HEVC / VP9 | ✅ 7 / 7 |
+| SYS_ERROR / 超时 | 0 / 0 |
+| 对照：`eos_flush=Y`（上游）播完后 seek | ❌ seek 后 0 帧（因果再确认） |
+
+之后收尾（不再上机）：0066 默认改成 1、删掉 A/B 里证明无效的模式 2（草稿树上 0065 → 0066 → 0067 → 0064 逐个干净打上、与 k12 的源码只差这两处）。
+⬜ 还没做：不带诊断的全配方编译（0066 改了默认值后要编一次确认）；`venus_compat_gfmt=N`（k6 上疑似整机复位，没复测）；
+HAL 的 POLLPRI 空转；SYS_ERROR 后固件重启的 `invalid uc_region`；换 prebuilt-boot、编 ROM；待机复位（发版阻断，与 iris 无关）。

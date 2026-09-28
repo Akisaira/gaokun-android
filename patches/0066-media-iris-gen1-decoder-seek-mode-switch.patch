@@ -1,7 +1,7 @@
 From: Vahiru <nekovahiru@gmail.com>
-Subject: [PATCH] media: iris: gen1 解码器的 seek 做成三选一（seek_mode），修"同一会话 STOP 后重新 START 固件断言"（本地，#128 §12，⬜ 待 A/B）
+Subject: [PATCH] media: iris: gen1 解码器的 seek 学 venus —— 只 flush、会话不停（本地，#128 §12–§13）
 
-案卷 docs/stage4-findings.md #128 §12–§13。**本地补丁**。
+案卷 docs/stage4-findings.md #128 §12–§13、§16。**本地补丁**。
 
 现象（iris-k6 / k7 / k8，2026-09-28）：v4l2_codec2 的 seek（`V4L2Decoder::flush()`：streamoff CAPTURE → streamoff OUTPUT →
 streamon OUTPUT → streamon CAPTURE）之后 0 帧，固件 `sys error (type 1, session ff, deadbead)`，
@@ -9,81 +9,18 @@ SFR `Err_Fatal - video_decoder_utils.c:3056`，调试队列 `assert_loop(444): F
 k8 的 HFI 跟踪：FLUSH_ALL ✓ → **STOP**（750 ms）→ RELEASE_RESOURCES → 15 条 SET_PROPERTY + SET_BUFFERS ×2 →
 **LOAD_RESOURCES + START** → 输出端 SET_PROPERTY → SYS_ERROR。venus 同一份固件 192/192：它的 seek 从不 STOP
 （`vdec_stop_capture` / `vdec_stop_output` 各一次 FLUSH_ALL，`vdec_start_output` 的 SEEK 分支直接继续，不重发属性）。
-另：上游这条重启路径上 `iris_create_internal_buffers()` 不管已有多少都新建 min_count 个，旧的 BIN / SCRATCH_1
-从没向固件 RELEASE_BUFFERS 过 ⇒ 固件手里同时挂着两套输入内部缓冲。
 
-0644 模块参数 `qcom_iris.seek_mode`（默认 0 = 上游，A/B 定下来之前不改默认）：
-  0  上游：OUTPUT streamoff（在 INPUT_STREAMING、会话已启动时）发 STOP + RELEASE_RESOURCES，streamon 全部重配 + LOAD_RESOURCES + START
-  1  学 venus：同一时机只发 FLUSH_ALL、保留 LOAD_RESOURCES，置 inst->seek_resume；之后 streamon OUTPUT 不重发属性 /
-     内部缓冲（session_start 因 LOAD_RESOURCES 仍在而跳过），streamon CAPTURE 不重发输出端属性、只重新给 DPB；
-     两个队列都回到 STREAMING 时清 seek_resume。没有 streamon 就 close 时，iris_close() 在 m2m 上下文释放之前
-     补 STOP + RELEASE_RESOURCES —— 收尾因此变成 FLUSH_ALL ×2 → STOP → RELEASE_RESOURCES → SESSION_END，与 venus 相同。
-  2  上游，但 streamon OUTPUT 重配之前先把固件还挂着的输入内部缓冲逐个 RELEASE_BUFFERS 并等回复
-     （逐个等，免得晚到的"释放完成"被下一条会话命令的等待当成自己的回复）
+做法（0644 模块参数 `qcom_iris.seek_mode`，默认 1；0 = 上游，留作回归对照）：
+OUTPUT streamoff 在 INPUT_STREAMING、会话已启动（LOAD_RESOURCES 仍在）时只发 FLUSH_ALL，保留 LOAD_RESOURCES，置 inst->seek_resume；
+之后 streamon OUTPUT 不重发属性 / 内部缓冲（session_start 因 LOAD_RESOURCES 仍在而跳过），streamon CAPTURE 不重发输出端属性、
+只重新给 DPB；两个队列都回到 STREAMING 时清 seek_resume。没有 streamon 就 close 时，iris_close() 在 m2m 上下文释放之前
+补 STOP + RELEASE_RESOURCES —— 收尾因此变成 FLUSH_ALL ×2 → STOP → RELEASE_RESOURCES → SESSION_END，与 venus 相同。
 只影响解码器；编码器、DRC、drain 路径不动。
+
+A/B（k9）：模式 1 seek AVC / HEVC / VP9 3/3、中途 stop / drain / HEVC 分辨率变化 3/3；上游（0）照旧 SYS_ERROR。
+试过的另一条路（上游 + 重配前先 RELEASE_BUFFERS 释放固件还挂着的输入内部缓冲）seek 0/3，已删。
+k12（0066 + 0067）：16 项回归全过，0 次 SYS_ERROR / 超时。
 ---
-diff --git a/drivers/media/platform/qcom/iris/iris_buffer.c b/drivers/media/platform/qcom/iris/iris_buffer.c
-index 246ad0a..11e5536 100644
---- a/drivers/media/platform/qcom/iris/iris_buffer.c
-+++ b/drivers/media/platform/qcom/iris/iris_buffer.c
-@@ -810,6 +810,45 @@ static int iris_release_input_internal_buffers(struct iris_inst *inst)
- 	return 0;
- }
- 
-+/*
-+ * gaokun3 0066 (seek_mode=2): release, one at a time and waiting for each reply, the input
-+ * internal buffers the firmware still holds. Waiting keeps a late RELEASE_BUFFERS done from
-+ * completing the next session command's wait. Nothing is queued on the first streamon, so
-+ * this only acts on a restart after STOP + RELEASE_RESOURCES.
-+ */
-+int iris_release_input_internal_buffers_sync(struct iris_inst *inst)
-+{
-+	const struct iris_firmware_data *firmware_data = inst->core->iris_firmware_data;
-+	const struct iris_hfi_session_ops *hfi_ops = inst->hfi_session_ops;
-+	struct iris_buffer *buffer, *next;
-+	u32 i;
-+	int ret;
-+
-+	if (inst->domain != DECODER)
-+		return 0;
-+
-+	for (i = 0; i < firmware_data->dec_ip_int_buf_tbl_size; i++) {
-+		struct iris_buffers *buffers = &inst->buffers[firmware_data->dec_ip_int_buf_tbl[i]];
-+
-+		list_for_each_entry_safe(buffer, next, &buffers->list, list) {
-+			if (buffer->attr & BUF_ATTR_PENDING_RELEASE)
-+				continue;
-+			if (!(buffer->attr & BUF_ATTR_QUEUED))
-+				continue;
-+			buffer->attr |= BUF_ATTR_PENDING_RELEASE;
-+			reinit_completion(&inst->completion);
-+			ret = hfi_ops->session_release_buf(inst, buffer);
-+			if (ret)
-+				return ret;
-+			ret = iris_wait_for_session_response(inst, false);
-+			if (ret)
-+				return ret;
-+		}
-+	}
-+
-+	return 0;
-+}
-+
- int iris_alloc_and_queue_persist_bufs(struct iris_inst *inst, enum iris_buffer_type buffer_type)
- {
- 	struct iris_buffers *buffers = &inst->buffers[buffer_type];
-diff --git a/drivers/media/platform/qcom/iris/iris_buffer.h b/drivers/media/platform/qcom/iris/iris_buffer.h
-index 75bb767..b7e916a 100644
---- a/drivers/media/platform/qcom/iris/iris_buffer.h
-+++ b/drivers/media/platform/qcom/iris/iris_buffer.h
-@@ -115,6 +115,7 @@ int iris_queue_internal_deferred_buffers(struct iris_inst *inst, enum iris_buffe
- int iris_destroy_internal_buffer(struct iris_inst *inst, struct iris_buffer *buffer);
- int iris_destroy_all_internal_buffers(struct iris_inst *inst, u32 plane);
- int iris_destroy_dequeued_internal_buffers(struct iris_inst *inst, u32 plane);
-+int iris_release_input_internal_buffers_sync(struct iris_inst *inst);
- int iris_alloc_and_queue_persist_bufs(struct iris_inst *inst, enum iris_buffer_type buf_type);
- int iris_alloc_and_queue_input_int_bufs(struct iris_inst *inst);
- int iris_queue_buffer(struct iris_inst *inst, struct iris_buffer *buf);
 diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c b/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c
 index f00748b..e8eeb83 100644
 --- a/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c
@@ -146,7 +83,7 @@ index 814b608..c157a01 100644
  	u32				frame_counter;
  	u32				frame_rate;
 diff --git a/drivers/media/platform/qcom/iris/iris_vdec.c b/drivers/media/platform/qcom/iris/iris_vdec.c
-index d1dc09f..a977131 100644
+index d1dc09f..f25b7da 100644
 --- a/drivers/media/platform/qcom/iris/iris_vdec.c
 +++ b/drivers/media/platform/qcom/iris/iris_vdec.c
 @@ -3,6 +3,7 @@
@@ -157,25 +94,23 @@ index d1dc09f..a977131 100644
  #include <media/v4l2-event.h>
  #include <media/v4l2-mem2mem.h>
  
-@@ -363,10 +364,35 @@ void iris_vdec_src_change(struct iris_inst *inst)
+@@ -363,10 +364,33 @@ void iris_vdec_src_change(struct iris_inst *inst)
  	v4l2_event_queue_fh(&inst->fh, &event);
  }
  
 +/*
-+ * gaokun3 0066 (#128 §12): v4l2_codec2 seeks by streaming off CAPTURE, then OUTPUT, then
-+ * streaming both back on. Upstream gen1 turns the OUTPUT streamoff into STOP +
++ * gaokun3 0066 (#128 §12–§13): v4l2_codec2 seeks by streaming off CAPTURE, then OUTPUT,
++ * then streaming both back on. Upstream gen1 turns the OUTPUT streamoff into STOP +
 + * RELEASE_RESOURCES and the streamon into a full reconfiguration plus LOAD_RESOURCES + START
 + * in the same session; the sc8280xp firmware then asserts (video_decoder_utils.c:3056)
 + * as the output properties arrive.
++ *   1  (default) like venus vdec_stop_output()/vdec_start_output(): flush, keep the session
++ *      loaded and started, and on streamon send neither properties nor internal buffers again
 + *   0  upstream
-+ *   1  like venus vdec_stop_output()/vdec_start_output(): flush, keep the session loaded
-+ *      and started, and on streamon send neither properties nor internal buffers again
-+ *   2  upstream, but first release the input internal buffers the firmware still holds
-+ *      (upstream registers a second set on top of them)
 + */
-+unsigned int iris_seek_mode;
++unsigned int iris_seek_mode = 1;
 +module_param_named(seek_mode, iris_seek_mode, uint, 0644);
-+MODULE_PARM_DESC(seek_mode, "gaokun3: decoder seek (OUTPUT streamoff after CAPTURE streamoff): 0 upstream STOP + restart, 1 flush and continue like venus, 2 upstream + release stale input internal buffers");
++MODULE_PARM_DESC(seek_mode, "gaokun3: decoder seek (OUTPUT streamoff after CAPTURE streamoff): 1 flush and continue like venus (default), 0 upstream STOP + restart");
 +
  int iris_vdec_streamon_input(struct iris_inst *inst)
  {
@@ -193,20 +128,7 @@ index d1dc09f..a977131 100644
  	ret = iris_set_properties(inst, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
  	if (ret)
  		return ret;
-@@ -377,6 +403,12 @@ int iris_vdec_streamon_input(struct iris_inst *inst)
- 
- 	iris_get_internal_buffers(inst, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
- 
-+	if (READ_ONCE(iris_seek_mode) == 2) {
-+		ret = iris_release_input_internal_buffers_sync(inst);
-+		if (ret)
-+			return ret;
-+	}
-+
- 	ret = iris_destroy_dequeued_internal_buffers(inst, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
- 	if (ret)
- 		return ret;
-@@ -399,9 +431,12 @@ int iris_vdec_streamon_output(struct iris_inst *inst)
+@@ -399,9 +423,12 @@ int iris_vdec_streamon_output(struct iris_inst *inst)
  	const struct iris_hfi_session_ops *hfi_ops = inst->hfi_session_ops;
  	int ret;
  
@@ -222,7 +144,7 @@ index d1dc09f..a977131 100644
  
  	iris_get_internal_buffers(inst, V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
  
-@@ -421,6 +456,9 @@ int iris_vdec_streamon_output(struct iris_inst *inst)
+@@ -421,6 +448,9 @@ int iris_vdec_streamon_output(struct iris_inst *inst)
  	if (ret)
  		goto error;
  

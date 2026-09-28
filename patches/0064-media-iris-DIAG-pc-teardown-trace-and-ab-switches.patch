@@ -1,7 +1,7 @@
 From: Vahiru <nekovahiru@gmail.com>
 Subject: [PATCH] media: iris: DIAG —— 收尾 / 断电全程跟踪 + A/B 开关（【诊断补丁，不进发版内核】）
 
-案卷 docs/stage4-findings.md #128 §8–§9。只在 kernel-apply-patches.sh --with-diag 时打，打在 0065、0066 之上。
+案卷 docs/stage4-findings.md #128 §8–§9。只在 kernel-apply-patches.sh --with-diag 时打，打在 0065–0067 之上。
 
 来历：iris-k3 / k4 上机，第一次收尾时等固件回复超时（stop 后约 1.03 s），之后固件不再应答任何命令，
 断电握手（PC_PREP）永远等不到 PC_READY。iris-k5（2026-09-28）用本补丁定位：根因是 CAPTURE streamoff
@@ -272,7 +272,7 @@ index e8eeb83..b5fc550 100644
  		} else if (READ_ONCE(iris_seek_mode) == 1 && V4L2_TYPE_IS_OUTPUT(plane) &&
  			   inst->state == IRIS_INST_INPUT_STREAMING &&
 diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen1_response.c b/drivers/media/platform/qcom/iris/iris_hfi_gen1_response.c
-index bfd7495..ed5f1ff 100644
+index 314167f..08fd01e 100644
 --- a/drivers/media/platform/qcom/iris/iris_hfi_gen1_response.c
 +++ b/drivers/media/platform/qcom/iris/iris_hfi_gen1_response.c
 @@ -225,6 +225,10 @@ iris_hfi_gen1_sys_event_notify(struct iris_core *core, void *packet)
@@ -286,7 +286,7 @@ index bfd7495..ed5f1ff 100644
  	core->state = IRIS_CORE_ERROR;
  
  	mutex_lock(&core->lock);
-@@ -683,7 +687,10 @@ static void iris_hfi_gen1_flush_debug_queue(struct iris_core *core, u8 *packet)
+@@ -692,7 +696,10 @@ static void iris_hfi_gen1_flush_debug_queue(struct iris_core *core, u8 *packet)
  			struct hfi_msg_sys_debug_pkt *pkt =
  				(struct hfi_msg_sys_debug_pkt *)packet;
  

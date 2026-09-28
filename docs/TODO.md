@@ -32,8 +32,9 @@
     华为固件读走后就再也不读命令（A/B 8/11 卡死），改成与 venus 一样的 FLUSH_ALL 后 0/15（**0065**，#128 §9）。
     ✅ 全配方 k6（含 0050 + 0065）：中途停止 5/5、播到结尾 3/3。❌ **seek 让固件 SYS_ERROR → v4l2 HAL 死锁**（k7 去掉 0050 照旧 ⇒ iris 自己的缺陷，#128 §11）。
     ✅ seek 根因（k8）：同一会话 STOP 后重新 START，固件断言 ⇒ **0066**（`seek_mode=1` 学 venus 只 flush、不停会话）k9 上 seek AVC/HEVC/VP9 全过。
-    ❌ 剩一个：**播到结尾（EOS）之后的第一次 seek 没有输出**（三种格式都复现，venus 正常；#128 §14）—— 对应"播完拖回开头重看"。
-    ⬜ 修它 → 0066 默认改成 1、删掉模式 2 → 全配方编候选内核 → `venus_compat_gfmt=N` 再测一遍
+    ✅ 播完后 seek（k10 strace 查清：EOS 时 iris 自己 FLUSH_OUTPUT 收走 DPB、START 不重置 LAST）⇒ **0067**；k12 回归 16 项全过（#128 §15–§16）。
+    ✅ 0066 默认已改 1、模式 2 已删。⬜ 不带诊断的全配方编一次（确认编得过）→ 换 prebuilt-boot、编 ROM → 上机验收；
+    ⬜ 顺手：`venus_compat_gfmt=N` 复测、HAL 的 POLLPRI 空转、SYS_ERROR 后 `invalid uc_region`
     → ⬜ 换 prebuilt-boot、编 ROM（VP8 撤掉要 ROM 才生效）→ ⬜ 删 ESP 上的 `slot_iris/` 与测试条目（k5 还在）。
 * ❌❌ **发版阻断：候选版一待机就整机复位**（2026-09-28 实测，#128 §11）。`#24`（候选版 `1790206017` 的内核，venus）上
   `echo +30 > /sys/class/rtc/rtc0/wakealarm; echo mem > /sys/power/state`：进入 s2idle 后 **12–17 s、闹钟之前**就复位，pstore 空；
