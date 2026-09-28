@@ -10186,6 +10186,9 @@ HAL 文件与正在跑的进程 `/proc/<pid>/exe` 都是 `ad7c5c92…`、`/proc/
 * A3 ✅ 120 s 长录：D 分 10 段都在 1.0–1.2 ms，0 个洞。停 audioserver 0.12 s + 0.2 s：0 个洞，D 在停顿之后仍约 1 ms。
 * A4 ✅ 输出线程 48 kHz、HAL frame count 4096，与修复前一致。
 * A5 ✅ 音频相关的 avc 0 条。当时 logcat 中途被清过一次，开机起的完整普查由 iris 会话另做。
+* 重编候选版 `1790605865`（加 0068 修 Histen、Parts 页改版）上又跑了一遍 A1 / A2 / A4：
+  HAL 仍是 `a5803b1d`；四组开头静音 0 ms、0 个洞；48k 两组 D 1.0 / 1.1 ms、E 21.6 / 22.0 ms；首块 145–148 ms；incomplete / skipping 都是 0。
+  0068 改的是同一个 APEX 的链接配置，录音没被牵连。v0.7.0-alpha 发的就是这一版。
 * 放音 B1：播放管道没被改（`capacity 4096 … writeCanBlock 0`）。另见到 **1 次播放方向的 `skipping transfer`**：
   这是 StreamPrimary 原本的墙钟定拍在播放方向的同一个毛病（framework 送来的块晚于时刻表超过一块，HAL 就把下一块丢掉，约 85 ms），
   0051/0052/0063 都没碰这条路，旧版本也有 ⇒ 不是回归，记为后续项 TODO B25。

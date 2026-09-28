@@ -278,6 +278,19 @@ adb shell su -c 'logcat -d -s gaokun_effect' | tail -40
    * ② 改用 vendor 侧的加载接口（例如 `AApexSupport_loadLibrary` 一类，⬜ 接口名要对照源码核实）；
    * ③ 改 linkerconfig，不推荐；
    * 放 `/system` 能跑，但分区归属不对。
-   原来的上机检查项在修好之后照旧要做：开关关时只有一行 `bypass`；打开后外放有 `meter:`；插耳机立刻 `bypass: output is not the built-in speaker`；enforcing 下没有 `hal_audio_default` / `vendor_init` 的 avc。
+   ✅ **修复 = `patches/0068`**（iris 会话写，tree-fixes 第 16 条）：音频 APEX 自带的 `etc/linker.config.pb` 加一条 `permittedPaths: /vendor/${LIB}/soundfx`，只放行这一个目录。
+   ✅ **2026-09-28 重编候选版 `1790605865` 上机通过**（原始输出在本机 `out/v070b-accept/`）：
+   * 自然开机后，effect HAL 已经把 `/vendor/lib64/soundfx/libgaokunhisteneffect.so` 映射进来了；重启 effect HAL，日志依次是
+     `parseLibrary gaokun_histen` → `openEffectLibrary dlopen lib: /vendor/lib64/soundfx//…` → `queryEffect: ok`；
+     `dlopen failed`、`not accessible`、`getDescriptorFailed` 都是 0 条。
+   * 开关关时：`open: vendor.gaokun3.histen.on is off -- bit-exact passthrough, nothing loaded`，`output device: … -> built-in speaker`，以及一行 `bypass: master switch off`。
+   * 开关打开（新 Parts 页）、重新放一次：
+     * 依次出现 `speaker chain up: … hpf=150Hz makeup=+4.0dB limit=1 ceiling=-1.0dB`、`Histen engine loaded from /vendor/lib64/soundfx/libhw_histen_processing.so`、
+       `init: dlopen+GetSize+Init+SetParams ok`、`ready: scene SWS_SPK_LANDSCAPE_ONE`、`Histen chain up: scene=0 of 15, block=480 frames`、
+       `processing: built-in speaker, Histen + speaker chain`，并且有 `meter:` 行（音量 1 格，电平很低）；
+     * 放音期间 AudioOut_D 上有 1 条 Effect Chain（`Gaokun Histen`，b7e4c9a2），maps 里两个库都在。
+   * 再关掉：回到 bypass，`meter:` 0 条；两种状态下都没有崩溃。
+   * ⬜ 插耳机那一项没测（手边没耳机，发版说明里写明了）。
+   * ⬜ enforcing：录音期间见到 `hal_audio_default → hal_audio_default` 的 binder call denial，也就是 core HAL 调 effect HAL，要补规则，见 TODO B1。
    开关开 + 外放有 `meter:`；插耳机立刻 `bypass: output is not the built-in speaker`；
    enforcing 下没有 `hal_audio_default` 读属性的 avc。
