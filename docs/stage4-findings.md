@@ -10006,9 +10006,11 @@ storaged / system_server）—— hangdump 取证读跨 uid 的 `wchan` 那条�
 
 ### 3. 还没做的（TODO B24）
 * ⬜ **v0.6.3 不含这项修复**（候选版 `1790206017` 编于合并之前，`release.sh --no-build` 发的就是它）。
-* ⬜ 下一版构建上机验收：tree-fixes 的 [13]/[14] "已应用"；logcat（DEBUG）"parsed with card id 0, device id 3"、采集
-  "MonoPipe capacity 8192"、播放 4096；MIC 44.1k 单声道与 VOICE_COMMUNICATION 16k 单声道各录一段看大小与 RMS、有无
-  "incomplete data received"；游戏播放回归；Oboe 独占低延迟输入确认不再有 MMAP_CAPTURE 线程且 RMS 非零。
+* ✅ ~~logcat 三行、单声道两段、低延迟独占不再走 MMAP~~ —— 2026-09-28 在 bind-mount 的 HAL 上实测过，见 §5。
+* ⬜ 下一版**构建出来的镜像**上再验一次（§5 用的是 bind-mount，不是镜像）：tree-fixes 的 [13]/[14] "已应用" 且退出码 0；
+  `scripts/audio/mic-verify.sh` 的四个用例；游戏播放回归（`dumpsys media.audio_flinger` 的 latency 不变）；
+  `AudioRecord.getActiveMicrophones()` 对得上内置麦。
+* ⬜ 开头 170.7 ms 的静音（§5 ③）：要不要修、会不会让 VoIP 多出这段延迟，都没测。
 * ⓘ 贡献者的验证是在 bind-mount 的 HAL 上做的，而且那个二进制带了额外日志（提交 4463983 引用的 before 日志
   "parsed … device id 0" 不可能出自原版代码：address 为 "bottom" 时 `StreamPrimary.cpp:184-189` 在打这行之前就返回了）——
   所以要按本仓配方重新构建、重新验。
@@ -10018,3 +10020,40 @@ storaged / system_server）—— hangdump 取证读跨 uid 的 `wchan` 那条�
   直到一位用户真的去录音。
 * ★ **修复有效 ≠ 解释正确**。0052 实测有效，但注释里的机制是错的、作用范围也写错了（"播放不动"），照着那段注释维护的人会被带偏。
   审 PR 时按真实源码核对每一条"因为"，不只核对"结果对不对"。
+
+### 5. 2026-09-28 实机验证：原版 0 帧 → 修复后满帧，中途零丢块；剩开头 170.7 ms 静音
+**方法**（不刷机、不重启，`scripts/audio/mic-verify.sh`）：设备跑 v0.6.3 候选版（incremental `20260923232657`，这次 `ro.boot.slot_suffix` = `_a`），
+原版 HAL `ad7c5c92…`。先在原版上录一遍，再把构建机上打好 0051/0052 的 HAL（`c46c0fc3…`）和本仓的策略 XML 在 **init 的挂载命名空间**里
+bind-mount 上去、重启 HAL 与 audioserver，再录一遍，最后撤掉。
+录音工具是新写的 `gaokun3-mic-smoke`（`device/huawei/gaokun3/audio/tools/mic-smoke.c`）：AAudio 的普通模式内部就是 AudioRecord，
+和 App 走同一条路。录音不出声，不打扰旁人。
+
+**硬件事实**（`tinypcminfo -D 0 -d 2` / `-d 3`）：两个采集 PCM 都是 `Rate min=48000Hz max=48000Hz`、`Channels min=2 max=2` ——
+§1 ② "只留 48000 + STEREO" 的前提实测成立；PR 里建议的 `tinycap -c 1` 在这台机器上不可能成功。
+
+| 用例（请求） | 原版 HAL + 原版 XML | 带 0051/0052 + 本仓 XML |
+|---|---|---|
+| rec441m（44.1 kHz 单声道，系统录音机那种） | **0 帧、0 次回调**，44 字节 WAV | 220500/220500 帧，RMS −30.3 dBFS |
+| raw48s（48 kHz 双声道） | **0 帧**，44 字节 | 240000/240000，−26.9 dBFS |
+| voip16m（16 kHz 单声道，communication） | **0 帧**，44 字节 | 80000/80000，−37.5 dBFS |
+| lowlat48m（48 kHz 单声道，低延迟 + 独占） | 240000 帧，RMS **−4.8 dBFS** —— 是 stub 给的**随机数**，见 ② | 回落到普通 + 共享，240000/240000，−30.1 dBFS |
+
+① **Issue #9 复现了、根因 ① 实锤**：原版 logcat 是 `proxy_open(card:0 device:0 PCM_IN)` → `pcm_is_ready() failed: cannot open device (0) for card (0): No such file or directory`。
+   修复后是 `getCardAndDeviceId: parsed with card id 0, device id 3` → `proxy_open(card:0 device:3 PCM_IN)`，采集 `makeSink: MonoPipe capacity 8192 frames, block 4096 frames, writeCanBlock 1`。
+   两个单声道请求（44.1k、16k）在只留 STEREO 的剖面下都能录 —— 这一半现在是**实测**；"MONO 还列着就会失败"那一半仍是推断
+   （没单独做"只删 MONO"的对照：原版 0 帧是 address 的问题，与声道无关）。
+② **§2 删掉 `mmap_no_irq_in` 的理由实锤**：原版的低延迟独占请求确实走了 MMAP（`AHAL_MmapStream: createMmapBuffer … size: 960, burstSizeFrames: 120`，
+   没有打开 ALSA），拿到的是 63227 种取值几乎均匀分布的满幅数据：RMS 18956 = −4.8 dBFS，而满幅均匀噪声的理论值 20·log10(1/√3) = **−4.77 dBFS** ——
+   是随机数，不是麦克风。**"数据回调很多、帧数满、RMS 很大"不等于录到了声音**：这一格当时判的是 PASS —— `gaokun3-mic-smoke` 已加一条：5 秒平均 RMS 高于 −8 dBFS 判 FAIL。
+   修复后日志里没有 `AHAL_MmapStream`，AAudio 回落到普通路径。
+③ **0052 管用了，但开头还剩一段静音**：修复后每个用例都是**开头恰好 170.7 ms 全零（= 2 × 4096 帧）**，之后 5 秒一个洞都没有。
+   logcat 的 `transfer: incomplete data received, inserting 4096 frames of silence` 一共 8 行 = 4 个用例 × 流刚起时的 2 行（间隔约 86 ms）——
+   PR 里那种"约每 8 块丢 1 块"没了。这段静音是启动时管道还没填满、`transfer()` 用静音补出来的；它会不会一直作为多出来的延迟留在流里，**没测**。
+   `gaokun3-mic-smoke` 已改成把开头静音单独报出来，只有第一个非零样本之后的洞才判 FAIL。
+
+**坑（修进了脚本）**：第一次撤 bind-mount 时 HAL 还在运行，它的可执行文件正被占用，普通 `umount` 返回 **EBUSY**；脚本没检查，还在
+adb 的命名空间里对 sha256，打出一个"没回到原样"的值却照常退出 0。实际靠 `umount -l` 加重启两个服务才恢复（之后在 init 命名空间核对：
+HAL 文件与正在跑的进程 `/proc/<pid>/exe` 都是 `ad7c5c92…`、`/proc/1/mountinfo` 无残留）。
+现在脚本先停 HAL 再卸、失败就用 `umount -l`，按"init 命名空间里的文件 + 正在跑的 HAL 的 exe"核对，对不上就以非零退出。
+原始输出在本机 `out/micverify/20260928-123113/`（不入库）。
+

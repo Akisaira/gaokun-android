@@ -80,7 +80,7 @@ printf '%s' "$OUT" | grep -q 'userdata-too-small' && ok "userdata 太小被拒" 
 
 # ★ macOS 自带的 bash 3.2 在 UTF-8 下把紧跟在 $变量 后面的中文字节读进变量名（"VER�: unbound variable"）——
 #   2026-09-27 release-installer.sh 第一次跑就死在这。在 Mac 上跑的脚本一律写 ${变量}
-BADV=$(for f in scripts/live/*.sh scripts/windows/*.sh scripts/find-device.sh scripts/boot-oneshot.sh; do
+BADV=$(for f in scripts/live/*.sh scripts/windows/*.sh scripts/audio/*.sh scripts/find-device.sh scripts/boot-oneshot.sh; do
     perl -CSD -ne 'print "'"$f"':$.\n" if /(?<![\\])\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]/' "$f"; done)
 [ -z "$BADV" ] && ok "脚本里没有紧跟中文的 \$变量（bash 3.2 会读错）" || bad "这些地方 \$变量 后面紧跟中文，要写成 \${变量}：$(echo $BADV)"
 
