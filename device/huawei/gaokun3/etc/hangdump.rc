@@ -11,7 +11,6 @@ service hangdump /vendor/bin/gaokun3-hangdump.sh
 
 on property:sys.boot_completed=1
     mkdir /data/vendor/gaokun3 0770 root system
-    # ★ 2026-09-29：.done 标记在 /data 上会跨重启保留 —— 原先没人删，第一次取证之后看门狗
-    #   就永久不跑了（与"每次启动一份"的设计相反）。vendor_init 对 vendor_data_file 有 unlink。
-    rm /data/vendor/gaokun3/hangdump.done
+    # ⓘ 2026-09-29：以前的 hangdump.done 标记已从脚本里删掉（它让看门狗在第一次取证后永久停跑）。
+    #   老机器上可能还留着一个，无害：新脚本不再看它。
     start hangdump

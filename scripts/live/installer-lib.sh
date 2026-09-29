@@ -672,6 +672,14 @@ gk3_apply() {
             [ "$efs" = vfat ] || { rm -rf "$parts"; gk3_die "$esp 不是 FAT 文件系统（是 '${efs}'）—— 不像一个 ESP"; return 1; }
             [ "$etype" = C12A7328-F81F-11D2-BA4B-00A0C93EC93B ] \
                 || { rm -rf "$parts"; gk3_die "$esp 的分区类型不是 EFI System（是 '${etype}'）"; return 1; }
+            # ⚠️ 2026-09-29（SELinux 第七轮）：Android 侧按 by-name 名字给 ESP 打专用标签，只认
+            #   `esp` 与 Windows 默认的 "EFI system partition"（sepolicy/file_contexts）。别的名字
+            #   （空、大小写不同、本地化）在 enforcing 下 bootctl 与 OTA 都打不开它。不替别人改名，只警告。
+            local ename; ename=$(blkid -p -o value -s PART_ENTRY_NAME "$esp" 2>/dev/null)
+            case "$ename" in
+                esp|"EFI system partition") ;;
+                *) echo "⚠️ ESP 的分区名是 '${ename}'，不是 esp / EFI system partition —— 以后的 enforcing 版本上切槽与 OTA 会失败。可以用 sgdisk -c <号>:esp 改名（UEFI 只认类型 GUID，改名无害）" >&2 ;;
+            esac
             # ⚠️★ ② 真的去量它有多少空闲。原先只在 plan 里打一行 need_mib=150
             #   却从不验证 —— 不够的话分区表已经改完、super 已经写完，然后死在
             #   装引导链那一步，留下一块半装的盘。

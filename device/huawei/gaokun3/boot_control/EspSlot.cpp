@@ -70,11 +70,19 @@ bool LooksLikeOurEsp(const std::string& dev) {
 }
 
 std::string FindEspDevice() {
+    // The by-name links are candidates, not answers: a disk can carry the
+    // Windows ESP ("EFI system partition") next to a separate Android ESP with
+    // some other name — the hand-partitioned layout the content probe below was
+    // written for. So each candidate must pass the same content check. Both
+    // candidates carry gaokun3_esp_block_device, so this works under enforcing.
+    const char* named = nullptr;
     for (const char* dev : kEspDevices) {
-        if (access(dev, F_OK) == 0) return dev;
+        if (access(dev, F_OK) != 0) continue;
+        if (!named) named = dev;
+        if (LooksLikeOurEsp(dev)) return dev;
     }
-    LOG(WARNING) << "no by-name/esp or by-name/EFI_system_partition; probing vfat partitions by content"
-                 << " (fails under enforcing: the nodes are generic block_device)";
+    LOG(WARNING) << "no by-name ESP candidate holds loader/entries/*-android-*.conf; probing vfat partitions by content"
+                 << " (fails under enforcing: those nodes are generic block_device)";
     DIR* d = opendir("/dev/block");
     if (!d) return "";
     std::string result;
@@ -87,6 +95,13 @@ std::string FindEspDevice() {
         if (LooksLikeOurEsp(dev)) { result = dev; break; }
     }
     closedir(d);
+    // Last resort, the pre-2026-09-14 behaviour: trust the name. by-name/esp is
+    // what a wipe install creates, so an empty loader/entries there is more
+    // likely a damaged ESP than a wrong one.
+    if (result.empty() && named) {
+        LOG(WARNING) << "content probe found nothing; falling back to " << named;
+        return named;
+    }
     if (result.empty()) LOG(ERROR) << "no vfat partition with loader/entries/*-android-*.conf found";
     else LOG(INFO) << "ESP found by content: " << result;
     return result;

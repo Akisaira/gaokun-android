@@ -16,18 +16,22 @@
 # **同一个 tid 连续三次采样都在 D**（= 卡住至少两分钟）。
 # 不可中断睡眠正是内核侧死锁/DSP 通路卡住的特征。
 #
-# 每次启动最多产出一份 dump（`.done` 标记，hangdump.rc 每次开机先删），不会把 /data 撑爆。
+# 每次启动最多产出一份 dump：服务是 oneshot + disabled、只在 boot_completed 时起一次，取完证就 exit。
+# 盘上只留最近 5 份（KEEP），不会把 /data 撑爆。
+# ⓘ 2026-09-29 删掉了 `.done` 标记：它在 /data 上跨重启保留、从没人删 ⇒ 第一次取证之后看门狗
+#   就永久不跑了（与"每次启动一份"相反）；而"每次启动一份"本来就由上面那两点保证，标记是多余的。
 
 PATH=/system/bin:/vendor/bin
 export PATH
 
 DIR=/data/vendor/gaokun3
-DONE=$DIR/hangdump.done
+KEEP=5
 INTERVAL=60
 STRIKES_NEEDED=3
 
 mkdir -p $DIR 2>/dev/null
-[ -e "$DONE" ] && exit 0
+# 只留最近 KEEP 份（ls -t 新的在前）
+ls -dt $DIR/hangdump-* 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r old; do rm -rf "$old"; done
 
 # 关注的进程：音频服务端、蓝牙、以及我们自己的 DSP 文件服务器
 # （#38 的推断是三者共用 QRTR/FastRPC 那条通路）。
@@ -97,7 +101,6 @@ collect() {
     #   事后 `adb logcat -d` 或 bug report —— 取证目录里的时间戳（目录名就是 uptime）用来对齐。
 
     sync
-    touch $DONE
     log -t hangdump "取证完成：${O}（本次启动不再重复采集）"
 }
 

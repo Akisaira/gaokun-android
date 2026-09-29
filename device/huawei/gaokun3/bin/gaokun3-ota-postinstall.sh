@@ -55,23 +55,38 @@ log "目标槽位 = _$SUFFIX"
 #   扫所有 vfat 分区，只读挂上，看谁有 loader/entries/*-android-*.conf。多个 ESP（比如 Windows 的）
 #   也能分开：只有我们的那个有 android 条目。
 find_esp() {
+    # ⚠️ 这个函数的 stdout 就是返回值（ESP_DEV=$(find_esp)）⇒ 里面的 log 一律走 stderr。
+    #   2026-09-29 之前"按内容找到 ESP"那一行打在 stdout 上，会和设备路径一起被捕获。
     # ★ 2026-09-29：双系统复用 Windows 的 ESP，PARTLABEL 是 "EFI system partition"，
     #   ueventd 规整成 by-name/EFI_system_partition。两个名字 sepolicy/file_contexts 都标成 ESP 类型。
-    #   下面的按内容探测在 enforcing 下走不通（节点是通用 block_device，domain.te:705）。
-    for n in esp EFI_system_partition; do
-        if [ -e /dev/block/by-name/$n ]; then echo /dev/block/by-name/$n; return 0; fi
-    done
-    log "by-name/esp 与 by-name/EFI_system_partition 都不存在（手工分区常见），改为按内容探测 vfat 分区（enforcing 下会失败）"
+    #   ⚠️ 名字只是候选：盘上可能同时有 Windows 的 ESP（就叫这个名字）和另起名字的 Android ESP
+    #   （用户反馈 #1 那种手工分区）⇒ 候选也要过内容检查。全都不过才扫全盘；
+    #   扫全盘在 enforcing 下走不通（那些节点是通用 block_device，domain.te:705）。
     PROBE=/mnt/gaokun3_esp_probe; mkdir -p "$PROBE" || return 1
+    NAMED=""
+    for n in esp EFI_system_partition; do
+        d=/dev/block/by-name/$n
+        [ -e "$d" ] || continue
+        [ -n "$NAMED" ] || NAMED=$d
+        mount -o ro -t vfat "$d" "$PROBE" 2>/dev/null || continue
+        if ls "$PROBE"/loader/entries/*-android-*.conf >/dev/null 2>&1; then
+            umount "$PROBE"; echo "$d"; return 0
+        fi
+        umount "$PROBE"
+    done
+    log "by-name 候选（esp / EFI_system_partition）里没有带 android 启动项的，改为按内容探测全部 vfat 分区（enforcing 下会失败）" >&2
     for d in /dev/block/nvme*n*p* /dev/block/sd*[0-9] /dev/block/mmcblk*p*; do
         [ -b "$d" ] || continue
         toybox blkid "$d" 2>/dev/null | grep -q 'TYPE="vfat"' || continue
         mount -o ro -t vfat "$d" "$PROBE" 2>/dev/null || continue
         if ls "$PROBE"/loader/entries/*-android-*.conf >/dev/null 2>&1; then
-            umount "$PROBE"; log "按内容找到 ESP = $d"; echo "$d"; return 0
+            umount "$PROBE"; log "按内容找到 ESP = $d" >&2; echo "$d"; return 0
         fi
         umount "$PROBE"
     done
+    # 最后一招（2026-09-14 之前的行为）：信名字。by-name/esp 是整盘安装建的，
+    #   它的 loader/entries 为空更像是 ESP 坏了、而不是找错了。
+    [ -n "$NAMED" ] && { log "按内容没找到，退回用 $NAMED" >&2; echo "$NAMED"; return 0; }
     return 1
 }
 ESP_DEV=$(find_esp) || fail "找不到 ESP：没有 /dev/block/by-name/esp（PARTLABEL=esp），扫描 vfat 分区也没有含 loader/entries/*-android-*.conf 的那个"

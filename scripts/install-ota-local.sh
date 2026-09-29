@@ -45,15 +45,24 @@ ok "当前槽 $CUR · 内核 $(S 'cat /proc/version' | grep -o '#[0-9]*' | tr -d
 #   它能读的是 /data/ota_package（ota_package_file）。照旧 push 到 /data/local/tmp，这里挪过去：
 #   同一个文件系统，mv 是瞬时的；mv 保留旧标签，所以要 restorecon。
 OTA=/data/ota_package
+# --check 不动机器：只报告文件在哪；真挪在 --go 里（下面 ota_move）。
 for f in payload.bin payload_properties.txt; do
-    if S "[ -f /data/local/tmp/$f ]"; then
-        S "mv -f /data/local/tmp/$f $OTA/$f && chown system:cache $OTA/$f && chmod 0660 $OTA/$f && restorecon $OTA/$f" \
-            || die "把 /data/local/tmp/$f 挪进 $OTA 失败"
+    if S "[ -f $OTA/$f ]"; then :
+    elif S "[ -f /data/local/tmp/$f ]"; then echo "  $f 在 /data/local/tmp，--go 时挪进 $OTA"
+    else die "设备上缺 ${f}（/data/local/tmp 与 $OTA 都没有）—— 先从 OTA zip 里解出来 push 过去"
     fi
-    S "[ -f $OTA/$f ]" || die "设备上缺 $f（/data/local/tmp 与 $OTA 都没有）—— 先从 OTA zip 里解出来 push 过去"
 done
-S "ls -Z $OTA/payload.bin" | grep -q ota_package_file || die "$OTA/payload.bin 的标签不是 ota_package_file"
-ok "payload 与 properties 都在 $OTA"
+ok "payload 与 properties 都在设备上"
+ota_move() {
+    for f in payload.bin payload_properties.txt; do
+        if S "[ -f /data/local/tmp/$f ]"; then
+            S "mv -f /data/local/tmp/$f $OTA/$f && chown system:cache $OTA/$f && chmod 0660 $OTA/$f && restorecon $OTA/$f" \
+                || die "把 /data/local/tmp/$f 挪进 $OTA 失败"
+        fi
+        S "ls -Z $OTA/$f" | grep -q ota_package_file || die "$OTA/$f 的标签不是 ota_package_file"
+    done
+    ok "payload 与 properties 已在 ${OTA}（ota_package_file）"
+}
 
 # ⚠️ overlayfs 必须是关的
 if S 'mount' | grep -q "overlay on /vendor"; then
@@ -92,6 +101,7 @@ if [ "$MODE" != "--go" ]; then
 fi
 
 echo "═══ 2. 下发更新 ═══"
+ota_move
 HDRS=$(S "cat $OTA/payload_properties.txt" | tr -d '\r' | tr '\n' '|' | sed 's/|$//')
 S "update_engine_client --payload=file://$OTA/payload.bin --update --headers=\"\$(cat $OTA/payload_properties.txt)\"" 2>&1 | tail -5
 
