@@ -40,10 +40,20 @@ ok "当前槽 $CUR · 内核 $(S 'cat /proc/version' | grep -o '#[0-9]*' | tr -d
 
 [ "$(S id -u | tr -d '\r')" = "0" ] || die "需要 root（先 setprop service.adb.root 1 && adb root）"
 
-for f in /data/local/tmp/payload.bin /data/local/tmp/payload_properties.txt; do
-    S "[ -f $f ]" || die "设备上缺 $f —— 先从 OTA zip 里解出来 push 过去"
+# ★ 2026-09-29（SELinux 第七轮审计）：update_engine 自己打开 --payload 给的文件，而它读不了
+#   /data/local/tmp（shell_data_file，policy-query DENY）—— enforcing 下这个脚本会失败。
+#   它能读的是 /data/ota_package（ota_package_file）。照旧 push 到 /data/local/tmp，这里挪过去：
+#   同一个文件系统，mv 是瞬时的；mv 保留旧标签，所以要 restorecon。
+OTA=/data/ota_package
+for f in payload.bin payload_properties.txt; do
+    if S "[ -f /data/local/tmp/$f ]"; then
+        S "mv -f /data/local/tmp/$f $OTA/$f && chown system:cache $OTA/$f && chmod 0660 $OTA/$f && restorecon $OTA/$f" \
+            || die "把 /data/local/tmp/$f 挪进 $OTA 失败"
+    fi
+    S "[ -f $OTA/$f ]" || die "设备上缺 $f（/data/local/tmp 与 $OTA 都没有）—— 先从 OTA zip 里解出来 push 过去"
 done
-ok "payload 与 properties 都在设备上"
+S "ls -Z $OTA/payload.bin" | grep -q ota_package_file || die "$OTA/payload.bin 的标签不是 ota_package_file"
+ok "payload 与 properties 都在 $OTA"
 
 # ⚠️ overlayfs 必须是关的
 if S 'mount' | grep -q "overlay on /vendor"; then
@@ -82,8 +92,8 @@ if [ "$MODE" != "--go" ]; then
 fi
 
 echo "═══ 2. 下发更新 ═══"
-HDRS=$(S 'cat /data/local/tmp/payload_properties.txt' | tr -d '\r' | tr '\n' '|' | sed 's/|$//')
-S "update_engine_client --payload=file:///data/local/tmp/payload.bin --update --headers=\"\$(cat /data/local/tmp/payload_properties.txt)\"" 2>&1 | tail -5
+HDRS=$(S "cat $OTA/payload_properties.txt" | tr -d '\r' | tr '\n' '|' | sed 's/|$//')
+S "update_engine_client --payload=file://$OTA/payload.bin --update --headers=\"\$(cat $OTA/payload_properties.txt)\"" 2>&1 | tail -5
 
 echo "═══ 3. 等装完 ═══"
 # ⚠️★ 判据踩过一次坑（2026-09-12）：原先用 "active slot 是否切换"，而

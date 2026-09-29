@@ -220,7 +220,7 @@ allow gaokun3_audioroute system_file:file execute_no_trans;
 #       system_server（加几个 userdebug 的），vendor 域一个都没有。2026-09-27 第一版写了 allow，
 #       sepolicy_neverallows 当场打回 —— 我之前 grep 单行没抓到这条多行的规则。
 #     ⇒ enforcing 下取证拿不到跨 uid 的 wchan（01-stuck-threads.txt 里那一行会是 0），静音。
-r_dir_file(gaokun3_hangdump, { audioserver bluetooth hal_bluetooth_default hexagonrpcd })
+r_dir_file(gaokun3_hangdump, { audioserver bluetooth hal_bluetooth_default hal_audio_default hexagonrpcd })
 dontaudit gaokun3_hangdump domain:dir search;
 dontaudit gaokun3_hangdump domain:file { read open };
 dontaudit gaokun3_hangdump self:global_capability_class_set sys_ptrace;
@@ -233,8 +233,11 @@ dontaudit gaokun3_hangdump self:global_capability_class_set sys_ptrace;
 #     transactions / failed_transaction_log 在 domain.te:558-568 里只许 dumpstate / system_server 等读，拿不到；
 #     debugfs 那条回退路径没有任何豁免，脚本已删。
 #   * 写取证目录：/data/vendor/gaokun3 是 hangdump.rc 建的，标签就是 vendor_data_file（实机核过）。
-#   * gaokun3-qrtr-lookup：vendor_file 里的可执行文件（执行权限核心策略已给非 coredomain，domain.te:209），
-#     要一个 QRTR socket（与 hal_sensors_default.te 同款权限）。
+#   * gaokun3-qrtr-lookup：⚠️ 2026-09-29 更正 —— 原先说"执行权限核心已给"是错的：domain.te:188 给非 coredomain
+#     的 vendor_file 只有 { read open getattr execute map }，【没有 execute_no_trans】，不做域转换地执行它会被拒
+#     （policy-query DENY）。现在给它专用类型、只放行这一个文件（file_contexts）。要一个 QRTR socket
+#     （与 hal_sensors_default.te 同款权限）。
+#   * /proc/uptime（取证目录名、摘要）：proc_uptime，此前没给 ⇒ 目录会叫 "hangdump-"。
 #   ✗ 做不到、脚本已删的：logcat（/system/bin/logcat 是 logcat_exec，vendor 域执行 system 文件被 Treble
 #     neverallow 禁）、dumpsys（要 /dev/binder，vendor 域同样被禁）、/proc/<tid>/stack（要 ptrace attach）。
 allow gaokun3_hangdump kernel:system syslog_read;
@@ -248,6 +251,9 @@ userdebug_or_eng(`
 allow gaokun3_hangdump vendor_data_file:dir create_dir_perms;
 allow gaokun3_hangdump vendor_data_file:file create_file_perms;
 allow gaokun3_hangdump self:qipcrtr_socket { create getattr read write };
+type gaokun3_qrtr_lookup_exec, vendor_file_type, file_type;
+allow gaokun3_hangdump gaokun3_qrtr_lookup_exec:file rx_file_perms;
+allow gaokun3_hangdump proc_uptime:file r_file_perms;
 
 # ── gaokun3-smmu-nostall.sh：只在 userdebug / eng 上放行（2026-09-27，#126）──────────
 # 证据：`gaokun3_smmustall gaokun3_devmem_device:chr_file { read open map write }` 与

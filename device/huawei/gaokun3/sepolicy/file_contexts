@@ -82,6 +82,7 @@
 #    改由这里的标签驱动 init 自动做域转换。
 /vendor/bin/audio-route\.sh          u:object_r:gaokun3_audioroute_exec:s0
 /vendor/bin/gaokun3-hangdump\.sh     u:object_r:gaokun3_hangdump_exec:s0
+/vendor/bin/gaokun3-qrtr-lookup    u:object_r:gaokun3_qrtr_lookup_exec:s0
 /vendor/bin/gaokun3-keyboard\.sh     u:object_r:gaokun3_keyboard_exec:s0
 /vendor/bin/smmu-nostall\.sh         u:object_r:gaokun3_smmustall_exec:s0
 /vendor/bin/gaokun3-usbrole\.sh      u:object_r:gaokun3_usbrole_exec:s0
@@ -128,23 +129,35 @@
 # （system/sepolicy/vendor/file_contexts:88 的 c2-default-service）。
 /vendor/bin/hw/android\.hardware\.media\.c2-service-v4l2  u:object_r:mediacodec_exec:s0
 
-# ── 块设备：vold 被拒 `nvme0n1p2 : blk_file` ────────────────────────────
-# 实机 `ls -Z` 确认这些节点现在全是通用兜底的 u:object_r:block_device:s0。
-# ⚠️ 这里写死了分区号，因为本机布局由 scripts/install-gaokun3.sh 固定生成
-#    （by-name 符号链接逐个核对过：p1=esp p2=userdata p3=rescue p4=misc
-#    p5/p6=boot_a/b p8=super p10=metadata）。换布局要同步改这里。
-# ⚠️★ p1 = ESP。此前【没给它类型】，于是它挂着通用的 block_device ——
-#    而 domain.te:705 那条 neverallow 让任何域都打不开通用 block_device。
-#    也就是说 boot_control HAL 挂 ESP 这件事在 enforcing 下【根本不可能成功】，
-#    而且是"加 allow 只会让 sepolicy_neverallows 构建失败"的那种不可能。
-#    类型定义与出处见 device.te。
-/dev/block/nvme0n1p1     u:object_r:gaokun3_esp_block_device:s0
-/dev/block/nvme0n1p2     u:object_r:userdata_block_device:s0
-/dev/block/nvme0n1p4     u:object_r:misc_block_device:s0
-/dev/block/nvme0n1p5     u:object_r:boot_block_device:s0
-/dev/block/nvme0n1p6     u:object_r:boot_block_device:s0
-/dev/block/nvme0n1p8     u:object_r:super_block_device:s0
-/dev/block/nvme0n1p10    u:object_r:metadata_block_device:s0
+# ── 块设备：按 by-name 别名打标签（2026-09-29 第七轮改，此前按分区号写死）─────────
+# ⚠️★★ 此前这里是 /dev/block/nvme0n1p1…p10 写死分区号，对的只是【开发机】的老布局
+#    （p1=esp p2=userdata p4=misc p5/p6=boot p8=super p10=metadata）。v0.7.0 起的图形安装器
+#    按 esp, misc, metadata, boot_a, boot_b, super, [gk3rescue], userdata 的顺序 `sgdisk -n 0:`
+#    （取下一个空号，scripts/live/installer-lib.sh:388-400、:788）⇒ 新装机 p2=misc、p4=boot_a、
+#    p6=super……标签全错：enforcing 下 bootctl 读不了 misc、postinstall 读不了 boot_x、
+#    snapuserd 碰不了 super、fsck 碰不了 userdata。开发机布局恰好对得上，普查与试跑都看不见。
+#    设备上 policy-query：hal_bootctl_default userdata_block_device open DENY 等（第七轮审计）。
+# ★ 现在按 by-name 别名：ueventd 建节点时用 SelabelLookupFileContextBestMatch(path, links)
+#   （refs/lineage-system-core/init/devices.cpp:406），coldboot 时对已有节点重标（:427-440）；
+#   核心策略自己也这么写（private/file_contexts:106 的 by-name/zoned_device）。
+#   ⚠️ 不能再留 nvme0n1pN 的行：best-match 先取节点路径的精确匹配，会盖过别名。
+#   ⚠️ 用精确名、不用正则（boot_[ab] 拆成两行），同理。
+#   ⚠️ 符号链接本身也会拿到这些类型：devices.cpp:606 用 SelabelLookupFileContext(link, 0)，
+#      mode 0 不看 -b 限定。这是 AOSP 设备的通行做法，消费者对这些类型的 lnk_file 读权限核心策略
+#      都有（init 的 lnk_file relabelto 见 init.te）。
+# ★ ESP 两个名字：我们整盘安装的 PARTLABEL 是 esp；双系统复用 Windows 的 ESP，它叫
+#   "EFI system partition"，ueventd 规整成 EFI_system_partition（devices.cpp:474-486）。
+#   bootctl HAL（boot_control/EspSlot.cpp）与 postinstall 两个名字都试。
+# ⚠️★ ESP 为什么必须有专用类型：domain.te:705 那条 neverallow 让任何域都打不开通用
+#    block_device —— 加 allow 只会让 sepolicy_neverallows 构建失败。类型定义与出处见 device.te。
+/dev/block/by-name/esp                   -b u:object_r:gaokun3_esp_block_device:s0
+/dev/block/by-name/EFI_system_partition  -b u:object_r:gaokun3_esp_block_device:s0
+/dev/block/by-name/misc                  -b u:object_r:misc_block_device:s0
+/dev/block/by-name/metadata              -b u:object_r:metadata_block_device:s0
+/dev/block/by-name/boot_a                -b u:object_r:boot_block_device:s0
+/dev/block/by-name/boot_b                -b u:object_r:boot_block_device:s0
+/dev/block/by-name/super                 -b u:object_r:super_block_device:s0
+/dev/block/by-name/userdata              -b u:object_r:userdata_block_device:s0
 
 # ── /dev/media* 与 /dev/v4l-subdev*：AOSP 只给 /dev/video* 打了 video_device ──────
 # （system/sepolicy/private/file_contexts:225 只有 video 一行；media/v4l-subdev 是主线
@@ -188,13 +201,15 @@
 
 # ── /dev/fastrpc-*：hexagonrpcd 的命根子，AOSP 里没有对应类型 ───────────
 # 传感器整条链（accel/gyro → SSC → QMI）都走它。此前是通用 device 类型。
+# ⓘ 正则只盖 fastrpc-adsp / -cdsp / -sdsp；fastrpc-cdsp-secure 故意留在通用 device：
+#   没有任何服务用它（root 0600、不在任何 rc 里）。实际只用 -sdsp（hexagonrpcd-sdsp.rc）。
 /dev/fastrpc-[a-z]+      u:object_r:gaokun3_fastrpc_device:s0
 
 # ── /dev/mem：整棵 AOSP 策略里【没有任何条目】（memory_device 类型也不存在）──
 # ⚠️ 打上专用类型不是为了给谁开权限，恰恰相反：是为了让"谁在碰它"变得显式。
-#    目前【没有任何域】被允许访问它。唯一的使用者 smmu-nostall.sh 走的是
-#    devmem，而那需要 sys_rawio —— 那条 neverallow 只在 userdebug 上失效。
-#    正解是把 TODO B6 做掉，让这个脚本整个消失。见 #75。
+#    唯一被允许的是 gaokun3_smmustall，而且只在 userdebug（gaokun3_scripts.te 末尾，
+#    2026-09-27 #126 改的；sys_rawio 那条 neverallow 只在 userdebug 上豁免）。
+#    正解是把 TODO B6 做掉，让这个脚本和这条放行一起消失。见 #75。
 /dev/mem                 u:object_r:gaokun3_devmem_device:s0
 
 # ── /vendor/firmware：只给内核读（类型定义与理由见 device.te，规则见 kernel.te）──
@@ -213,5 +228,6 @@
 #   匹配不到的 sysfs 路径 restorecon 不动它（核心策略只有精确的 `/sys` 一条），
 #   genfscon 打的标签不受影响。
 # ⚠️ 只匹配 `…/wakeup/wakeupN`，不会碰到每个设备的 `power/wakeup` 属性文件。
-# ⬜ 这条机制在本机【未上机验证】：下一版装上后 `ls -Z /sys/class/wakeup/*/name` 应全是 sysfs_wakeup。
+# ✅ 2026-09-29 上机验证（v0.7.0，开机 2 小时后）：`ls -LZ /sys/class/wakeup/*/name` 50/50 是 sysfs_wakeup，
+#    包括 genfscon 没写到的 a400000 下的 xhci-hcd.2.auto 与键盘的 usb3/3-3。
 /sys/devices/platform/.*/wakeup/wakeup[0-9]+(/.*)?   u:object_r:sysfs_wakeup:s0

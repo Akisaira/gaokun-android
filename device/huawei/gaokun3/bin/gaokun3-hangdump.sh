@@ -16,7 +16,7 @@
 # **同一个 tid 连续三次采样都在 D**（= 卡住至少两分钟）。
 # 不可中断睡眠正是内核侧死锁/DSP 通路卡住的特征。
 #
-# 每次启动最多产出一份 dump（`.done` 标记），不会把 /data 撑爆。
+# 每次启动最多产出一份 dump（`.done` 标记，hangdump.rc 每次开机先删），不会把 /data 撑爆。
 
 PATH=/system/bin:/vendor/bin
 export PATH
@@ -32,7 +32,11 @@ mkdir -p $DIR 2>/dev/null
 # 关注的进程：音频服务端、蓝牙、以及我们自己的 DSP 文件服务器
 # （#38 的推断是三者共用 QRTR/FastRPC 那条通路）。
 watched_pids() {
-    for n in audioserver com.android.bluetooth android.hardware.bluetooth hexagonrpcd; do
+    # ⚠️ 2026-09-29：原先的 android.hardware.bluetooth 一个进程都匹配不上（pidof 按完整名），
+    #   蓝牙 HAL 真名是 android.hardware.bluetooth-service.default；并补上音频 HAL 两个进程。
+    for n in audioserver com.android.bluetooth android.hardware.bluetooth-service.default \
+             android.hardware.audio.service-aidl.example android.hardware.audio.effect.service-aidl.example \
+             hexagonrpcd; do
         pidof "$n" 2>/dev/null
     done
 }
@@ -62,13 +66,16 @@ collect() {
             echo "=== tid $t ==="
             cat /proc/$t/comm    2>/dev/null
             cat /proc/$t/wchan   2>/dev/null; echo
-            echo "--- stack ---"; cat /proc/$t/stack 2>/dev/null
             echo "--- status ---"; cat /proc/$t/status 2>/dev/null
         } >> $O/01-stuck-threads.txt 2>&1
     done
 
-    ps -AT -o PID,TID,S,NAME > $O/02-ps.txt 2>&1
-    dmesg | tail -800 > $O/03-dmesg.txt 2>&1
+    # 只列被看的那几个进程：vendor 域读不到别的进程的 /proc（`ps -A` 会每个进程报一条 denial、
+    #   结果也只剩这几个）。/proc/<tid>/stack 要 CAP_SYS_ADMIN + ptrace，vendor 域拿不到，已删。
+    L=$(watched_pids | tr -s ' \n' ',' | sed 's/^,//;s/,$//')
+    [ -n "$L" ] && ps -T -o PID,TID,S,NAME -p "$L" > $O/02-ps.txt 2>&1
+    # -S：走 syslog(2)（sepolicy 给了 kernel:system syslog_read）；默认的 /dev/kmsg 是 kmsg_device，不给。
+    dmesg -S | tail -800 > $O/03-dmesg.txt 2>&1
 
     # QRTR 服务表：#38 第 3 步。少了哪个服务就指向哪个 DSP。
     timeout 10 gaokun3-qrtr-lookup > $O/04-qrtr.txt 2>&1

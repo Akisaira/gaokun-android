@@ -2,7 +2,10 @@
 
 # ── super 分区节点的重标 ────────────────────────────────────────────────
 #
-# 证据：`init super_block_device:blk_file relabelto  name=nvme0n1p8`（uptime 2.3 s）。
+# 证据：`init super_block_device:blk_file relabelto  name=nvme0n1p8`（uptime 2.3 s，开发机布局）。
+# ⓘ 2026-09-29 file_contexts 改成按 by-name 别名标之后，第二阶段 init 的 restorecon
+#   只按路径查（selinux.cpp:483）⇒ 先落 block_device，再由 ueventd coldboot 按别名重标
+#   （devices.cpp:427-440）。这条 relabelto 那时就用不上了，但留着无害。
 # 第一阶段 init 为挂 super 自己建了 /dev/block/nvme0n1p8（那时还没有策略，标签是临时的），
 # 第二阶段 restorecon /dev/block 时要把它改成 file_contexts 里的 super_block_device。
 # 核心策略允许重标的块设备类型只有 metadata / misc / recovery / system / userdata

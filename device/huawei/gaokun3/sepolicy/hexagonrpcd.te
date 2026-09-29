@@ -12,11 +12,8 @@ type hexagonrpcd, domain;
 type hexagonrpcd_exec, exec_type, vendor_file_type, file_type;
 init_daemon_domain(hexagonrpcd)
 
-# ⬜ 它真正需要的权限要等第 4 步（重新普查）才写。已知会用到的至少有：
-#    * /dev/fastrpc-sdsp  —— ⚠️ 那个节点【也没有 file_contexts 条目】，
-#      现在是通用兜底的 device 类型，和 /dev/dri 是同一类缺口
-#    * /vendor/etc/hexagonrpcd-root/ 下的只读文件（vendor_file，应当现成）
-#    * QRTR socket（AF_QIPCRTR）—— 传感器 HAL 那边也要
+# ⓘ 2026-09-29 更新：/dev/fastrpc-sdsp 已由 file_contexts 标成 gaokun3_fastrpc_device，
+#    规则就在下面（第 4 步已完成）。
 
 # ── 第 4 步：换上带域的镜像之后重新普查，照实机拒绝写的规则 ──────────────
 # 证据：2026-08-23 slot_a（构建戳 1787436126）开机后的 avc 日志，

@@ -32,6 +32,8 @@ allow hal_bootctl_default vfat:file { create open read write getattr rename unli
 # 开权限，理由见 device.te 里 domain.te:705 那条 neverallow。
 allow hal_bootctl_default block_device:lnk_file r_file_perms;
 allow hal_bootctl_default gaokun3_esp_block_device:blk_file rw_file_perms;
+# 2026-09-29：按 by-name 别名标之后，ueventd 新建的链接会拿到分区类型（见 postinstall.te 同一段）。
+allow hal_bootctl_default { gaokun3_esp_block_device misc_block_device boot_block_device }:lnk_file r_file_perms;
 
 # 2026-09-27：`hal_bootctl_default boot_block_device:blk_file getattr  path=/dev/block/nvme0n1p5`
 # （boot_a；HAL 开机时 stat 两个 boot 槽）。只 getattr，不给读写。

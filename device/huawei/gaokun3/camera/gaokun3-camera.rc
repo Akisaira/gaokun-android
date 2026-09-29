@@ -14,3 +14,10 @@ service vendor.camera-provider-gaokun3 /vendor/bin/hw/android.hardware.camera.pr
     # 留一条出口：软件 ISP 的失败因果链很长，没有它根本查不动（见 #97）。
     setenv LIBCAMERA_LOG_FILE /data/vendor/camera/libcamera.log
     setenv LIBCAMERA_LOG_LEVELS *:INFO
+
+# ★ 2026-09-29（SELinux 第七轮审计）：日志目录以前从没有 rc 建过 —— 开发机上那个是 2026-09-12
+#   手建的。全新安装 / 恢复出厂后目录不存在，libcamera 静默回落到 stderr（= 丢弃），
+#   enforcing 下 HAL 自己也建不了（hal_camera_default 对 vendor_data_file 没有 add_name；DAC 上
+#   /data/vendor 是 0771 root）。由 vendor_init 建，标签按 file_contexts 取 gaokun3_camera_vendor_data_file。
+on post-fs-data
+    mkdir /data/vendor/camera 0770 cameraserver cameraserver

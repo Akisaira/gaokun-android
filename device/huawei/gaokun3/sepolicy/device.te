@@ -10,7 +10,7 @@ type gaokun3_fastrpc_device, dev_type;
 #    现在没有任何域被 allow 到它。见 sepolicy/file_contexts 里的说明与 #75。
 type gaokun3_devmem_device, dev_type;
 
-# ── ESP（/dev/block/nvme0n1p1）────────────────────────────────────────────
+# ── ESP（/dev/block/by-name/esp 或 EFI_system_partition）────────────────────────────────────────────
 # ⚠️★ 这不是"顺手也给它个类型"：核心策略里有一条【加 allow 也绕不过去】的
 #    neverallow —— system/sepolicy/private/domain.te:705
 #       neverallow { domain -kernel -init -recovery } block_device:blk_file { open read write };
@@ -20,8 +20,8 @@ type gaokun3_devmem_device, dev_type;
 #    （AOSP 自己的 hal_bootctl_default.te:15-16 就是这么做的：misc 分区给
 #     misc_block_device，只 search 通用的 block_device 目录。）
 #
-# ⚠️ 分区号写死在 file_contexts 里，与 p2/p4/p5/p6/p8/p10 那几条同一批 ——
-#    本机布局由 scripts/install-gaokun3.sh 固定生成。换布局要一起改。
+# 2026-09-29 起 file_contexts 按 by-name 别名打标签，不再写死分区号（原先写死的是
+#    开发机的老布局，v0.7.0 安装器建的盘对不上 —— 见 file_contexts 那一节）。
 type gaokun3_esp_block_device, dev_type;
 
 # ── /vendor/firmware：内核直读固件（firmware_class.path=/vendor/firmware/）──────

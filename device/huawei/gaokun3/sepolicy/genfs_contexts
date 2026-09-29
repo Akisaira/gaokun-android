@@ -32,6 +32,9 @@ genfscon sysfs /devices/platform/soc@0/ae00000.display-subsystem/ae96000.dsi/ae9
 # path=".../a600000.usb/xhci-hcd.5.auto/wakeup/wakeup52/name"
 # ⚠️ wakeup 目录在很多设备下都有，这里只标有证据的那一处。
 #    以后普查再发现别的，照样一条一条加 —— 别图省事去标整个 /devices/platform。
+# ⓘ 2026-09-29：xhci-hcd.N 的编号是动态的（port0 切 host 时才出现，N 不固定），这一行只盖 .5 那一次。
+#   真正兜底的是 file_contexts 里 wakeup 那条正则（ueventd restorecon，已上机验证 50/50）。
+#   留着无害；等一次带 host 切换的 enforcing 试跑确认 system_suspend 没有 sysfs denial 再删。
 genfscon sysfs /devices/platform/soc@0/a6f8800.usb/a600000.usb/xhci-hcd.5.auto/wakeup u:object_r:sysfs_wakeup:s0
 
 # 后摄闪光灯 LED（PM8350C 闪光模块，patches/0036）。/sys/class/leds 只是符号链接，标签要打在

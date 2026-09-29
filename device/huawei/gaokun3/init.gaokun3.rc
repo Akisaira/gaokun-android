@@ -1,8 +1,9 @@
 # init.gaokun3.rc -- Huawei MateBook E Go (sc8280xp)
 
-on early-init
-    # 本机没有串口，内核日志只能靠 dmesg / efi_pstore
-    write /proc/sys/kernel/printk "7 4 1 7"
+# ⓘ 2026-09-29 删掉了 `on early-init` 里的 `write /proc/sys/kernel/printk "7 4 1 7"`：
+#   vendor_init 对 /proc/sys/kernel/printk（通用 proc 类型）没有 write，enforcing 下每次开机一条 denial；
+#   而内核配置本来就是这个值（CONFIG_CONSOLE_LOGLEVEL_DEFAULT=7、MESSAGE_LOGLEVEL_DEFAULT=4，
+#   设备 /proc/config.gz 实查），这一行一直是空操作。要改就改内核 cmdline 的 loglevel=。
 
 # ═════════ s2idle 休眠：★2026-08-22 已修好，默认【开启】 ═════════
 # 真凶既不是内核也不是 EC，是我们自己在 Stage 2 为 USB adb 改的那行设备树：
@@ -52,8 +53,8 @@ on property:persist.vendor.gaokun3.allow_suspend=1
 #    节点地址 —— 换 DTB / 换面板就会变。HAL 那边是 glob 找的，写失败会在
 #    logcat 打 "写 .../brightness 失败（权限？看 init 里的 chown）"，
 #    照那条日志回来改这一行。
-# ⚠️ 这个节点的 SELinux 标签是通用的 u:object_r:sysfs:s0。现在 permissive 无碍，
-#    将来转 enforcing 要给它单独打标签（TODO B1）。
+# ✅ SELinux：这个节点已由 sepolicy/genfs_contexts 标成 sysfs_leds（设备 ls -LZ 实查），
+#    vendor_init 对它的 chown/chmod（setattr）核心策略现成。
 on boot
     chown system system /sys/class/backlight/ae96000.dsi.0/brightness
     chmod 0664 /sys/class/backlight/ae96000.dsi.0/brightness

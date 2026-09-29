@@ -11,3 +11,9 @@ get_prop(mediaserver, vendor_minigbm_debug_prop)
 # ⚠️ 这条与上面那条是【同一个根因的两个主体】—— 上一轮只看到 mediaserver，
 #    是因为旧样本滚掉了开机段。
 get_prop(mediaswcodec, vendor_minigbm_debug_prop)
+
+# cameraserver 同理（2026-09-29 第七轮）：相机链里 gralloc mapper（minigbm）在 cameraserver 进程内，
+# 每次开相机读 vendor.minigbm.debug（值 nocompression）。证据：v0.7.0 验收普查
+# `cameraserver vendor_minigbm_debug_prop:file { read open getattr map }  comm=C3Dev-0-ReqQueu`，
+# 第七轮 enforcing 试跑同一条 permissive=0。与上面两条是同一个根因的第三个主体。
+get_prop(cameraserver, vendor_minigbm_debug_prop)

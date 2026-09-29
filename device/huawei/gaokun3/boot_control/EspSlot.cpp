@@ -27,11 +27,15 @@
 namespace gaokun3 {
 namespace {
 
-// The installer gives the ESP the PARTLABEL `esp` precisely so that this
-// by-name link exists. The conventional label "EFI system partition" contains
-// spaces and is therefore useless for by-name lookup — UEFI identifies the ESP
-// by its partition *type* GUID, not by name, so renaming it is harmless.
-constexpr char kEspDevice[] = "/dev/block/by-name/esp";
+// A wipe install gives the ESP the PARTLABEL `esp`. A dual-boot install reuses
+// the Windows ESP untouched, whose PARTLABEL is "EFI system partition"; ueventd
+// sanitizes that to EFI_system_partition (system/core/init/devices.cpp,
+// SanitizePartitionName). Both names are labeled gaokun3_esp_block_device in
+// sepolicy/file_contexts. Anything else falls through to the content probe
+// below, which cannot work under enforcing: the node is then generic
+// block_device, and domain.te:705 forbids opening that.
+constexpr const char* kEspDevices[] = {"/dev/block/by-name/esp",
+                                       "/dev/block/by-name/EFI_system_partition"};
 constexpr char kMountPoint[] = "/mnt/gaokun3_esp";
 constexpr char kLoaderConf[] = "/mnt/gaokun3_esp/loader/loader.conf";
 
@@ -66,8 +70,11 @@ bool LooksLikeOurEsp(const std::string& dev) {
 }
 
 std::string FindEspDevice() {
-    if (access(kEspDevice, F_OK) == 0) return kEspDevice;
-    LOG(WARNING) << kEspDevice << " missing (ESP has no PARTLABEL 'esp'); probing vfat partitions by content";
+    for (const char* dev : kEspDevices) {
+        if (access(dev, F_OK) == 0) return dev;
+    }
+    LOG(WARNING) << "no by-name/esp or by-name/EFI_system_partition; probing vfat partitions by content"
+                 << " (fails under enforcing: the nodes are generic block_device)";
     DIR* d = opendir("/dev/block");
     if (!d) return "";
     std::string result;

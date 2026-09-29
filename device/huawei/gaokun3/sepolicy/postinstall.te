@@ -15,6 +15,12 @@
 #    的内核/ramdisk/dtb 铺上去、并把 boot.img 的 cmdline 同步进 BLS 启动项
 #    （见 bin/gaokun3-ota-postinstall.sh 与 #116 §17）。
 #    [TODO B3] 的自研 EFI 加载器做出来之后，整个脚本连同本文件一起退役。
+#
+# ⚠️★★ 设计约束（2026-09-29 第七轮审计）：postinstall 跑的是【新】vendor 里的脚本，
+#    但加载着的是【旧】槽的策略（update_engine_common.te:14 的 domain_auto_trans 发生在旧系统里）。
+#    ⇒ 一旦某一版是 enforcing，之后任何要新权限的 postinstall 改动都会被旧策略拒掉、
+#      OTA 回滚。规矩：本文件的新增要【比用到它的脚本早一版】发出去；
+#      第一个 enforcing 版本之前把脚本可能要的都补齐；发版前实测一次 enforcing → enforcing 的 OTA。
 
 # ── 挂 ESP ───────────────────────────────────────────────────────────────
 # mount(2) 要 sys_admin。vfat 属于 sdcard_type，被 domain.te:1987-2003 那条
@@ -23,7 +29,9 @@
 # 所以这条写得进去 —— 与 hal_bootctl_default 那组同理。
 allow postinstall self:capability sys_admin;
 allow postinstall vfat:filesystem { mount unmount };
-allow postinstall vfat:dir { search read open getattr write add_name remove_name };
+# create / rmdir：2026-09-29 第七轮审计补。`mkdir -p $DEST`（脚本 :82）在 slot_<x>/ 或 android/
+#   不存在时要 create，被拒 ⇒ fail ⇒ 整个 OTA 回滚（POSTINSTALL_OPTIONAL_vendor=false）。
+allow postinstall vfat:dir { search read open getattr write add_name remove_name create rmdir };
 allow postinstall vfat:file { create open read write getattr setattr rename unlink };
 
 # 挂载点 /mnt/gaokun3_ota_esp（以及探测用的 /mnt/gaokun3_esp_probe）。
@@ -35,6 +43,10 @@ allow postinstall tmpfs:dir { search getattr create write add_name mounton };
 # 脚本读 /dev/block/by-name/{esp,boot_a,boot_b}。
 allow postinstall block_device:dir search;
 allow postinstall block_device:lnk_file r_file_perms;
+# 2026-09-29：file_contexts 改成按 by-name 别名标之后，ueventd 新建的 by-name 链接也会拿到
+# 分区类型（devices.cpp:606，mode 0 不看 -b）。开发机上的链接是第一阶段建的、仍是 block_device，
+# 但不能指望这一点。
+allow postinstall { gaokun3_esp_block_device boot_block_device }:lnk_file r_file_perms;
 allow postinstall gaokun3_esp_block_device:blk_file rw_file_perms;
 # gaokun3-bootimg-extract 从刚刷好的那个槽解包（只读）。
 allow postinstall boot_block_device:blk_file r_file_perms;

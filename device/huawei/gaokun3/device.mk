@@ -510,9 +510,10 @@ DEVICE_PACKAGE_OVERLAYS += device/huawei/gaokun3/overlay
 #   互相覆盖对方的决定。脚本本身留在仓库里（带失效说明），给还在用旧 DTB
 #   的人用。
 #
-# turnip 调试旗标加载器（快速迭代机制，见 docs/stage5-freedreno.md）
-PRODUCT_COPY_FILES += \
-    $(LOCAL_PATH)/bin/tu_debug_loader.sh:$(TARGET_COPY_OUT_VENDOR)/bin/tu_debug_loader.sh
+# ⓘ 2026-09-29 退役：bin/tu_debug_loader.sh【不再随镜像安装】（SELinux 第七轮审计）。
+#   init 从不启动它、没有域、shebang 是 /system/bin/sh、设的属性名 debug.tu.debug 也不对 ——
+#   实际生效的是 init.gaokun3.rc 从 ro.boot.tu_debug 抄到 debug.mesa.tu.debug 那一段。
+#   文件留在仓库里只为记录（同 bin/thermal-guard.sh 的处理）。
 
 # ─── Stage 4 的音频路由（Android 没有 ALSA UCM，混音器要自己摆）───
 # ⚠️ 2026-08-19 发现：这两个文件在 Stage 4 时【只通过 adb remount 的 overlay】
@@ -558,7 +559,8 @@ PRODUCT_COPY_FILES += \
 #    而本机正是 0（见 CLAUDE.md 状态框）。默认改成 0，改名前后行为一致。
 #    ⚠️ 代价说清楚：**新装机的用户默认也不进 s2idle**，息屏耗电按不睡算 ——
 #      这与 v0.3.0～v0.6.2 的镜像默认相反，发版说明里必须写。
-#      要开：adb shell setprop persist.vendor.gaokun3.allow_suspend 1（persist 属性，重启不丢）。
+#      要开：adb root 之后 adb shell setprop persist.vendor.gaokun3.allow_suspend 1（persist 属性，重启不丢；
+#      普通 adb shell 在 enforcing 下设不了 vendor 属性，见 etc/usbrole.rc 顶部）。
 #    ★ 2026-09-23 用户定：开发期保持 0；【正式版】发布前改回 1（老用户 OTA 后不能丢待机，
 #      TODO S1）。改回 1 之后，开发机自己 setprop … 0（persist 属性重启不丢）。
 #    ✅ 2026-09-24 已改回 1（这一版起的构建就是 v0.6.3 的候选版）。开发机已显式

@@ -19,13 +19,12 @@ D=/sys/bus/platform/devices/a600000.usb
 UDC=/sys/class/udc/a600000.usb/state
 WL=gaokun3_usbrole
 TAG=gaokun3-usbrole
-WATCH_PID=/data/vendor/gaokun3/usbrole-watch.pid
 
 say() { log -t $TAG "$*"; }
 
 case "$WANT" in
-    host|device|watch|follow) ;;
-    *) say "用法: $0 host|device|watch|follow"; exit 2 ;;
+    host|device|follow) ;;
+    *) say "用法: $0 host|device|follow"; exit 2 ;;
 esac
 
 if [ ! -e "$S" ]; then
@@ -44,7 +43,7 @@ fi
 #   两边都试过还是没东西（纯充电器）⇒ 停在 host（挂起安全），直到这根线拔掉
 #   我方供电（U 盘、手机）⇒ 对面只能是设备，内核给的 host 是对的，不插手
 # ⚠️ 前提是 patches/0048：没有它，任何一次切换都会把 port0 控制器弄坏（xhci -110 / gadget -524）。
-# ⚠️ 息屏且允许挂起时不插手 —— 那段时间归上面 host/device/watch 三个模式管（挂起安全的不变量在那边）。
+# ⚠️ 息屏且允许挂起时不插手 —— 那段时间归 host/device 两个模式管（挂起安全的不变量在那边）。
 # ★ 切到 device 之前先拿 wakelock，保持"device 模式不挂起"的不变量（#52）。
 P=/sys/class/typec/port0
 if [ "$WANT" = follow ]; then
@@ -98,7 +97,7 @@ fi
 # ★ 2026-09-14（#112）：插着 USB 主机（PC 在用 adb）时【不切 host、不放行挂起】。
 #   依据：#56 实测 device 模式带着已枚举的 gadget 挂起照样整板复位，所以"插着线睡"在这块板子上
 #   目前不可能安全；而切 host 就等于把用户正在用的 adb 拔掉。折中：插着主机 → 息屏但不睡（反正在充电），
-#   拔线后再切 host 放行挂起（watch 模式每 2 秒看一次 UDC 状态）。判据用 UDC 的 state：
+#   拔线后再切 host 放行挂起（role_host 进程原地每 2 秒看一次 UDC 状态）。判据用 UDC 的 state：
 #   configured/addressed = 有主机在总线另一端；not attached = 没有。
 #   ⚠️ 这不是根治。根治是让 dwc3 device 模式的挂起不复位（见 docs/stage4-findings.md #112）。
 host_attached() {
@@ -108,33 +107,25 @@ host_attached() {
     esac
 }
 
-stop_watch() {
-    if [ -f "$WATCH_PID" ]; then
-        kill "$(cat $WATCH_PID)" 2>/dev/null
-        rm -f "$WATCH_PID"
-    fi
-}
-
-if [ "$WANT" = watch ]; then
-    # 息屏期间插着主机：等到拔线（或亮屏把我们杀掉）再切 host。
-    echo $$ > "$WATCH_PID"
-    while host_attached; do
-        [ "$(getprop debug.tracing.screen_state)" = 2 ] && { rm -f "$WATCH_PID"; exit 0; }
-        sleep 2
-    done
-    rm -f "$WATCH_PID"
-    say "USB 主机已拔掉（UDC=$(cat $UDC 2>/dev/null)）→ 现在切 host 放行挂起"
-    exec "$0" host
-fi
-
 if [ "$WANT" = host ] && host_attached; then
+    # 息屏期间插着主机：先关门，再【就在这个进程里】等到拔线（或亮屏）再切 host。
+    # ⚠️★ 2026-09-29 改（SELinux 第七轮审计）：原先是 `(setsid "$0" watch &)` 另起一个 watch 进程、
+    #   写 pid 文件到 /data/vendor/gaokun3，拔线后再 `exec "$0" host`。三处都站不住：
+    #   ① enforcing 下重新执行自己要 execute_no_trans（init_daemon_domain 不给），pid 文件所在的
+    #     vendor_data_file 也没给写 —— policy-query 全是 DENY；
+    #   ② 更根本的：oneshot 服务的主进程退出时，init 对 vendor API ≥ R 会 SIGKILL 整个进程组
+    #     （system/core/init/service.cpp:264-276；本机 ro.board.api_level=202504），setsid 出不了
+    #     init 的 cgroup ⇒ watch 进程多半在 role_host 退出那一刻就被杀了（从源码推断，未实测 ——
+    #     开发机 allow_suspend=0，这条路径从没跑过）。
+    #   现在：role_host 自己留着等；亮屏时 usbrole.rc 先 `stop gaokun3_role_host` 再起 role_device。
     echo $WL > /sys/power/wake_lock
     say "USB 主机在线（UDC=$(cat $UDC 2>/dev/null)）→ 保持 device、不放行挂起（充电中，息屏不睡）；拔线后自动切 host"
-    stop_watch
-    (setsid "$0" watch >/dev/null 2>&1 &)
-    exit 0
+    while host_attached; do
+        [ "$(getprop debug.tracing.screen_state)" = 2 ] && exit 0
+        sleep 2
+    done
+    say "USB 主机已拔掉（UDC=$(cat $UDC 2>/dev/null)）→ 现在切 host 放行挂起"
 fi
-[ "$WANT" = device ] && stop_watch
 
 # ★ 先把门关上，再动 role。失败路径全都停在这个状态。
 echo $WL > /sys/power/wake_lock

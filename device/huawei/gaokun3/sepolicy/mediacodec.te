@@ -1,20 +1,19 @@
-# Venus 硬件解码服务（android.hardware.media.c2-service-v4l2）。
+# 硬件编解码服务（android.hardware.media.c2-service-v4l2，2026-09-28 起驱动是 qcom-iris）。
 #
 # 它由 sepolicy/file_contexts 标成 mediacodec_exec，于是落在 AOSP 的
-# mediacodec 域 —— 绝大多数规则（binder、ashmem、gralloc）都现成。
-#
-# 唯一要补的是 V4L2 设备节点：AOSP 的 mediacodec 是为【软件】编解码设计的，
-# 它从来不需要 /dev/video*。而本机的 codec2 组件直接跟 Venus 的 V4L2
-# 驱动说话。
-#
-# 证据：2026-08-23 普查里 `comm="DecodeComponent"` 开 /dev/video0 被拒
-#   （当时 scontext 还是 u:r:init:s0，因为二进制没打标签）。
-# ⚠️ 这是本轮唯一一条【预测性】规则：主体会从 init 变成 mediacodec，
-#    而客体和权限不变。第 4 步复查时要确认它确实被用到了。
-allow mediacodec video_device:chr_file rw_file_perms;
+# mediacodec 域 —— binder、ashmem、gralloc 以及 /dev/video* 都现成
+# （核心 vendor/mediacodec.te:23-24 给了 video_device rw 与目录 search）。
+# ⓘ 这里原先有一条 `allow mediacodec video_device:chr_file rw_file_perms;`（Venus 时代的
+#    "预测性"规则），与核心重复，2026-09-29 删掉。
 
 # 2026-09-27 运行期 enforcing 试跑抓到（permissive 的开机日志里没露面 —— 硬解是用到才建组件）：
 #   mediacodec vendor_minigbm_debug_prop:file read   comm=DecodeComponent
 # gralloc(minigbm) 在 codec 进程里读 vendor.minigbm.debug；与 mediaserver / mediaswcodec 那两条同根。
 # 读不到也能解码（试跑里硬解照样过），但 minigbm 会拿不到 nocompression 设置。
 get_prop(mediacodec, vendor_minigbm_debug_prop)
+
+# ── 自己的 A/B 开关 vendor.gaokun3.v4l2c2.merge_csd（2026-09-29 第七轮审计）──────────
+# patches/0019 让 v4l2 codec2 读这个属性；它落在 vendor_gaokun3_prop（property_contexts）。
+# 设备上 policy-query：mediacodec vendor_gaokun3_prop:file read DENY。读不到时取默认 1，解码照样工作，
+# 但开关失效。两边都是 vendor，没有 neverallow。v0.7.0 验收普查里见过 mediacodec 读它被拒。
+get_prop(mediacodec, vendor_gaokun3_prop)

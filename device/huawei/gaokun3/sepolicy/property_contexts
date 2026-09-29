@@ -15,10 +15,10 @@
 # ★ 为什么用 vendor_public_prop 而不是 vendor_internal/restricted：
 #   core 侧的两条 neverallow（private/property.te:192-203）把
 #   coredomain 读/写 vendor 属性一律禁掉，**只豁免 vendor_public_property_type**。
-#   而我们恰恰需要两个 coredomain：
-#     * shell      —— 排查时 `adb shell setprop`（这是本仓文档里到处写的操作）
-#     * postinstall —— OTA 钩子 getprop 那个 recovery_entry
-#   所以只能是 public。类型定义与 allow 在 sepolicy/vendor_gaokun3_props.te。
+#   而 postinstall（coredomain）要 getprop 那个 recovery_entry ⇒ 只能是 public。
+#   ⚠️ 2026-09-29 更正：这里原先还写着"shell 要 `adb shell setprop`"—— 那做不到：shell 设 vendor 属性
+#      被 private/property.te:492-502 禁（vendor_gaokun3_props.te 顶上记着那次构建失败）。
+#      排查时走 `adb root`（userdebug 下 su 域是 permissive）。类型定义与 allow 在 vendor_gaokun3_props.te。
 persist.vendor.gaokun3.  u:object_r:vendor_gaokun3_prop:s0
 # 非持久的 vendor.gaokun3.*（2026-09-26 起）：扬声器增强总开关的镜像 vendor.gaokun3.histen.on，
 # 由 etc/histen.rc 在 vendor_init 里 setprop、音频 HAL 读。`vendor.` 也在允许的前缀清单里。

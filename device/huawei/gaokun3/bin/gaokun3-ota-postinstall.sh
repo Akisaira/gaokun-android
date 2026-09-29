@@ -55,8 +55,13 @@ log "目标槽位 = _$SUFFIX"
 #   扫所有 vfat 分区，只读挂上，看谁有 loader/entries/*-android-*.conf。多个 ESP（比如 Windows 的）
 #   也能分开：只有我们的那个有 android 条目。
 find_esp() {
-    if [ -e /dev/block/by-name/esp ]; then echo /dev/block/by-name/esp; return 0; fi
-    log "by-name/esp 不存在（PARTLABEL 不是 esp —— 手工分区常见），改为按内容探测 vfat 分区"
+    # ★ 2026-09-29：双系统复用 Windows 的 ESP，PARTLABEL 是 "EFI system partition"，
+    #   ueventd 规整成 by-name/EFI_system_partition。两个名字 sepolicy/file_contexts 都标成 ESP 类型。
+    #   下面的按内容探测在 enforcing 下走不通（节点是通用 block_device，domain.te:705）。
+    for n in esp EFI_system_partition; do
+        if [ -e /dev/block/by-name/$n ]; then echo /dev/block/by-name/$n; return 0; fi
+    done
+    log "by-name/esp 与 by-name/EFI_system_partition 都不存在（手工分区常见），改为按内容探测 vfat 分区（enforcing 下会失败）"
     PROBE=/mnt/gaokun3_esp_probe; mkdir -p "$PROBE" || return 1
     for d in /dev/block/nvme*n*p* /dev/block/sd*[0-9] /dev/block/mmcblk*p*; do
         [ -b "$d" ] || continue

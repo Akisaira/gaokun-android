@@ -21,5 +21,15 @@ get_prop(hal_audio_default, vendor_gaokun3_prop)
 #    ★ 我审阅时"system_public 就能读"的推理漏了这一条 —— 和 vendor_gaokun3_props.te 顶上
 #      那次一样，neverallow 读漏了，只有编译器能证伪（permissive 下实机永远不报）。
 #
-# ⬜ 未验证：dlopen /vendor/lib64/soundfx/ 下的两个库（vendor_file）在 enforcing 下
-#    是否还要别的规则。本机现在 permissive，装机后看 dmesg 的 avc。
+# ✅ dlopen /vendor/lib64/soundfx/ 下的两个库：v0.7.0 验收（B2，补丁 0068）引擎加载成功；
+#    hal_audio_default 对 vendor_file 的 execute / map 核心策略现成（policy-query ALLOW）。
+
+# ── 核心音频 HAL ↔ effect HAL 的 binder 调用（同一个域）──────────────────────────
+# 证据：v0.7.0 验收（重编候选版 1790605865）录音期间
+#   `avc: denied { call } scontext=u:r:hal_audio_default tcontext=u:r:hal_audio_default tclass=binder`
+# 两个服务都在 com.android.hardware.audio APEX 里、都标 hal_audio_default_exec，同一个域。
+# 核心策略只有 binder_call(hal_audio_client, hal_audio_server) 与反向（private/hal_audio.te:2-3），
+# 这个域不是 hal_audio 的客户端 ⇒ 域内自调用没有规则放行。设备上 policy-query：call / transfer 都 DENY。
+# 没有 neverallow 管 vendor 域调自己（domain.te:696-697 只管 init / vendor_init）。
+binder_call(hal_audio_default, hal_audio_default)
+

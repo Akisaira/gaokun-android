@@ -12,3 +12,8 @@
 # ⚠️ 代价：以后这些主体真读某个 vendor_default_prop 属性时也看不到 denial。
 #    真要给它们读 vendor 属性，正路本来就是给那个属性单独定 vendor_public 类型，不会走这里。
 dontaudit { surfaceflinger bootanim appdomain } vendor_default_prop:file { read open getattr map };
+
+# cameraserver 同理只静音（2026-09-29 第七轮）：每次连相机读 persist.vendor.camera.privapp.list
+# （frameworks/av 的 CameraService），这个名字在核心 property_contexts 里落到 vendor_default_prop，
+# 本机没设过它 ⇒ 读不到就是正确结果（默认空列表）。enforcing 试跑里相机前后全过。
+dontaudit cameraserver vendor_default_prop:file { read open getattr map };

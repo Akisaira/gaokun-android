@@ -29,3 +29,19 @@ allow hal_camera_default sysfs_leds:file rw_file_perms;
 type gaokun3_camera_tmpfs, file_type;
 type_transition hal_camera_default tmpfs:file gaokun3_camera_tmpfs;
 allow hal_camera_default gaokun3_camera_tmpfs:file { read write getattr map };
+
+# ── 相机 HAL 要找 allocator 与 mapper（2026-09-29，第七轮运行期 enforcing 试跑）──────────
+# 证据（enforcing，permissive=0）：
+#   hal_camera_default hal_graphics_allocator_service:service_manager find  IAllocator/default
+#   hal_camera_default hal_graphics_allocator_default:binder call
+#   hal_camera_default hal_graphics_mapper_service:service_manager find     mapper/minigbm
+#   hal_camera_default vendor_minigbm_debug_prop:file read                  （minigbm 在 HAL 进程内）
+# ★ 后果：enforcing 下前后摄【全部】出不了帧（设备错误 4 → 断开），HAL 崩溃重启。
+#   第六轮试跑里相机是过的，是因为 HAL 早在开机时就拿到了 allocator；这一轮试跑中途
+#   HAL 重启过，才露出来。用 ksud 在线补这几条后：enforcing 下 HAL 重启 3 次、后 / 前 / 后全过。
+# 核心策略的 hal_camera_default 不是 allocator 客户端（vendor/hal_camera_default.te 只有
+# private/hal_camera.te:19 的 fd use）。做成客户端：find allocator + binder call 来自
+# hal_client_domain，find mapper 来自 private/hal_graphics_allocator.te:6。
+# 与 hal_graphics_composer_default.te 同一行，AOSP 的 hal_evs_default 也是这样。
+hal_client_domain(hal_camera_default, hal_graphics_allocator)
+get_prop(hal_camera_default, vendor_minigbm_debug_prop)
