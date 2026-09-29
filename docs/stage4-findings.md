@@ -10507,3 +10507,56 @@ HAL 的 POLLPRI 空转；SYS_ERROR 后固件重启的 `invalid uc_region`；换 
 * 停掉 usbfollow（`setprop ctl.stop gaokun3_usbfollow`）、每次待机前确认 `role=host`：#24 上 **5 次真实待机（RTC +20 s）4 次 rc=0、1 次 1 s 返回的 -EBUSY
   （s2idle README 的"计数陷阱"），0 次复位**，uptime 连续。
 ⇒ 待机在正确的 USB 角色下是好的；TODO 顶部那条阻断撤掉。真实用户路径（allow_suspend=1、拔线、息屏自动睡、电源键唤醒）⬜ 发版前再验一次。
+
+## #129 ★★★★ SELinux 第七轮：运行期 enforcing 试跑查出【相机全挂】；源码审计查出块设备标签按分区号写死、v0.7.0 安装器装的盘全错（2026-09-29/30）
+
+用户："开始为此项目编写 selinux"。设备跑 v0.7.0（`_a`，戳 `1790605865`，第六轮策略已随它上机），permissive。
+本轮**没有装机**；规则编译通过（`out-sel`），提交 `572a060` + 审查修正 `d885275`，未推送。
+
+### 1. 起点：开机普查已经干净
+开机 2 小时的完整普查（logd kernel 缓冲从 3 s 起，`audit_lost` 0）：vendor 域一条 denial 都没有，只剩 `untrusted_app` 的常规探测。
+`ps -AZ`：`init` 域只剩 PID 1，每个自研服务都在自己的域里。⇒ 剩下的问题只能从【运行期 enforcing】和【源码】里找。
+
+### 2. 运行期 enforcing 试跑（第六轮那份脚本扩了一倍：录音 + Histen、HAL 重启、Parts、蓝牙开关）
+* 过：触摸 / 键盘 / bootctl / 温控 / 传感器 / 亮度 / WiFi 扫描 / 录音（48 k 双声道、16 k 单声道，开着 Histen）/ light、thermal、boot、effect HAL 重启 / Parts 两页 / 蓝牙关开。
+* ★★★ **相机前后全挂**（设备错误 4 → 断开，HAL 崩溃 3 次，tombstone `gralloc-mapper is missing`）：
+  `hal_camera_default` 找不到 `IAllocator/default` 与 `mapper/minigbm`、调不了 allocator。第六轮试跑里相机是过的，因为 HAL 进程
+  （和它的 GraphicBufferMapper 单例）是在 permissive 时建好的；这一轮 HAL 中途重启过才露出来 ⇒ **真 enforcing 开机每一次都会这样**。
+  用 `ksud sepolicy patch` 在线补展开后的规则，enforcing 下 HAL 重启 3 次、后 / 前 / 后全过。
+  ⚠️ `ksud sepolicy patch "typeattribute …"` 不生效（编译后的策略里属性规则已经展开），要补展开后的 allow。
+  修法：`hal_client_domain(hal_camera_default, hal_graphics_allocator)` + minigbm 属性（与 HWC 同一行，AOSP 的 hal_evs_default 同款）。
+* 硬解有一次 40 s 超时：`qcom-iris … sys error (type: 1, … data2:deadbead)`，没有任何 mediacodec denial；紧接着 enforcing / permissive 交替各 3 次全过
+  ⇒ **iris 固件偶发，与 SELinux 无关**（⬜ 记给 #128）。
+
+### 3. 源码审计（workflow：5 个子系统审计 + 各一名反驳者 + 查漏者，38 条）
+按"enforcing 下会怎样"排序，已修：
+| 严重度 | 现象 | 修法 |
+|---|---|---|
+| ★★★★ | **v0.7.0 安装器新装的机器，块设备标签全错**：`file_contexts` 写死的是开发机老布局（p2=userdata p4=misc p5/6=boot p8=super p10=metadata），安装器按 esp, misc, metadata, boot_a, boot_b, super, [rescue], userdata 顺序 `sgdisk -n 0:` ⇒ p2 其实是 misc…… enforcing 下 bootctl 读不了 misc、postinstall 读不了 boot、snapuserd 碰不了 super、fsck 碰不了 userdata。开发机布局恰好对得上，普查和试跑都看不见 | 改成 `/dev/block/by-name/<名字> -b`（ueventd 按符号链接 best-match，`devices.cpp:406`，coldboot 重标已有节点 `:427-440`；核心 `private/file_contexts:106` 同款）。`nvme0n1pN` 的行必须删（精确路径会盖过别名） |
+| ★★★ | 双系统复用 Windows 的 ESP（PARTLABEL "EFI system partition"）没有 `by-name/esp` ⇒ 回落到按内容扫全盘，而那些节点是通用 `block_device`（`domain.te:705`）⇒ 切槽与每次 OTA 失败 | `by-name/EFI_system_partition` 也标 ESP 类型；bootctl HAL 与 postinstall 两个名字都当【候选】、过内容检查（审查抓到：只认名字会在"Windows ESP + 另起名的 Android ESP"上选错，那是用户反馈 #1 的布局，permissive 下就坏）；安装器对不认的名字给警告，不替别人改名 |
+| ★★ | 核心音频 HAL ↔ effect HAL 的 binder 自调用（同一个域，v0.7.0 验收见过） | `binder_call(hal_audio_default, hal_audio_default)` |
+| ★★ | usbrole "插着电脑息屏、再拔线"：`setsid "$0" watch` 要 `execute_no_trans`、pid 文件要写 vendor_data_file（都 DENY）；而且 oneshot 主进程退出时 init 会 SIGKILL 整个进程组（`service.cpp:264-276`，api 202504）⇒ watch 多半从来没活下来过（源码推断，开发机 allow_suspend=0 没跑过） | 改成 role_host 原地等拔线；亮屏时 rc 先 `stop gaokun3_role_host`（审查确认这还顺带堵了一个老竞态：旧写法 role_host 晚到的 `wake_unlock` 会释放 role_device 刚拿的同名锁） |
+| ★★ | **设计约束**：postinstall 跑新脚本、用旧策略 ⇒ 一旦某版 enforcing，之后 postinstall 要的新权限都会让 OTA 回滚 | `postinstall.te` 头部写明规矩（新增权限比脚本早一版发）；补 `vfat:dir create` |
+| ★ | hangdump 四处（qrtr-lookup 要 execute_no_trans、`/proc/uptime`、`dmesg` 默认开 `/dev/kmsg`、`ps -A` 读不了别人），`pidof android.hardware.bluetooth` 从来匹配不上；`.done` 标记跨重启保留 ⇒ 第一次取证后看门狗永久停跑 | 专用 exec 类型、`proc_uptime`、`dmesg -S`、`ps -p`、改名 + 加音频 HAL、去掉标记只留最近 5 份 |
+| ★ | cameraserver / mediacodec 读属性（minigbm 调试、`merge_csd` 开关）；cameraserver 读 `persist.vendor.camera.privapp.list`（只静音） | get_prop / dontaudit |
+| ★ | 开发用 OTA：update_engine 读不了 `/data/local/tmp` | `install-ota-local.sh` 挪到 `/data/ota_package` 再 restorecon |
+| ★ | `/data/vendor/camera` 从没有 rc 建过（开发机那个是 09-12 手建的） | camera rc `on post-fs-data mkdir` |
+| — | vendor_init 写 printk（空操作，内核默认就是 7 4 1 7）、`tu_debug_loader.sh`（死文件）、一批过时注释 | 删 / 改 |
+
+✅ 顺带验证了 #126 留下的"未上机"：唤醒源的 file_contexts 正则 + ueventd restorecon，`ls -LZ /sys/class/wakeup/*/name` **50/50** 是 `sysfs_wakeup`。
+
+**没修、记为待办**（都是加固或产品功能，不是 enforcing 阻塞）：rproc-kick / hexagonrpcd / bootctl 的 sysfs、tmpfs 规则过宽；`/dev/dri/card*` 0666；
+触摸手感与 allow_suspend 在 enforcing 下只能 `adb root` 后设（普通 shell 设 vendor 属性 / system_prop 被禁）⇒ 要在 Parts 里做开关（allow_suspend 照 histen.rc 的字面值触发器镜像）；
+WiFi HAL 的 NETLINK_ROUTE 只有 create/bind（link-layer stats 没开时无影响，不确定）。
+
+### 4. 方法上的三条
+* ★ **policy-query 的 ALLOW 不全可信**：设备上加载的策略含 KernelSU 注入的规则（查漏者指出）。DENY 可信，ALLOW 要回到 .te 与核心策略核对。
+  本轮就据此把两条"因为链接会拿到分区类型才要的 lnk_file"删了 —— 核心 `domain.te:70` 早给了 `domain dev_type:lnk_file`。
+* ★ **运行期试跑要让服务在 enforcing 下【重启】一次**：第六轮相机"全过"是因为进程是 permissive 时起的。
+* ⚠️ 一次 `ksud sepolicy patch`（音频自调用那条）之后整机重启（重启原因 `reboot`、pstore 空、脚本日志空）。原因没查清；**没人在场时不再在线打补丁**。
+
+### 5. 下一步（都要用户点头）
+1. 开构建机编一版带第七轮策略的 ROM（审查修正那批还没重编），装进回落槽 `_b`，oneshot 起来 → permissive 完整普查：
+   `ls -Z /dev/block/nvme0n1p*` 对照 `ls -l /dev/block/by-name`（by-name 重标是否生效）、`/data/vendor/camera` 的标签、相机 / 音频 / OTA postinstall 无 denial。
+2. 然后 oneshot 一次 `androidboot.selinux=enforcing` 的真开机（userdebug 认这个参数）—— 要人在场。
+3. 都过了才去掉 `BoardConfig.mk` 里的 `androidboot.selinux=permissive`。
