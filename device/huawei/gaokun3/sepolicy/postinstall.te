@@ -77,3 +77,10 @@ allow postinstall boot_block_device:blk_file r_file_perms;
 # 布局装的机器（p1=ESP）能走完 OTA 最后一步**；手工分区的机器会在
 # postinstall 失败，整次 OTA 回滚。这不是"少一条规则"，是布局假设变成了硬约束。
 # ★ 正解仍是 [TODO B3]：自研 EFI 加载器直接读 misc 选槽，postinstall 整个消失。
+
+# ── 只静音：toybox umount 卸完之后对块设备发 LOOP_CLR_FD（2026-09-30，#129）─────────
+# 证据（第七轮 ROM 装机时，旧策略、permissive）：
+#   `umount … ioctl  path="/dev/block/nvme0n1p1" ioctlcmd=0x4c01  postinstall → gaokun3_esp_block_device:blk_file`
+# 0x4c01 = LOOP_CLR_FD：toybox 的 umount 在 umount(2) 之后顺手试着释放 loop 设备。ESP 不是 loop，
+# 这个 ioctl 本来就会失败（ENXIO），被拒只是换成 EACCES —— 卸载那一步早已完成，脚本照常往下走。
+dontaudit postinstall gaokun3_esp_block_device:blk_file ioctl;

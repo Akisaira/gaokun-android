@@ -93,6 +93,6 @@ CLAUDE.md「环境」一节有简版；本文是细则与依据。
 | 日期 | 档位 / 机型 | 盘 | 活 | 用时 | 备注 |
 |---|---|---|---|---|---|
 | 2026-09-26 | D32as_v5 | P20 | 独立 `OUT_DIR` 冷编 4 个模块 + selinux_policy | 9.5 分钟跑到 71%（sepolicy 处失败），补完 13 分钟 | PR #7 编译验证 |
-| | | StandardSSD | | | 下一次构建填这里 |
+| 2026-09-29 | D32as_v5 | StandardSSD | 整包增量 `m bacon superimage`（改动只在 device/ 与 sepolicy；机器刚开、lunch 冷缓存约 2 分钟） | **16 分 46 秒**（+ release.sh --dry-run 打包约 2 分钟） | SELinux 第七轮 ROM，戳 1790702971（#129） |
 
 要不要为大构建临时把盘切回 Premium（停机时 `az disk update --sku Premium_LRS`，数据不受影响）：等上表有了新盘的数据再定。
