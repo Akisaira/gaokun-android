@@ -10555,8 +10555,33 @@ WiFi HAL 的 NETLINK_ROUTE 只有 create/bind（link-layer stats 没开时无影
 * ★ **运行期试跑要让服务在 enforcing 下【重启】一次**：第六轮相机"全过"是因为进程是 permissive 时起的。
 * ⚠️ 一次 `ksud sepolicy patch`（音频自调用那条）之后整机重启（重启原因 `reboot`、pstore 空、脚本日志空）。原因没查清；**没人在场时不再在线打补丁**。
 
-### 5. 下一步（都要用户点头）
-1. 开构建机编一版带第七轮策略的 ROM（审查修正那批还没重编），装进回落槽 `_b`，oneshot 起来 → permissive 完整普查：
-   `ls -Z /dev/block/nvme0n1p*` 对照 `ls -l /dev/block/by-name`（by-name 重标是否生效）、`/data/vendor/camera` 的标签、相机 / 音频 / OTA postinstall 无 denial。
-2. 然后 oneshot 一次 `androidboot.selinux=enforcing` 的真开机（userdebug 认这个参数）—— 要人在场。
-3. 都过了才去掉 `BoardConfig.mk` 里的 `androidboot.selinux=permissive`。
+### 5. 上机（2026-09-30，用户同意、在场）
+**ROM**：构建戳 `1790702971`（incremental `20260929172931`，含 `572a060` + `d885275`），D32 + StandardSSD 上整包增量 16 分 46 秒，
+`release.sh --dry-run --no-build` 断言全过。载荷 8 路并行经 ssh 取回（约 1.9 MB/s，sha256 三份一致，本机 `out/sel7-1790702971/`），
+`install-ota-local.sh --go` 装进 `_b`（第一次走 `/data/ota_package`，postinstall 成功），oneshot 起来。
+开机成功后 bootctl HAL 自己把 ESP default 同步成了 `_b`（设计如此；也说明新的"候选 + 内容检查"ESP 查找在新策略下是通的）。
+
+**① permissive 完整开机普查**（logcat 从 0 s，`audit_lost` 0）：**vendor 域零 denial**。by-name 重标生效 —— 策略里已没有任何
+`nvme0n1pN` 条目，7 个分区节点全部拿到正确类型（只能是 ueventd 按别名匹配出来的）；by-name 链接一半 `block_device`、一半分区类型（预期，
+核心 `domain.te:70` 覆盖读）。`/data/vendor/camera` = `gaokun3_camera_vendor_data_file`，qrtr-lookup = `gaokun3_qrtr_lookup_exec`。
+装机时 postinstall 露出一条 `umount` 对 ESP 的 ioctl `0x4c01`（LOOP_CLR_FD，卸完之后，无害）⇒ dontaudit（`e3bdedb`）。
+
+**② 运行期 enforcing 试跑**（新策略上）：permissive=0 的 denial **一条都没有**，全部功能过（含 HAL 重启后的后摄 133 帧 0 失败）。
+
+**③ ★ 第一次真 enforcing 开机**（oneshot 一个只把 `selinux=permissive` 换成 `enforcing` 的条目 `gaokun3-enforcing-test.conf`）：
+约 45 秒 `boot_completed`，`getenforce` = Enforcing。开机全程 **vendor 域零 denial**。GPU 固件（a660_sqe / gmu）加载、SF 跑硬件 Turnip、
+蓝牙固件、三颗 DSP running、传感器 2 个、WiFi 连上、USB adb 通、所有服务无重启；**用户在 55 s 解锁成功**（gatekeeper 通）。
+功能试跑（去掉 setenforce 的版本）全过：触摸 / 键盘 / bootctl / 温控 / 亮度 / WiFi / 录音 + Histen / 硬解 / 前后摄 / 5 个 HAL 重启 / Parts / 蓝牙。
+usbrole "插着电脑息屏"：role_host 原地等、角色保持 device、wakelock 持有；亮屏后 role_host 被停、角色 device —— 没有 usbrole denial。
+剩下被拒的只有：
+* system_server `vendor_default_prop` 两批各约 50 次（HWUI `GrallocUploadTh` 与解锁时的 binder 线程）= mesa 在 GPU 进程里逐个选项查 `vendor.mesa.*`，
+  与 SF / bootanim / 应用同一根因 ⇒ 加进 `graphics_clients.te` 的 dontaudit（coredomain 读 vendor 属性本来就被 neverallow 禁）。
+* system_server 读 HID 键盘 `country`、secure_element 数据目录（上游缺口，#126 §3）；应用的环境探测（每台 AOSP 设备都一样）。
+* ⓘ `ro.odm.build.{id,tags,type,version.*}` 与 Android 16 的 `ro.*.build.version.sdk_full` 在核心 property_contexts 里没有 `build_odm_prop`，
+  落在 `vendor_default_prop` —— 平台侧缺口，所有设备一样。
+
+### 6. 还没验证的，与下一步
+* ⬜ enforcing 下的**真实待机**（allow_suspend=1、拔线 → role_host 切 host → 睡 → 唤醒 → 回插）：要用户拔线，当时电量 15%、没接充电器，没做。
+* ⬜ **enforcing → enforcing 的 OTA**（postinstall 跑在旧的 enforcing 策略下，§3 的设计约束）。
+* ⬜ 恢复出厂 / 全新安装（`/data/vendor/camera` 由 rc 建、首次开机的 restorecon）。
+* ⬜ 默认改 enforcing（去掉 `BoardConfig.mk` 的 `androidboot.selinux=permissive`）—— 要用户定跟哪一版发；那之前把这一版的 dontaudit 编进去。

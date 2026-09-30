@@ -891,7 +891,9 @@ checkout），让 `git status` 直接说话。⚠️ 换之前先做一次清单
 ★ **第七轮（[#129](stage4-findings.md)）**：运行期 enforcing 试跑查出**相机全挂**（HAL 拿不到 allocator，已在线验证修法）；
 源码审计查出**块设备标签按分区号写死、v0.7.0 安装器装的盘全错**（改按 by-name）、双系统 ESP、音频自调用、usbrole 拔线路径、hangdump 等 20 余处。
 提交 `572a060` + `d885275`（本地），`m selinux_policy` 通过（审查修正那批未重编）、**未上机**。
-⬜ 下一步：编 ROM → 装 `_b` → permissive 普查（重点看 by-name 重标）→ oneshot 真 enforcing 开机（要人在场）→ 去掉 cmdline 的 permissive。
+✅ **2026-09-30 上机**：ROM `1790702971` 装进 `_b`；permissive 普查 vendor 域零 denial、by-name 重标生效；★ **第一次真 enforcing 开机成功**
+（开机全程 vendor 域零 denial、解锁 / GPU / 相机 / 音频 / 硬解 / 传感器 / WiFi / 蓝牙 / usbrole 全过），剩 system_server 的 mesa 探测已静音。
+⬜ 下一步：enforcing 下真实待机与回插、enforcing→enforcing OTA、恢复出厂；然后**用户定**默认改 enforcing 跟哪一版发（去掉 cmdline 的 permissive）。
 ⬜ 非阻塞：Parts 里加触摸手感 / allow_suspend 开关（enforcing 下普通 adb shell 设不了）；rproc-kick / hexagonrpcd / bootctl 规则收窄；`/dev/dri/card*` 0666。
 ★ **现状以 [#126](stage4-findings.md) 为准**：第六轮之后已经没有"加规则解决不了"的阻塞，剩下的是上机验证
 （新策略编译通过、未上机）。工具在 [`scripts/selinux/`](../scripts/selinux/README.md)。下面是第五轮及以前的记录，

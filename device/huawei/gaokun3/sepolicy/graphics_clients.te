@@ -12,6 +12,10 @@
 # ⚠️ 代价：以后这些主体真读某个 vendor_default_prop 属性时也看不到 denial。
 #    真要给它们读 vendor 属性，正路本来就是给那个属性单独定 vendor_public 类型，不会走这里。
 dontaudit { surfaceflinger bootanim appdomain } vendor_default_prop:file { read open getattr map };
+# system_server 同理（2026-09-30，#129 第一次真 enforcing 开机）：HWUI 的 GrallocUploadThread 与解锁时的
+#   binder 线程各一批约 50 次 `system_server vendor_default_prop:file read`（= mesa 每个选项查一次）。
+#   解锁、界面一切正常。permissive 普查里只露一次（去重），所以之前没进这张名单。
+dontaudit system_server vendor_default_prop:file { read open getattr map };
 
 # cameraserver 同理只静音（2026-09-29 第七轮）：每次连相机读 persist.vendor.camera.privapp.list
 # （frameworks/av 的 CameraService），这个名字在核心 property_contexts 里落到 vendor_default_prop，
