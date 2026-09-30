@@ -79,6 +79,10 @@
 > * **不推仓库、不发版**是需要用户点头的两件事；其余（本地提交、构建、staging、设备实验）直接做。
 >
 > ### 现在设备上跑的是什么
+> ★★ **2026-09-30 起：槽 `_b` = SELinux 第七轮测试版 `1790702971`**（#129；`install-ota-local.sh` 装、开机成功后 bootctl 把 **ESP default 同步成了 `_b`**，permissive）。
+> 这次开机是 oneshot 到 `gaokun3-enforcing-test.conf`（同一版、只改 `selinux=enforcing`）—— **下次重启回到 `_b` 的 permissive**。
+> `_a` = v0.7.0-alpha 正式版 `1790605865`（回落）。载荷在本机 `out/sel7-1790702971/`。⚠️ 在热点下 IP 这次是 `.127`（09-30 早上），会漂。
+> 下面这段是 09-29 的状态，`_b` 那一行已过时。
 > ★★ **2026-09-29 起跑在槽 `_a`：v0.7.0-alpha**（戳 `1790605865`，incremental `20260928143105`）——
 > `install-ota-local.sh` 装进 `_a`、oneshot 验收（`out/v070b-accept/`，TODO 的 v0.7.0 一节）后 ESP default 改成 `*-android-a.conf`，`_a` 已 marked successful。
 > ★ **现在有回落槽了**：`_b` = 第一个 v0.7.0 候选版 `1790597477`（2026-09-28 装、开过机、只差 Histen 与 M3E 开关）。
