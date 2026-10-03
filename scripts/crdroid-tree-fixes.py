@@ -37,7 +37,7 @@ crDroid 在 system/core/init/property_service.cpp 里加了 SetSafetyNetProps()�
 
 我们本来就不追求 Play Integrity（这是台开发机），关掉没有副作用。
 """
-import io, re, sys, pathlib, subprocess
+import io, re, sys, pathlib, shutil, subprocess, tempfile
 
 def patch_spoof_safetynet(tree: pathlib.Path) -> str:
     p = tree / "system/core/init/Android.bp"
@@ -404,7 +404,8 @@ def patch_disable_desktop_mode(tree: pathlib.Path) -> str:
     return "已把 crDroid 的 config_isDesktopModeSupported 改成 false"
 
 
-def apply_patch_file(tree: pathlib.Path, project: str, patch_name: str) -> str:
+def apply_patch_file(tree: pathlib.Path, project: str, patch_name: str,
+                     covered_by: tuple = ()) -> str:
     """把 <repo>/patches/<patch_name> 用 git apply 打进 AOSP 树的 <project>（幂等）。
 
     ★ 为什么要有这个助手：本仓 `patches/` 里的 **AOSP 侧**补丁（0003 glslang、
@@ -417,6 +418,11 @@ def apply_patch_file(tree: pathlib.Path, project: str, patch_name: str) -> str:
     幂等判据用 `git apply --check -R`（反向能打上 = 已经在树里了）。
     ⚠️ 与 kernel-apply-patches.sh 不同，这里**不接受 fuzz** —— AOSP 树是
     repo sync 出来的干净树，打不上就是上游动了，应当大声报错而不是模糊匹配。
+
+    covered_by：排在后面、改到同一段上下文的补丁（例如 0069 改了 0063 加的那几行附近）。
+    它们打上之后，本补丁正反两个方向都对不上 —— 2026-10-04 重跑时 [15] 就这样报了"打不上"，
+    而 0063 的 42 行其实一行不缺（#130）。这时把涉及的文件拷到临时目录、先撤掉这些后续补丁，
+    再对本补丁做反向检查：过了才算"已打过"。不是放宽判据，判的仍是"本补丁确实在树里"。
     """
     repo = pathlib.Path(__file__).resolve().parent.parent
     patch = repo / "patches" / patch_name
@@ -432,6 +438,10 @@ def apply_patch_file(tree: pathlib.Path, project: str, patch_name: str) -> str:
 
     if git("apply", "--check", "-R", str(patch)).returncode == 0:
         return "已打过（幂等，无需改动）"
+    later = [repo / "patches" / n for n in covered_by]
+    if later and all(git("apply", "--check", "-R", str(l)).returncode == 0 for l in later):
+        if _applied_under(proj, patch, later):
+            return "已打过（上下文被 " + "、".join(covered_by) + " 改过，撤掉它们后反向检查通过）"
     chk = git("apply", "--check", str(patch))
     if chk.returncode != 0:
         return "✗ 打不上（既不是已应用、也不干净）：" + chk.stderr.strip().splitlines()[0] if chk.stderr.strip() else "✗ 打不上"
@@ -439,6 +449,30 @@ def apply_patch_file(tree: pathlib.Path, project: str, patch_name: str) -> str:
     if r.returncode != 0:
         return "✗ 应用失败：" + (r.stderr.strip().splitlines()[0] if r.stderr.strip() else "?")
     return f"已应用 {patch_name}"
+
+
+def _applied_under(proj: pathlib.Path, patch: pathlib.Path, later: list) -> bool:
+    """在临时目录里：拷出涉及的文件 → 依次（倒序）撤掉 later → 对 patch 做反向检查。不碰 proj 本身。"""
+    paths = set()
+    for p in [patch, *later]:
+        r = subprocess.run(["git", "-C", str(proj), "apply", "--numstat", str(p)],
+                           capture_output=True, text=True)
+        paths |= {line.split("\t")[2] for line in r.stdout.splitlines() if line.count("\t") >= 2}
+    with tempfile.TemporaryDirectory() as tmp:
+        for rel in paths:
+            src = proj / rel
+            if src.exists():
+                (pathlib.Path(tmp) / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, pathlib.Path(tmp) / rel)
+
+        def git_tmp(*args):
+            # 临时目录不在任何仓库里，git apply 按普通补丁处理文件
+            return subprocess.run(["git", "apply", *args], cwd=tmp, capture_output=True, text=True)
+
+        for l in reversed(later):
+            if git_tmp("-R", str(l)).returncode != 0:
+                return False
+        return git_tmp("--check", "-R", str(patch)).returncode == 0
 
 
 def patch_connected_displays_flag(tree: pathlib.Path) -> str:
@@ -515,7 +549,8 @@ def main():
     # 依赖 [14]（采集管道要能放 2 块），所以排在它后面。#127 §6/§7：去掉开头 170 ms 静音与常驻 2 块延迟
     step(" [15] audio AIDL HAL 采集改成数据驱动交付（去掉开头静音与常驻延迟）: ", apply_patch_file(
         tree, "hardware/interfaces",
-        "0063-audio-aidl-primary-capture-data-driven.patch"))
+        "0063-audio-aidl-primary-capture-data-driven.patch",
+        covered_by=("0069-audio-aidl-primary-playback-paced-by-alsa.patch",)))
     # 不依赖前面几条（只动 audio/aidl/default/apex/）。v0.7.0 验收 B2：effect HAL 在 vendor APEX 里，加载不了 /vendor/lib64/soundfx 的 Histen
     # ⚠️ 这是唯一一条会【新建】文件的 AOSP 补丁（linker.config.json，未跟踪）：把 hardware/interfaces 还原成上游时
     #    `git checkout -- .` / `reset --hard` 删不掉它，要再 `git clean -f audio/aidl/default/apex/`，否则这一条报"打不上"（2026-09-29 审查）
