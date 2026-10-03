@@ -10631,3 +10631,54 @@ U = 时间戳说已播出的帧 − 同一时刻的 hw_ptr（插值），ms。
 * ⬜ 整包镜像里回归：普通播放 / 蓝牙 / 耳机切换 / 暂停-继续 / 拖进度（播放现在是阻塞写，`pause()` 仍是空实现 —— 暂停期间 ALSA 欠载、继续时 tinyalsa 重新 prepare，A/B 里没覆盖）。
 * ⬜ "偏移过大"的另一半是**基础延迟本身大**：HAL 一块 4096 帧（85 ms）+ ALSA 120 ms + DSP。现在时间戳是真的，游戏可以自己补偿；要降下来得缩 HAL 块与 period（Stage 4 M4 那次 10 ms MMAP 撑不住，要找中间值、在游戏负载下量 XRUN）。
 * ⓘ 运维教训：09-30 等构建结果的后台任务随会话中断一起没了，构建机（D16）**空转到 10-03 才发现**，约三天。长构建要么等在前台、要么构建脚本自己在结束时停机。
+
+## #131 ★★★ issue #16 待机睡死：DPM 看门狗误留 10 秒 + panic 不重启 + ath11k 每次恢复赌高阶连续 DMA（CMA 放错了地方）—— 0070 / 0071 上机通过；39 位地址空间测试内核起不来（2026-10-04）
+
+**来源**：GitHub issue #16（niceboat0，v0.7.0-alpha，pstore 全链）。同日核查的另外五个 issue 见 `docs/TODO.md` 的 issue 一节。
+
+### 1. 三环
+1. **ath11k 在本机只走断电挂起**：WoW 只给 `ath11k_pm_quirk_table` 里的联想机型（v7.2-rc2 `core.c:931-1045`）。suspend_late 断电（`core.c:1279`），
+   resume_early 上电、MHI 重新下载固件（`core.c:1297`）。MHI 每次都把 BHIe 表放掉再重抢：seg_len = sbl_size = 512 KiB（`ath11k/mhi.c:382-383`），
+   coherent mask 32 位 ⇒ GFP_DMA；挂起期间 `pm_restrict_gfp_mask()` 去掉 `__GFP_IO` ⇒ 不做 compaction。碎片一多 order-7 就失败（issue 里的 buddyinfo：DMA 区 0 个 ≥512 KiB 的块）。
+2. resume_early 失败后，正常 resume 阶段干等 `restart_completed` 20 秒（`core.c:1311`）。而**发布内核的 `DPM_WATCHDOG_TIMEOUT` 是 10**：
+   调试时设的值留在了构建树的 `.config` 里，`kernel-config-android.sh` 注释写着"保持默认 120"，却从没写值也没断言。10 秒到就 panic。
+3. `PANIC_TIMEOUT=0` ⇒ panic 后停住，用户看到的是"睡死"。
+
+### 2. CMA 为什么没顶上（这次新查出的根因）
+gaokun3 的 `linux,cma` 节点（与上游 X13s / CRD 同样写法）只写了 size、没写 alloc-ranges ⇒ 128 MiB 自顶向下落在 **0x878000000**
+（`created CMA memory pool at 0x0000000878000000`）。dma-direct 确实先试 CMA，但拿到的页过不了 32 位的 `dma_coherent_ok()`，只好退回 ZONE_DMA 的伙伴分配器。
+ftrace（`kmem:mm_page_alloc`、`order >= 7` + stacktrace，`scripts/s2idle/android-order7-trace.sh`）抓三次恢复：
+
+| 内核 | GFP_DMA 高阶伙伴分配 | 其中 MHI | 其中数据通路（order-9，`ath11k_core_restart → ath11k_dp_alloc`） |
+|---|---|---|---|
+| 原版 #13 | 69 | 57（`mhi_alloc_bhie_table`，约 19 次/每次恢复）+ 3（BHI 缓冲） | 9 |
+| k2（+0070） | 9 | **0** | 9 |
+| k3（+0070 +0071） | **0** | 0 | 0（改由 CMA 供给） |
+
+⚠️ 数据通路那 3 块 order-9（2 MiB）比 MHI 的还大：只有 0070 时，碎片严重的机器下一个失败点就是它。
+
+### 3. 修法
+* `kernel-config-android.sh`：显式写 `DPM_WATCHDOG_TIMEOUT=120`、`WARNING_TIMEOUT=60`、`PANIC_TIMEOUT=10`，并**断言取值**（23a0ec0）。
+* `patches/0070`（本地）：MHI 加 opt-in 的 `reuse_fw_images`（只有 ath11k 打开）——BHI / FBC / RDDM 三块缓冲跨断电保留，卸载时才释放；
+  FBC 只在段数恰好相同时复用（设备读整张向量表）。顺带修了 prepare 失败时 rddm_image 悬空。上游到 v7.3-rc5 都没有对应改动。
+* `patches/0071`（本地）：DT 给 CMA 加 `alloc-ranges = <0x0 0x80000000 0x0 0x80000000>` ⇒ 实测落在 0xf4000000，开机约 29 MiB 被 32 位设备用上。
+  **ROM 用的是 prebuilt-boot 里的 dtb，发版时要换成带 0071 的那份**。
+
+### 4. 上机（k2 = 48 位 + 0070 + 配置；k3 = k2 + 0071 的 dtb；都是 oneshot，ESP default 未动）
+* k2：pm_test=platform 9 次 + 真 s2idle（RTC 唤醒）3 次，12/12：每次固件都重新下载，Wi-Fi 2–6 秒恢复，零报错、零复位。
+* k3：同样 12/12；CMA 用量前后一致（借出都还回）；硬解 AVC / HEVC / VP9 通过、`gaokun3-ncam-smoke` PASS（143 个结果 0 次帧失败）、GPU / SMMU 无报错。
+  ⬜ App 冒烟没做成：重启后机器停在锁屏（有密码），凭据加密存储未解锁，`monkey` 报 `No activities found`。
+* 原版 #13 对照：pm_test=platform 2/2 通过（固件重载、重新关联）——恢复本身在原版上也能过，差别只在高阶分配，所以修复的价值要靠 §2 那张表、而不是"过 / 不过"。
+
+### 5. 测试方法上踩的三个坑（脚本 `scripts/s2idle/android-ath11k-s2loop.sh` / `android-order7-trace.sh`）
+* ★ **`pm_test=devices` 测不了 ath11k**：它只跑 suspend/resume、不跑 suspend_late/resume_early。ath11k 的 suspend 停掉 CE/DP 影子定时器、却不断电，
+  于是既不重载固件、数据通路也停在半截 ⇒ Wi-Fi 必坏，第二次挂起时整板复位。要用 **`pm_test=platform`**（跑完 late/noirq 再返回）。
+* ★ **开发机上 `gaokun3_usbfollow` 会把角色切回 device**：allow_suspend=0 时 follow 一直在跑，host 下约 6 秒没下游设备就切 device（`gaokun3-usbrole.sh` follow 段），
+  而 device 角色下挂起 = 整板静默复位（不留 pstore）。前两轮"第 2 次循环复位"就是它。测试期间 `setprop ctl.stop gaokun3_usbfollow`，每次挂起前检查角色仍是 host。
+* 判据别按 dmesg 全量计数（环形缓冲会写满，计数失真），也别猜网关（Android 默认路由在策略路由表里，`.1` ping 不通）：只看本轮标记之后的 dmesg，ping 同网段一台已知主机。
+
+### 6. issue #12 的 39 位测试内核（k1）
+同一棵树、配置只多 `ARM64_VA_BITS_39`（PGTABLE_LEVELS 4→3，MMAP_RND_BITS_MAX 33→24）：**起不来**。从发命令到回落内核开始运行 41 秒，
+正常重启是 27.8 秒（实测基准）⇒ 测试内核最多活了一两秒，死在 efi_pstore 就绪（约 0.9 秒）之前，pstore 空；panic=10 / 复位后自动回 `_b`。
+k2 = k1 只改回 48 位，正常 ⇒ 是 39 位本身，不是 0070。物理内存顶在 0x87fffffff，39 位线性映射（256 GiB）按理装得下 —— **原因未知**。
+⬜ 下一步要有人看屏幕：加 `earlycon=efifb keep_bootcon` 再引一次。在那之前 #12（抖音 / 英雄联盟）的 48 位假设仍未验证。
