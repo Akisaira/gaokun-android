@@ -130,6 +130,11 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 
 ### 🐞 GitHub issues #11–#16（2026-10-04 逐条核查；报告者均在 v0.7.0-alpha `20260928121116`/`…143105` 上）
 
+> **2026-10-04 完整镜像（候选）**：构建戳 **`1791053208`**、incremental `20261003184648`（`m bacon superimage` 17 分钟，`release.sh --dry-run --no-build` 全过）。
+> 含：hostapd / usb.host / SAE overlay（#11 #13）、内核 `6d3f7c67…`（0070 + 看门狗 120 / panic 10）+ dtb `8ed1cd04…`（0071）、音频 0069（#130）。
+> 产物核对：boot.img 的 kernel / dtb 与上机验过的逐字节相同；vendor 里 hostapd + VINTF + rc、usb.host.xml、overlay 的 `config_wifiSaeUpgradeEnabled=false`、HAL `9fcd9eb5…` 都在。
+> 载荷在本机 `out/issues-1791053208/`。⬜ **未装机**（要用户同意 + 有人在场）；装上后验：`cmd wifi start-softap`（#11）、`dumpsys usb`（#13）、待机循环（#16）、App 冒烟、音游。
+
 | issue | 结论 | 处理 |
 |---|---|---|
 | [#11](https://github.com/vahiru/gaokun-android/issues/11) 热点开不了 | ✅ 属实：从没打包 hostapd。模块 `external/wpa_supplicant_8/hostapd/Android.bp:685-709` 自带 rc 与 VINTF（`required: android.hardware.wifi.hostapd.xml`），SELinux 域 system/sepolicy 自带 | ✅ `device.mk` 加 `hostapd hostapd_cli`，**已写未编**。⬜ 镜像上 `cmd wifi start-softap` 实测；没设 `WIFI_HAL_INTERFACE_COMBINATIONS` ⇒ 开热点会断 STA（`wifi_feature_flags.cpp:97-104`）。附带：混合 WPA2/WPA3 AP 上 SAE 升级被拒 ⇒ `Gaokun3WifiOverlay` 加 `config_wifiSaeUpgradeEnabled=false`（默认 true，`config.xml:808`），已写未编 |
