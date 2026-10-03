@@ -522,6 +522,10 @@ def main():
     step(" [16] audio APEX 链接器命名空间放行 /vendor/${LIB}/soundfx（Histen 效果库）: ", apply_patch_file(
         tree, "hardware/interfaces",
         "0068-audio-aidl-apex-permit-vendor-soundfx.patch"))
+    # 上下文依赖 [14]/[15]（同一个 StreamAlsa / StreamPrimary），所以排在它们后面。#130：播放由硬件定拍、不再整块丢音乐
+    step(" [17] audio AIDL HAL 播放由硬件定拍、位置按真实播出上报（卡顿不再整块丢音乐）: ", apply_patch_file(
+        tree, "hardware/interfaces",
+        "0069-audio-aidl-primary-playback-paced-by-alsa.patch"))
     if failed:
         print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))
         sys.exit(1)

@@ -140,7 +140,7 @@ say "2. 换上带补丁的 HAL 与仓库里的策略 XML（bind-mount，不改�
 ORIG_HAL=$(dev_sha $HAL_ON_DEV); ORIG_XML=$(dev_sha $XML_ON_DEV)
 echo "   设备原版：HAL ${ORIG_HAL} · 策略 XML ${ORIG_XML}"
 adb -s "$SER" push "$XML" $D/primary_audio_policy_configuration.xml >/dev/null || die "推 XML 失败"
-S "chmod 644 $D/primary_audio_policy_configuration.xml; chcon --reference=$XML_ON_DEV $D/primary_audio_policy_configuration.xml 2>/dev/null; true"
+S "chmod 644 $D/primary_audio_policy_configuration.xml; chcon \$(ls -Z $XML_ON_DEV | cut -d' ' -f1) $D/primary_audio_policy_configuration.xml"
 trap undo EXIT
 TAGS=()
 n=0
@@ -150,7 +150,7 @@ for H in "$HAL" ${HAL_B:+"$HAL_B"}; do
     [ "$NEW_HAL" != "$ORIG_HAL" ] || die "设备上跑的已经是这份 HAL（上次没撤干净？先重启设备或手动 umount）"
     [ $n -gt 1 ] && undo   # 先撤掉上一份
     adb -s "$SER" push "$H" $D/hal.bin >/dev/null || die "推 HAL 失败"
-    S "chmod 755 $D/hal.bin; chcon --reference=$HAL_ON_DEV $D/hal.bin 2>/dev/null; true"
+    S "chmod 755 $D/hal.bin; chcon \$(ls -Z $HAL_ON_DEV | cut -d' ' -f1) $D/hal.bin"
     S "nsenter -t 1 -m -- mount --bind $D/hal.bin $HAL_ON_DEV && nsenter -t 1 -m -- mount --bind $D/primary_audio_policy_configuration.xml $XML_ON_DEV" || die "bind-mount 失败"
     restart_audio
     [ "$(hal_exe_sha)" = "$NEW_HAL" ] || die "换上之后跑的 HAL 不是 ${H}（$(hal_exe_sha)）"

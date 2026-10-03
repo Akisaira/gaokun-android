@@ -10585,3 +10585,49 @@ usbrole "插着电脑息屏"：role_host 原地等、角色保持 device、wakel
 * ⬜ **enforcing → enforcing 的 OTA**（postinstall 跑在旧的 enforcing 策略下，§3 的设计约束）。
 * ⬜ 恢复出厂 / 全新安装（`/data/vendor/camera` 由 rc 建、首次开机的 restorecon）。
 * ⬜ 默认改 enforcing（去掉 `BoardConfig.mk` 的 `androidboot.selinux=permissive`）—— 要用户定跟哪一版发；那之前把这一版的 dontaudit 编进去。
+
+## #130 ★★★ 音游"偏移大、不稳定"：播放方向按墙钟定拍，客户端一晚到 HAL 就整块扔音乐 —— 修复 0069（播放直接阻塞写 ALSA）静默 A/B 通过（2026-09-30 → 10-04）
+
+用户反馈："玩音乐游戏时音频偏移量过大、不稳定"。设备上装着 Arcaea（`moe.low.arc`）、Phigros。设备 `_b`（`1790702971`），permissive。
+全程**不出声**（探针播全零，宿舍环境）、**不重启**（bind-mount 换 HAL）。补丁 `patches/0069`，tree-fixes [17]；工具 `gaokun3-play-probe`（`device/huawei/gaokun3/audio/tools/play-probe.c`）+ `scripts/audio/play-latency-verify.sh`。
+
+### 1. 播放链路（源码，`hardware/interfaces/audio/aidl/default`，带 0051/0052/0063）
+* `StreamPrimary::transfer` 播放方向：数据进**非阻塞** MonoPipe（容量 4096），然后按墙钟 `usleep` 定拍；落后于墙钟就置 `mSkipNextTransfer`，**下一块整个扔掉**、照常计数（给模拟器写的，b/302587331；只打一行 DEBUG `skipping transfer`）。另有 `outputIoThread` 从管道搬进 ALSA。
+* `StreamPrimary::refinePosition` 空实现 ⇒ 上报的位置 = 客户端交进来的帧数、时刻 = 回复时刻（`Stream.cpp` `populateReply`）。框架照单全收：`StreamOutHalAidl::getPresentationPosition` → `getObservablePosition`（libaudiohal），`PlaybackThread::collectTimestamps_l` → `Track::updateTrackFrameInfo`（`mFrameMap.findX`）。
+* ALSA 实测 `period_size 1440 × 4 = buffer 5760` 帧（120 ms，kernel 把请求的 1024 向上 refine；0008 的注释同一件事），而上报的 `latencyMs` 用 `proxy_get_latency` 按请求值算成 85 ms。播放时 ALSA 积压 25–117 ms（中位 71 ms），都不在时间戳里。
+* 现成的旁证：用户之前玩游戏那段，`dumpsys media.audio_flinger` 的 `Timestamp stats: disc=36 … jitterMs min=-84.4` —— 85 ms 的负跳 = 扔了一块。
+
+### 2. 探针与读法
+`gaokun3-play-probe`：AAudio 共享模式播全零；1 ms 读一次 `/proc/asound/card0/pcm1p/sub0/status`（hw_ptr 何时前进、appl_ptr），5 ms 调一次 `AAudioStream_getTimestamp(CLOCK_MONOTONIC)`。
+U = 时间戳说已播出的帧 − 同一时刻的 hw_ptr（插值），ms。
+* ⚠️ **hw_ptr 不是出声时刻**：开播 96 ms 时 hw_ptr 已经到 2879（= start_threshold），audioreach 的 DSP 会预读 ⇒ hw_ptr 领先 DAC，DSP / codec 那一段测不出。只能看 U 的**变化**，不能把绝对值当延迟。
+* ⚠️ **帧号对齐的假象（§3 的更正）**：U 假设"应用第 0 帧 = 硬件第 0 帧"。AudioFlinger 有时在轨道填满前先往 HAL 写一块别的，应用第 0 帧就落在硬件第 4096 帧；AF 的帧映射（`mFrameMap`）把这一块换算掉了，时间戳是对的，错的是探针的假设。⇒ 开流之间 U 差整块（85.3 ms）不能当证据，要按整块折叠后再比。
+
+### 3. ⚠️ 一个被推翻的中间结论
+09-30 我先看到原版 20 次开流 U 呈双峰（15 次 −55 ms、5 次 +29 ms，差 84.5 ms ≈ 一块），一度判断为"每首歌时间戳随机差 85 ms"，并据此写了第一版 0069（只改上报，不改定拍）。
+10-04 第一版上机：U 变成 0 / −85.3 两种 —— 同样差一块；对照 AF 源码（`collectTimestamps_l` 在每轮循环开头，映射的那一对是一致的快照）才认出这是 §2 的对齐假象。
+**把两种对齐代回去，原版其实一直是同一个值**（时间戳比 hw_ptr 超前约 +30 ms），补丁版一直是 0。双峰不是用户问题的原因。
+（用 dumpsys 读"线程写出增量 − 轨道 Server"去测对齐量 c，也只得到 0 / −4096 两种：两个计数在一次 dump 里的采样时刻本身就可能差一块，这条路分不清。）
+
+### 4. 真正的原因：卡顿后整块扔音乐（每次都复现）
+播放中途让 audioserver 停 0.2 s（模拟游戏把 CPU 吃满时 AudioFlinger 晚到）：
+| HAL | 卡顿前 → 后 U | HAL 日志 |
+|---|---|---|
+| 原版（三轮） | **+255 / +256.6 ms，永久** | `skipping transfer` 3 次 / 8 次（第三轮 logcat 的 main 缓冲没采到，0 条 HAL 日志，不作数） |
+| 第一版 0069（只改上报） | 仍然 +170.7 / +256 ms | `skipping` 8 次 —— 扔帧照扔，上报改对了也没用 |
+| **第二版 0069（播放直接写 ALSA）** | **+0.0 ms**（每秒 U 从头到尾一个值） | skipping 0、ALSA 写错误 0、HAL 崩溃 0 |
+机理：墙钟定拍下客户端晚到 ⇒ 下一块被扔、直到追上墙钟，0.2 s 的停顿换来 2–3 块（170–256 ms）音乐**消失**。
+音游按自己交出去的帧推进谱面，不知道下游扔了帧 ⇒ **每卡一次，听到的音乐相对谱面永久提前一截**（多卡几次就累加）—— 这就是"偏移不稳定"；
+真实设备的 HAL 在这种时候只会欠载（一段静音）、之后从原处接着播，谱面跟着时间戳走就不会错位。
+
+### 5. 修复（`patches/0069-audio-aidl-primary-playback-paced-by-alsa.patch`，tree-fixes [17]）
+* `StreamAlsa` 加虚函数 `writesPlaybackDirectly()`（默认 false；只有 `StreamPrimary` 返回 true —— USB 等其它子类不变）：播放不建管道和 `outputIoThread`，`transfer` 直接 `proxy_write_with_retries`，ALSA 满了就阻塞 ⇒ 由硬件时钟定拍，墙钟时刻表与 `mSkipNextTransfer` 只留给采集的异步分支。
+* `StreamPrimary::refinePosition` 播放方向改调 `StreamAlsa::refinePlaybackPosition`：位置 = 开流时的客户端帧号 + 写失败丢的帧 + `proxy_get_presentation_position`（写进 ALSA 的 − ALSA 里没播的），时刻 = ALSA htimestamp；不倒退、不超过客户端帧数；ALSA 没在跑时沿用上一次。不用 `StreamAlsa::refinePosition`（它把 proxy 计数改写成客户端计数，等于没改）。
+* `latencyMs` 按 refine 之后的 ALSA 缓冲（`pcm_get_buffer_size`）算：120 ms，不再是 85。
+* 静默 A/B（10-04，各 12 次开流，`out/playprobe/20261004-002837/`）：补丁版按整块折叠后的开流极差 **0.0 ms**、卡顿后 U 变化 **+0.0 ms**；原版 +256.6 ms。原版组前几次开流与另一个会话的 App 冷启动冒烟（00:26–00:32）重叠，开始时扬声器 RUNNING、出了一个 U = −76043 的离群值，那几条不计。
+
+### 6. 还没做 / 没测到的
+* ⬜ **出声**的验证：真实游戏里听感（Arcaea / Phigros 校准后玩几首、中途切后台制造卡顿），以及 DSP / codec 段的绝对延迟（要声学回环：扬声器 → 麦克风；出声，等用户在场）。
+* ⬜ 整包镜像里回归：普通播放 / 蓝牙 / 耳机切换 / 暂停-继续 / 拖进度（播放现在是阻塞写，`pause()` 仍是空实现 —— 暂停期间 ALSA 欠载、继续时 tinyalsa 重新 prepare，A/B 里没覆盖）。
+* ⬜ "偏移过大"的另一半是**基础延迟本身大**：HAL 一块 4096 帧（85 ms）+ ALSA 120 ms + DSP。现在时间戳是真的，游戏可以自己补偿；要降下来得缩 HAL 块与 period（Stage 4 M4 那次 10 ms MMAP 撑不住，要找中间值、在游戏负载下量 XRUN）。
+* ⓘ 运维教训：09-30 等构建结果的后台任务随会话中断一起没了，构建机（D16）**空转到 10-03 才发现**，约三天。长构建要么等在前台、要么构建脚本自己在结束时停机。
