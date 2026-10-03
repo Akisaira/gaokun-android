@@ -182,6 +182,9 @@ KPATCHES=(
     # 0067：【本地】drain 之后不 streamoff 也能接着解：EOS 时不自动 FLUSH_OUTPUT（与 venus 同），START 时重置 LAST 状态。
     #    上游 ⇒ 播到结尾后的第一次 seek 没有输出、每隔一次 drain 收不到 EOS（#128 §15）。0644 qcom_iris.eos_flush，默认 N。
     0067-media-iris-no-output-flush-on-eos.patch
+    # 0070：【本地】MHI 给 ath11k 保留固件 DMA 表跨断电复用 —— issue #16 待机睡死的根治
+    #   （恢复时不再赌 order-7 GFP_DMA 分配）。⬜ 实机 s2idle 循环待验（docs/TODO.md 的 issue 一节）。
+    0070-bus-mhi-keep-firmware-images-across-power-cycles-for-ath11k.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
