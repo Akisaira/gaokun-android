@@ -54,6 +54,17 @@ PRODUCT_PROPERTY_OVERRIDES += \
 PRODUCT_PROPERTY_OVERRIDES += \
     sys.usb.controller=a600000.usb
 
+# ★ USB 系统服务（issue #13）：SystemServer 只在声明了 usb.host 或 usb.accessory 特性时才起 UsbService
+#   （frameworks/base/services/java/com/android/server/SystemServer.java:2536-2542），本机两个都没声明 ⇒
+#   `usb` 服务不存在，getSystemService(USB_SERVICE) 返回 null，不判空的 App（天翼云电脑）启动即崩。
+#   只加 host：UsbDeviceManager 只在 /sys/class/android_usb 存在时才建（UsbService.java:218，本机是
+#   configfs，没有这个目录）⇒ 不碰 adb 的 gadget；没有 USB HAL 时 UsbPortManager 打一条异常就返回 null
+#   （hal/port/UsbPortHalInstance.java:31-43）。
+#   ✅ 2026-10-04 上机（bind-mount 这个文件 + 重启 zygote，_b 1790702971）：`usb` 服务起来、dumpsys usb 列出键盘、
+#   查 HAL 耗时 3 ms、USB adb 不断、无新 denial。不加 accessory（要 gadget 那一侧，本机没有 UsbDeviceManager）。
+PRODUCT_COPY_FILES += \
+    frameworks/native/data/etc/android.hardware.usb.host.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.usb.host.xml
+
 # ------------------------------------------------- 安全 HAL（软件实现）
 # keystore2 是 critical 服务且被 init.rc 的
 #   exec 4 (/system/bin/vdc keymaster earlyBootEnded)
@@ -273,6 +284,19 @@ PRODUCT_PACKAGES += \
     com.android.hardware.wifi \
     wpa_supplicant \
     wpa_cli
+
+# ★ 热点（issue #11）：从没打包过 hostapd ⇒ SoftApManager 连不上 IHostapd，热点开关一开就弹回。
+#   模块已核：external/wpa_supplicant_8/hostapd/Android.bp:685-709 —— proprietary、装到 /vendor/bin/hw/，
+#   自带 init_rc（hostapd.android.rc：AIDL 服务 IHostapd/default、disabled+oneshot，由框架按需拉起），
+#   VINTF 片段走 `required: android.hardware.wifi.hostapd.xml`（vintf_fragments 那行在上游是注释掉的）。
+#   BOARD_HOSTAPD_DRIVER := NL80211 早在 BoardConfig.mk:266；SELinux 域 hal_wifi_hostapd_default
+#   由 system/sepolicy/vendor/hal_wifi_hostapd_default.te + vendor/file_contexts:139 自带。
+#   Wi-Fi HAL 没设 WIFI_HAL_INTERFACE_COMBINATIONS ⇒ 默认组合里 AP 是单独一个芯片模式
+#   （hardware/interfaces/wifi/aidl/default/wifi_feature_flags.cpp:97-104）：开热点时 STA 会断开。
+#   ⬜ 未上机：AP 接口能不能经 libwifi-hal-emu 建出来要等下次镜像实测（ath11k 本身支持 AP，见 issue 里的 iw 输出）。
+PRODUCT_PACKAGES += \
+    hostapd \
+    hostapd_cli
 
 # ★ Wi-Fi 的 TCP 缓冲区上限调大（rro/Gaokun3WifiOverlay，#119）：国内到海外 CDN 的 RTT
 #   约 300 ms，AOSP 默认 2 MB 的接收上限把单连接卡在 ~3.5 MB/s；8 MB 实测 ~9.5 MB/s。

@@ -334,12 +334,25 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 # ⚠️ DPM_WATCHDOG_TIMEOUT 保持默认 120 秒 —— 发布内核里不要压低，
 #   否则某个合法的慢设备会被误判成挂死。调试时在测试内核里单独设成 10 秒
 #   （本机 ~13 秒就复位，120 秒永远轮不到它开火）。
+#
+# ★★ 2026-10-04（issue #16）：上面这句"保持默认"**没落地** —— 发布内核 #13 实测
+#   DPM_WATCHDOG_TIMEOUT=10、WARNING_TIMEOUT=10（`zcat /proc/config.gz`）：调试时设的 10 秒
+#   留在了构建树的 .config 里，olddefconfig 不会把它改回默认。用户的机器上 ath11k 恢复失败后
+#   10 秒就 panic（pstore 有整条链）。所以这里**显式写值、下面断言值**，不再依赖"默认"。
+#   WARNING 设 60：60 秒先打一次卡住回调的栈（不 panic），120 秒才 panic
+#   （kernel/power/Kconfig:271-283、drivers/base/power/main.c:595-619）。
+#   调试时要短超时就单独编测试内核，别动这里。
+# ★ PANIC_TIMEOUT=10：默认 0 = panic 后永远停住（lib/Kconfig.debug:1109-1117），用户看到的就是"睡死"、
+#   只能长按电源键。10 秒足够 efi_pstore 落盘，然后自己重启回 ESP default。cmdline 的 panic= 仍可覆盖。
 ./scripts/config --file "$OUT/.config" \
     --enable EXPERT \
     --enable PM_DEBUG \
     --enable PM_SLEEP_DEBUG \
     --enable PM_ADVANCED_DEBUG \
-    --enable DPM_WATCHDOG
+    --enable DPM_WATCHDOG \
+    --set-val DPM_WATCHDOG_TIMEOUT 120 \
+    --set-val DPM_WATCHDOG_WARNING_TIMEOUT 60 \
+    --set-val PANIC_TIMEOUT 10
 
 # ─── olddefconfig + 断言（止损"=m 坑"）───
 # 这个坑已经踩了 13 次：`scripts/config --enable X` 写进去了，olddefconfig
@@ -420,6 +433,12 @@ MUST_N="RT_GROUP_SCHED VIDEO_QCOM_VENUS"
 for s in $MUST_N; do
     if grep -qE "^CONFIG_$s=(y|m)" "$OUT/.config"; then
         echo "  ✗ CONFIG_$s 开着 —— 必须 =n（见脚本内注释）"; bad=1
+    fi
+done
+# 取值断言：这几个曾经"以为是默认、其实是残留的调试值"（issue #16）
+for kv in DPM_WATCHDOG_TIMEOUT=120 DPM_WATCHDOG_WARNING_TIMEOUT=60 PANIC_TIMEOUT=10; do
+    if ! grep -qx "CONFIG_$kv" "$OUT/.config"; then
+        echo "  ✗ 期望 CONFIG_$kv，实际 '$(grep -E "^CONFIG_${kv%%=*}=" "$OUT/.config")'"; bad=1
     fi
 done
 # apparmor **编进内核无害**，致命的是它出现在 CONFIG_LSM 里（会挤掉 selinux）

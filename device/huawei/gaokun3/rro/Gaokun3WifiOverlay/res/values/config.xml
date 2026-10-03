@@ -12,4 +12,14 @@
       内存代价：只在确有长肥管道时 autotuning 才会涨到上限，局域网 / 低 RTT 连接不受影响。
     -->
     <string name="config_wifi_tcp_buffers" translatable="false">524288,1048576,8388608,262144,524288,4194304</string>
+
+    <!--
+      关掉 WPA2 → WPA3 自动升级（issue #11 附带报告）：WPA2/WPA3 混合模式的路由器上，框架默认把保存的
+      WPA2 网络升级成 SAE 去连，ath11k 在 SAE 关联时被 AP 拒（Reason 9 = STA_REQ_ASSOC_WITHOUT_AUTH），
+      纯 WPA2 正常；报告者用 force-overlay-config-value 关掉它后能连上。默认值 true 出自
+      packages/modules/Wifi/service/ServiceWifiResources/res/values/config.xml:808，读取在 WifiGlobals.java:352。
+      只影响"混合模式 AP 上的 WPA2 网络要不要改走 SAE"；纯 WPA3 网络照旧走 SAE。
+      与 issue #2（纯 WPA3 关联后被踢，TODO A6b）不是一回事，那条仍未复现。
+    -->
+    <bool name="config_wifiSaeUpgradeEnabled" translatable="false">false</bool>
 </resources>

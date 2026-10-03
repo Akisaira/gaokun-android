@@ -128,6 +128,17 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 都过 ⇒ 这一版就是 v0.6.3：`release.sh --no-build`（脚本现在会断言 allow_suspend 默认为 1）。发版要用户点头。
 ⚠️ **变体必须 `lineage_gaokun3-bp4a-userdebug`**（#117 §15）。
 
+### 🐞 GitHub issues #11–#16（2026-10-04 逐条核查；报告者均在 v0.7.0-alpha `20260928121116`/`…143105` 上）
+
+| issue | 结论 | 处理 |
+|---|---|---|
+| [#11](https://github.com/vahiru/gaokun-android/issues/11) 热点开不了 | ✅ 属实：从没打包 hostapd。模块 `external/wpa_supplicant_8/hostapd/Android.bp:685-709` 自带 rc 与 VINTF（`required: android.hardware.wifi.hostapd.xml`），SELinux 域 system/sepolicy 自带 | ✅ `device.mk` 加 `hostapd hostapd_cli`，**已写未编**。⬜ 镜像上 `cmd wifi start-softap` 实测；没设 `WIFI_HAL_INTERFACE_COMBINATIONS` ⇒ 开热点会断 STA（`wifi_feature_flags.cpp:97-104`）。附带：混合 WPA2/WPA3 AP 上 SAE 升级被拒 ⇒ `Gaokun3WifiOverlay` 加 `config_wifiSaeUpgradeEnabled=false`（默认 true，`config.xml:808`），已写未编 |
+| [#13](https://github.com/vahiru/gaokun-android/issues/13) 天翼云电脑必崩 | ✅ 属实，但根因比报告窄：services.jar 里有 UsbService，只是 SystemServer 要 usb.host 或 usb.accessory 特性才启动它（`SystemServer.java:2536-2542`）；不需要 USB HAL | ✅ `device.mk` 拷 `android.hardware.usb.host.xml`。**2026-10-04 上机通过**（bind-mount + 重启 zygote）：`usb` 服务在、dumpsys 列出键盘、USB adb 不断（UsbDeviceManager 要 `/sys/class/android_usb`，本机没有，`UsbService.java:218`）、无新 denial |
+| [#16](https://github.com/vahiru/gaokun-android/issues/16) 待机睡死 | ✅ 属实，三环：① ath11k 在本机必走断电挂起（WoW 只给 `ath11k_pm_quirk_table` 里的联想机型，`core.c:931-1045`），恢复时 MHI 重新 `dma_alloc_coherent` 512 KB 的 BHIe 段（`mhi.c:382-383`、`boot.c:385`），coherent mask 32 位 ⇒ ZONE_DMA；挂起期间 gfp 去掉了 `__GFP_IO` ⇒ 不做 compaction，碎片多时 order-7 失败；② 正常 resume 阶段干等 `restart_completed` 20 秒（`core.c:1311`），而**发布内核的 DPM_WATCHDOG_TIMEOUT 是 10**（调试值残留，脚本注释写着"保持 120"却从没落地）⇒ panic；③ `PANIC_TIMEOUT=0` ⇒ 停住不重启 | ✅ `kernel-config-android.sh` 显式写 `DPM_WATCHDOG_TIMEOUT=120`/`WARNING=60`/`PANIC_TIMEOUT=10` 并断言取值（下次编内核生效；效果预期：Wi-Fi 坏但机器醒来，最坏也自己重启）。⬜ 根治：MHI 挂起时保留 fbc/rddm 表、恢复时只重拷固件（上游到 v7.3-rc5 都没修；表本来就常驻，零额外内存）—— 要写补丁 + 实机多次循环。⬜ 顺带：`ath11k_mhi_start` 失败不 unprepare，每次漏约 4 MB DMA（`mhi.c:446-450`）。⬜ 请报告者给 `dmesg | grep cma` 与 `/sys/kernel/mm/cma/*/alloc_pages_fail`（区分 CMA 被占满 / 迁移失败） |
+| [#12](https://github.com/vahiru/gaokun-android/issues/12) 抖音播放必崩 | ❌ 报告的根因不成立：内核只在 CPU 真有 SVE 时才上报 HWCAP_SVE，`/proc/cpuinfo` 里没有 sve ⇒ 应用拿不到。本机是 Cortex-X1（`0xd4c`）+ A78C（`0xd4b`）。崩在抖音自带的 ByteVC2 软解，#128 开头那份日志已查过（读参考帧越界形态） | ⬜ **头号嫌疑改为 48 位用户地址空间**：Android GKI 是 39 位（`gki_defconfig:64`），本机 48 位，崩溃地址 `0xfe8…` 在手机上不可能出现；英雄联盟手游"点开秒退"（#15 评论）可能同源。物理内存顶在 `0x87fffffff`，39 位的线性映射（256 GB）装得下。⇒ 要一个 `ARM64_VA_BITS_39` 的测试内核做 A/B（**装内核要用户同意**）；先向报告者要 tombstone（`/data/tombstones/`）|
+| [#14](https://github.com/vahiru/gaokun-android/issues/14) 实测报告 | B22 ✅、B16 ✅、A1 未复现、B5b / A6 仍在 —— 与本表一致 | B20 新信息已核：开随机化不断网（**2026-10-04 本机 USB adb 下复测三次**，Wi-Fi 都连上）；"每次连接都换"**不是 seed 坏了**，而是 crDroid 把每个网络默认设成 `RANDOMIZATION_ALWAYS = 100`（`WifiConfiguration.java:1952,1964`，提交 `06bc263807`）—— 设计如此。持久模式要 keystore 的 `MacRandSecret` 密钥（`MacAddressUtil.java:39`），⬜ 未测 |
+| [#15](https://github.com/vahiru/gaokun-android/issues/15) 实测报告 | 运行期 `setenforce 1` 的结论与 #126/#129 一致；`content_capture_service` 对 isolated_app 的拒绝是上游 neverallow，不修；`suspend_stats` 里 `alarmtimer -EBUSY` 是正常拒绝；充电是涓流阶段 + 电池健康 74% | 无代码改动。英雄联盟手游秒退并入 #12 的 39 位假设，先要 logcat |
+
 ### 🔴 第一梯队：用户明确点名 / 用户能直接感觉到
 
 | # | 事情 | 现在卡在哪 | 下一步（具体） |
