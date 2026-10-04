@@ -4,10 +4,17 @@
 在 scripts/gk3boot/gk3boot-build.Dockerfile 的容器里跑（要 mkfs.vfat / mtools / virt-fw-vars）。
 
   fixture.py mkdisk   --out DIR [--bootimg 完整 boot.img] [--variant normal|broken|espfull]
+                      [--gk3boot-options '...'] [--boot-a IMG] [--boot-b IMG] [--misc FILE] [--corrupt-a]
   fixture.py snapshot DISK MANIFEST OUT.json
-  fixture.py diff     BEFORE.json AFTER.json      只允许 ESP 上多出 \\EFI\\gk3boot\\probe\\log-*.txt 与条目计数改名
+  fixture.py diff     BEFORE.json AFTER.json      只允许 ESP 上多出 \\EFI\\gk3boot\\{probe\\log-*,log\\boot-*}.txt 与条目计数改名
   fixture.py vars     IN.fd OUT.fd --oneshot NAME 往 AAVMF 变量库里写 LoaderEntryOneShot（与 boot-oneshot.sh 同一格式）
   fixture.py esp-get  DISK MANIFEST PATH OUT      从盘上的 ESP 取一个文件
+
+gk3boot（S5）的 QEMU 测试另用这几样（qemu/run-boot-tests.sh）：
+  fixture.py initramfs  --init ELF --marker STR --out FILE      最小 initramfs（newc cpio + gzip，同 Android ramdisk 的压缩）
+  fixture.py fdt-mark   IN.dtb OUT.dtb NAME VALUE                给根节点加一个字符串属性（证明内核用的是我们装的 dtb）
+  fixture.py mkbootimg  --kernel K --ramdisk R --dtb D --cmdline S --out F   header v2（与本机 BoardConfig 同版本、page 2048）
+  fixture.py misc       --variant b-active --out FILE           从实机 misc 向量改出一份（_b 15/6 未成功，_a 14/1 已成功）
 
 盘的样子照实机抄（tools/gk3boot/test/vectors/gpt-primary-20261005.bin）：分区号、名字、类型 GUID、
 PARTUUID、磁盘 GUID、boot_a 的属性位 bit 54 都与实机一致；misc 也照实机坐在 LBA 34–2047，
@@ -103,13 +110,12 @@ def gpt_header(my, alt, first_usable, last_usable, entries_lba, disk_guid, entri
 
 # ---------------------------------------------------------------- 夹具里的文件
 
-def synth_bootimg(tag):
-    """合成一份 header v2 boot.img（page 2048），id 按 mkbootimg 算。kernel 以 MZ…zimg 开头（zboot 的样子）。"""
+def mkbootimg(kernel, ramdisk, dtb, cmdline, name=b""):
+    """header v2 boot.img（page 2048），id 按 mkbootimg 算。cmdline 超过 511 字节的部分按 mkbootimg 的规矩
+    原样切进 extra_cmdline（头 @608[1024]），中间不加空格 —— 与 gk3_bootimg_cmdline 的拼法对应。"""
     page = 2048
-    kernel = b"MZ\0\0zimg" + hashlib.sha256(tag.encode()).digest() * 100
-    ramdisk = b"\x1f\x8b" + bytes(range(256)) * 20
-    dtb = bytes.fromhex("d00dfeed") + b"\0" * 60
-    cmdline = b"console=tty0 androidboot.hardware=gaokun3 gk3fixture=" + tag.encode()
+    if len(cmdline) > 511 + 1023:
+        die("cmdline 太长（%d）" % len(cmdline))
     s = hashlib.sha1()
     for blob in (kernel, ramdisk, b"", b"", dtb):
         s.update(blob)
@@ -117,8 +123,9 @@ def synth_bootimg(tag):
     h = bytearray(page)
     h[0:8] = b"ANDROID!"
     struct.pack_into("<IIIIIIIII", h, 8, len(kernel), 0x8000, len(ramdisk), 0x1000000, 0, 0, 0x100, page, 2)
-    h[48:48 + len(tag)] = tag.encode()[:16]
-    h[64:64 + len(cmdline)] = cmdline
+    h[48:48 + min(len(name), 16)] = name[:16]
+    h[64:64 + min(len(cmdline), 511)] = cmdline[:511]
+    h[608:608 + len(cmdline[511:])] = cmdline[511:]
     h[576:596] = s.digest()
     struct.pack_into("<IQI", h, 1632, 0, 0, 1660)
     struct.pack_into("<IQ", h, 1648, len(dtb), 0x2000000)
@@ -126,6 +133,15 @@ def synth_bootimg(tag):
     def pad(b):
         return b + b"\0" * (-len(b) % page)
     return bytes(h) + pad(kernel) + pad(ramdisk) + pad(dtb), s.hexdigest()
+
+
+def synth_bootimg(tag):
+    """合成一份 header v2 boot.img，kernel 以 MZ…zimg 开头（zboot 的样子，但不是真 PE —— LoadImage 会拒）。"""
+    kernel = b"MZ\0\0zimg" + hashlib.sha256(tag.encode()).digest() * 100
+    ramdisk = b"\x1f\x8b" + bytes(range(256)) * 20
+    dtb = bytes.fromhex("d00dfeed") + b"\0" * 60
+    cmdline = b"console=tty0 androidboot.hardware=gaokun3 gk3fixture=" + tag.encode()
+    return mkbootimg(kernel, ramdisk, dtb, cmdline, tag.encode())
 
 
 def bootimg_id(img):
@@ -144,8 +160,12 @@ def minimal_fdt():
     return hdr + rsv + struct_blk
 
 
-def esp_tree(stage, variant):
-    """在 stage 目录下摆出 ESP 的内容。返回条目文件名等信息。"""
+GK3BOOT_ENTRY = "gk3boot-e4.conf"
+
+
+def esp_tree(stage, variant, gk3boot_options=None):
+    """在 stage 目录下摆出 ESP 的内容。返回条目文件名等信息。
+    gk3boot_options 不为 None 时摆 gk3boot（S5）的 E4 条目，否则摆探针（S4）的条目。"""
     def put(rel, data):
         p = os.path.join(stage, rel)
         os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -174,6 +194,15 @@ def esp_tree(stage, variant):
             "devicetree /%s/android/slot_%s/gaokun3.dtb\n"
             "initrd     /%s/android/slot_%s/ramdisk.img\n"
             % (slot, slot, slot, base, slot, MID, slot, MID, slot, MID, slot)).encode())
+    if gk3boot_options is not None:
+        # 与 README §10 的上机步骤同一份条目：文件名不匹配 *-android-*.conf、不带计数、title 只用 ASCII（§4.13）
+        put("EFI/gk3boot/e4/gk3boot.efi", open(os.path.join(EFI_BUILD, "gk3boot.efi"), "rb").read())
+        put("loader/entries/" + GK3BOOT_ENTRY, (
+            "title      gk3boot E4 (observe)\n"
+            "sort-key   zzgk3boot\n"
+            "efi        /EFI/gk3boot/e4/gk3boot.efi\n"
+            "options    %s\n" % gk3boot_options).encode())
+        return dict(oneshot=GK3BOOT_ENTRY, default_entry="%s-android-a.conf" % MID, gk3boot_options=gk3boot_options)
     probe = os.path.join(EFI_BUILD, "gk3probe.efi")
     if not os.path.exists(probe):
         return dict(oneshot=None, default_entry="%s-android-a.conf" % MID)
@@ -261,17 +290,27 @@ def cmd_mkdisk(a):
         def at(name):
             return next(p for p in parts if p["name"] == name)
 
-        # misc：实机 64 KiB
+        # misc：实机 64 KiB（或 --misc 给的改过的一份）
         f.seek(at("misc")["first"] * SECTOR)
-        f.write(open(MISC_VEC, "rb").read())
+        f.write(open(a.misc or MISC_VEC, "rb").read())
         # boot_a：完整的真 boot.img（有就用），否则合成；boot_b：总是合成（两份内容不同，各验各的）
-        if a.bootimg:
+        # --boot-a / --boot-b：gk3boot 测试用的现成镜像（Debian 内核 + 测试 initramfs 重新打的包）
+        if a.boot_a:
+            ba = open(a.boot_a, "rb").read()
+            src_a = os.path.basename(a.boot_a) + " (%d bytes)" % len(ba)
+        elif a.bootimg:
             ba = open(a.bootimg, "rb").read()
             src_a = os.path.basename(a.bootimg) + " (real, %d bytes)" % len(ba)
         else:
             ba, _ = synth_bootimg("fixture-a")
             src_a = "synthetic"
-        bb, _ = synth_bootimg("fixture-b")
+        if a.corrupt_a:
+            # 坏一个 kernel 字节、头里的 id 不动 → SHA1(id) 对不上（§4.3.3 的 boot_corrupt）
+            ba = bytearray(ba)
+            ba[2048 + 4096] ^= 0xff
+            ba = bytes(ba)
+            src_a += " [kernel byte 4096 flipped]"
+        bb = open(a.boot_b, "rb").read() if a.boot_b else synth_bootimg("fixture-b")[0]
         for name, img in (("boot_a", ba), ("boot_b", bb)):
             p = at(name)
             if len(img) > (p["last"] - p["first"] + 1) * SECTOR:
@@ -286,7 +325,7 @@ def cmd_mkdisk(a):
 
         # ESP
         stage = tempfile.mkdtemp()
-        info = esp_tree(stage, a.variant)
+        info = esp_tree(stage, a.variant, a.gk3boot_options)
         esp = at("esp")
         fat = os.path.join(a.out, "esp.tmp")
         make_fat(stage, esp["last"] - esp["first"] + 1, fat, fill=a.variant == "espfull")
@@ -320,6 +359,12 @@ def esp_extract(disk, m, outdir):
                 break
             g.write(b)
             left -= len(b)
+    # 先只读查一遍 FAT：固件 / 被测程序把 FAT 写坏了（例如目录项指回根目录、成环）时，下面的 mcopy -s
+    # 会无限递归、把容器的盘写满 —— 2026-10-05 gk3boot espfull 场景真遇到过（gk3efi.c gk3_log_open_seq 的注释）
+    r = subprocess.run(["fsck.fat", "-n", fat], capture_output=True, text=True)
+    if r.returncode:
+        os.unlink(fat)
+        die("ESP 的 FAT 不一致（fsck.fat -n → %d）：\n%s" % (r.returncode, (r.stdout + r.stderr)[-1500:]))
     tree = os.path.join(outdir, "esp")
     os.makedirs(tree, exist_ok=True)
     run(["mcopy", "-s", "-n", "-i", fat, "::/*", tree])
@@ -366,10 +411,12 @@ def cmd_diff(a):
     added = sorted(set(c["esp"]) - set(b["esp"]))
     removed = sorted(set(b["esp"]) - set(c["esp"]))
     changed = sorted(k for k in set(b["esp"]) & set(c["esp"]) if b["esp"][k] != c["esp"][k])
-    logs = [x for x in added if x.startswith("EFI/gk3boot/probe/log-") and x.endswith(".txt")]
+    logs = [x for x in added if (x.startswith("EFI/gk3boot/probe/log-") or x.startswith("EFI/gk3boot/log/boot-"))
+            and x.endswith(".txt")]
     # systemd-boot 自己做的计数改名：loader/entries/gk3probe+N[-M].conf → 另一个计数（内容不变）
-    ren_from = [x for x in removed if x.startswith("loader/entries/gk3probe+")]
-    ren_to = [x for x in added if x.startswith("loader/entries/gk3probe+")]
+    counted = ("loader/entries/gk3probe+", "loader/entries/gk3boot-e4+")
+    ren_from = [x for x in removed if x.startswith(counted)]
+    ren_to = [x for x in added if x.startswith(counted)]
     for x in added:
         if x not in logs and x not in ren_to:
             bad.append("ESP 上多了 %s" % x)
@@ -387,7 +434,7 @@ def cmd_diff(a):
         print("  systemd-boot 计数改名：%s → %s" % (", ".join(ren_from), ", ".join(ren_to)))
     if bad:
         sys.exit(1)
-    print("✓ 盘上只多了探针自己的日志（misc / boot_a / boot_b / super / userdata / metadata / GPT 逐字节未变）")
+    print("✓ 盘上只多了自己的日志（misc / boot_a / boot_b / super / userdata / metadata / GPT 逐字节未变）")
 
 
 # ---------------------------------------------------------------- AAVMF 变量
@@ -416,6 +463,96 @@ def cmd_esp_get(a):
     shutil.rmtree(tmp)
 
 
+# ---------------------------------------------------------------- gk3boot（S5）测试用的产物
+
+def cpio_newc(entries):
+    """entries: (name, mode, data, rdev_major, rdev_minor)。newc 格式（"070701"，内核 init/initramfs.c）。"""
+    out = bytearray()
+    ino = 1
+    for name, mode, data, rmaj, rmin in entries + [("TRAILER!!!", 0, b"", 0, 0)]:
+        nm = name.encode() + b"\0"
+        hdr = "070701" + "".join("%08X" % v for v in (
+            ino, mode, 0, 0, 2 if mode & 0o040000 else 1, 0, len(data), 0, 0, rmaj, rmin, len(nm), 0))
+        out += hdr.encode() + nm
+        out += b"\0" * (-len(out) % 4)
+        out += data
+        out += b"\0" * (-len(out) % 4)
+        ino += 1
+    return bytes(out)
+
+
+def cmd_initramfs(a):
+    import gzip
+    init = open(a.init, "rb").read()
+    if init[:4] != b"\x7fELF":
+        die("%s 不是 ELF" % a.init)
+    ents = [
+        ("dev", 0o040755, b"", 0, 0), ("dev/console", 0o020600, b"", 5, 1),
+        ("proc", 0o040755, b"", 0, 0), ("sys", 0o040755, b"", 0, 0),
+        ("init", 0o100755, init, 0, 0), ("gk3-initrd-marker", 0o100644, a.marker.encode() + b"\n", 0, 0),
+    ]
+    data = gzip.compress(cpio_newc(ents), mtime=0)
+    open(a.out, "wb").write(data)
+    print("✓ initramfs %s（%d 字节，marker %s）" % (a.out, len(data), a.marker))
+
+
+def fdt_add_root_prop(dtb, name, value):
+    """给根节点开头插一个字符串属性。只支持 libfdt 的标准布局（头 / rsvmap / struct / strings 依次排）。"""
+    magic, total, off_struct, off_str, off_rsv, ver, _, _, size_str, size_struct = struct.unpack_from(">10I", dtb, 0)
+    if magic != 0xd00dfeed or ver < 17 or not (off_rsv < off_struct < off_str):
+        die("不认识的 FDT 布局")
+    if struct.unpack_from(">I", dtb, off_struct)[0] != 1 or dtb[off_struct + 4] != 0:
+        die("struct 块不以根节点开头")
+    ins_at = off_struct + 8                      # BEGIN_NODE + 根节点名 ""（补齐到 4 字节）
+    strings = dtb[off_str:off_str + size_str]
+    nameoff = len(strings)
+    val = value.encode() + b"\0"
+    prop = struct.pack(">III", 3, len(val), nameoff) + val + b"\0" * (-len(val) % 4)
+    new_struct = dtb[off_struct:ins_at] + prop + dtb[ins_at:off_struct + size_struct]
+    new_strings = strings + name.encode() + b"\0"
+    head = bytearray(dtb[:off_struct])
+    new_off_str = off_struct + len(new_struct)
+    total = new_off_str + len(new_strings)
+    struct.pack_into(">I", head, 4, total)
+    struct.pack_into(">I", head, 12, new_off_str)
+    struct.pack_into(">I", head, 32, len(new_strings))
+    struct.pack_into(">I", head, 36, len(new_struct))
+    return bytes(head) + new_struct + new_strings
+
+
+def cmd_fdt_mark(a):
+    d = fdt_add_root_prop(open(a.input, "rb").read(), a.name, a.value)
+    open(a.out, "wb").write(d)
+    print("✓ %s：根节点加 %s = \"%s\"（%d 字节）" % (a.out, a.name, a.value, len(d)))
+
+
+def cmd_mkbootimg(a):
+    img, sha = mkbootimg(open(a.kernel, "rb").read(), open(a.ramdisk, "rb").read(), open(a.dtb, "rb").read(),
+                         a.cmdline.encode(), a.name.encode())
+    open(a.out, "wb").write(img)
+    print("✓ boot.img %s（%d 字节，id %s，cmdline %d 字节%s）" % (
+        a.out, len(img), sha, len(a.cmdline), "，切进了 extra_cmdline" if len(a.cmdline) > 511 else ""))
+
+
+def bcab_slot(prio, tries, ok):
+    return prio | (tries << 4) | (int(ok) << 7)
+
+
+def cmd_misc(a):
+    m = bytearray(open(MISC_VEC, "rb").read())
+    bc = m[2048:2080]
+    if a.variant == "b-active":
+        # 像 setActive(b) 之后、新槽还没开过机：_b 15/6 未成功，_a 降到 14、仍是已成功
+        bc[0:3] = b"_b\0"
+        struct.pack_into("<HH", bc, 12, bcab_slot(14, 1, True), bcab_slot(15, 6, False))
+    else:
+        die("不认识的 misc 变体 %s" % a.variant)
+    struct.pack_into("<I", bc, 28, zlib.crc32(bytes(bc[:28])) & 0xffffffff)
+    m[2048:2080] = bc
+    open(a.out, "wb").write(m)
+    print("✓ misc %s（%s，bcab %s）" % (a.out, a.variant, bytes(bc).hex()))
+
+
 def main():
     ap = argparse.ArgumentParser()
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -423,6 +560,11 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--bootimg")
     p.add_argument("--variant", default="normal", choices=["normal", "broken", "espfull"])
+    p.add_argument("--gk3boot-options")
+    p.add_argument("--boot-a")
+    p.add_argument("--boot-b")
+    p.add_argument("--misc")
+    p.add_argument("--corrupt-a", action="store_true")
     p = sp.add_parser("snapshot")
     p.add_argument("disk")
     p.add_argument("manifest")
@@ -439,8 +581,28 @@ def main():
     p.add_argument("manifest")
     p.add_argument("path")
     p.add_argument("out")
+    p = sp.add_parser("initramfs")
+    p.add_argument("--init", required=True)
+    p.add_argument("--marker", required=True)
+    p.add_argument("--out", required=True)
+    p = sp.add_parser("fdt-mark")
+    p.add_argument("input")
+    p.add_argument("out")
+    p.add_argument("name")
+    p.add_argument("value")
+    p = sp.add_parser("mkbootimg")
+    p.add_argument("--kernel", required=True)
+    p.add_argument("--ramdisk", required=True)
+    p.add_argument("--dtb", required=True)
+    p.add_argument("--cmdline", required=True)
+    p.add_argument("--name", default="")
+    p.add_argument("--out", required=True)
+    p = sp.add_parser("misc")
+    p.add_argument("--variant", required=True)
+    p.add_argument("--out", required=True)
     a = ap.parse_args()
-    dict(mkdisk=cmd_mkdisk, snapshot=cmd_snapshot, diff=cmd_diff, vars=cmd_vars, esp_get=cmd_esp_get)[
+    dict(mkdisk=cmd_mkdisk, snapshot=cmd_snapshot, diff=cmd_diff, vars=cmd_vars, esp_get=cmd_esp_get,
+         initramfs=cmd_initramfs, fdt_mark=cmd_fdt_mark, mkbootimg=cmd_mkbootimg, misc=cmd_misc)[
         a.cmd.replace("-", "_")](a)
 
 
