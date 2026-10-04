@@ -26,6 +26,7 @@ echo $?        # 0 = 没有 FAIL；1 = 有 FAIL；2 = adb 不通或中途掉线�
 * `--readonly`：只做只读检查（跳过开相机、录音、真解视频），任何时候都能跑。
 * **WARN 不挡发版，但要人看一眼**（denial 有没有新的大面积、测试工具自己崩了等）。
 * 本清单里每个属性名 / 路径 / 字符串都是 2026-10-04 在 `1791053208` 上实测核对过的；新增一项也要先在实机上核对再写。
+  ⚠️ **例外**：2026-10-05 补进来的 A23–A27、B14–B17、D9 来自 1.0 批 1 的待验证项（`docs/TODO.md` 总表第一节 V0–V17），对应的改动还没构建、设备当时也不在线，**命令与判据都没在实机上核对过**。第一次跑之前先在实机上核一遍，核过后删掉这条说明。
 
 ---
 
@@ -62,6 +63,11 @@ A 档里不在 `accept.sh` 的两项（要手动，但不用人在场）：
 |---|---|---|---|---|
 | A21 | iris 回归 15 项 | `out/iris-rc/rc-accept.sh`（⚠️ 不在仓库里，只在维护者本机的 `out/`） | 播完后 seek、seek、分辨率变化、stop、drain 全过 | v070#2 |
 | A22 | 热点起得来（#11） | USB adb 下 `cmd wifi start-softap gk3test wpa2 <口令>` → `dumpsys wifi` 看 AP 起来 → `cmd wifi stop-softap` | AP 起来；停掉后 STA 自己重连。⚠️ 会断 STA，TCP adb 下别做 | v071 |
+| A23 | USB 角色的开机路径（批 1） | `logcat -b all -d \| grep 'SVC_EXEC service gaokun3_role_device'`；`getprop vendor.gaokun3.usbrole.broken` | 有 `… started; waiting` 那一行，且 USB adb 照常起来；`broken` 为空或 0（为 1 说明这次开机里 port0 坏过，A6） | PWR-5、PWR-4、B1 |
+| A24 | 诊断通路（发布构建） | `adb shell su -c id`、`adb shell dmesg`、`adb logcat -b kernel -d`、`adb bugreport` 各跑一次（`su` 要先在 KSU 管理器里给 Shell 授 root，一次性、要人在场） | `su -c id` 为 0；其余三条能不能用逐条记下 —— FAQ、`gsf-android-id.sh`、`accept.sh` / `standby.sh` 的 su 路径都靠它们，不能用就改 FAQ | B1、D1、D6、REL-9 |
+| A25 | `/data` 保留块（STOR-5） | `su -c "tune2fs -l /dev/block/by-name/userdata" \| grep -iE 'Reserved block count\|Reserved blocks gid'`；`getprop vold.has_reserved` | 32768 与 1065；`1`。开机日志里 fs_mgr 的 `Setting reserved block count` 只在第一次开机出现 | STOR-5 |
+| A26 | Wi-Fi 软件 PNO 与 NTP 重试 | `dumpsys wifi` 的 WifiResourceCache；`dumpsys network_time_update_service` | `config_wifiSwPnoEnabled=true`，且 DeviceConfig `wifi/software_pno_enabled` 已被 tree-fixes 绕过（只记录它的值）；`mTryAgainTimesMax=-1`，`mServerUris` 第一项是 `ntp.aliyun.com` | NET-1、NET-12 |
+| A27 | 传感器按订阅启停 + 亮灭屏 50 次 | 息屏、没有订阅者时隔 10 秒看两次 `/proc/interrupts` 的 smp2p-slpi 与 q6v5 handover 两行（10-04 实机是 IRQ 19 / 212）和 debugfs `qcom_stats/slpi`；然后 TCP adb 下 `input keyevent 26` 亮灭屏 ≥50 次，每次亮屏后看 `dumpsys sensorservice` 的 Recent events | 息屏时两行 IRQ 不涨、`slpi` 的 Count 涨、logcat 有 `SscHub: accel 停用`，5 分钟内没有看门狗的"15 秒无读数""60 秒没有读数，重建"；每次亮屏后都有 accel 新读数、Z≈9.8，SscHub 不重建会话；dropbox 里 `system_server_crash` 0；`logcat -s gaokun3-lights` 里的写失败行记下 errno（不判） | PWR-3、LIVE-2、HW-3、LIVE-1 |
 
 ---
 
@@ -81,7 +87,11 @@ A 档里不在 `accept.sh` 的两项（要手动，但不用人在场）：
 | B10 | 1.0 RC 追加 | 合盖三种姿态的 getevent（DISP-1）；屏幕方向 A/B（DISP-2）；录屏与录像（AV-1）；开机菜单不接键盘能否操作（INST-18）；金融类 App（APP-4）；首次开机向导完整走一遍并截图（OTA-13） | 按各条目的判据；结果记进 1.0 计划对应条目 | 1.0 计划批 1 / 批 3 |
 | B11 | 安装路径（G4） | 外接盘 / 真 NVMe 上：整盘清空、双系统、清除数据重装、从 U 盘启动 | 各通过一次，记进 `docs/stage7-flutter-debian.md` §M4a | G4 |
 | B12 | OTA 与回落（G6） | 在 `_b` 上从上一版保留数据 OTA 一次；让新槽故意起不来 | 数据原样；能回到旧槽 | G6 |
-| B13 | live 安装器写盘安全（G5） | 启动进 live（开机菜单的 `gaokun3 installer`，要重启 ⇒ 要用户同意、在场），ssh 进去跑 `systemctl is-active sleep.target`；写盘期间按电源键、合盖各一次（用测试盘）；本机 `cd live/installer-flutter && flutter test test/flow_test.dart` | `sleep.target` 是 `masked`、写盘不被打断；flow_test 里有"下载失败 → 重试"用例且通过。⚠️ 2026-10-04 两样都还没有：mask 由 1.0 计划 B5（GUI-2）加，重试用例由 GUI-3/5、GUI-14 加 —— 落地之前本项判不过 | G5 |
+| B13 | live 安装器写盘安全（G5） | 启动进 live（开机菜单的 `gaokun3 installer`，要重启 ⇒ 要用户同意、在场），ssh 进去跑 `systemctl is-active sleep.target`；写盘期间按电源键、合盖各一次（用测试盘）；本机 `cd live/installer-flutter && flutter test test/flow_test.dart` | `sleep.target` 是 `masked`、写盘不被打断；flow_test 里有"下载失败 → 重试"用例且通过。2026-10-05 两样都已合进 main（`3608a52`：`build-rootfs.sh` mask 5 个睡眠 target，`flow_test.dart` 有"下载失败（盘没动）… 重试"用例，本机 flutter test 72/72）；⬜ mask 还要等 `build-live.sh` 重建后在真 live 里验 | G5 |
+| B14 | adb 开关与 root（发布构建） | 开发者选项里打开「USB 调试」→ 关掉再开 → 重启；「无线调试」用配对码配对一次；KSU 管理器给一个 App、再给 Shell 授 root | 打开时 USB 枚举并弹授权框；关了再开不断连；重启后开关复位成关；无线调试能配对、能连；App 拿得到 root、`adb shell su -c id` 为 0。全新装机另看：开机后 adbd 不在跑、`settings get global adb_enabled` 为 0 | B1、D1、D6 |
+| B15 | U 盘与外设细项（B2 之外） | port1 插 FAT32、exFAT 的 U 盘各一次：`sm list-disks`、`sm list-volumes all`；port0 插 U 盘或鼠标、allow_suspend=1，息屏→亮屏 5 次后换插 PC；开机时插着 U 盘，开机后拔掉换插 PC | `disk:8,0`、`public:8,N mounted`，「文件」里看得到；port0 每次仍是 host、外设还在、`logcat -s gaokun3-usbrole` 有"保持 host"，换插 PC 后 USB adb 回来；开机插着 U 盘那条，切回 device 后 `/sys/class/udc/a600000.usb/function` 为 g1、`/config/usb_gadget/g1/UDC` 非空。⚠️ port0 可能坏到要重启（A6），全程用 TCP adb | STOR-1、PWR-5、STOR-2 |
+| B16 | 亮屏后的方向、陀螺仪与亮度 | 亮屏后转动机器；游戏里只开 gyro、accel 已开再开 gyro、切后台再回来各一次；目视亮屏后的亮度 | 旋转及时跟上，亮屏后那段 UNRELIABLE 零向量不误转、不卡住；陀螺仪三种情形与 Game Rotation Vector / Gravity 正常；亮度和熄屏前一致 | PWR-3、LIVE-2、LIVE-1 |
+| B17 | Wi-Fi 断开后回连（软件 PNO） | 息屏但系统醒着（插电或持锁）时让 AP 断开再恢复；allow_suspend=1 时再做一次 | 2 分钟内重新连上；定时唤醒后能重新连上 | NET-1 |
 
 ---
 
@@ -90,7 +100,7 @@ A 档里不在 `accept.sh` 的两项（要手动，但不用人在场）：
 | # | 检查 | 怎么做 | 判据 / 记录 | 来源 |
 |---|---|---|---|---|
 | C1 | 游戏性能基线 | 用户解锁、进固定场景后：`SER=gaokun3 bash scripts/perf/game-perf.sh -p com.tencent.tmgp.dfm -t 1200`（三角洲 20 分钟）；`-p com.idreamsky.klbqm -t 600`（卡拉彼丘 10 分钟）；`-p com.hypergryph.arknights -t 1800`（明日方舟挂机 30 分钟）。之后马上 `accept.sh --readonly` 看 A15 / A16 | 每个记平均 fps、1% low、CPU / GPU / 内存最高温、温控压频秒数、GPU 频率分布；GMU / fault 0。**和上一版比，平均 fps 降超过 10% 或最高温升超过 5 °C 判失败**。先看 `header.txt` 确认帧率上限是 60 还是 120（PERF-2 复核）。**UBWC 的 A/B 同时做**（DISP-18 并入 PERF-2，`docs/v1.0-plan.md:141`、`:229`；TODO B5b）：同一场景在 `vendor.minigbm.debug=nocompression`（`device.mk:224`，历版发布值）与 UBWC 开着各跑一次，两份 `summary.txt` 并排记 —— 切换要改镜像或 overlay，按 TODO B5b 的做法来，别凭"理应更好"直接改 | PERF-2、PERF-12、DISP-18 |
-| C2 | 拔线待机 8 小时 | 插着线 `SER=gaokun3 bash scripts/perf/standby.sh start` → 用户临时把 allow_suspend 设 1 → 拔 USB、息屏放 8 小时 → 插回 `pull` → `stop` → 改回原值 | 不设合格线，但必须量过（G8）：掉电点数 / 每小时、charge_now 的 mAh、挂起次数、`cxsd` / `aosd` / `ddr` 增量写进案卷与发版说明。`cxsd` 仍为 0 时按 1.0 计划 B7 的顺序排查 | B7、PERF-3、G8 |
+| C2 | 拔线待机 8 小时 | 插着线 `SER=gaokun3 bash scripts/perf/standby.sh start` → 用户临时把 allow_suspend 设 1 → 拔 USB、息屏放 8 小时 → 插回 `pull` → `stop` → 改回原值 | 不设合格线，但必须量过（G8）：掉电点数 / 每小时、charge_now 的 mAh、挂起次数、`cxsd` / `aosd` / `ddr` 增量写进案卷与发版说明。`cxsd` 仍为 0 时按 1.0 计划 B7 的顺序排查。软件 PNO（NET-1）进镜像后，每小时的唤醒次数和掉电与上一版并排记，看 PNO 有没有让待机多醒、多耗电 | B7、PERF-3、G8、NET-1 |
 | C3 | 亮屏硬解 1 小时 | 固定亮度，`HB=300 … standby.sh start`，拔线连续硬解播放 1 小时，`pull` | 掉电点数写进案卷（G8） | B7、G8 |
 | C4 | 72 小时狗粮 | allow_suspend=1、拔线日常使用，`standby.sh start` 全程开着；结束 `pull` | 真实挂起 ≥30 次；`system_server_crash` 0、tombstone 0；心跳行里关键进程 PID 不变、RSS / fd 无单调增长；每次唤醒后 `wlan=up` 能回来；结束后 `accept.sh` 全过（G7） | B7、PERF-4、G7 |
 | C5 | 挂起 / 恢复循环（#16） | 内核改动时：`scripts/s2idle/android-ath11k-s2loop.sh`（用法见脚本头；先切 host） | 全部恢复、Wi-Fi 每次回来；恢复期间 GFP_DMA 高阶分配 0（#131） | v071（#16） |
@@ -104,9 +114,10 @@ A 档里不在 `accept.sh` 的两项（要手动，但不用人在场）：
 |---|---|---|---|---|
 | D1 | 内核能从仓库重建 | 设备 `/proc/config.gz` 与照本仓配方重建出的 `.config` 做 diff；两个内核镜像做全字符串差集，dtb 比 sha256 | config 无差；字符串差集无未解释项；dtb sha256 一致（字符串差集看不见 DTS） | `TODO.md:244`、`stage4-findings.md:4691` |
 | D2 | 文档不过时 | `grep -rnE "cannot suspend\|不能待机\|=m\|❌" README.md README.zh-CN.md docs/INSTALL.md docs/TODO.md`，再对 README 状态表与本版实测；设备树里的成段注释也会变质（`init.gaokun3.rc`、`etc/usbrole.rc`、`device.mk` 都出过事），另跑 `grep -rnE "^[[:space:]]*#.*(cannot suspend\|不能待机\|❌)" device/huawei/gaokun3/` 只看注释命中 | 每一处命中都确认仍然成立 | `project-log.md:494`、`TODO.md:1017`、`stage4-findings.md:8053` |
-| D3 | 发的就是验过的那一版 | `release.sh --no-build`；变体是 `lineage_gaokun3-bp4a-userdebug`；各分区 build.prop 的 `date.utc` 对一遍（system / system_ext / product / vendor / odm，vendor 的曾停在 09-28 —— OTA-11 / SEC-13） | 构建戳 = A1 验过的戳；各分区 `date.utc` 一致（G6 要 `release.sh` 断言这一条，⬜ 截至 2026-10-04 `release.sh` 只比了清单 timestamp 与 `ro.build.date.utc`，`:82-85`，落地前手动比） | CLAUDE.md、#117 §15、G6 |
-| D4 | 产物齐、字节对 | GitHub release 附件逐个核对服务端字节数；R2 清单最后传、设备侧抓取 200；`install-artifacts.sha256` | 字节数与本地一致（别信上传命令的输出，CLAUDE.md 运维坑 1） | v0.7.0 / v0.7.1 发版记录 |
+| D3 | 发的就是验过的那一版 | `release.sh --no-build`；变体是 `lineage_gaokun3-bp4a-userdebug`；各分区 build.prop 的 `date.utc` 对一遍（system / system_ext / product / vendor / odm，vendor 的曾停在 09-28 —— OTA-11 / SEC-13） | 构建戳 = A1 验过的戳；各分区 `date.utc` 一致（G6 / OTA-11：`2bf59e1` 起 `release.sh` 第 2 步断言各分区的 `ro.<part>.build.date.utc` 与 system 相同，⬜ 还没在真构建上跑过，第一次跑时仍手动对一遍；构建前要 `rm -f $OUT/vendor/build.prop`，构建机的 `~/iris-work/rom-build.sh` 还没加） | CLAUDE.md、#117 §15、G6 |
+| D4 | 产物齐、字节对 | GitHub release 附件逐个核对服务端字节数；R2 清单最后传、设备侧抓取 200；`install-artifacts.sha256` | 字节数与本地一致（别信上传命令的输出，CLAUDE.md 运维坑 1）。`2bf59e1` 起每版多出 `kernel-source.txt`、`kernel-config.txt`、`kernel-base-patches.tar.gz`，`repo manifest -r` 能跑成时还有 `crdroid-manifest.xml` —— 都要传、都要核字节数（它们不进 `install-artifacts.sha256`，sha256 记在 `kernel-source.txt` 里），发版说明的 Files 一节要链到 `kernel-source.txt` | v0.7.0 / v0.7.1 发版记录、REL-7 |
 | D5 | 安装器与 ROM 一致 | 安装器里的内核 / dtb 与 ROM 的 `boot.img` 拆出来的比 sha256 | 一致 | G11 |
 | D6 | 发版说明与披露 | 已知问题 / 不支持一节：root（D6）、AOSP test-key 签名（D2）、`/data` 不加密（D3）、专有组件、Widevine、U 盘 / MTP / 指纹 / 手写笔等；GPL 对应源码清单 | 每项都写了 | G2、G3、G10、REL-7 |
 | D7 | 验收记录存档 | A 档报告目录、B / C 档结果 | `report.txt` 汇总行 FAIL 0；B / C 档结果写进 TODO 的本版一节 | G11 |
 | D8 | SELinux 的去留（G9） | 二选一：做完 #129 §6 剩下的 3 项、默认切 enforcing（`getenforce` = `Enforcing`，A17 在 enforcing 下跑一遍 `avc-summary.py --enforcing`）；或者书面接受 permissive | 有用户的决定（1.0 计划决定 D5）**加一份验收记录**：切了就附 enforcing 下的 A 档报告；没切就在发版说明里披露、并把决定记进 TODO 的本版一节 | G9、SEC-4 |
+| D9 | 发的是发布构建（B1） | 构建时**不设** `GAOKUN3_DEV_BUILD`；同一棵 `out/` 从开发构建换过来要先 `m installclean`；`release.sh --dry-run --no-build` 看第 2 步 | 每份 build.prop 都没有 `ro.adb.secure≠1`、`ro.debuggable≠0`、`persist.adb.tcp.port`，至少一份写了 `ro.adb.secure=1`；`product/etc/security/adb_keys` 不存在或为空。`GAOKUN3_DEV_BUILD=1` 的构建只能 `--stage-only`。装机后由 A3 复核 | B1、D1、G1 |

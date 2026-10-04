@@ -1,10 +1,12 @@
 # 待办清单
 
-最后更新：**2026-10-04**（1.0 计划 REL-12 的过时条目对账：把 v0.6.3 / v0.7.0 / v0.7.1 验收里已经过了、总表还挂着 ⬜ / 🆕 的 B16、B22、T5、B18、S1 收口，
+最后更新：**2026-10-05**（总表新增第一节「▶ 1.0 批 0/1 已合并、待构建与验证」：12 组改动 + 安装器组已合进 main，逐项列出构建机核实、构建后自检、上机与用户在场的验证，以及等安装器的项；每次发版都要回归的部分同步进 [`release-checklist.md`](release-checklist.md)。）
+
+上一次：**2026-10-04**（1.0 计划 REL-12 的过时条目对账：把 v0.6.3 / v0.7.0 / v0.7.1 验收里已经过了、总表还挂着 ⬜ / 🆕 的 B16、B22、T5、B18、S1 收口，
 改正 B19（"回落槽"的说法以实机为准）、B4、B20、A3 标题的过时描述，记下 A5 / B11 的用户决定（D4 / D6）；逐条依据见下面"✅ 本次对账收口的"第三轮。
 **1.0 之前要修什么、按什么顺序，以 [`v1.0-plan.md`](v1.0-plan.md) 为准**，本表不重复列。）
 
-上一次：**2026-09-23**（全表对账：把 v0.6.2 发布与 SELinux 第五轮之后已经做完、但正文还写着 ⬜ 的条目逐条核对并收口；
+再上一次：**2026-09-23**（全表对账：把 v0.6.2 发布与 SELinux 第五轮之后已经做完、但正文还写着 ⬜ 的条目逐条核对并收口；
 新增两条 —— 待机默认值对老用户的影响（S1）、全新安装丢触摸参数（B15 实锤）。
 同日第二轮：按用户反馈关 A0；修掉 B15 / B17；issue #5 声明平板（T5）；12 个过时脚本归档到 `scripts/archive/`）
 
@@ -28,6 +30,134 @@
 **统计（2026-09-23，未重算）**：用户能感觉到的缺口 **9** 条未完 · 工程债 **12** 条未完 ·
 等用户点头的对外动作 **5** 条 · 明确搁置 **4** 条。⚠️ 这组数字是 09-23 的，此后新增与收口的条目都没算进去；
 1.0 还剩多少，看 [`v1.0-plan.md`](v1.0-plan.md)。下面按"下一步是什么"分组，详情见各自的条目。
+
+### ▶ 1.0 批 0/1 已合并、待构建与验证（2026-10-05）
+
+> [`v1.0-plan.md`](v1.0-plan.md) 批 0 / 批 1 的 12 组改动 2026-10-05 凌晨合进 main（`12e37ce..2bf59e1`，下表 1–12）。
+> ★ 安装器那组原定"审查完再合"，记账时发现它 **00:55 已 cherry-pick 进 main**（`3608a52` + `203265a`，下表第 13 行）⇒ 下面"等安装器"一段**已经可以做了**，
+> 但本轮按约定没碰 `scripts/live/`、`live/installer-flutter/`、`scripts/windows/`，那些项照旧是 ⬜。
+> **除安装器组在本机跑过测试外，全部只是写好了代码 / 文档：没在构建机上编过，也没上过机。**各组的 handoff 与证据在那次 workflow 的 scratchpad（`handoffs.md` / `v1-raw.json`，不入库），要点都抄在下面。
+> 用户决定（v1.0-plan §6）：D1 发布版关 `ro.debuggable`；D2 留 test-key 并披露；D3 `/data` 不加密并披露；**D4 恢复出厂交给"统一启动入口"**
+> （用户说的"fastboot"指的就是它：一个统一的、用来启动 Android 的入口，设计稿 [`fastboot-design.md`](fastboot-design.md)，还在设计）——
+> **本轮不碰 BCB / misc / 恢复出厂 / 启动链**，批 1 里的"清除旧 BCB"和"B6(a)"一起搁着；D6 保留 root；D7 只发 GApps；其余按计划第 6 节的建议。
+> ⚠️ 2026-10-05 01:00 记账时设备不在线（`adb devices` 是空的；TCP 没扫；审查那边记过 10-04 22:56 USB adb 掉线）⇒ 设备一上线先做 V0，开工前先跑 `bash scripts/find-device.sh`。
+> 下面的编号 V0–V17 只在本节内部用；以后每个发版都要回归的项已经补进 [`release-checklist.md`](release-checklist.md)（A23–A27、B14–B17、D9）。
+
+**已合并的改动**
+
+| # | 组 | 提交 | 改了什么 | 状态 |
+|---|---|---|---|---|
+| 1 | lights（LIVE-1 / PERF-1 / APP-7） | `44ff592` | 背光写失败只记限流日志并返回 ok。原来返回的 -EIO 在 DisplayPowerState 线程里没人接，10-02 因此出过一次 `system_server_crash` | 已写未编 |
+| 2 | 存储（STOR-1 / BKUP-6 / STOR-5） | `8da5974` | fstab 给两个口各加一行 `voldmanaged=usb:auto`（port0 那行依赖第 10 组）；`/data` 加 `reservedsize=128M` | 已写未编 |
+| 3 | 传感器（PWR-3 / LIVE-2 / HW-3） | `4db08bc` | SscHub 按订阅在同一个 client 上 EnableContinuous / Disable（不重建会话）；流停着时看门狗不计时 | 已写未编（本机只做过语法检查）；同一 client 反复开关**从没实测过**（V8） |
+| 4 | 网络（NET-1 / NET-12） | `ff4a5a4` | `config_wifiSwPnoEnabled=true`；NTP 把 `ntp.aliyun.com` 排第一，`config_ntpRetry=-1` | 已写未编；⚠️ NET-1 还差 DeviceConfig 那道门（V3），不补就等于没开 |
+| 5 | README（INST-8 / REL-3 / AV-17） | `d9a039a` | 中英两份 README 按 v0.7.1 的现状逐行重写 | 文档 |
+| 6 | INSTALL（INST-3/5/15/20、GUI-16、OTA-3、B3） | `7a10ae2` | INSTALL 按实测重写；roadmap 改掉"FBE 在管 /data"的错误说法 | 文档；菜单文案、按键这些要实测（V5、V15） |
+| 7 | 披露（SEC-10/12、REL-9/10/15 等） | `2b92d52` | 已知限制清单 `known-limitations`（中英）、FAQ（中英）、发版说明模板 | 文档 |
+| 8 | 验收工具（REL-6 / PERF-12 / PERF-2 / B7） | `311faac` + `1c695f6` | [`release-checklist.md`](release-checklist.md)、`scripts/accept.sh`、`scripts/perf/`；修掉 verify-turnip 的假阴性 | 本机测过，没上过机（V0、V14） |
+| 9 | 仓库对账（REL-11 / REL-14 / INST-19 / REL-12 / OTA-3） | `2fb8ed5` `a1712b2` `782263c` `31da421` | 7 个 issue 模板重写、删 `ota/gaokun3.json`、deploy 脚本归档、TODO 过时条目对账 | issue 表单要推上去渲染一次才算验过（V7c） |
+| 10 | usbrole（PWR-5 / STOR-2 / PWR-4） | `11ace25` | 亮屏 / 开机切 device 之前先看 xhci 下面有没有设备，有就保持 host；切 host 失败时置 `vendor.gaokun3.usbrole.broken` | 已写未编；PWR-4 的 Parts 通知还没写（V4） |
+| 11 | B1 发布构建（B1 / D1 / SEC-5 / SEC-6） | `91df0b7` | 默认是发布构建，`GAOKUN3_DEV_BUILD=1` 才是开发构建；发布构建关掉免授权 adb、TCP 5555、debuggable 和开发者公钥；`release.sh` 加断言 | 已写未编；★ 编之前先过 V1 |
+| 12 | GPL 与日期断言（REL-7 / SEC-11 / OTA-11） | `2bf59e1` | `release.sh` 每版生成 `kernel-source.txt` 等；补录 v0.7.1 的内核来源；断言各分区的 `date.utc` 一致 | 还没在构建机上真跑过（V2、V6） |
+| 13 | 安装器（B5 / GUI-3/5/20 / STOR-5 / GUI-7 / INST-11） | `3608a52` `203265a`（00:55 合入） | live 写盘期间防关机（logind + mask + inhibit）、下载失败可重试、下载停滞判死、`/data` 默认 64 GiB、`mkfs -m 0`、ps1 先暂停 BitLocker | 已写，本机测过（test-apply 130/130、flutter test 72/72、test-setup.ps1 39/39）；还没重建 live 镜像、没上过机（见"等安装器"） |
+
+批 1 计划里本轮**还没写**的（以 v1.0-plan 批 1 为准）：APP-8、APP-9、HW-7、HW-12、LIVE-4、AV-6、OTA-8/9、REL-4、REL-5（版本属性与断言）、SEC-14、REL-13、PWR-4 通知（V4）、NET-1 的第二道门（V3）、`gaokun3-ssc-test` 的 toggle 模式（V8 要用）；"清除旧 BCB"和 B6(a) 按 D4 搁置。
+
+**构建机 grep 核实（编之前做；`bash scripts/cicd.sh start light` 就够）**
+* ⬜ **V1 ★★ B1 的关键源码（最要紧：这一条不过就不编）**（B1 / D1 / SEC-5 / SEC-6 / REL-5）。在 `~/crdroid` 下：
+  ① `grep -rn ProductNotDebuggableInUserdebug build/soong system/sepolicy`：如果有消费者会去改 Soong 的 Debuggable，init 的 `ALLOW_PERMISSIVE_SELINUX` 就会变成 0，发布构建被强制 enforcing，**装上去起不来**（#117 §15 的翻版）⇒ 那就先改方案再编；
+  ② `sed -n 25,50p vendor/lineage/config/common.mk`：确认不设 `WITH_ADB_INSECURE` 时，它会设 `ro.adb.secure=1` 和 `PRODUCT_NOT_DEBUGGABLE_IN_USERDEBUG`；
+  ③ `grep -rn 'PRODUCT_ADB_KEYS\|adb.tcp.port\|persist.sys.usb.config' vendor/ device/`：继承链里没有别人另设；
+  ④ `grep -n -A6 'def get_build_variant' build/soong/scripts/gen_build_prop.py`：裁决 SEC-5 的两种说法，结论回填 T2 一节"`ro.build.type=user` … crDroid 自己的 spoof"那句（:423 一带）和 #117 §16；
+  ⑤ AOSP 16 的 soong 是不是仍对每份 build.prop 跑 `post_process_props`（开发构建能自动得到 `persist.sys.usb.config=adb` 就靠它）；
+  ⑥ `frameworks/base/services/core/java/com/android/server/adb/AdbService.java`：确认打开 USB 调试只会 `ctl.start adbd`、不写 `sys.usb.config`，`systemReady` 按 `persist.sys.usb.config` 复位 ADB_ENABLED；`UsbService.java:218` 只在 `/sys/class/android_usb` 存在时才建 UsbDeviceManager。跟这些对不上，就要重新评估 `init.gaokun3.usb.rc` 新加的 `init.svc.adbd` 桥接；
+  ⑦ `get_build_var PRODUCT_ADB_KEYS` 和 `get_build_var PRODUCT_SYSTEM_EXT_PROPERTIES` 各跑两遍，一遍带 `GAOKUN3_DEV_BUILD=1`、一遍不带，看这个环境变量进不进得了 Kati。
+  判据：①没有消费者；②–⑦与 `lineage_gaokun3.mk` / `device.mk` 注释里的假设一致。
+* ⬜ **V2 GPL 补录与构建脚本**（REL-7 / SEC-11 / OTA-11）：先确认编出 v0.7.1 内核 #15 的是哪棵树（推测是 `~/gk3-kernel-iris`），在那棵树上跑 `git log --reverse 8cdeaa50..HEAD` 和 `git format-patch`，补进 `docs/relnotes/v0.7.1-alpha-sources.md` 第 2 节；`bash scripts/kernel-apply-patches.sh ~/gk3-kernel-iris --verify` 要绿灯；KernelSU 的 HEAD 应等于 `b2ac2fc8`。
+  `~/iris-work/rom-build.sh`（不入库）在 `m` 之前加 `rm -f $OUT/vendor/build.prop`，否则 OTA-11 的新断言会拦下发版。再确认构建机上的 `release.sh` 是不是从本仓 checkout 里跑的（`REPO` 由 `BASH_SOURCE` 推出），不是就设 `GK3_REPO`。
+* ⬜ **V3 NET-1 的第二道门**（NET-1 / NET-12）：DeviceConfig `wifi/software_pno_enabled` 在本机读到的是 false，多半是 GMS Phenotype 下发的。在 `~/crdroid` 里 grep：`packages/modules/Wifi/service/java/com/android/server/wifi/WifiGlobals.java` 的 `isSwPnoEnabled`、`scanner/WifiScanningServiceImpl.java` 里 StartedState 的 PNO 分支、`DeviceConfigFacade.java` 的 `software_pno_enabled`（默认 false），并和设备上的字节码对一遍；确认 `com.android.wifi` APEX 是从源码编的（不是预编译）；`frameworks/base/.../timedetector/NetworkTimeUpdateService.java` 里 `config_ntpRetry` 的读取点和 `mTryAgainTimesMax<0` 那个分支。
+  ⇒ 核实无误后按做法 (a)，在 `scripts/crdroid-tree-fixes.py` 里给 DeviceConfigFacade 打补丁，让 `software_pno_enabled` 恒为 true（或者让 StartedState 只看 `isSwPnoEnabled()`），这样不受 GMS Phenotype 覆盖；v1.0-plan 的 NET-1 一条也要补上这道门。
+* ⬜ **V4 PWR-4 止损通知**（PWR-4 / HW-14；批 1 来不及就挪到批 2，和 PWR-16 的 Parts 开关一起做）：先在构建机的 `frameworks/base` 里核实 Parts 能用哪种触发方式（也可以用 scratchpad 里从设备拉下来的 `framework.jar` 做 dexgrep）：有没有 SystemProperties 的变化回调；亮屏广播只能动态注册的话，Parts 进程怎么常驻（system 分区、平台签名的应用要满足什么条件才能 `persistent`）；开机广播接收器。
+  定下来以后，在 `device/huawei/gaokun3/parts` 加一条通知，大意是"USB-C 口（左侧 / port0）异常：USB 数据与待机要重启后恢复"；sepolicy 加 `get_prop(system_app, vendor_gaokun3_prop)`（它是 vendor_public_prop，`private/property.te:193-198` 的 neverallow 对它有豁免），同时改掉 `sepolicy/vendor_gaokun3_props.te:46`"没给 system_app 任何权限"那句注释。
+  属性的语义：只在每次息屏、role_host 跑完之后才会变，失败一次就置 1，下次成功清 0。判据：编译通过；上机时人为造出 broken=1（V11）后弹出通知。
+* ⬜ **V5 其余标着"待构建机核实"的出处**（LIVE-1、STOR-1、STOR-5、OTA-11、PWR-5、INSTALL / FAQ 的菜单文案、PERF-12），结论回填到 FAQ / INSTALL / issue 模板 / 相关注释：
+  * `system/libbase/file.cpp`：WriteStringToFile 失败返回时，errno 是不是还保留底层 write / open 的值（不保留的话，lights 日志里的 errno 只能作参考）；
+  * `system/vold`：`DiskSource::matches` 的 fnmatch flags、`main.cpp` 的 `process_config` 和 `VolumeManager.cpp` 的 `handleBlockEvent` 的行号；`vold.has_reserved` 由 reserved_size 置 1 的出处；
+  * crDroid 的 `build/make/core/sysprop.mk`（:119 / :208 一带）与 `config.mk`（:870 一带）是否与 `refs/aosp-build` 一致（OTA-11 的成因）；
+  * 内核树 `~/gk3-kernel-iris` 的 `drivers/usb/gadget/configfs.c`：UDC 写入失败以后 gadget 会不会留在 pending、是不是 `match_existing_only`。这决定"开机时插着 U 盘、之后换插 PC"时 adb 能不能自己回来（V11）；
+  * `packages/apps/Settings`（crDroid 16）里实际的菜单文案：About tablet → Build number、System → Developer options、USB debugging、Wireless debugging、Pair device with pairing code、Always allow、Reset options → Erase all data、Take bug report，以及显示 `ro.crdroid.display.version` 的那一行叫什么；
+  * `frameworks/native`：`dumpsys SurfaceFlinger --latency` 的三列格式和 128 帧窗口（`game-perf.sh` 是凭记忆写的）。
+
+**构建后自检（ROM 构建 #1，`bash scripts/cicd.sh start rom`）**
+* ⬜ **V6 编译通过 + 发布产物断言**（LIVE-1、PWR-3、PWR-5、STOR-1、STOR-5、NET-1、NET-12、B1、REL-5、OTA-11、REL-7、HW-3）：V1 绿了才编。先 `sync-device-tree.sh`，再做发布构建（**不设** `GAOKUN3_DEV_BUILD`），`m bacon superimage` 一次成功。判据看产物，不看管道尾巴：lights HAL（`-Wall -Werror`，`android.hardware.light-V2-ndk` + libbase）、sensors HAL（Sensor.cpp 用的 AIDL 头）、sepolicy（`set_prop(gaokun3_usbrole, vendor_gaokun3_prop)` 不撞 neverallow）都要编过。
+  然后跑 `release.sh --dry-run --no-build`：B1 的四条 adb 断言通过；各分区的 `date.utc` 与 system 相同；`kernel-source.txt` 生成出来。GNU tar 的 `--sort` / `--mtime`、`--verify` 在真内核树上的耗时、`repo manifest -r` 能不能跑成，都记下来。
+  ⚠️ 拿现有 v0.7.1 的 `out/`（vendor 日期是 `1790597477`）跑 `--no-build` 会被 OTA-11 拦下，这是有意的，那份只能 `--stage-only`。
+  ⚠️ 同一棵 `out/` 从开发构建换到发布构建之前要先 `m installclean`，否则残留的 `adb_keys` 会被 `release.sh` 拦下。
+  ⬜ 下面两项要先写出来，才有对应的断言：REL-5 的版本属性（建议叫 `ro.vendor.gaokun3.version`，由 `GK3_VERSION` 注入 `PRODUCT_VENDOR_PROPERTIES`；名字由负责人从源码里定，要核实过得了 `check_prop_prefix`）和它在 `release.sh` 里的断言；`device/huawei/gaokun3/ssc/ssc_test.cpp` 的 toggle 模式。截至记账时，仓库里两样都没有。
+
+**待用户决定**
+* ⬜ **V7a 开发机迁移**（B1；要写设备，所以要用户点头；必须在装第一个发布构建**之前**做）：趁开发机还跑着开发构建（有 root）：
+  `adb -s gaokun3 shell setprop persist.sys.usb.config adb`；`setprop persist.adb.tcp.port 5555`（实机已经持久化过，再设一次保险）；把 Mac 的 `~/.android/adbkey.pub`、Windows `DESKTOP-D81MTDK` 等开发主机的公钥追加进 `/data/misc/adb/adb_keys`（属主 `system:shell`、权限 0640，再 `restorecon`）。
+  另一个办法是装完以后，用户在场时在屏幕上对每台主机点一次「始终允许」（最稳）。判据：装上发布构建后，USB 和 TCP 5555 的 adb 都已授权，`install-ota-local.sh`、`find-device.sh` 照常能用。不做的话，装完 USB / TCP adb 会全断或者变成 unauthorized。
+* ⬜ **V7b 1.0 预不预装 ReSukiSU 管理器 APK**（D6 / SEC-12 / B11；批 1 构建之前定）：D6 写的是"KSU + 管理器"，而 v0.7.1 及以前都没预装。决定预装的话，known-limitations / FAQ / INSTALL 里"先装管理器、给 Shell 授 root"那句开头要改成"系统里已带管理器"，`gsf-android-id.sh` 的提示也一起改。
+* ⬜ **V7c 对外动作**（REL-11 / REL-7，批 0；两件都要用户点头）：推仓库之后，到 `github.com/vahiru/gaokun-android/issues/new/choose` 把 7 个表单实际打开一遍（看多选 dropdown 和 checkbox label 里的链接）才算验过；把 `docs/relnotes/v0.7.1-alpha-sources.md` 和 `v0.7.1-alpha-config.txt` 补传成 release v0.7.1-alpha 的附件，传完用 `gh release view --json assets` 核对字节数。
+
+**无人值守上机**
+* ⬜ **V0 设备一上线就做（批 0，当前构建 `1791053208`）**（REL-6、PERF-12、A16、AV-6、B19、DISP-6、DISP-1、SEC-10）：先 `find-device.sh`，再 `accept.sh --readonly --profile dev --stamp 1791053208`。要核实三点：
+  A16 用设备上 toybox 的 grep 跑 `grep -m2 -oE '>>> .* <<<|^uid: [0-9]+'` 能取到 `>>>` 行和 uid 行（10-04 22:26 那个 lpdumpd 应判成系统 FAIL，`gaokun3-loopback` 应判成工具 WARN）；A17 的元组数比原先按 audit 去重的 29 条，看合不合理；A18 的增量行有输出。
+  然后：查 22:26 那个 lpdumpd 的 tombstone（slot_number 检查失败后 abort，看是不是哪个会话手动跑了 lpdump）；把 `gaokun3-loopback` 的 SIGSEGV tombstone 拉下来，修好 `device/huawei/gaokun3/audio/tools/loopback.c`，之后 B6 / A13 才能用它。
+  非只读的三项各跑一次：A13 mic-smoke（不出声）应 PASS，A12 ncam-smoke，A11 `--video` 真解。另外：`verify-turnip.sh` 改用 `get-state` 后，经 TCP adb 在 offline / unauthorized 下返回什么码；复核 B19 的 `snapshotctl` "Update state: none" 和 lpdump 的结果；Histen 开关关着（`vendor.gaokun3.histen.on=0`）时，看音频 HAL 进程的 `/proc/<pid>/maps` 里有没有加载 `libhw_histen_processing.so`，以此裁决 `effects/README.md` 和本文件"发版暂停"一节里 Histen 那段的矛盾；复核者转述的两项：`dumpsys input` 的 `mEnablePalmRejection` 是不是 0（DISP-6），合盖是不是 `LID_BEHAVIOR_NONE`（DISP-1）。
+* ⬜ **V8 传感器：上新 HAL 之前的同会话开关实验**（HW-3 / LIVE-2 / PWR-3；在新 HAL 装机**之前**做）：用新编的 `gaokun3-ssc-test accel 50 20 toggle` 跑 ≥20 轮（⬜ 这个 toggle 模式还没写，见 V6），HAL 停着跑一次、HAL 在跑时再跑一次。判据：每轮都有读数，静止平放时 Z≈9.8，SSC 枚举不坏，退出码 0。
+  **绝不能碰 ambient_light**（会污染会话，#37）；弄坏了就重启 hexagonrpcd，再等约 20 秒。**这一项不过，就不上 PWR-3 的新 HAL**（撤 `4db08bc`）。
+* ⬜ **V9 新构建装上以后的检查**（PWR-3 / LIVE-2 / HW-3 / B21 / LIVE-1 / PERF-1 / APP-7 / STOR-5 / NET-1 / NET-12）：
+  * 传感器功耗：息屏且没有订阅者时，`/proc/interrupts` 里 smp2p-slpi（IRQ 19）和 q6v5 handover（IRQ 212）10 秒内不再增长；debugfs `qcom_stats/slpi` 的 Count 和 Accumulated Duration 开始增长；logcat 出现"SscHub: accel 停用"，并且至少 5 分钟内不出现看门狗的"15 秒无读数""60 秒没有读数，重建"。首次 activate 后约 20 秒的沉降期只报 UNRELIABLE，不能把旧值当真值。
+    B21：停用期间 SLPI 自愈或崩溃之后，下一次 activate 时看门狗会在 15 / 60 秒处理，accel 要能回来（B21 本身仍需要再重启一次 hexagonrpcd）。
+  * 亮灭屏 ≥50 次（TCP adb 下 `input keyevent 26`，lights 和传感器一起看）：dropbox 里不再出现 `system_server_crash`；每次亮屏后 `dumpsys sensorservice` 的 Recent events 里有 accel 的新读数、Z≈9.8，SscHub 没有重建会话；`logcat -s gaokun3-lights` 里有没有"写 …/brightness=… 失败: <errno>"，有就记下 errno 和时序（用来验证"`himax_bl_update_status` 在 DSI 下电时发 DCS"这个推断）。另外几次 allow_suspend=1 的待机唤醒要拔线，并到用户在场的那次里做。
+  * STOR-5：`tune2fs -l /dev/block/by-name/userdata | grep -iE 'Reserved block count|Reserved blocks gid'` 应为 32768 和 1065；`getprop vold.has_reserved` 为 1；`dumpsys diskstats` 的 Data-Free 多出约 18 GiB；开机日志里有 fs_mgr 的 `Setting reserved block count`，第二次开机就不再出现；enforcing 下 init 跑 tune2fs（fsck 域）时，对 userdata 块设备没有 avc（块设备标签已经按 by-name 打，#129）。
+  * NET：`dumpsys wifi` 的 WifiResourceCache 里 `config_wifiSwPnoEnabled=true`，DeviceConfig 那道门已被 V3 的补丁绕过；`dumpsys network_time_update_service` 里 `mTryAgainTimesMax=-1`，`mServerUris` 第一项是 `ntp.aliyun.com`；正常开机一次（不跑挂起测试），记下从连上网到第一次对时成功花了多久。
+
+**需要用户在场**（批 1 尽量集中做一次；装机、重启之前先征得同意）
+* ⬜ **V10 第一个发布构建装进 `_b`（oneshot 启动）+ B1 的上机验收**（B1 / D1 / D6 / INST-14 / PWR-5 / REL-9）：先做 V7a。⚠️ 发布构建如果被强制 enforcing 就起不来（V1 ①），所以必须有人在场才装。
+  只读判据：`ro.adb.secure=1`、`ro.debuggable=0`；`/proc/net/tcp6` 里没有 5555 的 LISTEN（开发机有持久化的属性所以会有，全新装机的判据另记）；新装机开机后 adbd 没在跑、`settings get global adb_enabled` 为 0；`getenforce` 为 Permissive；开机日志里有 `SVC_EXEC service gaokun3_role_device … started; waiting`，USB adb 照常起来。
+  交互：打开「USB 调试」→ USB 枚举并弹出授权框；关掉再打开不断连；重启后开关复位成关；「无线调试」用配对码能配对。
+  KSU：`ro.debuggable=0` 下 ReSukiSU 的 adb root（`/data/adb/ksu/lib/libadbroot.so`，adbd 在 `u:r:ksu:s0`）还能不能用；管理器给 App 授 root 正常；管理器给 Shell 授 root 后，`adb shell su -c id` 输出 0（`gsf-android-id.sh`、FAQ 里的 dmesg / pstore / hangdump、`accept.sh` / `standby.sh` 的 su 路径都靠这个）；在发布构建上，`adb shell dmesg`、`adb logcat -b kernel`、`adb bugreport`、开发者选项里的「错误报告」能不能用。
+  开发构建另外验一条：`adb root` 重启 adbd 时，新加的桥接只报 EEXIST / EBUSY，不断连。
+* ⬜ **V11 USB / 存储 / usbrole**（STOR-1、BKUP-6、PWR-5、STOR-2、PWR-4、STOR-3、GUI-6；STOR-1 可以在构建前用 bind-mount 改好的 fstab 预先验，同样要用户同意并在场）：先告诉用户 port0 可能坏到只能重启（A6），全程用 TCP adb。
+  * STOR-1：U 盘分别格式化成 FAT32、exFAT，插 port1。`sm list-disks` 出现 `disk:8,0`，`sm list-volumes all` 出现 `public:8,N mounted`，「文件」应用里能看到；enforcing 下再插一次，看 vold / fsck_untrusted / sdcard 有没有 avc。
+  * PWR-5：port0 插 U 盘或鼠标，allow_suspend=1，息屏→亮屏 5 次。每次 role 都仍是 host、外设还在，`logcat -s gaokun3-usbrole` 里有"保持 host"；之后换插 PC，亮屏后 USB adb 能回来。
+  * 开机时插着 U 盘：开机保持 host → 拔掉 U 盘、换插 PC。切回 device 以后看 `/sys/class/udc/a600000.usb/function` 是不是 g1、`/config/usb_gadget/g1/UDC` 是不是非空。挂不上就二选一：(a) `gaokun3-usbrole.sh` 切 device 后发现 function 为空，就把 `a600000.usb` 写进 UDC（要给 `gaokun3_usbrole` 加 configfs 的写权限）；(b) 把 `init.gaokun3.usb.rc` 第 40、46 行退回成无条件写 device。顺带看看开机那一次是不是早于 U 盘枚举完成。
+  * PWR-4：坏口复现时，`getprop vendor.gaokun3.usbrole.broken` 应为 1（V4 的通知做了的话，看它有没有弹出来）。
+  * STOR-3 / GUI-6：请用户看清哪个物理孔是 port0、哪个孔能从 U 盘启动，结果补进 FAQ / INSTALL / known-limitations（包括"U 盘、鼠标、手柄插 port1"的建议）。
+* ⬜ **V12 亮屏后的方向、陀螺仪与亮度**（PWR-3 / LIVE-2 / LIVE-1）：亮屏后转动机器，旋转能及时跟上；亮屏后约 0.2–1 秒内那段 UNRELIABLE 零向量不会造成误转或卡住。游戏陀螺仪三种情形都要正常：只开 gyro、accel 已开再开 gyro、游戏切到后台再回来（gyro 停用后重开）；Game Rotation Vector / Gravity 这类融合传感器正常。
+  用户目视亮屏后的亮度对不对 —— **只有出现可见后果才做内核侧根治**（放批 2）：给 `refs/gaokun-buildbot/drivers/panel-hx83121a/panel-himax-hx83121a.c:194-200` 的 `himax_bl_update_status` 写本地补丁（面板 unprepare 之后只记亮度、返回 0，prepare / enable 时补发 DCS），或者让 HAL 缓存这个值、下次补写；没有可见后果就维持现在的 HAL 兜底。
+* ⬜ **V13 NET 实测**（NET-1 / NET-12；PNO 在批 1 测，耗电在批 4 测）：V3 的补丁进镜像以后，在息屏但系统醒着（插电或持锁）的状态下让 AP 断开再恢复，看 2 分钟内能不能重新连上；allow_suspend=1 时，定时唤醒后能不能重新连上；软件 PNO 有没有让 s2idle 期间多出唤醒和耗电（SwPnoScanState 用的闹钟类型还没查）。`ntp.aliyun.com` 在海外能不能连上，要有海外网络的用户来测。
+* ⬜ **V14 采样脚本与 A22**（PERF-2 / PERF-12 / B7 / REL-6；批 1 先验输出格式，批 4 正式测）：
+  * `standby.sh start / stop / pull`：setsid nohup 拉起来以后拔掉 USB，采样器还活着；挂起再醒来能写出 `ev=wake` 行；stop 会写 stop 行、pid 文件被清掉；adbd 重启是不是真会把采样器杀掉（这是按 cgroup 推断的，没实测），把它挪到根 cgroup 能不能根治；pull 的"中途死了"提示能不能触发。
+  * `game-perf.sh`：请用户解锁、开着游戏跑一次，核实 `--latency` 认的图层名是 `--list` 去掉外壳之后、带 #序号的全名；128 帧窗口每秒抓一次能拼成连续的（看 gap 列）；timestats 交叉核对的结果一致；改成 0.5 秒一轮后 GAP 基本消失，CSV 的 frames / fps 不再偏低；TCP adb 下单轮耗时 < 1.067 s。
+  * A22：真跑一次 `cmd wifi start-softap <ssid> wpa2 <口令>`（会断开 STA，要在 USB adb 下做）。
+* ⬜ **V15 文档里写成"待补 / 未验证"的事实**（INST-4 / INST-18 / OTA-12 / AV-12 / NET-2 / APP-19 / BATT-1 / INST-5；BATT-1 在批 2 测）：进 UEFI 固件设置和启动菜单的按键，以及不接键盘盖时怎么操作；systemd-boot 菜单在不接键盘盖时能不能用音量键 / 电源键操作（结果补进 FAQ / INSTALL，也作为 D19 菜单超时的依据）；前摄方向（v0.7.0 发版说明写"目测确认过"，与 AV-12 矛盾）；WPA2/WPA3 混合模式的路由器能不能连（#107 与 v0.7.1 发版说明的说法冲突）；QQ / 微信的平板模式登录（T5 / APP-19）；R2 在国内网络下能不能直连下载、速度多少（可以在本机 Mac 上用 curl 测）；BATT-1：接低功率电源时显示"充电"（批 2 做放电实验时一起看）。
+* ⬜ **V16 救援系统里 FAQ 写到的行为**（INST-12 / REL-9；批 3。要重启进救援，所以要同意 + 在场）：systemd-pstore 会不会把 EFI 里的 pstore 记录挪进内存里的 `/var/lib/systemd/pstore` 并删掉 EFI 变量（那样一重启就没了；FAQ 让用户先拷到 `/media/gk3/gaokun3/diag/`）；在别人的网络里 `ssh root@gaokun3-live.local`（avahi）能不能用；INSTALL 新写的 `bootctl list` + `bootctl set-oneshot <id>` 在救援里能不能用。
+
+**批 5（RC）的构建后自检**
+* ⬜ **V17 1.0 发版说明和"从 1.0 起"的说法**（B1 / D1 / REL-10 / REL-15 / SEC-10 / NET-2 / AV-10 / D5 / D10）：从 `docs/relnotes/TEMPLATE.md` 复制出 1.0 的说明，已知限制的摘要逐条对齐发版当时的 known-limitations（SELinux 的 D5、恢复出厂有没有由统一启动入口落地、U 盘 STOR-1、有线耳机麦 AV-10、热点 NET-2、中文输入法 D10）。
+  加一条安全公告：v0.7.1 及以前开着免授权的 5555 adb，debuggable 下能拿 root，还内置了维护者的公钥，从本版起都关掉；OTA 之后自动生效（build.prop 的默认值不落盘），但自己 setprop 过 `persist.adb.tcp.port` 的人除外；「USB 调试」每次重启都会复位成关。
+  要在已验收的发布构建上确认 `ro.adb.secure=1` / `ro.debuggable=0` / 没有 5555 之后，才保留 INSTALL / FAQ / README 里"Release builds after v0.7.1 no longer…""From 1.0…"这些句子，并改掉两份 README 里"计划在 1.0 关掉"那句；如果 B1 没进这一版，就撤回这些句子。
+
+**等安装器**（`scripts/live/`、`live/installer-flutter/`、`scripts/windows/`）—— 安装器组 10-05 00:55 已合进 main，下面这些现在都可以做了，只是本轮没碰：
+* ✅ 本表已记（上表第 13 行）：B5、GUI-3、GUI-5、GUI-20、STOR-5（安装器侧）、GUI-7 / INST-11 都已写、已在本机测过，待构建与上机。⬜ v1.0-plan 那边还没标。⬜ GUI-5 里 RunPage 下载阶段的取消按钮和速度 / 剩余时间显示**没做**。
+* ✅ STOR-5 的第二道保险已经随 `3608a52` 落地：`installer-lib.sh` 里 userdata 的 `mkfs.ext4` 加了 `-m 0`，test-apply 也断言了保留块为 0。⬜ 真盘装一次后只读跑 `tune2fs -l` 确认（ROM 侧 `reservedsize` 生效后应为 32768，见 V9）。
+* ✅ release-checklist B13（G5）要的两样都已合进 main：`build-rootfs.sh` mask 了 5 个睡眠 target，`flow_test.dart` 有"下载失败（盘没动）… 重试"的用例。⬜ mask 要等 build-live 重建以后在真 live 里验（见下）。
+* ⬜ GUI-7 / INST-11：把 `docs/INSTALL.md` "Before you start, in Windows"那一段（:109-114 一带）的 BitLocker 提醒改成"脚本会先让你确认恢复密钥、用 Suspend-BitLocker 暂停 2 次重启，然后再去关安全启动"，与 ps1 的顺序一致（`203265a` 起 ps1 还会先查 UEFI）。
+* ⬜ `docs/stage7-flutter-debian.md` 记一笔：B5 的三层（logind.conf.d、mask 掉的睡眠 target、systemd-inhibit）、失败页分成两种、侧栏的重启 / 关机、`gk3_net_fetch` 的停滞判死和重试上限（GUI-3/5）；rescue 也用 overlay-common，所以在救援系统里短按电源键也不会再关机。
+* ⬜ `live/installer-flutter/testdata` 的 fixture 下次用 `scripts/live/gen-fixtures.sh` 重录（会自然带上 `fixed_mib`），届时删掉手补的那几行和 index 的头注释。
+* ⬜ `live/installer-flutter/lib/l10n/app_en.arb` 与 `app_zh.arb` 的 `optsRescueBody`（"a Linux that runs from RAM"）改成准确的说法：squashfs 从分区只读 loop 挂载，写入层在 RAM（`initramfs-init:119-123`）。
+* ⬜ INST-6：Windows 安装包的 GK3LIVE 上没有 `rescue.squashfs`（`scripts/windows/build-bundle.sh:51-53` 和 `release-installer.sh` 都没带 `--rescue-squashfs`，`installer-lib.sh` 只按 `rescue.squashfs` 这个名字找）⇒ 要么打包时带上 `install-rescue/rescue.squashfs`（不加 `--with-rescue` 时就用 live squashfs 本身），要么让 installer-lib 在 `/media/gk3/gaokun3/live.squashfs` 上兜底；落地以后改掉 INSTALL 里"⬜ Whether an install started from Windows gets one has not been checked"那句（:254-255）。
+* ⬜ `release-installer.sh` / 发版流程：以后每版都附安装器的话，INSTALL 和 README 的 Downloads / Files 表改成指向 latest，安装器文件也传一份 R2（国内才下得到）。
+* ⬜ `scripts/live/m0-internal.sh:46` 的 root 提示（`setprop service.adb.root 1 && adb root`）按发布构建的情况改写（D1 之后 adb root 走不通，要靠 KSU 或 `su -c`，先等 V10 的结果）。
+* ⬜ live 镜像重建（`build-live.sh`）之后要验：体检新加的断言（5 个 masked、logind 的 6 个键、systemd-inhibit）在真 chroot 里通过；在 live 里只读查 `systemctl is-active systemd-logind`、`loginctl show-seat`、`udevadm info /dev/input/event* | grep power-switch`、`systemd-inhibit --list`（安装期间能看到 gaokun3 installer）；按电源键不关机、合盖不挂起、`systemctl suspend` 因为被 mask 而被拒；systemd 257 认不认 `--what` 的 handle-suspend-key 等值（看 installer.log 里有没有"拿不到 systemd-inhibit"）；停滞判死的阈值（10 KiB/s 持续 60 秒）在国内走 R2 慢速下载时不会误判；侧栏的关机（`poweroff`，由 systemd-sysv 提供）在真机上点一次。
+* ⬜ Windows 侧：`Suspend-BitLocker -RebootCount 2` 够不够用（关安全启动回来算 1 次，装完第一次经 systemd-boot 进 Windows 算 1 次），恢复保护时按哪条启动路径重新封存 —— 需要一台带 Windows 的 MateBook E Go，用户在场，并进 B4 一起做。
+* ⬜ B4 / M4a 的真机路径：U 盘启动安装器 → tty2 root 免密登录 → curl 下载到 `/tmp` → 跑 `/usr/share/gaokun3/install-gaokun3.sh` 整盘安装，这一整条从没在真机上跑过；图形安装器"Reinstall Android"默认清除数据这条路径（现在是文档推荐的唯一真正清数据的办法），B4 验收时优先跑。
+* ⬜ INST-12 的 `gk3-boot-android` 助手（放救援 overlay，按 `*-android-<槽>.conf` 通配，批 3）：落地以后，把 INSTALL "About the rescue system"里本轮改写的 `bootctl list` + `set-oneshot <id>` 说明换成用这个助手。
 
 ### ▶ v0.7.0-alpha（用户 2026-09-28 定：名字 v0.7.0-alpha、带 SELinux 第六轮、验收全过就推仓库 + 发版 + 发安装器预览）
 * 内核 = iris 候选 `56f9b66a`（全配方 0053–0057、0059–0061、0065–0067 + 0050，不带诊断）+ dtb `bad0cd6e`；候选内核上机验收过：
@@ -177,7 +307,7 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 | **B0** | 让构建机的树**就是**本仓 checkout | **已经咬了六次**。`kernel-apply-patches.sh --verify` 与 `sync-device-tree.sh`（带断言）是探测器，不是根治 |
 | **B5b** | UBWC：仓库写着关 | `device.mk:224`（原记 :174，行号已漂）仍是 `nocompression`，**一次测量都没有**。下版构建前删那行并带一次实测 |
 | **B6** | GPU SMMU 中断根治 | 做掉它 `smmu-nostall.sh` 整个消失，B1 的一半阻塞跟着消失 |
-| **B9** ✅ | SLPI handover 噪声 | **2026-09-24 结案**（[#119](stage4-findings.md) §4）：它是 SSC 向 AP 投递一批数据的门铃（封顶 5 Hz，采样率 25→50 Hz 不变，没人读时为 0），不是故障。`patches/0014` 的 ratelimit 就是正解 |
+| **B9** ✅ | SLPI handover 噪声 | **2026-09-24 结案**（[#119](stage4-findings.md) §4）：它是 SSC 向 AP 投递一批数据的门铃（封顶 5 Hz，采样率 25→50 Hz 不变，没人读时为 0），不是故障。`patches/0014` 的 ratelimit 就是正解。⚠️ 2026-10-05 更正（1.0 计划 PWR-3 的复核）："没人读时为 0"是**停掉 HAL** 测的；HAL 在跑、只是没有订阅者时并不为 0（旧 HAL 会话一建好就 50 Hz 常开）—— 这份空转功耗由 PWR-3 的 `4db08bc` 修，待上机（见总表第一节 V8 / V9）；#119 §4 待补同一句更正 |
 | **B12** | 释放 R2 桶前要有国内可达的镜像 | GitHub 附件国内不可达。要用户定方案（Worker 反代 / 保留桶） |
 | **B16** ✅ | 设备外网单连接慢 | **2026-09-24 定位并修**（[#119](stage4-findings.md) §3）：到海外 CDN 的 RTT ~294 ms，Android 默认 Wi-Fi TCP 接收上限 2 MB ⇒ 单连接 ~3.5 MB/s；临时改 8 MB 实测 9.1–9.8 MB/s（4 连接合计 12.6 MB/s，局域网 32 MB/s）。`rro/Gaokun3WifiOverlay` 已进镜像。✅ **已生效**：v0.6.3 候选版验收第 5 项、v0.7.0 验收第 9 项 `TcpBufferSizes` 都含 `8388608`；issue #14 的报告者在 v0.7.0 上也确认了 B16 |
 | **B3** | 自研 EFI 加载器 | "默认启动项永远留救援"依赖它（A5 原也依赖它，2026-10-04 用户定改由 fastboot 承接，见 A5） |
@@ -253,7 +383,7 @@ B19 **没有翻成"有回落"**：实机仍只有 `_a`，是 VAB 的设计，描
 `panic=10` 让 init 炸掉后**自动重启回 `default` 自愈**，不用按电源键；
 `init_fatal_panic` 把 init 的 LOG(FATAL) 转成真 panic 落 pstore。
 
-★ **重建验收判据（进发版收尾清单，两条都要）**：
+★ **重建验收判据（进发版收尾清单，两条都要；已落地为 [`release-checklist.md`](release-checklist.md) D1）**：
 ① 设备 `/proc/config.gz` 与重建树 `.config` 做 diff —— 差出的每个符号都是一份
 没入库的源码；② 两个内核镜像做**全字符串差集**，**外加 dtb 比 sha256**。
 ⚠️ 字符串差集**看不见 DTS**，0009 漏打就完全逃过了它。
@@ -1031,7 +1161,7 @@ checkout），让 `git status` 直接说话。⚠️ 换之前先做一次清单
 而 `ThermalManagerService.shutdownIfNeeded()` 到 SHUTDOWN 会直接 `powerManager.shutdown()`；
 mock 值恒定才没打到。**只换 HAL 不改阈值 = 开机几分钟自动关机。**
 ⚠️ 本条 2026-09-14 之前一直写着"现在是 AOSP mock"——**发版说明写了不等于 TODO 更新了**，
-这是本仓第二次栽在同一处（M16 那次是 README 首屏）。收尾清单里要有一条"grep 旧结论的关键词"。
+这是本仓第二次栽在同一处（M16 那次是 README 首屏）。收尾清单里要有一条"grep 旧结论的关键词"（已落地为 [`release-checklist.md`](release-checklist.md) D2）。
 
 ### B3. 自研 EFI 加载器（规范化的最后一段）
 读 `misc` 的 `bootloader_control` 选槽 + 解析 Android boot 镜像 +
