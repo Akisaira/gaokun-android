@@ -253,8 +253,19 @@ PRODUCT_VENDOR_PROPERTIES += \
 # 看门狗/ANR 超时统一 ×5。cycle-1 的 AudioService 等 audioserver 发布
 # 差几十秒被 60s 看门狗击杀 → 级联轮回（ANR 实锤）。Phase B 换
 # freedreno 后可降回 2 或删除。
+# ★ v1.0 APP-9（2026-10-05）：5 → 2（按计划先降到 2，不直接删）。×5 让应用卡死后要 25 秒才弹 ANR
+#   （实机 dumpsys input：应用窗口 dispatchingTimeout=25000ms），用户只会以为整机卡了。
+#   这个倍数放大的东西（读源码，不是凭记忆）：
+#     · system_server 看门狗：Watchdog.java:881-882 `watchdogTimeoutMillis * Build.HW_TIMEOUT_MULTIPLIER`
+#       （DEFAULT_TIMEOUT 60 s，:101）⇒ ×5 = 300 s，×2 = 120 s；Build.java:1715-1716 读本属性、默认 1
+#       （LineageOS frameworks_base lineage-23.2 的上游副本，⚠️ 待构建机核对 crDroid 那份行号）；
+#     · 输入分发超时（应用 ANR）5 s × 倍数 —— 实机 25000ms 印证了这一条，常量出处在 frameworks/native，本地没有，待构建机核实；
+#     · debuggerd / tombstoned 的握手与取证超时：refs/lineage-system-core/debuggerd/crash_dump.cpp:178/185/624、
+#       tombstoned/tombstoned.cpp:322/342、tombstoned/intercept_manager.cpp:150/161；llkd：libllkd.cpp:965。
+#   当初怕的是开机期 AudioService 等 audioserver 超过 60 s；现在是 turnip 硬件渲染，开机 40 秒左右起来（1.0.0-dev.1 实测）。
+#   ×2 仍给看门狗留了 120 s。上机回归：冷启动 ≥5 次 + 重启 audioserver 几次，dropbox 里不出现 system_server_watchdog / 新的 ANR。
 PRODUCT_VENDOR_PROPERTIES += \
-    ro.hw_timeout_multiplier=5
+    ro.hw_timeout_multiplier=2
 
 # ★ REL-5（docs/v1.0-plan.md）：项目自己的版本号，只读属性 ro.vendor.gaokun3.version。
 #   ⬜ 2026-10-05 写，未编译、未上机。
