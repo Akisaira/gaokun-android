@@ -33,7 +33,7 @@ has_downstream() {
 }
 
 # PWR-4 止损：切 host 失败（A6：待机后回插 port0，xhci 一律 -110）时置 1，确认 host 成功时清 0。
-#   不持久 —— 口坏了要重启才好，重启后它自然没了。供以后 Parts 发"USB 口异常，重启后恢复待机"的通知。
+#   不持久 —— 口坏了要重启才好，重启后它自然没了。Parts 据此发"USB 口异常，重启后恢复"的通知（UsbPortNotifier）。
 BROKEN=vendor.gaokun3.usbrole.broken
 
 # ── USB-2（v1.0，2026-10-05）：port0 在 host 时让 adbd 的 USB 传输停下 ──────────────
@@ -77,6 +77,24 @@ adb_gate() {
     fi
 }
 
+# ── USB-1（v1.0，2026-10-05）：插电脑时 port0 落成【我方供电】、数据连不上 ─────────────
+# 现象（10-05 实机，插 Mac：DRP 对 DRP、对端不支持 PD）：port0 有时协商成我方供电（power_role=[source]），平板给电脑
+#   充电，内核随之定成 host，两边都不枚举 ⇒ USB adb 不出现。下面的 follow 只在我方受电时纠偏，这种情况不管。
+#   拔插一次即恢复（当场验证：重插后 [sink]、UDC configured）。
+# 主动换成受电方走不通：UCSI 的 ucsi_pr_swap 要对端支持 PD，非 PD 时交换后复位连接器并返回 -EPROTO
+#   （refs/linux-v7.2-rc2/drivers/usb/typec/ucsi/ucsi.c:1607-1650）⇒ 只能请用户重插：
+#   我方供电 + 对端不支持 PD + 没有数据连接（host 且 xhci 下无设备，或 device 且没被主机枚举）持续约 6 秒
+#   ⇒ 置 vendor.gaokun3.usbrole.reversed=1，Parts（UsbPortNotifier）弹"平板正在给对方供电，请拔下重插"；
+#   条件不再成立 / 拔线 ⇒ 清 0。
+# "对端不支持 PD"的判据：port0-partner/supports_usb_power_delivery = no，或 port0/power_operation_mode 不是
+#   usb_power_delivery（typec class：linux v7.2-rc2 drivers/usb/typec/class.c:799-807、:1917-1925）。
+#   ⚠️ 没用 usb_power_delivery_revision = 0.0：1.0.0-dev.1 实机插着 Mac（Mac 供电、有 PD 合同）时对端读到的
+#   就是 supports_usb_power_delivery=yes、revision=0.0、power_operation_mode=usb_power_delivery —— 这台的 EC 不报
+#   PD 版本，拿 0.0 当"无 PD"会把有 PD 的对端也算进去。
+# 不算的：accessory_mode 不是 none 的对端（模拟音频 / 调试附件）。
+# ⚠️ 也会命中"只取电、不是 USB 设备"的东西（USB 风扇 / 灯）—— 通知的措辞因此写成"若连的是电脑"。
+REVERSED=vendor.gaokun3.usbrole.reversed
+
 case "$WANT" in
     host|device|follow) ;;
     *) say "用法: $0 host|device|follow"; exit 2 ;;
@@ -104,13 +122,46 @@ P=/sys/class/typec/port0
 if [ "$WANT" = follow ]; then
     partner_present() { [ -d ${P}-partner ]; }
     we_are_sink() { case "$(cat $P/power_role 2>/dev/null)" in *"[sink]"*) return 0 ;; esac; return 1; }
+    we_are_source() { case "$(cat $P/power_role 2>/dev/null)" in *"[source]"*) return 0 ;; esac; return 1; }
     enumerated_by_host() {
         case "$(cat $UDC 2>/dev/null)" in
             configured|addressed|default|suspended) return 0 ;;
         esac
         return 1
     }
-    miss=0; tried=""; settled=0; last_role=""; gate_n=0
+    # USB-1：对端不支持 PD（判据与理由见文件开头 USB-1 一段）
+    partner_no_pd() {
+        case "$(cat ${P}-partner/accessory_mode 2>/dev/null)" in ""|none) ;; *) return 1 ;; esac
+        [ "$(cat ${P}-partner/supports_usb_power_delivery 2>/dev/null)" = no ] && return 0
+        m=$(cat $P/power_operation_mode 2>/dev/null)
+        [ -n "$m" ] && [ "$m" != usb_power_delivery ]
+    }
+    # USB-1：我方供电、对端无 PD、而且没有任何数据连接
+    source_no_data() {
+        we_are_source || return 1
+        partner_no_pd || return 1
+        case "$(cat "$S" 2>/dev/null)" in
+            host)   has_downstream && return 1 ;;
+            device) enumerated_by_host && return 1 ;;
+            *) return 1 ;;
+        esac
+        return 0
+    }
+    rev_last=""
+    set_reversed() {   # $1 = 0/1；只在变化时 setprop（本进程记着上次的值，免得每 2 秒 fork 一次 getprop）
+        [ "$rev_last" = "$1" ] && return 0
+        rev_last=$1
+        rv=$(getprop $REVERSED)
+        [ "$rv" = "$1" ] && return 0
+        [ "$1" = 0 ] && [ -z "$rv" ] && return 0
+        setprop $REVERSED "$1"
+        if [ "$1" = 1 ]; then
+            say "$REVERSED=1：我方供电、对端无 PD、约 6 秒没有数据连接 ⇒ 请用户重插（USB-1）"
+        else
+            say "$REVERSED=0（USB-1 解除）"
+        fi
+    }
+    miss=0; tried=""; settled=0; srcmiss=0; last_role=""; gate_n=0
     say "follow 启动"
     while :; do
         sleep 2
@@ -120,10 +171,21 @@ if [ "$WANT" = follow ]; then
         if [ "$cur_role" != "$last_role" ] || [ $gate_n -ge 30 ]; then
             adb_gate; last_role=$cur_role; gate_n=0
         fi
-        if ! partner_present; then miss=0; tried=""; settled=0; continue; fi
+        if ! partner_present; then miss=0; tried=""; settled=0; srcmiss=0; set_reversed 0; continue; fi
         if [ "$(getprop persist.vendor.gaokun3.allow_suspend)" = 1 ] &&
            [ "$(getprop debug.tracing.screen_state)" != 2 ]; then miss=0; continue; fi
-        we_are_sink || { miss=0; continue; }
+        if ! we_are_sink; then
+            miss=0
+            # USB-1：连续 3 轮（约 6 秒）都是"我方供电、无 PD、无数据" ⇒ 置 1；一轮不成立就清
+            if source_no_data; then
+                srcmiss=$((srcmiss + 1))
+                [ $srcmiss -ge 3 ] && set_reversed 1
+            else
+                srcmiss=0; set_reversed 0
+            fi
+            continue
+        fi
+        srcmiss=0; set_reversed 0
         [ $settled = 1 ] && continue
         cur=$(cat "$S" 2>/dev/null)
         case "$cur" in
