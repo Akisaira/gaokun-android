@@ -1,6 +1,10 @@
 # 待办清单
 
-最后更新：**2026-09-23**（全表对账：把 v0.6.2 发布与 SELinux 第五轮之后已经做完、但正文还写着 ⬜ 的条目逐条核对并收口；
+最后更新：**2026-10-04**（1.0 计划 REL-12 的过时条目对账：把 v0.6.3 / v0.7.0 / v0.7.1 验收里已经过了、总表还挂着 ⬜ / 🆕 的 B16、B22、T5、B18、S1 收口，
+改正 B19（"回落槽"的说法以实机为准）、B4、B20、A3 标题的过时描述，记下 A5 / B11 的用户决定（D4 / D6）；逐条依据见下面"✅ 本次对账收口的"第三轮。
+**1.0 之前要修什么、按什么顺序，以 [`v1.0-plan.md`](v1.0-plan.md) 为准**，本表不重复列。）
+
+上一次：**2026-09-23**（全表对账：把 v0.6.2 发布与 SELinux 第五轮之后已经做完、但正文还写着 ⬜ 的条目逐条核对并收口；
 新增两条 —— 待机默认值对老用户的影响（S1）、全新安装丢触摸参数（B15 实锤）。
 同日第二轮：按用户反馈关 A0；修掉 B15 / B17；issue #5 声明平板（T5）；12 个过时脚本归档到 `scripts/archive/`）
 
@@ -15,14 +19,15 @@
 > 所以凡是写着"应已随 v0.6.2 进镜像"的，依据是**提交时间早于构建戳**（`a7ce25f` 09-14 14:50 <
 > `1789570683` = 09-16 22:58）加 09-16 `sync-device-tree.sh` 的一致性断言，**不是设备上的核对**。
 > 下次设备在线时先 `adb shell` 看一眼 `/vendor/bin/gaokun3-usbrole.sh` 与相机 HAL 是否是新版。
+> ✅ 2026-10-04 在 v0.7.1-alpha（`1791053208`）上核对：`/vendor/bin/gaokun3-usbrole.sh` 与 `gaokun3-rproc-kick.sh` 的 md5 与仓库逐字节相同（相机 HAL 未核）。
 
 ---
 
 ## 总表：现在还剩什么
 
-**统计（2026-09-23）**：用户能感觉到的缺口 **9** 条未完 · 工程债 **12** 条未完 ·
-等用户点头的对外动作 **5** 条 · 明确搁置 **4** 条。下面按"下一步是什么"分组，
-详情见各自的条目。
+**统计（2026-09-23，未重算）**：用户能感觉到的缺口 **9** 条未完 · 工程债 **12** 条未完 ·
+等用户点头的对外动作 **5** 条 · 明确搁置 **4** 条。⚠️ 这组数字是 09-23 的，此后新增与收口的条目都没算进去；
+1.0 还剩多少，看 [`v1.0-plan.md`](v1.0-plan.md)。下面按"下一步是什么"分组，详情见各自的条目。
 
 ### ▶ v0.7.0-alpha（用户 2026-09-28 定：名字 v0.7.0-alpha、带 SELinux 第六轮、验收全过就推仓库 + 发版 + 发安装器预览）
 * 内核 = iris 候选 `56f9b66a`（全配方 0053–0057、0059–0061、0065–0067 + 0050，不带诊断）+ dtb `bad0cd6e`；候选内核上机验收过：
@@ -148,9 +153,9 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 
 | # | 事情 | 现在卡在哪 | 下一步（具体） |
 |---|---|---|---|
-| **S1** ✅ | **待机默认值 1→0 会波及老用户**（2026-09-24 已改回 1，见下） | 用户 2026-09-23：这是 SELinux 那轮（属性改名）带出来的，不是为待机本身做的决定。09-18 为改名把 `persist.vendor.gaokun3.allow_suspend` 默认设成 0（`device.mk:526`），`device.mk` 注释只说"新装机默认不睡"。但 v0.6.2 的用户**绝大多数从没设过这个属性**（旧默认 1）⇒ OTA 一过、新名字取默认 0 ⇒ **所有老用户也会失去 s2idle**，README 的"待机 ✅"随之失真 | ✅ **用户 2026-09-23 定**：开发期保持 0，**正式版发布前改回 1**。✅ 2026-09-24 候选版起已改回 1（`device.mk` 的 `PRODUCT_VENDOR_PROPERTIES`），开发机已 `setprop … 0` 并核对落盘；✅ `release.sh` 断言发版的 `vendor/build.prop` 里是 1（`--stage-only` 不拦）。⬜ 装机验收清单第 8 条 |
+| **S1** ✅ | **待机默认值 1→0 会波及老用户**（2026-09-24 已改回 1，见下） | 用户 2026-09-23：这是 SELinux 那轮（属性改名）带出来的，不是为待机本身做的决定。09-18 为改名把 `persist.vendor.gaokun3.allow_suspend` 默认设成 0（`device.mk:526`），`device.mk` 注释只说"新装机默认不睡"。但 v0.6.2 的用户**绝大多数从没设过这个属性**（旧默认 1）⇒ OTA 一过、新名字取默认 0 ⇒ **所有老用户也会失去 s2idle**，README 的"待机 ✅"随之失真 | ✅ **用户 2026-09-23 定**：开发期保持 0，**正式版发布前改回 1**。✅ 2026-09-24 候选版起已改回 1（`device.mk` 的 `PRODUCT_VENDOR_PROPERTIES`），开发机已 `setprop … 0` 并核对落盘；✅ `release.sh` 断言发版的 `vendor/build.prop` 里是 1（`--stage-only` 不拦）。✅ 装机验收：v0.6.3 候选版清单第 8 条过（开发机持久 0 不睡、镜像默认 1）；v0.7.0 第 8 项真睡约 3.5 分钟、唤醒不复位；2026-10-04 v0.7.1（`1791053208`）实机 `/vendor/build.prop` 里仍是 `allow_suspend=1`。（按真实用法长时间待机的实测是另一件事，见 [`v1.0-plan.md`](v1.0-plan.md) PWR-7） |
 | **B21** 🆕 | **SLPI 崩溃自愈后系统传感器全丢**（2026-09-24，[#121 §3](stage4-findings.md)） | 自愈时 init 只重启一次 hexagonrpcd，而 SEE 要再重启一次才注册传感器 ⇒ accel 没了、自动旋转失效，直到重启 | 给 hexagonrpcd 的 rc 加"SLPI 回到 running 后再重启一次"（`on property` 盯不住 remoteproc 状态，多半要一个小守护或 uevent 触发），实测：让 SLPI 崩一次（激活光感就能复现）看 accel 能否自己回来 |
-| **B22** 🆕 | **时钟不校准：NTP 只有 `time.android.com`，国内连不上**（2026-09-24，[#122 §3](stage4-findings.md)） | 设备慢 41 分钟、这次开机从没自动校时；Lineage 的中国服务器只在 `values-mcc460`，本机无基带落不到 | ✅ overlay 加 `config_ntpServers`（time.android.com + aliyun / tencent / ntsc），**已写未编**。⬜ 下一版装上后 `settings delete global ntp_server` → `cmd network_time_update_service force_refresh` = true |
+| **B22** ✅ | **时钟不校准：NTP 只有 `time.android.com`，国内连不上**（2026-09-24，[#122 §3](stage4-findings.md)） | 设备慢 41 分钟、这次开机从没自动校时；Lineage 的中国服务器只在 `values-mcc460`，本机无基带落不到 | ✅ overlay 加 `config_ntpServers`（time.android.com + aliyun / tencent / ntsc）。✅ **已生效**：v0.7.0 验收第 7 项 `ntp.aliyun.com` 对时（与 Mac 差 1 秒）；2026-10-04 v0.7.1（`1791053208`）实机 `dumpsys network_time_update_service`：`mServerUris` 四个都在、`mLastSuccessfulNtpServerUri=ntp://ntp.aliyun.com`，开发机的 `ntp_server` 已删（`null`）。尾巴不在这条：那次开机第一次对时成功用了约 7 分钟、连续失败后下一次定时对时被推到 18 小时后 ⇒ [`v1.0-plan.md`](v1.0-plan.md) NET-12 |
 | **T1** | **触摸** | ✅ v0.6.2 已发（跳点限速线、fuzz=0、按下 17 ms、面积轴、6 个驱动缺陷、可观测性，[#114](stage4-findings.md)–[#116](stage4-findings.md)）。剩：手掌碎成多触点（不影响点击，三种阈值法实测全否） | 下一版驱动做跨帧形态判据；轴已经有了，可以顺手写触摸 IDC（`touch.size.calibration`，本机现在 `ConfigurationFile: <none>`） |
 | **B15** ✅ | **全新安装丢触摸参数**（2026-09-23 已修） | ★ 实锤：`scripts/install-gaokun3.sh:251-257` 写死的 cmdline **没有** `himax_hx83121a_spi.disable_pressure=0`（`BoardConfig.mk:134` 有）⇒ 按 INSTALL.md 全新装 v0.6.2 的机器**没有触点面积轴**，直到第一次 OTA 的 postinstall 把 cmdline 同步过去 | ✅ `install-gaokun3.sh` 改为从 boot.img 头读 cmdline（`cmdline[512]@64 + extra_cmdline[1024]@608`，与 `bootimg_extract.cpp` 同一写法），读不到就拒装。拿 v0.6.2 发布的 `boot.img`（sha `975d7987…`）实测：解出的 cmdline 与 `BoardConfig.mk` **逐字相同**。`deploy-android.sh` 已归档。✅ 2026-09-24 `installer-lib.sh` 那份也改了（随 B4 重启）：cmdline 与内核文件都从 boot.img 拆，命令行版改成 source 这个库，四份只剩 `BoardConfig.mk` 一份真相源（[stage7-flutter-debian.md](stage7-flutter-debian.md) §3.3） |
 | **T2** | **Google 未认证** | Play 商店报"设备未经 Play 保护机制认证" | 工具与文档已就位（`scripts/google/gsf-android-id.sh` + INSTALL.md）。**剩下的是用户动作**：拿 Android ID 去 google.com/android/uncertified 登记 |
@@ -159,10 +164,10 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 | **T3** | **相机画质** | 暗光噪点、闪光白墙过曝 34%、偏绿（[#112](stage4-findings.md) §5）。降噪 + 预闪按亮度收敛 + 曝光回填**应已随 v0.6.2 进镜像**（见顶上"对账边界"），1:1 样片颗粒明显变细（#112） | 还没写的两条：闪光帧下发 `ExposureValue` 负补偿；libcamera AWB 剔饱和像素（值得投上游）。CCM 要色卡（用户提供）。手电筒亮度档位（`turnOnTorchWithStrengthLevel`） |
 | **T4** | **息屏 USB adb 断** | `usbrole.sh` v2（插着主机不睡）**应已在 v0.6.2 里**；但在 S1 定下来之前默认根本不睡，这条暂时无感 | 原生化要先修 UCSI 的数据角色（A6，现在是反的） |
 | **A1** | 音频/蓝牙长期运行后死锁 | 用户报过，我们从未复现 | 设备在线时先 `ls /data/vendor/gaokun3/` 看开发机自己有没有抓到过 `hangdump-*`；否则等下次死锁把目录要过来 |
-| **T5** 🆕 | **声明本机是平板**（[issue #5](https://github.com/vahiru/gaokun-android/issues/5)） | `ro.build.characteristics` 是 `default` ⇒ QQ 不给平板模式登录。原因：从没设过 `PRODUCT_CHARACTERISTICS`，而 `common_full_tablet_wifionly.mk` 也不设它 | ✅ 已写 `lineage_gaokun3.mk`：`PRODUCT_CHARACTERISTICS := tablet`（依据 `build/make/core/product_config.mk:425-428`）。⬜ 下次构建后 `grep ro.build.characteristics …/system/build.prop` 验；请报告者实机测 QQ。⚠️ issue 里「网页把设备认成 Linux」**不一定**跟着好 —— Android 的 UA 本来就含 `Linux; Android`，网页是否给平板版由浏览器决定，不看这个属性（未验证） |
+| **T5** ✅ | **声明本机是平板**（[issue #5](https://github.com/vahiru/gaokun-android/issues/5)） | （原状）`ro.build.characteristics` 是 `default` ⇒ QQ 不给平板模式登录。原因：从没设过 `PRODUCT_CHARACTERISTICS`，而 `common_full_tablet_wifionly.mk` 也不设它 | ✅ 已写 `lineage_gaokun3.mk`：`PRODUCT_CHARACTERISTICS := tablet`（依据 `build/make/core/product_config.mk:425-428`）。✅ **已生效**：v0.6.3 候选版验收第 1 项、v0.7.0 验收第 1 项都是 `tablet`，2026-10-04 v0.7.1（`1791053208`）实机 `getprop ro.build.characteristics` = `tablet`。⬜ 只剩 QQ / 微信是否真进平板模式没人测过（[`v1.0-plan.md`](v1.0-plan.md) APP-19，开发机上装着 QQ，要用户在场登录）。⚠️ issue 里「网页把设备认成 Linux」**不一定**跟着好 —— Android 的 UA 本来就含 `Linux; Android`，网页是否给平板版由浏览器决定，不看这个属性（未验证） |
 | **A6** 🔺 | **USB 角色 / #27 拔插后 adb 不回来** | ★ 2026-09-23 真凶查到（[#118](stage4-findings.md) §7）：port0 控制器**任何一次**角色切换后都坏 —— host 时 xhci `Host halt failed, -110`，切回 device 后 gadget `-524`、只能重启。与 0012 记过的 pipe 时钟 -110 同签名，缺 `qcom,select-utmi-as-pipe-clk` ⇒ `patches/0048` —— ✅ **2026-09-23 上机验证**：来回切三次 xhci 200 ms 绑上、UDC 400 ms `configured`，`-110`/`-524` 各 0 次（[#118](stage4-findings.md) §8）。角色策略：用户态 `follow`（电气探测，不信 EC）A/B 两场景实测通过、C 只测了状态机。本机 `slot_a` 的 dtb 已手工换成 0048 版（备份 `.pre0048`）；⬜ 随下次构建进镜像（prebuilt-boot 的 dtb 已换）；⬜ hub/U 盘/充电器真机场景仍未测（用户手边没有）。❌ **2026-09-29 v0.7.0 验收：待机之后再回插，port0 又坏了**（`-524` / `-110`，0048 在 DT 里；那次开机角色切了 4 次、第 4 次坏，之前三次都好；第一个候选版同样的步骤过了一次）⇒ 0048 没盖住"待机 / 唤醒之后"这一种；发版说明已写已知问题。⬜ 复现：待机前后各切一次角色看是哪一步坏、查 dwc3 / QMP PHY 的 resume 路径。另：2026-09-23 直接问 EC（[#118](stage4-findings.md) §6）：插着主机时 `partner_type=2`（UFP，应为 1），**没插也是 2** ⇒ 可能是常数；EC 端口数据里没有角色位 | **要用户插拔**：U 盘 / 纯充电器 / 扩展坞各跑一次 `scripts/usb/ucsi-snapshot.sh`，看 partner_type 与 pwr_dir 怎么变，再定 quirk（扩展坞会 DR_Swap，不能盲用"受电⇒对方是主机"） |
 | **A3** 🔄 | **自动亮度** | ★★ 2026-09-24（[#121](stage4-findings.md)）：激活光感 = **SLPI 的 sensor_process 整个崩溃**（`sns_stream_service.c:436` fatal），`08 04` 只是死前最后一条消息；Windows 在本机用的**也是 QRD 那套 JSON**（INF 按 `SUBSYS_QRD08280` 装）⇒ 差别只剩 DSP 自己写的 registry。**下一步：让 hexagonrpcd 可写**（FadyAckad `sp11-sensors` 分支；psacal 称加写入桩后 ~408 lux，未复现）。以下是旧记录 —— ★ 2026-09-23：`tcs3701`（ams AG）**注册出来了、芯片应答**（[#118](stage4-findings.md) §5，#72 时是"没有提供者"）。但使能后只回一条 `msg_id=130`、载荷 `08 04`，0 条读数；513/514 三种请求同一回应 ⇒ 传感器侧拒绝激活 | 查 130/4 的语义与 libssc 怎么使能光感；最像的差别是 registry（我们是空文件、只读，psacal 拷的是本机 Windows 生成的）。为什么现在应答：候选 L2C，未做对照 |
-| **A5** | 恢复出厂设置不起作用 | 走 misc+recovery，而本机 recovery 起不来 | 依赖 B3（自研 EFI 加载器）或让 recovery 能启动 |
+| **A5** | 恢复出厂设置不起作用 | 走 misc+recovery，而本机 recovery 起不来 | ★ 用户 2026-10-04 定（[`v1.0-plan.md`](v1.0-plan.md) D4）：**改由将来的 fastboot 承接**，设计进行中；下面原写的"依赖 B3 或让 recovery 能启动"作废 |
 
 ### 🟡 第二梯队：工程债（不修不会坏，但会反复咬人）
 
@@ -170,20 +175,20 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 |---|---|---|
 | **B1** 🔄 | SELinux 转 enforcing | ★ **2026-09-27 第六轮（[#126](stage4-findings.md)）**：完整开机普查（logd 的 kernel 缓冲从 2 s 起）+ **运行期 enforcing 试跑**（硬解 / 前后摄 / 触摸 / 键盘全过，USB adb 掉线查到原因）。查出 enforcing 下会整机失效的几处 —— **固件全部加载不了**（kernel 读不了 `/vendor/firmware`）、vendor build.prop 丢 6 个属性（含 `persist.adb.tcp.port`）、vendor rc 的属性触发器被丢、HWC 找不到 allocator、gatekeeper 注册失败、super 重标（OTA）—— 共 20 余处规则已写，**`m selinux_policy` 通过、未上机**。两个"结构性阻塞"都改了处理：hangdump 拆成看门狗 + 合法取证，smmustall 在 userdebug 里放行（B6 仍是根治）。⬜ 下一步：出一版带新策略的镜像（`out/` 被 v0.6.3 候选版占着，**要用户定**）→ permissive 普查验证 → oneshot 真 enforcing 开机（要人在场） |
 | **B0** | 让构建机的树**就是**本仓 checkout | **已经咬了六次**。`kernel-apply-patches.sh --verify` 与 `sync-device-tree.sh`（带断言）是探测器，不是根治 |
-| **B5b** | UBWC：仓库写着关 | `device.mk:174` 仍是 `nocompression`，**一次测量都没有**。下版构建前删那行并带一次实测 |
+| **B5b** | UBWC：仓库写着关 | `device.mk:224`（原记 :174，行号已漂）仍是 `nocompression`，**一次测量都没有**。下版构建前删那行并带一次实测 |
 | **B6** | GPU SMMU 中断根治 | 做掉它 `smmu-nostall.sh` 整个消失，B1 的一半阻塞跟着消失 |
 | **B9** ✅ | SLPI handover 噪声 | **2026-09-24 结案**（[#119](stage4-findings.md) §4）：它是 SSC 向 AP 投递一批数据的门铃（封顶 5 Hz，采样率 25→50 Hz 不变，没人读时为 0），不是故障。`patches/0014` 的 ratelimit 就是正解 |
 | **B12** | 释放 R2 桶前要有国内可达的镜像 | GitHub 附件国内不可达。要用户定方案（Worker 反代 / 保留桶） |
-| **B16** 🔄 | 设备外网单连接慢 | **2026-09-24 定位并修**（[#119](stage4-findings.md) §3）：到海外 CDN 的 RTT ~294 ms，Android 默认 Wi-Fi TCP 接收上限 2 MB ⇒ 单连接 ~3.5 MB/s；临时改 8 MB 实测 9.1–9.8 MB/s（4 连接合计 12.6 MB/s，局域网 32 MB/s）。`rro/Gaokun3WifiOverlay` 进下一版镜像。⬜ 装机后核对 `TcpBufferSizes` |
-| **B3** | 自研 EFI 加载器 | A5 与"默认启动项永远留救援"都依赖它 |
+| **B16** ✅ | 设备外网单连接慢 | **2026-09-24 定位并修**（[#119](stage4-findings.md) §3）：到海外 CDN 的 RTT ~294 ms，Android 默认 Wi-Fi TCP 接收上限 2 MB ⇒ 单连接 ~3.5 MB/s；临时改 8 MB 实测 9.1–9.8 MB/s（4 连接合计 12.6 MB/s，局域网 32 MB/s）。`rro/Gaokun3WifiOverlay` 已进镜像。✅ **已生效**：v0.6.3 候选版验收第 5 项、v0.7.0 验收第 9 项 `TcpBufferSizes` 都含 `8388608`；issue #14 的报告者在 v0.7.0 上也确认了 B16 |
+| **B3** | 自研 EFI 加载器 | "默认启动项永远留救援"依赖它（A5 原也依赖它，2026-10-04 用户定改由 fastboot 承接，见 A5） |
 | **B23** ✅ | **公开的 live 镜像带不带华为专有的 GPU zap shader**（2026-09-25，M0 第一轮查出，[stage7-flutter-debian.md](stage7-flutter-debian.md) §5.7） | cage/Flutter 要 GPU，GPU 要 `qcdxkmsuc8280.mbn`，而它按本仓规矩【不进仓库】（`.gitignore` 固件一节）—— 但已发布的 Android ROM 的 vendor 里就带着它 ✅ **用户 2026-09-27 定①：随镜像发，与 ROM 同待遇**。仓库照旧不收；`build-live.sh` 仍要 `--firmware`（从设备的 `/vendor/firmware` 取）；构建脚本与 Windows 安装包里的"不能公开发布"警告已改 |
 | **B24** 🆕 | **内置麦克风 App 录音（Issue #9 / PR #10，2026-09-28 合并）：✅ v0.7.0 候选版镜像验收通过（1790597477，#127 §7）** | 三个根因：HAL 把策略给的 address 覆盖成 "bottom"（patches/0051）、输入剖面列着硬件开不了的 44.1 kHz（XML）—— 这两个造成 44 字节空文件；MonoPipe 写端节流让采集线程只跑到实时的 87%（patches/0052，维护者改成只对采集翻倍、播放不动）—— 造成约每 8 块丢 1 块。维护者另外把输入剖面收成只留 STEREO、删了 mmap_no_irq_in（背后是 stub）。案卷 [#127](stage4-findings.md)。**v0.6.3 候选版 1790206017 不含**（编于合并之前）。✅ 2026-09-28 bind-mount 实测（#127 §5，`scripts/audio/mic-verify.sh`）：原版四种请求里三种 **0 帧**（`proxy_open(card:0 device:0)` 打不开）、低延迟独占拿到的是 stub 的随机数；修复后四种全满帧、落到 card 0 / device 3、中途零丢块；硬件实测采集只有 48k 双声道。✅ ① 开头 170.7 ms 静音**查清是常驻的采集延迟**（实测交付延迟 122–125 ms、App 时间戳偏 142–146 ms，不上报；卡一下还会永久再加一块；#127 §6）⇒ 修复 `patches/0063` 静默 A/B 通过（开头静音 0、交付延迟约 1 ms、卡顿后不留延迟；#127 §7），已接进 tree-fixes 的 [15]；② 下一版**镜像**上重跑 `mic-verify.sh`（tree-fixes [13]/[14] 已应用且退出码 0）+ 游戏播放回归（`dumpsys media.audio_flinger` 的 latency 不变）+ `getActiveMicrophones()` |
 | **B25** 🔧 | **播放方向同一个墙钟丢块 ⇒ 音游"偏移大、不稳定"（用户反馈，2026-10-04 查实，[#130](stage4-findings.md)）** | `StreamPrimary::transfer` 播放也按墙钟定拍：AudioFlinger 晚到就 `skipping transfer` 整块扔掉。静默实测：audioserver 停 0.2 s ⇒ 扔 2–3 块（170–256 ms 音乐），应用帧号与硬件永久错开这么多；音游按自己交出的帧推进谱面 ⇒ 每卡一次音乐就相对谱面提前一截。另：上报位置不含 ALSA 里压着的 25–117 ms，`latencyMs` 报 85 实为 120。✅ `patches/0069`（播放直接阻塞写 ALSA、位置按 hw 上报，tree-fixes [17]）bind-mount 静默 A/B 通过：卡顿后 U 变化 +0.0 ms（原版 +256.6）、开流间极差 0.0 ms、零丢块零崩溃；Arcaea 实机静音回归（切后台 ×2 + 卡顿 ×3）原版扔块 7 次、0069 为 0（#130 §6）⇒ **定版**，随下一版整包（与内核 0070/0071 同一版）。⬜ 镜像上做出声验证（音游校准后玩几首、中途切后台）+ 播放回归（暂停/继续、拖进度、耳机/蓝牙切换）；⬜ 基础延迟本身大（4096 帧块 + 120 ms ALSA + DSP），要降另开一项 |
 | **B7** | 用轻量系统替掉救援 Ubuntu（= B4） | 24.6 GiB 换成 squashfs；**2026-09-24 随 B4 重启**，改为 Debian 基底（见 B4） |
 | — | 相机零碎 | `patches/0022` 仍未在**健康**状态下验证 unbind/rebind；libcamera 生成源码仍靠手工，未改成 Soong `genrule`（`patches/libcamera/README.md:34`）；`kDarkLuma=50` 是启发式 |
-| **B18** 🔄 | init 泄漏 remoteproc 引用 | 已修（[#119](stage4-findings.md) §5）：`gaokun3-rproc-kick.sh` 只对不在运行的 DSP 写 start；新域 + usbrole 补 sysfs 规则，`selinux_policy` 通过。⬜ 随下一版镜像验证 |
-| **B19** 🆕 | 没有回落槽 | `_b` 不可启动（[#118](stage4-findings.md) §2）。出事只能靠救援系统；Virtual A/B 合并后 `-cow` 还在的原因未查 |
-| **B20** 🆕 | wlan0 MAC 每次开机都变 | 框架不做 MAC 随机化，驱动每次给新地址 ⇒ 每台机器在路由器上都是"新设备"，IP 漂。本机已用静态 IP 绕开。★ 2026-09-24 查清两条路：① ath11k 先读 DT 的 `local-mac-address`（`mac.c:10712 device_get_mac_address`），读不到才用固件给的 —— 但写死在 DT 会让所有用户同一个 MAC，不可取；② **Android 原生解**：`config_wifi_connected_mac_randomization_supported` 默认 false（`ServiceWifiResources/res/values/config.xml:373`），在 `rro/Gaokun3WifiOverlay` 里打开 ⇒ 每个 SSID 一个固定的随机 MAC。⬜ 故意没进这一版：它要 HAL 在连接前改 MAC，改不动可能连不上网，而夜里只有 Wi-Fi 上的 adb、没法远程救 —— 等有人在旁边时单独试 |
+| **B18** ✅ | init 泄漏 remoteproc 引用 | 已修（[#119](stage4-findings.md) §5）：`gaokun3-rproc-kick.sh` 只对不在运行的 DSP 写 start；新域 + usbrole 补 sysfs 规则，`selinux_policy` 通过。✅ **已验证**：v0.6.3 候选版验收第 7 项（各自的域、三颗 DSP running）；2026-10-04 v0.7.1（`1791053208`）实机三颗 DSP（slpi / adsp / cdsp）running、`gaokun3_usbrole` 在自己的域，两个脚本与仓库逐字节相同 |
+| **B19** | 没有回落槽（**设计如此**，不是故障） | `_b` 不可启动（[#118](stage4-findings.md) §2）。★ 2026-10-04 复核（[`v1.0-plan.md`](v1.0-plan.md) OTA-3）：这是 Virtual A/B 的本意 —— 新版首次开机、合并开始之前还能回滚，合并完成后旧槽的分区就被释放了。实机 `lpdump` 只有 `*_a` 与 `*_a-cow`、`bootctl is-slot-bootable 1` = 0、`snapshotctl` 报 `Update state: none`。ESP 上 `_b` 的条目却还在，选它是一次白白失败的启动（init reboot 后回 `_a`）。⚠️ CLAUDE.md 一度写着"`_b` 作回落"，与实机不符，已改。出事只能靠救援系统或安装器重装；`-cow` 还在的原因未查。下一步（文档改说法、合并后把那个条目的标题改成"已不可用"）见 OTA-3 |
+| **B20** 🆕 | wlan0 MAC 每次开机都变 | ⚠️ 2026-10-04 更正（[`v1.0-plan.md`](v1.0-plan.md) NET-4）：下面"框架不做 MAC 随机化"已被 #14 那一行推翻 —— crDroid 把每个网络默认设成 `RANDOMIZATION_ALWAYS`，每次连接都换随机 MAC；而 `config_wifi_connected_mac_randomization_supported` 实机仍是 false，可见它不是决定随机化的开关，下面第 ② 条修法不能照抄。用户可见的结果：选随机 MAC 每次连接都换，选设备 MAC 每次开机都换（固件给的工厂 MAC 只有后两字节随机），没有稳定的选项。以下是原记录 —— 框架不做 MAC 随机化，驱动每次给新地址 ⇒ 每台机器在路由器上都是"新设备"，IP 漂。本机已用静态 IP 绕开。★ 2026-09-24 查清两条路：① ath11k 先读 DT 的 `local-mac-address`（`mac.c:10712 device_get_mac_address`），读不到才用固件给的 —— 但写死在 DT 会让所有用户同一个 MAC，不可取；② **Android 原生解**：`config_wifi_connected_mac_randomization_supported` 默认 false（`ServiceWifiResources/res/values/config.xml:373`），在 `rro/Gaokun3WifiOverlay` 里打开 ⇒ 每个 SSID 一个固定的随机 MAC。⬜ 故意没进这一版：它要 HAL 在连接前改 MAC，改不动可能连不上网，而夜里只有 Wi-Fi 上的 adb、没法远程救 —— 等有人在旁边时单独试 |
 | — | tinymix 的 vendor 变体 | 有了它 `audioroute` 就不用挂 `vendor_executes_system_violators`（#117 §8） |
 | — | 设备上的垃圾 | `/data/local/tmp` 2.8 GB 历次测试内核；ESP 上 `slot_cam5` 与 `cam5/6/7` 测试条目（现状未核对）。**删东西等用户点头** |
 
@@ -211,6 +216,13 @@ SELinux 第五轮"一行都没编译"（B1，#117 §11–§18 已编译并装机
 第二轮（同日）：A0 侧滑返回（**用户确认已好**）· B15 全新安装的 cmdline（见上）·
 B17 `find-device.sh` 改成 macOS / Linux / Git Bash 通用、扫全段不看 ARP（实测：无设备时 2.7 秒给出结论，`--ssh` 模式扫到并正确排除了一台陌生主机）·
 12 个过时脚本归档到 [`../scripts/archive/`](../scripts/archive/README.md)（每个都写了取代者）。
+
+第三轮（2026-10-04，[`v1.0-plan.md`](v1.0-plan.md) REL-12，依据是 v0.6.3 / v0.7.0 验收记录 + 当天 v0.7.1 `1791053208` 上的只读核查）：
+B22 NTP（`ntp.aliyun.com` 对时成功）· B16 TCP 缓冲（`8388608`）· T5 平板声明（`tablet`；QQ 实测仍欠）·
+B18 remoteproc（三颗 DSP running、脚本与仓库逐字节相同）· S1 待机默认值（镜像默认 1）—— 均改 ✅。
+B19 **没有翻成"有回落"**：实机仍只有 `_a`，是 VAB 的设计，描述按 OTA-3 改写，CLAUDE.md 的"`_b` 回落"同步改掉。
+另改了四处过时描述（B4 "下一步 M4 真装一台"、B20 "框架不做 MAC 随机化"、A3 小节标题、B5b 的行号），记下用户对 A5（D4 fastboot）和 B11（D6 保留 root）的决定。
+`ota/gaokun3.json` 已删（REL-14）；`deploy-from-ubuntu.sh` 归档到 `scripts/archive/`（INST-19）。
 
 ---
 
@@ -538,7 +550,10 @@ SurfaceFlinger 交出来的是 **RGBX_8888 / IMPLEMENTATION_DEFINED**，
 是当时**屏幕是灭的**（`mWakefulness=Asleep`），SurfaceFlinger 拒绝抓屏。
 **灭屏状态下的 screenrecord 结果不能用来判断编解码器。**
 
-### A3. 自动亮度（环境光）— 芯片在总线上不应答，四个软件维度已扫空
+### A3. 自动亮度（环境光）— ⚠️ 本节是 2026-09-23 之前的定性，已被推翻
+★ **现状以总表 A3 为准**：芯片已经应答（[#118](stage4-findings.md) §5），一使能光感 SLPI 的 sensor_process 就整个崩溃（[#121](stage4-findings.md)）。
+下面"芯片在总线上不应答，四个软件维度已扫空"（原标题）留作历史。
+
 详见 [#72](stage4-findings.md)（并已作废 #43/#68/#70 的历次归因）。
 
 **当前定性**：光感驱动**在 SLPI 固件里**（`strings` 见 tcs3701 120 次），
@@ -575,7 +590,9 @@ Windows DriverData 注册表里，**已随抹除 Windows 丢失**。
 （[#39](stage4-findings.md)）。实机证据：misc 里躺着一条没人消费的 `boot-recovery`。
 
 **现在的替代**：从救援 Linux `mkfs.ext4 -F /dev/disk/by-partlabel/userdata`。
-**真正的修法**：见 B3（EFI 加载器）或让 recovery 能启动（已搁置）。
+~~**真正的修法**：见 B3（EFI 加载器）或让 recovery 能启动（已搁置）。~~
+★ **用户 2026-10-04 定（[`v1.0-plan.md`](v1.0-plan.md) D4）：做一个 fastboot**，恢复出厂（BCB `--wipe_data`）与 `fastboot -w` 都落到它上面；
+"先清掉旧 BCB"的前置照旧。方案调研与进度在 1.0 计划里，不在本节。
 
 ### A6. USB-C 外接显示（UCSI）★ 现在还欠着待机那笔账
 ⚠️ 2026-09-14 更新（[#112](stage4-findings.md)）：**UCSI 在当前内核上是活的**（typec port0/port1、partner、
@@ -846,7 +863,7 @@ features xml 补 `android.hardware.camera` + `android.hardware.camera.flash`（S
 ### B12. ⬜ 释放 R2 桶的前提：国内可达的下载镜像
 2026-09-14 v0.6.0 把清单 `download` 指到 GitHub Release 附件，用户当天反馈更新失败：附件 302 到
 `release-assets.githubusercontent.com`，国内不可达；`raw.githubusercontent.com` 同样。已全部换回 R2。
-出路：同一 Cloudflare 域名（`ota.072172.xyz`）下建 Worker 反代 GitHub Release 附件与仓库里的清单，
+出路：同一 Cloudflare 域名（`ota.072172.xyz`）下建 Worker 反代 GitHub Release 附件与仓库里的清单（⚠️ 2026-10-04 起仓库里**没有**清单了：`ota/gaokun3.json` 停在 v0.6.1、没有任何东西读它，已删（1.0 计划 REL-14）；权威清单只在 R2，由 `release.sh` 上传 —— 走这条路要先让 `release.sh` 把清单回写进仓库），
 桶只留存储为零的转发层；或干脆保留桶（成本很低：出站免费）。**要用户定**，且改完要在国内网络实测下载。
 
 ### B14. ⬜ 息屏 USB adb：脚本折中已做，原生化两步 + 复位根因（[#112](stage4-findings.md)）
@@ -1037,7 +1054,9 @@ mock 值恒定才没打到。**只换 HAL 不改阈值 = 开机几分钟自动�
 ### B4. LiveCD 图形安装器 —— ▶ **2026-09-24 重启：改 Flutter + Debian**
 ⚠️ 下面「⏸ 搁置」那段是 2026-08-23 的状态，留作历史。**现状与里程碑见
 [stage7-flutter-debian.md](stage7-flutter-debian.md)**：M0–M3 已完成（2026-09-26 M0 六项真机验收全过），
-C 版已删；下一步 M4 真装一台（M4a 要外接 USB 盘，M4b 内置盘要用户单独点头）。
+C 版已删。~~下一步 M4 真装一台~~ ✅ **M4b 2026-09-26 已在真机上装过一台**（内置盘上的 live → 重新安装 + 保留数据，§5.9），
+2026-09-27 网络安装也在真机上跑通；安装器 `0.1.0-preview` 随 v0.7.0-alpha 发布。
+⬜ 仍没在真机上跑过的：M4a（外接 USB 盘）、清除整个磁盘、双系统、清除数据的重新安装（默认那条）、Windows 脚本 ⇒ [`v1.0-plan.md`](v1.0-plan.md) GUI-1。
 
 （原标题：⏸ **用户决定暂时搁置**（2026-08-23））
 接手说明见 [stage7-installer-roadmap.md](stage7-installer-roadmap.md) 末尾。
@@ -1053,7 +1072,7 @@ DRM 输出 + 触摸 + 键盘 + 软键盘在真机上跑通。
 改一行到真机看见效果约 30 秒，不用重建镜像。
 
 ### B5b. ⬜ UBWC 压缩：设备上已经开了 13 天，但仓库里还写着关（[#85](stage4-findings.md)）
-`device/huawei/gaokun3/device.mk:174` 仍然设 `vendor.minigbm.debug=nocompression`
+`device/huawei/gaokun3/device.mk:224`（原记 :174，2026-10-04 行号已漂）仍然设 `vendor.minigbm.debug=nocompression`
 —— 那是 **Stage 2 为 SwiftShader 软渲染加的**（`stage2-findings.md` 第 15 条），
 Stage 5 换成硬件 turnip 之后就没有存在理由了。
 2026-08-30 我在设备 overlay 上把它注释掉做 A/B，**然后没记结论也没改 device.mk**，
@@ -1064,7 +1083,7 @@ Stage 5 换成硬件 turnip 之后就没有存在理由了。
 那步确实覆盖了这条路。
 **未知**：**一次测量都没有** —— "关掉能省显存带宽"至今是推论不是数据。
 
-⬜ 做法：下一版构建前删掉 `device.mk:174` 那一行，**并带一次实测**
+⬜ 做法：下一版构建前删掉 `device.mk:224` 那一行，**并带一次实测**
 （帧率 / 合成耗时 / 显存带宽三选一即可），别凭"理应更好"直接改。
 ★ 这是 #14 同一形状的坑：**"用了正确的做法"不等于"达成了目标"，差一次测量。**
 ⚠️ 2026-09-12 装的那版 ROM 把它 **revert 回 `nocompression` 了**，这是故意的：
@@ -1140,6 +1159,9 @@ range in the curve:`（后面是空的，连哪条曲线都没说）。
 2026-08-23 夜装机验收（构建戳 `1787436126`，slot_a）：
 `scripts/verify-root.sh` **8/8**，`/data/adb/ksud` 就位，管理器已装。
 ★ postinstall 写进 slot_a 的内核与手工验过的那个 **sha256 逐字节相同**。
+
+★ 用户 2026-10-04 定（[`v1.0-plan.md`](v1.0-plan.md) D6）：**保留 root（KSU + 管理器）并充分披露**。
+披露（README / INSTALL / 发版说明）的落实跟着 1.0 计划走。下面两条是定之前的原记录。
 
 ⬜ 还剩两个**产品决定**（都不是技术问题）：
 * 要不要预装管理器 APK。★ ROM 侧其实什么都不用加 —— `ksud` 就在 APK 的
