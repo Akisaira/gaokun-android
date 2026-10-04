@@ -86,8 +86,11 @@ public class UsbPortNotifier extends Service {
     public void onCreate() {
         super.onCreate();
         mNm = getSystemService(NotificationManager.class);
+        // 进程被杀后经 START_STICKY 拉起时 mShown* 都是 false：属性若已清 0，旧通知（"口坏了"那条划不掉）就永远不会被取消 ⇒ 先清一遍，下面轮询再按属性重贴（审查建议修 5）
+        mNm.cancel(ID_BROKEN);
+        mNm.cancel(ID_REVERSED);
         NotificationChannel ch = new NotificationChannel(CHANNEL,
-                getString(R.string.usb_port_channel), NotificationManager.IMPORTANCE_HIGH);
+                getString(R.string.usb_port_channel), NotificationManager.IMPORTANCE_DEFAULT);
         ch.setDescription(getString(R.string.usb_port_channel_desc));
         mNm.createNotificationChannel(ch);
 

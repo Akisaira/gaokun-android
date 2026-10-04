@@ -113,12 +113,15 @@ for e in "$MNT"/loader/entries/*-android-"$SUFFIX".conf; do
     ENTS="$ENTS ${e##*/}"; NENT=$((NENT + 1)); ENT=$e
 done
 [ "$NENT" = 1 ] || fail "ESP 上 *-android-$SUFFIX.conf 启动项有 $NENT 个（${ENTS:- 无}）—— 要恰好一个，才知道内核该写进哪个目录。多出来的那个请用安装器 live 清理（或改名成 .conf.disabled）"
-KPATH=$(sed -n 's/^linux[[:space:]][[:space:]]*//p' "$ENT" | head -1 | tr -d '\r')
+KPATH=$(sed -n 's/^linux[[:space:]][[:space:]]*//p' "$ENT" | head -1 | tr -d '\r' | sed 's/[[:space:]]*$//')
+# ↑ 行尾空白 systemd-boot 容忍，这里也去掉（审查建议修 2）
 case "$KPATH" in
     /*/android/slot_"$SUFFIX"/Image) ;;
     *) fail "启动项 ${ENT##*/} 的 linux 行是 '$KPATH'，不是 /<目录>/android/slot_$SUFFIX/Image —— 不知道该往哪写" ;;
 esac
 MID=${KPATH#/}; MID=${MID%%/*}
+# 嵌套路径（/x/y/android/slot_a/Image）能过上面的 case，却会算出 MID=x、把内核写到别处而 OTA 报成功 ⇒ 反核（审查建议修 1）
+[ "$KPATH" = "/$MID/android/slot_$SUFFIX/Image" ] || fail "启动项 ${ENT##*/} 的 linux 行 '$KPATH' 不是 /<目录>/android/slot_$SUFFIX/Image 这一层结构 —— 不知道该往哪写"
 [ -n "$MID" ] && [ -d "$MNT/$MID" ] || fail "启动项 ${ENT##*/} 指向的目录 /$MID 在 ESP 上不存在"
 DEST="$MNT/$MID/android/slot_$SUFFIX"
 mkdir -p "$DEST" || fail "mkdir $DEST"

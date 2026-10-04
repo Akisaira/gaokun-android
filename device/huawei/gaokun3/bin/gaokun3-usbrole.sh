@@ -138,6 +138,8 @@ if [ "$WANT" = follow ]; then
     }
     # USB-1：我方供电、对端无 PD、而且没有任何数据连接
     source_no_data() {
+        # 口已坏（A6，broken=1）时插 U 盘也会"我方供电 + host + 无下游"，别再叠一条误导的"方向反了"（审查建议修 4）
+        [ "$(getprop $BROKEN)" = 1 ] && return 1
         we_are_source || return 1
         partner_no_pd || return 1
         case "$(cat "$S" 2>/dev/null)" in
