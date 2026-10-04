@@ -24,6 +24,10 @@ init_daemon_domain(gaokun3_audioroute)
 type gaokun3_smmustall, domain;
 type gaokun3_smmustall_exec, exec_type, vendor_file_type, file_type;
 init_daemon_domain(gaokun3_smmustall)
+# v1.0 LIVE-4（2026-10-05）：每轮先读 GPU 的 runtime_status，suspended 时退避到 1 秒一轮。
+#   /sys/devices/platform/soc@0/3d00000.gpu/power/runtime_status 实机标签 u:object_r:sysfs:s0（ls -Z 核过）。
+#   读不到时脚本退回原来的 10 Hz（不会更差），所以 enforcing 下漏了这条只是没省电、不坏功能。⬜ 未编译、未上机。
+r_dir_file(gaokun3_smmustall, sysfs)
 
 # ── gaokun3-hangdump.sh：死锁取证看门狗 ─────────────────────────────────
 type gaokun3_hangdump, domain;

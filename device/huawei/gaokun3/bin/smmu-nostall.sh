@@ -88,8 +88,34 @@ check_cb() {
     $DM $((B + 0x58)) 4 $F 2>/dev/null              # FSR 写 1 清位
 }
 
-log -t smmustall "启动 v2：CB0..CB$((NCB - 1)) @ ${CB_BASE}，无限运行"
+# ★ v1.0 LIVE-4（2026-10-05）：GPU 掉电时退避。
+#   原来不论 GPU 开没开都 10 Hz 轮询、每轮至少 fork 一次 devmem 和一次 sleep —— 实机 ps 按 CPU 时间排序它是
+#   全机第一（10 分 44 秒，system_server 才 3 分 35 秒），全系统每秒约 28 次 fork，熄屏也照样跑。
+#   现在每轮先用 shell 内建的 read（不 fork）看 GPU 的 runtime PM 状态：
+#     · suspended ⇒ 这一轮不碰 MMIO，sleep 1 秒（与"读到 0 = 掉电就跳过"的旧语义一致，只是连那次读都省了）；
+#     · 其它（active / resuming / suspending）或读不到 ⇒ 照旧 0.1 秒一轮。**GPU 一上电立刻回到 10 Hz**，
+#       不在刚上电的窗口里放宽间隔（v1.0-plan LIVE-4）。
+#   代价：GPU 从 suspended 恢复后、CFCFG 被内核重新置上的那一刻起，最多要等约 1 秒才清掉（原来约 0.1 秒）。
+#   这一秒里若真出 GPU 页错误会 stall 到被清掉为止；patches/0004 v3 之后实测 fault 为 0（smmustall 心跳"抓 fault=0"）。
+#   节点路径与标签：1.0.0-dev.1 实机 /sys/devices/platform/soc@0/3d00000.gpu/power/runtime_status，
+#   u:object_r:sysfs:s0，熄屏读到 suspended（sepolicy/gaokun3_scripts.te 给了读权限）。
+#   上机判据：熄屏时 ns_last_pid 10 秒的增量比改前（约 280）明显变小、ps 里本进程累计时间基本不涨；
+#   亮屏玩一局游戏 smmustall 心跳照常，没有新的 GPU hang / device lost。
+GPU_RS=/sys/devices/platform/soc@0/3d00000.gpu/power/runtime_status
+gpu_suspended() {
+    rs=""
+    read -r rs 2>/dev/null < "$GPU_RS"
+    [ "$rs" = suspended ]
+}
+
+log -t smmustall "启动 v2：CB0..CB$((NCB - 1)) @ ${CB_BASE}，无限运行（GPU suspended 时 1 秒一轮）"
 while true; do
+    if gpu_suspended; then
+        # 心跳照旧按"轮"计（约 600 轮一行）；退避期间一轮 1 秒，心跳会稀一些，这是有意的（熄屏少写日志）。
+        round=$((round + 1))
+        sleep 1
+        continue
+    fi
     check_cb 0                                      # GPU 主 CB：每轮
     if [ $((round % 20)) -eq 0 ]; then               # 全扫：约每 2s
         cb=1
