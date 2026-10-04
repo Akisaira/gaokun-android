@@ -504,6 +504,61 @@ def patch_connected_displays_flag(tree: pathlib.Path) -> str:
     return "ENABLED -> DISABLED"
 
 
+def patch_wifi_sw_pno_gate(tree: pathlib.Path) -> str:
+    """—— 修补 18：软件 PNO 只看 overlay 的 config_wifiSwPnoEnabled，不再看 DeviceConfig ——
+
+    v1.0 NET-1（2026-10-05，TODO V3）。息屏且 Wi-Fi 断开时 Android 只靠 PNO 找回网络；ath11k 没有
+    sched_scan（实机 iw phy 里没有 start_sched_scan），硬件 PNO 不可用 ⇒ 要软件 PNO。
+    设备树 rro/Gaokun3WifiOverlay 已把 config_wifiSwPnoEnabled 设成 true（ff4a5a4），但 1.0.0-dev.1 上
+    `dumpsys wifi` 里仍看不到软件 PNO：WifiScanningServiceImpl 的 StartedState 还要第二道门 ——
+
+        } else if (mWifiGlobals.isSwPnoEnabled()
+                && mDeviceConfigFacade.isSoftwarePnoEnabled()) {
+
+    （LineageOS packages_modules_Wifi lineage-23.2：scanner/WifiScanningServiceImpl.java:2676-2677；
+      isSoftwarePnoEnabled() = DeviceConfig wifi/software_pno_enabled，DeviceConfigFacade.java:420-421、:898-899，
+      默认 false。）实机 `device_config get wifi software_pno_enabled` = false，而且是**显式下发**的值
+    （list 里有这一项）—— 多半是 GMS Phenotype 推的，所以改默认值没用，只能去掉这道门。
+    ⇒ 把条件改成只看 mWifiGlobals.isSwPnoEnabled()（= overlay 的 config_wifiSwPnoEnabled，WifiGlobals.java:573-576）。
+      不碰 DeviceConfigFacade：别处没有用 isSoftwarePnoEnabled()（上游副本里只此一处），dumpsys 里那个值照旧如实显示。
+      isPnoSupported()（WifiServiceImpl.java:8469）本来就只看 isSwPnoEnabled()，不用改。
+
+    ⚠️ 锚点是按上游 lineage-23.2 的副本写的，本机没有构建机那棵 crDroid 树：
+       构建机上核对 packages/modules/Wifi/service/java/com/android/server/wifi/scanner/WifiScanningServiceImpl.java
+       里这两行还在（`grep -n isSoftwarePnoEnabled` 应当只有这一处调用），并确认 com.android.wifi APEX 是从源码编的
+       （不是预编译的 Google 模块 —— 那样改源码不进镜像；Play 系统更新也换不掉它：包名 / 签名都不同）。
+    上机判据（V9 / V13）：`dumpsys wifi` 里 PNO 失败不再是 "reason: -3 not supported"，mPnoScanMetrics 的
+      numPnoScanAttempts 开始增长；息屏但醒着时让 AP 断开再恢复，2 分钟内自动回连。
+    ⓘ 耗电（V13 问的"SwPnoScanState 用什么闹钟"，上游副本里查到了）：schedulePnoTimer 用
+      setExactAndAllowWhileIdle(ELAPSED_REALTIME_WAKEUP, …)（WifiScanningServiceImpl.java:2979-2996）⇒ 会把机器从
+      s2idle 叫醒去扫。次数有上限：默认 config_wifiSwPnoFastTimerMs=300000 × 3 次、SlowTimerMs=1200000 × 10 次
+      （另有 MobilityStateTimerIterations=2；ServiceWifiResources config.xml:705-739），之后不再排程 ——
+      只在"息屏 + 断网"时才有，批 4 量一次待机电流。
+    ⚠️ 写法：正则只容忍空白差异；找不到锚点就报 ⚠️（step() 记为失败、整个脚本退 1），不会悄悄跳过。
+    """
+    p = (tree / "packages/modules/Wifi/service/java/com/android/server/wifi/scanner"
+              / "WifiScanningServiceImpl.java")
+    if not p.exists():
+        # 与 [4] 那类"树里本来就可能没有"的项目不同：Wi-Fi 模块一定在，找不到只能是上游挪了文件 ⇒ 算失败
+        return f"⚠️ 找不到 {p}，上游可能挪了文件"
+    s = io.open(p, encoding="utf-8").read()
+    marker = "gaokun3 tree-fix [18]"
+    if marker in s:
+        return "已改（幂等，无需改动）"
+    pat = re.compile(r"\}(\s*)else if \(mWifiGlobals\.isSwPnoEnabled\(\)\s*"
+                     r"&&\s*mDeviceConfigFacade\.isSoftwarePnoEnabled\(\)\)\s*\{")
+    hits = pat.findall(s)
+    if len(hits) != 1:
+        return f"⚠️ 锚点（isSwPnoEnabled() && isSoftwarePnoEnabled()）出现 {len(hits)} 次（应为 1），上游可能改了写法"
+    # 插进 Java 的注释只用 ASCII：不赌 javac 的源码编码设置
+    s = pat.sub(lambda m: ("}" + m.group(1) + "else if (mWifiGlobals.isSwPnoEnabled()) {  // " + marker
+                           + ": ignore DeviceConfig wifi/software_pno_enabled (GMS pushes false);"
+                           + " see gaokun-android scripts/crdroid-tree-fixes.py"),
+                s, count=1)
+    io.open(p, "w", encoding="utf-8", newline="").write(s)
+    return "已去掉软件 PNO 的 DeviceConfig 门（只看 config_wifiSwPnoEnabled）"
+
+
 def main():
     tree = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else pathlib.Path.home() / "crdroid").expanduser()
     if not (tree / "build/envsetup.sh").exists():
@@ -561,6 +616,8 @@ def main():
     step(" [17] audio AIDL HAL 播放由硬件定拍、位置按真实播出上报（卡顿不再整块丢音乐）: ", apply_patch_file(
         tree, "hardware/interfaces",
         "0069-audio-aidl-primary-playback-paced-by-alsa.patch"))
+    # v1.0 NET-1 / TODO V3：软件 PNO 的第二道门（DeviceConfig wifi/software_pno_enabled，GMS 下发 false）
+    step(" [18] Wi-Fi 软件 PNO 不受 DeviceConfig 覆盖（息屏断网后能自己回连）: ", patch_wifi_sw_pno_gate(tree))
     if failed:
         print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))
         sys.exit(1)
