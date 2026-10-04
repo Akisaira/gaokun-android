@@ -1,0 +1,9 @@
+# 产物	在上一层里的偏移	大小	sha256
+installer.exe	0x0	6047152	b24abe76148bed32e3add10827701025cb917e216a359861e6f57f0f9797d1a6
+capsule.bin (NSIS 块 #6)	0x331bc	8921998	9a6bf53ecb755a7d6a1ee52e35b13d885fe454bfb76ded77917daa88338db9d7
+xbl_uefi.elf (capsule FV 文件 0a85a45e-915f-49db-8bd5-5337861f8082)	0x3f6	7513176	c12ec5f910c9e8ad659381e07c74de0f4e4a0a2341725460bdb994c1a8cbb90e
+fd_fv.bin (ELF PT_LOAD va 0x9f000000)	0x8a000	6291456	e26fe1e9c4b549ce55a2be7c170bf36ea20aa76de0c031b0e9aa0c09b43e244d
+fvimg_gzip.bin (文件 9e21fd93-9c72-4c15-8c4b-e77f1db2d792 的 GUIDED 段体)	0x48958	4279528	dd7f85ed15b91b89f5ec860e0f35a53a79f33aa2900e9b1edc4b53e160dc79ce
+dxe_sections.bin (gunzip 结果 = 段流)	0x0	16031752	b5158a3f5b30804624df63bb21610843a9631d38b46bd8e94cadfe62e3ee197a
+dxe_fv.bin (FV image 段体)	0x0	16031744	b71838ff6a33089c6805c5ff4a3c722b8a2d587f731842709c8c47a49ea7fb61
+# capsule: vendor_hdr=4d535331100000001600020016000200 capsule_size=8921998 update_image_type_id=82315653-fe98-4014-82cf-ef099fa9357c update_image_index=1 image_header_version=2 update_image_size=8743702 vendor_code_size=178208 monotonic_count=2 pkcs7_len=830 fv_offset=942
