@@ -5,8 +5,8 @@
 //     * 那个 Sensors 类的传感器列表在【构造函数体里】硬加，而 mSensors 是 private；
 //     * libsensorsexampleimpl 的 visibility 只放行 hardware/interfaces 的
 //       子包，设备树链不了它。
-//   改了三处：传感器列表收敛为 accel+gyro、两个 readEventPayload 换成真数据、
-//   SensorInfo 写上真名字。其余原样。详见 README.md。
+//   改了四处：传感器列表收敛为 accel+gyro、两个 readEventPayload 换成真数据、
+//   SensorInfo 写上真名字、activate 通知 SscHub 按订阅启停。其余原样。详见 README.md。
 //
 // 数据来自 SscHub（GPL-3.0）→ libgaokun3ssc → QMI/QRTR → SLPI。
 // 因此本模块整体按 GPL-3.0-or-later 发布，NOTICE 里有记录。

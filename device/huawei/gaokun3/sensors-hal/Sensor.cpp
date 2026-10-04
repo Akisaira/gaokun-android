@@ -86,6 +86,15 @@ void Sensor::activate(bool enable) {
     if (mIsEnabled != enable) {
         std::unique_lock<std::mutex> lock(mRunMutex);
         mIsEnabled = enable;
+        // gaokun3：让 SscHub 知道这一路在 SSC 上该不该开着 —— 没有订阅者时
+        // 停用，SLPI 才能睡（v1.0 计划 PWR-3）。放在锁里，保证 SscHub 最后
+        // 看到的与 mIsEnabled 的最终值一致；锁序 mRunMutex → SscHub::m_ 与
+        // run() 里读样本时相同，SscHub 自己从不碰 mRunMutex。
+        if (mSensorInfo.type == SensorType::ACCELEROMETER) {
+            gaokun3::SscHub::Get().SetAccelWanted(enable);
+        } else if (mSensorInfo.type == SensorType::GYROSCOPE) {
+            gaokun3::SscHub::Get().SetGyroWanted(enable);
+        }
         mWaitCV.notify_all();
     }
 }

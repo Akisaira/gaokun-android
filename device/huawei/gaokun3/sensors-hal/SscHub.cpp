@@ -5,6 +5,7 @@
 
 #include <android-base/logging.h>
 
+#include <chrono>
 #include <vector>
 
 #include "ssc-sensor-accelerometer.pb.h"
@@ -15,6 +16,9 @@ namespace {
 constexpr float kRateHz = 50.0f;
 // hexagonrpcd 刚起来时 SSC 约需 20 秒沉降，给足余量（实测 6 秒读不到）。
 constexpr int kServiceWaitMs = 60000;
+// 全部停用后，先把 socket 里已在途的上报读掉再睡，免得下次使能时先读到
+// 停用前的旧样本。SSC 约 5 Hz 成批投递（#119 §4），半秒足够收尾。
+constexpr int kDrainMs = 500;
 }  // namespace
 
 SscHub& SscHub::Get() {
@@ -38,6 +42,24 @@ Sample SscHub::Gyro() {
     EnsureStarted();
     std::lock_guard<std::mutex> lk(m_);
     return gyro_;
+}
+
+void SscHub::SetAccelWanted(bool on) {
+    EnsureStarted();
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        want_accel_ = on;
+    }
+    cv_.notify_all();
+}
+
+void SscHub::SetGyroWanted(bool on) {
+    EnsureStarted();
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        want_gyro_ = on;
+    }
+    cv_.notify_all();
 }
 
 void SscHub::ReaderLoop() {
@@ -82,22 +104,83 @@ void SscHub::ReaderLoop() {
         }
         LOG(INFO) << "SscHub: accel=" << has_accel << " gyro=" << has_gyro;
 
-        if (has_accel) client.EnableContinuous(accel_uid, kRateHz, &err);
-        if (has_gyro) client.EnableContinuous(gyro_uid, kRateHz, &err);
+        // ★ 按订阅启停（PWR-3）：此前会话一建好就 EnableContinuous、之后再不停，
+        //   框架没有任何订阅者时 SLPI 也 50 Hz 常开、几乎不睡。现在只开"有人要"的
+        //   那一路，最后一个订阅者走了就 Disable。
+        //   ⚠️ 启停一律在【这个 client】上做，绝不为此重建会话（理由见上）。
+        //   on_* = 此刻在 SSC 上实际开着的，只有本线程读写；会话刚建好时全是
+        //   false，下面按 want_* 补开 —— 重建会话后原有订阅也就自动恢复。
+        bool on_accel = false, on_gyro = false;
+        auto drain = [&client]() {
+            const auto until = std::chrono::steady_clock::now() +
+                               std::chrono::milliseconds(kDrainMs);
+            while (std::chrono::steady_clock::now() < until) {
+                std::vector<SscReport> junk;
+                std::string ignore;
+                client.ReadReports(&junk, 100, &ignore);
+            }
+        };
 
         // 收数。连续空转说明会话坏了（例如别的进程去碰了光感）。
         // 先在同一个 client 上重新使能一次，还是不行才整条重建 —— 同样是为了
         // 少制造客户端 churn。
+        // ★ 看门狗只在"有人要、流该开着"时计时：都停用时读数本来就是 0，照算的话
+        //   15 秒后它会自己把流重新打开、60 秒后重建会话 —— 恰好制造上面警告的 churn。
         int idle = 0;
         bool re_enabled = false;
         while (!stop_) {
+            bool want_accel, want_gyro;
+            {
+                std::lock_guard<std::mutex> lk(m_);
+                want_accel = want_accel_ && has_accel;
+                want_gyro = want_gyro_ && has_gyro;
+                // 要停用的那一路缓存作废：下次使能、新数据到之前报 UNRELIABLE，
+                // 而不是拿停用前的旧值当真值（旧的角速度会让游戏视角一直漂）
+                if (on_accel && !want_accel) accel_ = Sample();
+                if (on_gyro && !want_gyro) gyro_ = Sample();
+            }
+            const bool was_on = on_accel || on_gyro;
+            if (want_accel != on_accel) {
+                const bool ok = want_accel
+                        ? client.EnableContinuous(accel_uid, kRateHz, &err)
+                        : client.Disable(accel_uid, &err);
+                LOG(INFO) << "SscHub: accel " << (want_accel ? "使能" : "停用")
+                          << (ok ? "" : " 失败: " + err);
+                on_accel = want_accel;
+                idle = 0;
+                re_enabled = false;
+            }
+            if (want_gyro != on_gyro) {
+                const bool ok = want_gyro
+                        ? client.EnableContinuous(gyro_uid, kRateHz, &err)
+                        : client.Disable(gyro_uid, &err);
+                LOG(INFO) << "SscHub: gyro " << (want_gyro ? "使能" : "停用")
+                          << (ok ? "" : " 失败: " + err);
+                on_gyro = want_gyro;
+                idle = 0;
+                re_enabled = false;
+            }
+
+            // 都没人要：读掉在途的上报，然后不收数、不计空转，睡到有人 activate
+            if (!on_accel && !on_gyro) {
+                if (was_on) drain();
+                idle = 0;
+                re_enabled = false;
+                std::unique_lock<std::mutex> lk(m_);
+                cv_.wait(lk, [&]() {
+                    return stop_ || (want_accel_ && has_accel) ||
+                           (want_gyro_ && has_gyro);
+                });
+                continue;
+            }
+
             std::vector<SscReport> reports;
             std::string ignore;
             if (!client.ReadReports(&reports, 1000, &ignore)) {
                 if (++idle == 15 && !re_enabled) {
                     LOG(WARNING) << "SscHub: 15 秒无读数，在同一会话上重新使能";
-                    if (has_accel) client.EnableContinuous(accel_uid, kRateHz, &err);
-                    if (has_gyro) client.EnableContinuous(gyro_uid, kRateHz, &err);
+                    if (on_accel) client.EnableContinuous(accel_uid, kRateHz, &err);
+                    if (on_gyro) client.EnableContinuous(gyro_uid, kRateHz, &err);
                     re_enabled = true;
                     continue;
                 }
@@ -120,18 +203,19 @@ void SscHub::ReaderLoop() {
                 s.accuracy = m.accuracy();
                 s.valid = true;
 
+                // 只写开着的那一路：刚停用的那一路可能还有在途的上报
                 std::lock_guard<std::mutex> lk(m_);
-                if (has_accel && r.uid_low == accel_uid.low() &&
+                if (on_accel && r.uid_low == accel_uid.low() &&
                     r.uid_high == accel_uid.high()) {
                     accel_ = s;
-                } else if (has_gyro && r.uid_low == gyro_uid.low() &&
+                } else if (on_gyro && r.uid_low == gyro_uid.low() &&
                            r.uid_high == gyro_uid.high()) {
                     gyro_ = s;
                 }
             }
         }
-        if (has_accel) client.Disable(accel_uid, &err);
-        if (has_gyro) client.Disable(gyro_uid, &err);
+        if (on_accel) client.Disable(accel_uid, &err);
+        if (on_gyro) client.Disable(gyro_uid, &err);
         LOG(WARNING) << "SscHub: 60 秒没有读数，重建 SSC 会话";
     }
 }

@@ -23,13 +23,14 @@ SH3001 Accelerometer: last 50 events
 * `libsensorsexampleimpl` 的 `visibility` 只放行 `hardware/interfaces` 的子包，
   设备树链不了它。
 
-改动只有三处，其余原样：
+改动只有四处，其余原样：
 1. `Sensors.h` 的传感器列表从 9 个假传感器收敛为 `AccelSensor` + `GyroSensor`。
    ★**必须删掉那 7 个**，留着会让框架以为本机有气压计/湿度计。
 2. `Sensor.cpp` 里两个 `readEventPayload` 从硬编码的 `{0,0,9.8}` 换成
    从 `SscHub` 取真数据；数据没到时报 `UNRELIABLE` 而**不是**编一个 9.8 出来
    —— 那会让上层以为机器平放着。
 3. `SensorInfo` 写上真名字（`SH3001 Accelerometer` 等）。
+4. `Sensor::activate` 把开/关告诉 `SscHub`（见下面"按订阅启停"）。
 
 新增的只有 `SscHub.{h,cpp}`。
 
@@ -51,6 +52,22 @@ SH3001 Accelerometer: last 50 events
 —— ★ 这也解释了一个必知的时序事实：**`registry` 服务比物理传感器【先】注册**，
 所以 `WaitForService` 成功之后立刻查 `accel` 会得到"没有传感器提供"，
 必须再等（约 20 秒）。
+
+## 按订阅启停（v1.0 计划 PWR-3 / LIVE-2 / HW-3，⬜ 待上机）
+
+此前会话一建好就 50 Hz 常开 accel+gyro、之后再不停：框架**没有任何订阅者**时
+（息屏后 `dumpsys sensorservice` 是 `0 open event connections`）SLPI 也照样采样、
+5 Hz 往 AP 投递，`qcom_stats/slpi` 几乎不涨。#119 §4 的"没人读时为 0"是**停掉 HAL**
+测的，不是"HAL 在跑但没人订阅"。
+
+现在 `activate(true/false)` → `SscHub::Set{Accel,Gyro}Wanted()` 只记下"想要"，
+读线程在**同一个 client** 上 `EnableContinuous` / `Disable` 对应那一路，**不重建会话**
+（上一节的教训）。两路都停用后：读掉在途上报（0.5 秒）、缓存作废（再次使能、新数据到之前
+报 `UNRELIABLE`）、在条件变量上睡到下次 activate。
+★ **空转看门狗（15 秒重新使能 / 60 秒重建会话）只在流该开着时计时** —— 否则停用后它会
+自己把流打开、再去重建会话，正好制造 churn。
+代价：会话若在停用期间坏了（例如 SLPI 自愈，B21），要等下次 activate 后看门狗才发现。
+⚠️ "同一个 client 上反复 Disable/Enable" 此前**从没实测过**，上机要专门验。
 
 ## 本机能提供什么
 
