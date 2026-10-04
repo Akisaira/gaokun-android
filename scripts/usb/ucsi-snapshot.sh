@@ -18,6 +18,9 @@
 set -u
 D=${1:-192.168.10.239:5555}
 NOTE=${2:-}
+# 静默试一次 adb root。需要 root：开发构建 `adb shell setprop service.adb.root 1 && adb root`；
+#   发布构建（ro.debuggable=0）上 KSU 的 adb root 是否还能用待上机核实（libadbroot 是否依赖
+#   ro.debuggable），这些开发脚本只保证在开发构建上可用。
 adb -s "$D" root >/dev/null 2>&1
 
 echo "=== $(date '+%F %T') ${NOTE:+— $NOTE}"

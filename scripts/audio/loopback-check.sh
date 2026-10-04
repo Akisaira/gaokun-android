@@ -27,7 +27,7 @@ mkdir -p "$OUT"
 
 [ -f "$ALT" ] && [ -f "$TOOL" ] || die "缺文件：$ALT / $TOOL"
 [ "$(S getprop ro.crdroid.device)" = gaokun3 ] || die "${SER} 不是 gaokun3"
-[ "$(S id -u)" = 0 ] || die "要 adb root"
+[ "$(S id -u)" = 0 ] || die "需要 root：开发构建 adb shell setprop service.adb.root 1 && adb root；发布构建（ro.debuggable=0）上 KSU 的 adb root 是否还能用待上机核实（libadbroot 是否依赖 ro.debuggable），这些开发脚本只保证在开发构建上可用"
 S "mkdir -p $D"
 adb -s "$SER" push "$TOOL" $D/gaokun3-loopback >/dev/null && S "chmod 755 $D/gaokun3-loopback"
 VOL0=$(S "cmd media_session volume --stream 3 --get" | grep -o 'volume is [0-9]*' | grep -o '[0-9]*$')

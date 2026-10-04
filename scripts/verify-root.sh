@@ -3,8 +3,9 @@
 #
 #   bash scripts/verify-root.sh
 #
-# ⚠️ 需要 adb root（本机要先 `adb shell setprop service.adb.root 1` 再 `adb root`，
-#    而且每次重启都要重做）。
+# ⚠️ 需要 root：开发构建 `adb shell setprop service.adb.root 1 && adb root`（每次重启都要重做）；
+#    发布构建（ro.debuggable=0）上 KSU 的 adb root 是否还能用待上机核实（libadbroot 是否依赖
+#    ro.debuggable），这些开发脚本只保证在开发构建上可用。
 # ⚠️★ 故意【不开 pipefail】。`cmd | grep -q` 里 grep 命中就提前退出，
 #    写端吃到 SIGPIPE 返回 141，pipefail 会把整条管道判成失败 ——
 #    结果是"值明明对，判据却报 FAIL"。本脚本第一版四个配置项全是这么假阴性的。

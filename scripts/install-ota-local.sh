@@ -38,7 +38,7 @@ S true >/dev/null 2>&1 || die "adb 连不上 $SER"
 CUR=$(S getprop ro.boot.slot_suffix | tr -d '\r')
 ok "当前槽 $CUR · 内核 $(S 'cat /proc/version' | grep -o '#[0-9]*' | tr -d '\r') · 构建 $(S getprop ro.build.date.utc | tr -d '\r')"
 
-[ "$(S id -u | tr -d '\r')" = "0" ] || die "需要 root（先 setprop service.adb.root 1 && adb root）"
+[ "$(S id -u | tr -d '\r')" = "0" ] || die "需要 root：开发构建 adb shell setprop service.adb.root 1 && adb root；发布构建（ro.debuggable=0）上 KSU 的 adb root 是否还能用待上机核实（libadbroot 是否依赖 ro.debuggable），这些开发脚本只保证在开发构建上可用"
 
 # ★ 2026-09-29（SELinux 第七轮审计）：update_engine 自己打开 --payload 给的文件，而它读不了
 #   /data/local/tmp（shell_data_file，policy-query DENY）—— enforcing 下这个脚本会失败。

@@ -45,7 +45,7 @@ mkdir -p "$OUT"
 [ -f "$HAL" ] && [ -f "$SMOKE" ] && [ -f "$XML" ] || die "缺文件：$HAL / $SMOKE / $XML"
 S true >/dev/null 2>&1 || die "adb 连不上 $SER"
 [ "$(S getprop ro.crdroid.device)" = gaokun3 ] || die "$SER 不是 gaokun3"
-[ "$(S id -u)" = 0 ] || die "要 adb root"
+[ "$(S id -u)" = 0 ] || die "需要 root：开发构建 adb shell setprop service.adb.root 1 && adb root；发布构建（ro.debuggable=0）上 KSU 的 adb root 是否还能用待上机核实（libadbroot 是否依赖 ro.debuggable），这些开发脚本只保证在开发构建上可用"
 
 say "0. 设备与硬件的事实（只读）"
 S "getprop ro.build.version.incremental; getprop ro.boot.slot_suffix; getenforce" | sed 's/^/   /'

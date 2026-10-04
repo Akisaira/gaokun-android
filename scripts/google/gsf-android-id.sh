@@ -10,7 +10,13 @@
 # ⚠️★ 这个 ID 是**设备标识**，与账号绑定。**不要把它写进本仓或任何公开地方**
 #   （本仓是公开仓库，同 WiFi 密码/SSID/构建机 IP 的纪律）。本脚本只打印，不落盘。
 #
-# ⚠️ 它要 root：ID 存在 GMS 的私有目录里。
+# ⚠️ 它要 root：ID 存在 GMS 的私有目录里。依次试三条路，哪条先拿到 uid 0 用哪条：
+#   1. `adb root`（开发构建）；2. 先 `setprop service.adb.root 1` 再 `adb root`（本机的老办法）；
+#   3. KSU 的 `su -c`（发布构建 ro.debuggable=0（B1）上 adb root 可能不可用，
+#      要先装 ReSukiSU 管理器、给 Shell（com.android.shell）授 root）。
+#   ⬜ 第 3 条（发布构建上 su -c 读 GMS 私有目录）**未实测**，待上机核实。
+#   读法：用 `adb exec-out` 把 Checkin.xml 整份拿回本机、在本机解析（不在设备上套 sed，避免嵌套引号）；
+#   内容只留在变量里，不落盘。
 #   ⚠️ 新版 GMS（本机 16_202505）**不再往 com.google.android.gsf 的 gservices.db 写**，
 #      所以网上那条 `sqlite3 .../gsf/databases/gservices.db` 的老办法在这里查不到东西
 #      （实测 `content query --uri content://com.google.android.gsf.gservices` 也是 No result found）。
@@ -31,19 +37,32 @@ A root >/dev/null 2>&1 || true
     S setprop service.adb.root 1 >/dev/null 2>&1
     A root >/dev/null 2>&1 || true
 }
-[ "$(S id -u | tr -d '\r')" = "0" ] || die "需要 root（先 adb shell setprop service.adb.root 1 && adb root）"
 
-ID=$(S 'sed -n "s/.*name=\"android_id\" *>\([0-9]*\)<.*/\1/p" /data/data/com.google.android.gms/shared_prefs/Checkin.xml 2>/dev/null' | tr -d '\r' | head -1)
+CHECKIN=/data/data/com.google.android.gms/shared_prefs/Checkin.xml
+# R "<命令>"：以 root 在设备上跑一条命令，stdout 原样带回（exec-out 不经 pty，不加 \r）。
+#   ⚠️ <命令> 里不能有单引号 —— su 路径要把它包进 su -c '…'。
+if [ "$(S id -u | tr -d '\r')" = "0" ]; then
+    R() { A exec-out "$1"; }
+elif [ "$(S "su -c 'id -u'" 2>/dev/null | tr -d '\r')" = "0" ]; then
+    # ⬜ 发布构建上这条路未实测（KSU 给 com.android.shell 授 root 之后应当可用）
+    R() { A exec-out "su -c '$1'"; }
+else
+    die "需要 root。开发构建：adb root（本机要先 adb shell setprop service.adb.root 1 && adb root）；发布构建（ro.debuggable=0，B1）：装 ReSukiSU 管理器，给 Shell（com.android.shell）授 root 后重跑"
+fi
+
+# 整份 XML 拿回本机、本机解析。只留在变量里，不落盘。
+XML=$(R "cat $CHECKIN 2>/dev/null" | tr -d '\r')
+ID=$(printf '%s\n' "$XML" | sed -n 's/.*name="android_id" *>\([0-9]*\)<.*/\1/p' | head -1)
 
 if [ -z "$ID" ]; then
     echo "✗ 没读到 android_id。可能的原因："
     echo "   * 还没登录 Google 账号，或 GMS 还没完成一次 checkin（联网后等几分钟）"
     echo "   * 刚恢复出厂设置 —— checkin 之后 ID 会变，要重新登记"
-    S 'ls /data/data/com.google.android.gms/shared_prefs/Checkin.xml 2>&1' | tr -d '\r' | sed 's/^/   /'
+    R "ls $CHECKIN 2>&1" | tr -d '\r' | sed 's/^/   /'
     exit 1
 fi
 
-LAST=$(S 'sed -n "s/.*CheckinService_lastCheckinSuccessTime\" value=\"\([0-9]*\)\".*/\1/p" /data/data/com.google.android.gms/shared_prefs/Checkin.xml 2>/dev/null' | tr -d '\r' | head -1)
+LAST=$(printf '%s\n' "$XML" | sed -n 's/.*CheckinService_lastCheckinSuccessTime" value="\([0-9]*\)".*/\1/p' | head -1)
 echo "Android ID : $ID"
 [ -n "$LAST" ] && echo "上次 checkin : $(date -r $((LAST/1000)) 2>/dev/null || echo "$LAST ms")"
 cat <<TXT

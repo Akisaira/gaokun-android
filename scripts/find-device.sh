@@ -18,6 +18,10 @@
 #     22   → ssh 上去问 hostname 是不是 gaokun3-rescue / gaokun3-live
 #   端口和 MAC 只用来【缩小候选范围】，确认永远靠协议。
 #
+# ⚠️ 发布构建（ro.debuggable=0）默认【不监听 5555】—— 只有设备上持久化过
+#    persist.adb.tcp.port（开发机迁移步骤）才扫得到。adb 已连上但未授权 / offline 的，
+#    单独打到 stderr，和"是 xx，不是 gaokun3"区分开。
+#
 # ⚠️ 必须绕开沙箱跑（sandbox 代理会把所有 TCP 连接都答应下来，
 #    于是端口扫描每个 IP 都"开着"，完全没有信息量）。
 set -u
@@ -62,6 +66,17 @@ CANDS=$(ls "$TMP")
 for ip in $CANDS; do
     if [ "$MODE" = android ]; then
         tmo 8 adb connect "$ip:5555" >/dev/null 2>&1
+        # 先看 adb 对这台的状态（device / unauthorized / offline）：未授权时 getprop 必然失败，
+        #   不区分的话它会和"不是 gaokun3"混在一起，而它其实可能正是我们的设备。
+        st=$(tmo 5 adb devices 2>/dev/null | tr -d '\r' | awk -v t="$ip:5555" '$1==t {print $2; exit}')
+        case "$st" in
+            unauthorized)
+                echo "  $ip 开着 5555 但 adb 未授权（新主机或发布构建？到设备屏幕上点允许，或改用无线调试配对）" >&2
+                tmo 5 adb disconnect "$ip:5555" >/dev/null 2>&1; continue ;;
+            offline)
+                echo "  $ip 开着 5555 但 adb 状态是 offline（握手没完成：设备刚起、正在重启 adbd，或对方不是 adb）" >&2
+                tmo 5 adb disconnect "$ip:5555" >/dev/null 2>&1; continue ;;
+        esac
         d=$(tmo 8 adb -s "$ip:5555" shell getprop ro.crdroid.device 2>/dev/null | tr -d '\r\n')
         if [ "$d" = gaokun3 ]; then echo "$ip"; exit 0; fi
         # 小米手机（pudding）等也开着 5555：把认出来的东西打到 stderr，好知道扫到了谁

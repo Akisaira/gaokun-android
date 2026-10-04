@@ -26,7 +26,7 @@ mkdir -p "$OUT"
 
 [ -f "$HAL" ] || die "缺 $HAL"
 [ "$(S getprop ro.crdroid.device)" = gaokun3 ] || die "$SER 不是 gaokun3"
-[ "$(S id -u)" = 0 ] || die "要 adb root"
+[ "$(S id -u)" = 0 ] || die "需要 root：开发构建 adb shell setprop service.adb.root 1 && adb root；发布构建（ro.debuggable=0）上 KSU 的 adb root 是否还能用待上机核实（libadbroot 是否依赖 ro.debuggable），这些开发脚本只保证在开发构建上可用"
 S "pm path $PKG" | grep -q package: || die "设备上没有 $PKG"
 S "dumpsys window | grep -q 'mDreamingLockscreen=false'" || echo "   ⚠️ 看起来没解锁（mDreamingLockscreen 不是 false），游戏可能起不来"
 
