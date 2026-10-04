@@ -23,11 +23,13 @@
 #define O_MIG_CMD 68
 #define O_MIG_REC 100
 #define MIG_REC_LEN 256
+#define O_BCB_SEEN 356
 #define O_EVENTS 1024
 #define EV_SIZE 16
 #define O_CRC (GK3_REC_SIZE - 4)
 
-_Static_assert(O_MIG_REC + MIG_REC_LEN <= O_EVENTS, "GK3 记录字段重叠");
+_Static_assert(O_MIG_REC + MIG_REC_LEN <= O_BCB_SEEN, "GK3 记录字段重叠");
+_Static_assert(O_BCB_SEEN + 4 <= O_EVENTS, "GK3 记录字段重叠");
 _Static_assert(O_EVENTS + GK3_EV_N * EV_SIZE <= O_CRC, "事件环越界");
 
 gk3_err gk3_rec_validate(const uint8_t rec[GK3_REC_SIZE])
@@ -61,6 +63,15 @@ void gk3_rec_seal(uint8_t rec[GK3_REC_SIZE])
 
 uint32_t gk3_rec_flags(const uint8_t *rec) { return gk3_le32(rec + O_FLAGS); }
 bool gk3_rec_migrated(const uint8_t *rec) { return gk3_rec_flags(rec) & GK3_REC_F_MIGRATED; }
+
+void gk3_rec_set_flag(uint8_t *rec, uint32_t flag, bool on)
+{
+    uint32_t f = gk3_rec_flags(rec);
+    gk3_put_le32(rec + O_FLAGS, on ? f | flag : f & ~flag);
+}
+
+uint32_t gk3_rec_bcb_seen(const uint8_t *rec) { return gk3_le32(rec + O_BCB_SEEN); }
+void gk3_rec_set_bcb_seen(uint8_t *rec, uint32_t crc) { gk3_put_le32(rec + O_BCB_SEEN, crc); }
 
 void gk3_rec_migrate(uint8_t *rec, const uint8_t *bcb, uint32_t dispatch_ver)
 {
@@ -198,6 +209,7 @@ const char *gk3_ev_name(gk3_ev_code c)
     case GK3_EV_BOOTLOOP: return "bootloop";
     case GK3_EV_NOSLOT: return "noslot";
     case GK3_EV_MIGRATED: return "migrated";
+    case GK3_EV_BCB_IGNORED: return "bcb_ignored";
     }
     return "?";
 }

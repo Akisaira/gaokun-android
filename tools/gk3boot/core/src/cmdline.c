@@ -107,6 +107,7 @@ gk3_err gk3_cmdline_android(const char *base, const gk3_android_args *a, char *o
     static const char *const ours[] = {
         "androidboot.slot_suffix", "androidboot.bootloader",
         "androidboot.gk3boot.event", "androidboot.gk3boot.entry", "androidboot.gk3boot.mode",
+        "androidboot.gk3boot.streak",
     };
     sbuf b = {out, out_len, 0, false};
     const char *p = base, *t;
@@ -119,7 +120,7 @@ gk3_err gk3_cmdline_android(const char *base, const gk3_android_args *a, char *o
     if (a->slot > 1)
         return GK3_EINVAL;
     if ((a->bootloader && !value_ok(a->bootloader)) || (a->event && !value_ok(a->event)) ||
-        (a->entry && !value_ok(a->entry)) || (a->mode && !value_ok(a->mode)))
+        (a->entry && !value_ok(a->entry)) || (a->mode && !value_ok(a->mode)) || (a->streak && !value_ok(a->streak)))
         return GK3_EINVAL;
     while ((n = next_token(&p, &t)) != 0) {
         bool drop = false;
@@ -139,6 +140,8 @@ gk3_err gk3_cmdline_android(const char *base, const gk3_android_args *a, char *o
         kv(&b, "androidboot.gk3boot.entry", a->entry);
     if (a->mode)
         kv(&b, "androidboot.gk3boot.mode", a->mode);
+    if (a->streak)
+        kv(&b, "androidboot.gk3boot.streak", a->streak);
     return b.overflow ? GK3_ENOSPC : GK3_OK;
 }
 

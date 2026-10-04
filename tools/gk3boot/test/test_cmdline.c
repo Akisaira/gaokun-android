@@ -24,13 +24,13 @@ void test_cmdline(void)
     CHECK(strncmp(want, "initrd=", 7) == 0, "实机 cmdline 以 initrd= 开头");
     p = strchr(want, ' ');
     {
-        gk3_android_args a = {0, NULL, NULL, NULL, NULL};
+        gk3_android_args a = {0, NULL, NULL, NULL, NULL, NULL};
         CHECK_EQ(gk3_cmdline_android(base, &a, out, sizeof(out)), GK3_OK);
         CHECK_STR(out, p ? p + 1 : "");
     }
     /* 入口的完整追加（§4.3.1 的顺序） */
     {
-        gk3_android_args a = {1, "gk3boot-1.0.0", "fallback", "gk3boot-android-b+2-1.conf", NULL};
+        gk3_android_args a = {1, "gk3boot-1.0.0", "fallback", "gk3boot-android-b+2-1.conf", NULL, NULL};
         char *tail;
         CHECK_EQ(gk3_cmdline_android(base, &a, out, sizeof(out)), GK3_OK);
         tail = strstr(out, " androidboot.slot_suffix=");
@@ -42,7 +42,7 @@ void test_cmdline(void)
     }
     /* 观察模式（E4）：mode 排在最后；base 里混进来的旧 gk3boot.* 键被换掉 */
     {
-        gk3_android_args a = {0, "gk3boot-0.1.0-e4.g5c13441", "none", "gk3boot-e4.conf", "observe"};
+        gk3_android_args a = {0, "gk3boot-0.1.0-e4.g5c13441", "none", "gk3boot-e4.conf", "observe", NULL};
         char *tail;
         CHECK_EQ(gk3_cmdline_android(base, &a, out, sizeof(out)), GK3_OK);
         tail = strstr(out, " androidboot.slot_suffix=");
@@ -55,9 +55,23 @@ void test_cmdline(void)
         a.mode = "ob serve";
         CHECK_EQ(gk3_cmdline_android(base, &a, out, sizeof(out)), GK3_EINVAL);
     }
+    /* 动作模式（S5 后续）：streak 排在 mode 之后；旧的 streak 被换掉；值照样过滤 */
+    {
+        gk3_android_args a = {1, "gk3boot-0.2.0", "fallback", "gk3boot-android-b+2-1.conf", "action", "4"};
+        char *tail;
+        CHECK_EQ(gk3_cmdline_android("x androidboot.gk3boot.streak=9 y", &a, out, sizeof(out)), GK3_OK);
+        tail = strstr(out, " androidboot.slot_suffix=");
+        CHECK(tail != NULL && strncmp(out, "x y ", 4) == 0, "旧的 streak 被去掉");
+        if (tail)
+            CHECK_STR(tail, " androidboot.slot_suffix=_b androidboot.bootloader=gk3boot-0.2.0"
+                            " androidboot.gk3boot.event=fallback androidboot.gk3boot.entry=gk3boot-android-b+2-1.conf"
+                            " androidboot.gk3boot.mode=action androidboot.gk3boot.streak=4");
+        a.streak = "4 5";
+        CHECK_EQ(gk3_cmdline_android(base, &a, out, sizeof(out)), GK3_EINVAL);
+    }
     /* base 里已有的同名键被替换，不会出现两个 */
     {
-        gk3_android_args a = {0, NULL, NULL, NULL, NULL};
+        gk3_android_args a = {0, NULL, NULL, NULL, NULL, NULL};
         CHECK_EQ(gk3_cmdline_android("a=1  androidboot.slot_suffix=_b\tb=2 androidboot.slot_suffixes=x", &a, out, sizeof(out)), GK3_OK);
         CHECK_STR(out, "a=1 b=2 androidboot.slot_suffixes=x androidboot.slot_suffix=_a");
         CHECK_EQ(gk3_cmdline_android("foo=\"a b\" bar", &a, out, sizeof(out)), GK3_OK);
@@ -70,7 +84,7 @@ void test_cmdline(void)
     }
     /* 值里不准有空白 / 引号（不给注入机会） */
     {
-        gk3_android_args a = {0, "gk3boot 1.0", NULL, NULL, NULL};
+        gk3_android_args a = {0, "gk3boot 1.0", NULL, NULL, NULL, NULL};
         CHECK_EQ(gk3_cmdline_android(base, &a, out, sizeof(out)), GK3_EINVAL);
         a.bootloader = NULL;
         a.entry = "x\"y";

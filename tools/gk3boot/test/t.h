@@ -60,6 +60,7 @@ void test_gpt(void);
 void test_bcb(void);
 void test_bcab(void);
 void test_gk3rec(void);
+void test_dispatch(void);
 void test_bootimg(void);
 void test_cmdline(void);
 void test_blk(void);

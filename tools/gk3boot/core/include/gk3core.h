@@ -337,12 +337,14 @@ typedef enum {
     GK3_EV_NONE = 0, GK3_EV_FALLBACK, GK3_EV_BOOT_CORRUPT, GK3_EV_BCB_DROPPED,
     GK3_EV_WIPE_FAILED, GK3_EV_REFUSED_MERGING, GK3_EV_BOOTLOOP, GK3_EV_NOSLOT,
     GK3_EV_MIGRATED,
+    GK3_EV_BCB_IGNORED,     /* 分派开关关着时看到一份新的非空 BCB：只记录、不消费（aux = gk3_bcb_kind） */
 } gk3_ev_code;
 
 typedef enum { GK3_NEXT_NONE = 0, GK3_NEXT_SDBOOT_MENU = 1, GK3_NEXT_SLOT = 2 } gk3_next_kind;
 
-#define GK3_REC_F_MIGRATED 0x1u
-#define GK3_EVF_NOTIFIED   0x1u
+#define GK3_REC_F_MIGRATED    0x1u
+#define GK3_REC_F_IN_FALLBACK 0x2u  /* 上一次是回落启动：回落只在"进入"的那一次记事件、写 ESP 日志 */
+#define GK3_EVF_NOTIFIED      0x1u
 
 typedef struct {
     uint32_t seq;
@@ -360,6 +362,12 @@ void gk3_rec_seal(uint8_t rec[GK3_REC_SIZE]);           /* 重算 CRC，写盘�
 
 uint32_t gk3_rec_flags(const uint8_t *rec);
 bool gk3_rec_migrated(const uint8_t *rec);
+/* 置 / 清 flags 里的一位（不碰其他位） */
+void gk3_rec_set_flag(uint8_t *rec, uint32_t flag, bool on);
+/* 偏移 356：分派开关关着时，上一次"看到但没消费"的那份 BCB 的 CRC32（0 = 没有）。
+ * 只用来让同一份 BCB 只记一次事件 / 只写一次 ESP 日志（README §11）。 */
+uint32_t gk3_rec_bcb_seen(const uint8_t *rec);
+void gk3_rec_set_bcb_seen(uint8_t *rec, uint32_t crc);
 /* 首跑迁移（§4.10）：把 bcb 原文 / 摘要抄进记录、置迁移标记与分派版本、记一条 MIGRATED（BCB 非空时
  * 另记 BCB_DROPPED）。不碰 bcb 本身 —— 清 BCB 是调用方的事（gk3_bcb_clear）。 */
 void gk3_rec_migrate(uint8_t *rec, const uint8_t *bcb, uint32_t dispatch_ver);
@@ -378,6 +386,32 @@ uint8_t gk3_rec_dispatch_enter(uint8_t *rec, gk3_bcb_kind why, uint8_t slot, con
 uint8_t gk3_rec_dispatch_count(const uint8_t *rec);
 void gk3_rec_dispatch_digest(const uint8_t *rec, uint8_t out[20]);
 void gk3_rec_dispatch_reset(uint8_t *rec);
+
+/* ------------------------------------------------------------------ BCB 分派（§4.3.4、§4.10），只决定、不写盘 */
+
+#define GK3_DISPATCH_VER     1u     /* 迁移标记里记的"分派版本"（§4.10）；打开分派的那一版入口用它 */
+#define GK3_WIPE_MAX_ENTRIES 3u     /* 同一份 wipe BCB 进执行端的上限，超过 → 入口自己清、event=wipe_failed */
+
+typedef enum {
+    GK3_DISP_NONE = 0,      /* BCB 空：正常启动（若有旧的分派计数就清掉） */
+    GK3_DISP_MIGRATE,       /* 还没迁移：只清 BCB、不执行，置迁移标记（§4.10） */
+    GK3_DISP_CLEAR,         /* boot-quiescent / boot-rescue / 乱码：原文记进 GK3、清掉、正常启动 */
+    GK3_DISP_EXECUTOR,      /* 进执行端，why = kind */
+    GK3_DISP_WIPE_CAP,      /* 同一份 wipe BCB 已进入 3 次仍没被清：入口自己清、event=wipe_failed、正常启动 */
+} gk3_disp_action;
+
+typedef struct {
+    gk3_disp_action action;
+    gk3_bcb_kind why;
+    bool clear_command_first;   /* bootloader / fastboot：进执行端之前先清 command 写回（GBL 语义，执行端坏了也不循环） */
+    uint8_t count;              /* EXECUTOR / WIPE_CAP：这份 BCB 第几次进入（gk3_rec_dispatch_enter 之后的值） */
+} gk3_disp_plan;
+
+/* 按 §4.3.4 的表决定这份 BCB 怎么处理。rec 必须是有效记录（无效时调用方先 gk3_rec_init）；
+ * EXECUTOR / WIPE_CAP 分支会调 gk3_rec_dispatch_enter 改 rec 里的分派计数，NONE 分支会清掉旧计数 ——
+ * 改的都只是调用方的缓冲区，写不写回由调用方定。不碰 BCB 本身。 */
+void gk3_dispatch_plan(const gk3_bcb_info *bi, uint8_t *rec, uint8_t slot, gk3_disp_plan *out);
+const char *gk3_disp_name(gk3_disp_action a);
 
 /* 事件环：追加（覆盖最旧的），返回分到的 seq。 */
 uint32_t gk3_rec_event_add(uint8_t *rec, gk3_ev_code code, uint8_t slot, uint32_t aux);
@@ -425,6 +459,7 @@ typedef struct {
     const char *event;          /* androidboot.gk3boot.event，NULL 不加 */
     const char *entry;          /* androidboot.gk3boot.entry（自己条目的文件名），NULL 不加 */
     const char *mode;           /* androidboot.gk3boot.mode=observe|action（E4/E5 的观察模式要能从 Android 侧认出来），NULL 不加 */
+    const char *streak;         /* androidboot.gk3boot.streak=<GK3 连续未完成启动计数>（动作模式），NULL 不加 */
 } gk3_android_args;
 
 /* Android 交接用：base 里已有的同名键先删掉（避免重复），再按顺序追加。值里只允许
