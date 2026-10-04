@@ -238,7 +238,9 @@ PY
     local RC RDIRTY
     RC=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo "<not a git checkout>")
     RDIRTY=$(git -C "$REPO" status --porcelain -- patches scripts/kernel-apply-patches.sh \
-             scripts/kernel-setup-resukisu.sh scripts/kernel-config-android.sh 2>/dev/null | wc -l | tr -d " ")
+             scripts/kernel-setup-resukisu.sh scripts/kernel-config-android.sh 2>/dev/null | wc -l | tr -d " " || true)
+    # ↑ `|| true`：$REPO 不是 git checkout（如构建机上 git archive 出来的副本）时 git 退 128，pipefail + set -e
+    #   会让整个 release.sh 在打包这一步静默退出（2026-10-05 构建 1791138567 实测）。RC 那行已经标了 <not a git checkout>。
 
     # 清单本体用英文写：它是 GitHub release（英文发版说明）的附件，读者是外人
     {
