@@ -346,31 +346,32 @@ class Session extends ChangeNotifier {
 
   /// 网络安装先下载（占总进度 0–40%），再走和 U 盘安装完全相同的 gk3_apply
   Stream<Gk3Event> install() async* {
+    var rel = usbRelease?.dir ?? '';
+    final net = source == Source.net;
+    if (net) {
+      // 下载阶段不算"写盘"：盘没动，侧栏的重启 / 关机照常可用 —— 下载卡住时它们就是取消（GUI 审查 2026-10-05）
+      stage = InstallStage.download;
+      var ok = false;
+      await for (final e in backend.call('gk3_net_release', [variant!.base, netPayloadDir])) {
+        if (e is Gk3Progress) {
+          yield Gk3Progress(e.percent * 40 ~/ 100, e.text);
+        } else if (e is Gk3Exit) {
+          ok = e.code == 0;
+          if (!ok) {
+            yield e;
+            return;
+          }
+        } else {
+          yield e;
+        }
+      }
+      if (!ok) return;
+      rel = netPayloadDir;
+    }
+    stage = InstallStage.write;
     _writing++;
     _changed();
     try {
-      var rel = usbRelease?.dir ?? '';
-      final net = source == Source.net;
-      if (net) {
-        stage = InstallStage.download;
-        var ok = false;
-        await for (final e in backend.call('gk3_net_release', [variant!.base, netPayloadDir])) {
-          if (e is Gk3Progress) {
-            yield Gk3Progress(e.percent * 40 ~/ 100, e.text);
-          } else if (e is Gk3Exit) {
-            ok = e.code == 0;
-            if (!ok) {
-              yield e;
-              return;
-            }
-          } else {
-            yield e;
-          }
-        }
-        if (!ok) return;
-        rel = netPayloadDir;
-      }
-      stage = InstallStage.write;
       final args = ['--release', rel, ..._planArgs()];
       await for (final e in backend.call('gk3_apply', args)) {
         yield (net && e is Gk3Progress) ? Gk3Progress(40 + e.percent * 60 ~/ 100, e.text) : e;

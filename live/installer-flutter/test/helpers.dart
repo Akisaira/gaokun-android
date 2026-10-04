@@ -14,7 +14,7 @@ import 'package:gk3_installer/session.dart';
 
 /// 包一层 FixtureBackend：记下每一次调用；可以让某个函数失败
 class Rec extends Gk3Backend {
-  Rec(this.inner, {this.failApply = false, this.shellError, this.failNetOnce = false, this.holdApply});
+  Rec(this.inner, {this.failApply = false, this.shellError, this.failNetOnce = false, this.holdApply, this.holdNet});
   final FixtureBackend inner;
   final bool failApply;
 
@@ -23,6 +23,9 @@ class Rec extends Gk3Backend {
 
   /// 给了就让 gk3_apply 停在半路、等它完成（看"写盘期间"界面的样子）
   final Completer<void>? holdApply;
+
+  /// 给了就让 gk3_net_release 停在半路（看"下载期间"界面的样子）
+  final Completer<void>? holdNet;
 
   /// 侧栏 / 完成页发出的重启与关机
   final power = <String>[];
@@ -44,6 +47,10 @@ class Rec extends Gk3Backend {
       yield const Gk3Log('!! 下载 super.img.zst 没完成（curl 退出码 28，试了 5 次）；已下的 377 MiB 留着，重试会接着下');
       yield const Gk3Exit(1);
       return;
+    }
+    if (fn == 'gk3_net_release' && holdNet != null) {
+      yield const Gk3Progress(30, '下载 super.img.zst（31%）');
+      await holdNet!.future;
     }
     if (fn == 'gk3_apply' && holdApply != null) {
       yield const Gk3Progress(30, '写入 super');
@@ -93,12 +100,13 @@ Future<Rec> pumpApp(WidgetTester t, String scenario,
     String language = 'zh',
     String? shellError,
     bool failNetOnce = false,
-    Completer<void>? holdApply}) async {
+    Completer<void>? holdApply,
+    Completer<void>? holdNet}) async {
   t.view.physicalSize = const Size(1280, 800);
   t.view.devicePixelRatio = 1;
   addTearDown(t.view.reset);
   final rec = Rec(FixtureBackend(scenario, bundle: DiskBundle(), speed: speed, overrides: overrides),
-      failApply: failApply, shellError: shellError, failNetOnce: failNetOnce, holdApply: holdApply);
+      failApply: failApply, shellError: shellError, failNetOnce: failNetOnce, holdApply: holdApply, holdNet: holdNet);
   final session = Session(rec)..language = language;
   await t.pumpWidget(InstallerApp(session: session));
   await settle(t);

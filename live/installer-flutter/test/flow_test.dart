@@ -489,6 +489,39 @@ void main() {
     expect(rec.power, isEmpty);
   });
 
+  testWidgets('下载期间盘没动：侧栏的重启 / 关机可用（下载卡住时它们就是取消）；进了写盘才禁用', (t) async {
+    final net = Completer<void>(), apply = Completer<void>();
+    final rec = await pumpApp(t, 'windows-free', overrides: {'gk3_release_info': 'release_info-none.txt'}, holdNet: net, holdApply: apply);
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await tap(t, find.text(l.modeAlongTitle));
+    await next(t);
+    await see(t, find.text(l.sourceUsbMissing));
+    await next(t);
+    await tap(t, find.text('宿舍网-5G'));
+    for (final k in 'abcdefgh'.split('')) {
+      await tap(t, find.text(k));
+    }
+    await tap(t, find.text(l.netConnect));
+    await see(t, find.textContaining('已连接到'));
+    await next(t);
+    await tap(t, find.text('标准版'));
+    await next(t);
+    await next(t); // 选项
+    await hold(t, l.confirmHoldIdle);
+    await see(t, find.text(l.runTitle));
+    expect(rec.last('gk3_net_release'), isNotNull);
+    expect(rec.last('gk3_apply'), isNull);
+    expect(find.text(l.railBusy), findsNothing);
+    expect(railBtn(t, l.railPoweroff).onPressed, isNotNull);
+    net.complete();
+    await see(t, find.text(l.railBusy));
+    expect(railBtn(t, l.railPoweroff).onPressed, isNull);
+    apply.complete();
+    await see(t, find.text(l.doneTitle));
+  });
+
   testWidgets('缩分区的默认值：/data 约 64 GiB（不是原先的约 16 GiB）；拖到只腾一点时黄色提醒（v1.0 计划 GUI-20）', (t) async {
     final rec = await pumpApp(t, 'factory');
     await tap(t, find.text(l.btnStart));

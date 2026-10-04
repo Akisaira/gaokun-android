@@ -1619,7 +1619,7 @@ gk3__curl_meter() {
 #   网络类的失败按 --continue-at 续传重试，总共最多 GK3_NET_TRIES 次，用完了就报失败交给界面（那边有"重试"）。
 #   三个数都能用环境变量改（test-apply.sh 的 E 节把停滞时间压到几秒）。
 gk3_net_fetch() {
-    local url=$1 dst=$2 want=${3:-} lo=${4:-0} span=${5:-100} name rc try=1
+    local url=$1 dst=$2 want=${3:-} lo=${4:-0} span=${5:-100} name rc try=1 http= why
     local tries=${GK3_NET_TRIES:-5}
     name=$(basename "$dst")
     gk3_prog "$lo" "开始下载 $name"
@@ -1627,13 +1627,19 @@ gk3_net_fetch() {
         # ⚠️ 用 --continue-at 支持断点续传：这台机器的 WAN 只有 1–2 MB/s，
         #    1.2 GB 要十几分钟，中途断一次全部重来是不可接受的。
         # ⚠️ 不再用 curl 自己的 --retry：重试由下面的循环做，每一次都按文件现有的长度续传
+        # ★ HTTP 状态码另存（-w 写 stdout → 临时文件；stderr 照旧进进度表）：curl 对 4xx/5xx 一律报 22，
+        #   而 503 / 429 这类是暂时的、要重试，404 不是（GUI 审查 2026-10-05：原先 curl --retry 3 会重试 5xx，
+        #   去掉它之后一个 503 就直接失败，续传时还会把半截文件交给 sha256 删掉）
+        local r cf; cf=$(mktemp) || cf=/dev/null
         curl -fL --connect-timeout "${GK3_NET_CONNECT_TIMEOUT:-20}" \
-            --speed-limit 10240 --speed-time "${GK3_NET_SPEED_TIME:-60}" \
-            ${1:+--continue-at "$1"} -o "$dst" "$url" 2>&1 \
+            --speed-limit 10240 --speed-time "${GK3_NET_SPEED_TIME:-60}" -w '%{http_code}' \
+            ${1:+--continue-at "$1"} -o "$dst" "$url" 2>&1 >"$cf" \
             | gk3__curl_meter "$lo" "$span" "$name" >&2
         # ⚠️★ 取 curl 自己的退出码，不看管道尾巴（CLAUDE.md 运维坑 1）。原先只判
         #   [ -f "$dst" ] —— 断在 77% 的文件也"存在"，于是报下载完成。
-        return "${PIPESTATUS[0]}"
+        r=${PIPESTATUS[0]}
+        http=$(cat "$cf" 2>/dev/null); [ "$cf" = /dev/null ] || rm -f "$cf"
+        return "$r"
     }
     gk3__curl_once() {   # 续传一次；服务器不支持续传（HTTP Range）就从头
         gk3__curl -; rc=$?
@@ -1643,20 +1649,26 @@ gk3_net_fetch() {
             rm -f "$dst"; gk3__curl ""; rc=$?
         fi
     }
-    # 只重试网络类的失败（解析 / 连接 / 超时与停滞 / 半截 / 收发出错）。22（HTTP ≥ 400，含续传一个已经下完的文件时的 416）
-    # 不重试：下面交给 sha256 裁决，或者就是真的没有这个文件
-    gk3__curl_transient() { case "$1" in 6|7|16|18|28|35|52|55|56|92) return 0 ;; esac; return 1; }
+    # 只重试网络类的失败（解析 / 连接 / 超时与停滞 / 半截 / 收发出错），以及服务器暂时的 HTTP 错误（408 / 429 / 5xx）。
+    # 别的 22（404 之类）不重试：下面交给 sha256 裁决，或者就是真的没有这个文件。
+    # （续传一个已经下完的文件时服务器回 416：curl 8.14 把它当成功、退出码 0 —— 2026-10-05 在 trixie 的 curl 上实测）
+    gk3__curl_transient() {
+        case "$1" in 6|7|16|18|28|35|52|55|56|92) return 0 ;; 22) case "$http" in 408|429|5??) return 0 ;; esac ;; esac
+        return 1
+    }
+    gk3__curl_why() { why="curl 退出码 ${rc}"; [ "$rc" != 22 ] || why="${why}，HTTP ${http}"; }
     gk3__curl_once
     while [ "$try" -lt "$tries" ] && gk3__curl_transient "$rc"; do
-        try=$(( try + 1 ))
-        gk3_log "下载 $name 中断（curl 退出码 ${rc}），${GK3_NET_RETRY_DELAY:-3} 秒后接着下（第 ${try}/${tries} 次）"
+        try=$(( try + 1 )); gk3__curl_why
+        gk3_log "下载 $name 中断（${why}），${GK3_NET_RETRY_DELAY:-3} 秒后接着下（第 ${try}/${tries} 次）"
         sleep "${GK3_NET_RETRY_DELAY:-3}"
         gk3__curl_once
     done
     # ⚠️ 重试用完还是网络类的失败：半截文件【留着】、不交给 sha256（那一步不符就删）——
     #   界面上的"重试"要接着它续传，不能让几分钟的下载白费（v1.0 计划 GUI-3）
     if gk3__curl_transient "$rc"; then
-        gk3_die "下载 $name 没完成（curl 退出码 ${rc}，试了 ${try} 次）；已下的 $(( $(wc -c 2>/dev/null < "$dst" || echo 0) >> 20 )) MiB 留着，重试会接着下"
+        gk3__curl_why
+        gk3_die "下载 $name 没完成（${why}，试了 ${try} 次）；已下的 $(( $(wc -c 2>/dev/null < "$dst" || echo 0) >> 20 )) MiB 留着，重试会接着下"
         return 1
     fi
     [ -f "$dst" ] || { gk3_die "下载失败（curl 退出码 ${rc}）"; return 1; }
@@ -1685,9 +1697,11 @@ gk3_net_fetch() {
 # ⚠️ 校验清单与镜像来自同一台服务器 —— 它防的是下载不完整（本机 WAN 1–2 MB/s，
 #    断线是常态），不是防一台恶意的服务器；那一层靠 HTTPS。
 gk3_net_release() {
-    local base=${1%/} dst=$2 f want
+    local base=${1%/} dst=$2 f want old="" ow
     [ -n "$base" ] && [ -n "$dst" ] || { gk3_die "用法：gk3_net_release <base-url> <目标目录>"; return 1; }
     mkdir -p "$dst" || return 1
+    # 上一次留下的校验清单：换了版本时，上一个版本留下的（半截）文件不能拿来续传（见下面）
+    [ -f "$dst/install-artifacts.sha256" ] && old=$(cat "$dst/install-artifacts.sha256")
     gk3_prog 0 "取校验清单"
     curl -fsSL --retry 3 --max-time 60 -o "$dst/install-artifacts.sha256" "$base/install-artifacts.sha256" \
         || { gk3_die "取不到校验清单：$base/install-artifacts.sha256"; return 1; }
@@ -1695,6 +1709,16 @@ gk3_net_release() {
     for f in boot.img super.img.zst; do
         want=$(awk -v n="$f" '{sub(/^\*/, "", $2)} $2==n{print $1}' "$dst/install-artifacts.sha256")
         [ -n "$want" ] || { gk3_die "校验清单里没有 $f"; return 1; }
+        # ★ 换了版本（GUI 审查 2026-10-05）：下载失败时半截文件是故意留着的（界面上"重试"接着续传），
+        #   而失败页同时提供"返回修改、换一个版本"。不先丢掉的话，新版本的后半截接在旧版本的前半截后面，
+        #   第一次必然 sha256 不符、还报"被篡改"，用户得再点一次重试。只在两份清单都有这个文件、且 sha256 不同时丢
+        if [ -f "$dst/$f" ] && [ -n "$old" ]; then
+            ow=$(printf '%s\n' "$old" | awk -v n="$f" '{sub(/^\*/, "", $2)} $2==n{print $1}')
+            if [ -n "$ow" ] && [ "$ow" != "$want" ]; then
+                gk3_log "换了版本：上一次留下的 $f 属于另一个版本，丢掉、从头下载"
+                rm -f "$dst/$f"
+            fi
+        fi
         # 进度：boot.img 占 0–5%，super 占 5–100%
         if [ "$f" = boot.img ]; then gk3_net_fetch "$base/$f" "$dst/$f" "$want" 0 5 || return 1
         else                          gk3_net_fetch "$base/$f" "$dst/$f" "$want" 5 95 || return 1; fi

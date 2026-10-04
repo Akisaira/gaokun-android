@@ -528,7 +528,8 @@ import http.server, os, sys
 import time
 # stall：支持 Range；不带 Range 的请求发一半就不动了（连接不断）—— 服务器活着、只是不再发数据（v1.0 计划 GUI-5）
 root, port, mode, log = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
-rng = mode in ("range", "stall")
+rng = mode in ("range", "stall", "e503")
+seen = set()   # e503：每个安装文件的第一个请求回 503（服务器暂时出错），之后照常
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_HEAD(self):   # gk3__ota_variant 用 HEAD 量安装文件的大小（R2 支持）
@@ -541,6 +542,8 @@ class H(http.server.BaseHTTPRequestHandler):
         data = open(p, "rb").read(); start = 0
         r = self.headers.get("Range")
         open(log, "a").write("%s %s\n" % (self.path, r or "-"))
+        if mode == "e503" and p.endswith((".img", ".zst")) and self.path not in seen:
+            seen.add(self.path); self.send_response(503); self.send_header("Content-Length", "0"); self.end_headers(); return
         if rng and r and r.startswith("bytes="):
             start = int(r[6:].split("-")[0])
             if start >= len(data): self.send_response(416); self.end_headers(); return
@@ -564,6 +567,7 @@ cp "$SRV/good/"* "$SRV/bad/"; printf 'X' | dd of="$SRV/bad/boot.img" bs=1 seek=4
 python3 "$W/srv.py" "$SRV" 18081 range "$W/srv-range.log" & SRVPID1=$!
 python3 "$W/srv.py" "$SRV" 18082 norange "$W/srv-norange.log" & SRVPID2=$!
 python3 "$W/srv.py" "$SRV" 18083 stall "$W/srv-stall.log" & SRVPID3=$!
+python3 "$W/srv.py" "$SRV" 18084 e503 "$W/srv-e503.log" & SRVPID4=$!
 sleep 1
 RI=$(gk3_release_info "$SRV/good")
 printf '%s' "$RI" | grep -q 'boot=yes super=zst sha256=yes' && printf '%s' "$RI" | grep -q 'version=crDroidAndroid-16.0-20260916-gaokun3-v12.11 ' \
@@ -595,11 +599,34 @@ mkdir -p "$SRV/alt"; cp "$SRV/good/boot.img" "$SRV/alt/"
 B100=$(od -An -tu1 -j100 -N1 "$SRV/alt/super.img.zst" | tr -d ' ')
 printf "\\$(printf %o $(( (B100 + 1) % 256 )))" | dd of="$SRV/alt/super.img.zst" bs=1 seek=100 conv=notrunc status=none
 ( cd "$SRV/alt" && sha256sum boot.img super.img.zst > install-artifacts.sha256 )
+# ★ GUI 审查 2026-10-05：下载失败时半截文件是故意留着的、失败页又给"返回修改、换版本" —— 换了版本时 gk3_net_release
+#   先比两份校验清单，sha256 变了的文件直接丢掉，第一次就下对（原先第一次必然"sha256 不符"、要再点一次重试）
 DL6=$W/dl6; gk3_net_release http://127.0.0.1:18081/good/ "$DL6" >/dev/null 2>&1
-gk3_net_release http://127.0.0.1:18081/alt/ "$DL6" >/dev/null 2>&1; rc1=$?
-gk3_net_release http://127.0.0.1:18081/alt/ "$DL6" >/dev/null 2>&1; rc2=$?
-[ "$rc1" != 0 ] && [ "$rc2" = 0 ] && [ "$(sha "$DL6/super.img.zst")" = "$(sha "$SRV/alt/super.img.zst")" ] \
-    && ok "同一目录换版本：第一次 sha256 不符并删掉，重试从头下、这次对了" || bad "换版本后卡住了（rc1=$rc1 rc2=${rc2}）"
+head -c 300000 "$DL6/super.img.zst" > "$DL6/s.part" && mv "$DL6/s.part" "$DL6/super.img.zst"   # A 的 super 只下了一半
+gk3_net_release http://127.0.0.1:18081/alt/ "$DL6" >/dev/null 2>"$W/e6.err"; rc1=$?
+[ "$rc1" = 0 ] && [ "$(sha "$DL6/super.img.zst")" = "$(sha "$SRV/alt/super.img.zst")" ] && grep -q '换了版本：上一次留下的 super.img.zst' "$W/e6.err" \
+  && ! grep -q '换了版本：上一次留下的 boot.img' "$W/e6.err" \
+    && ok "同一目录换版本：sha256 变了的 super 先丢掉、第一次就下对；没变的 boot.img 留着" || { bad "换版本没有一次下对（rc1=${rc1}）"; tail -3 "$W/e6.err"; }
+# 清单没变、本地的半截是坏的（前缀被改过）：续传后 sha256 不符 → 删掉，重试从头下、这次对了
+DL6B=$W/dl6b; gk3_net_release http://127.0.0.1:18081/good/ "$DL6B" >/dev/null 2>&1
+head -c 300000 "$DL6B/super.img.zst" > "$DL6B/s.part" && mv "$DL6B/s.part" "$DL6B/super.img.zst"
+B100=$(od -An -tu1 -j100 -N1 "$DL6B/super.img.zst" | tr -d ' ')
+printf "\\$(printf %o $(( (B100 + 1) % 256 )))" | dd of="$DL6B/super.img.zst" bs=1 seek=100 conv=notrunc status=none
+gk3_net_release http://127.0.0.1:18081/good/ "$DL6B" >/dev/null 2>"$W/e6b.err"; rc1=$?
+gk3_net_release http://127.0.0.1:18081/good/ "$DL6B" >/dev/null 2>&1; rc2=$?
+[ "$rc1" != 0 ] && grep -q 'super.img.zst 的 sha256 不符.*已删掉' "$W/e6b.err" && [ "$rc2" = 0 ] && [ "$(sha "$DL6B/super.img.zst")" = "$(sha "$REL/super.img.zst")" ] \
+    && ok "本地半截是坏的：第一次 sha256 不符并删掉，重试从头下、这次对了" || bad "坏的半截卡住了（rc1=$rc1 rc2=${rc2}）"
+# ★ GUI 审查 2026-10-05：服务器暂时回 503（R2 / CDN 偶尔会）—— 原先 curl --retry 3 会重试，去掉它之后要由外层循环接住；
+#   续传中途的 503 不能把半截文件交给 sha256 删掉
+DL9=$W/dl9; mkdir -p "$DL9"; head -c 300000 "$REL/super.img.zst" > "$DL9/super.img.zst"; : > "$W/srv-e503.log"
+GK3_NET_RETRY_DELAY=0 gk3_net_release http://127.0.0.1:18084/good/ "$DL9" >/dev/null 2>"$W/e9.err"; rc=$?
+[ "$rc" = 0 ] && [ "$(sha "$DL9/super.img.zst")" = "$(sha "$REL/super.img.zst")" ] && grep -q 'super.img.zst 中断（curl 退出码 22，HTTP 503）' "$W/e9.err" \
+  && [ "$(grep -c '^/good/super.img.zst bytes=300000-' "$W/srv-e503.log")" = 2 ] \
+    && ok "服务器暂时 503：重试、从第 300000 字节接着下，sha256 一致" || { bad "503 没被当成暂时的错误（rc=${rc}）"; tail -3 "$W/e9.err"; cat "$W/srv-e503.log"; }
+mkdir -p "$SRV/missing"; cp "$SRV/good/install-artifacts.sha256" "$SRV/missing/"   # 清单在、文件不在
+OUT=$(GK3_NET_RETRY_DELAY=0 gk3_net_release http://127.0.0.1:18081/missing/ "$W/dl10" 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '下载失败（curl 退出码 22）' && ! printf '%s' "$OUT" | grep -q '接着下' \
+    && ok "清单里有、服务器上没有（404）：不重试，直接报失败" || bad "404 的处理不对（rc=${rc}）：$(printf '%s' "$OUT" | tail -2)"
 # ★ v1.0 计划 GUI-5：服务器发了一半就不动了（连接还在）。原先 curl 只有 --retry 3，这种停滞永远不超时、进度条一直停着。
 #   现在：停滞判死（这里压到 2 秒）→ 按已有长度续传重试 → 下完、sha256 一致
 DL7=$W/dl7; : > "$W/srv-stall.log"; T0=$(date +%s)
@@ -654,7 +681,7 @@ VM=$(GK3_LOCAL_MANIFEST=$W/local-variants.txt GK3_MANIFEST_URL=http://127.0.0.1:
 VM=$(GK3_LOCAL_MANIFEST=$W/local-variants.txt GK3_MANIFEST_URL=http://127.0.0.1:18081/installer/variants.txt GK3_OTA_JSON_URL=http://127.0.0.1:18081/ota/gaokun3.json gk3_net_manifest 2>/dev/null); rc=$?
 [ "$rc" = 0 ] && [ "$(printf '%s\n' "$VM" | head -1 | cut -d' ' -f2)" = id=lan ] && printf '%s' "$VM" | grep -q '^VARIANT id=latest ' \
     && ok "介质清单与线上的都有：介质的排在前面，线上的最新发布也在" || bad "合并顺序不对（rc=${rc}）：$VM"
-kill $SRVPID1 $SRVPID2 $SRVPID3 2>/dev/null
+kill $SRVPID1 $SRVPID2 $SRVPID3 $SRVPID4 2>/dev/null
 # 下载下来的目录交给 gk3_apply —— 网络安装与 U 盘安装是同一条写盘路径
 DN=$(new_disk n 40G); sgdisk -o "$DN" >/dev/null 2>&1
 gk3_apply --disk "$DN" --mode wipe --rescue no --release "$DL" >"$W/n.log" 2>&1; rc=$?

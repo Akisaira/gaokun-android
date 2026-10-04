@@ -324,6 +324,9 @@ function Invoke-Setup {
     #   安全启动、回到 Windows（可能当场就被要恢复密钥），重跑脚本才第一次看到"先确认拿得到恢复密钥"，已经晚了。
     #   现在：先确认恢复密钥，再暂停保护 2 次重启（关安全启动回来算一次、装完第一次经 systemd-boot 进 Windows 算一次；
     #   之后 Windows 自己恢复保护、按当时的启动路径重新封存 —— 按 Windows 的行为推断，没在本机上实测过），然后才让用户去关安全启动。
+    # 先读安全启动状态（读不到 = 不是 UEFI，直接 Fail）、但【开着】的判定放到 BitLocker 之后：
+    #   不是 UEFI 的机器不该先被暂停 BitLocker 再被拒（GUI 审查 2026-10-05）
+    try { $sb = Confirm-SecureBootUEFI } catch { Fail '不是 UEFI 启动（或读不到安全启动状态）' 'not booted in UEFI mode (or Secure Boot state unreadable)' }
     $bl = $null
     $blSuspended = $false
     try { $bl = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop } catch { }
@@ -339,7 +342,6 @@ function Invoke-Setup {
             Warn "暂停 BitLocker 失败（$($_.Exception.Message)）：照样可以继续，但手上一定要有恢复密钥" "Could not suspend BitLocker ($($_.Exception.Message)): you can go on, but keep the recovery key at hand"
         }
     }
-    try { $sb = Confirm-SecureBootUEFI } catch { Fail '不是 UEFI 启动（或读不到安全启动状态）' 'not booted in UEFI mode (or Secure Boot state unreadable)' }
     if ($sb) {
         if ($blSuspended) { Fail '安全启动开着：内核没有签名，开着就起不来。BitLocker 已经暂停了 —— 现在重启进固件设置关掉安全启动，回到 Windows 后再运行本脚本' 'Secure Boot is on: the kernel is unsigned. BitLocker is suspended now - restart into firmware setup, turn Secure Boot off, then run this again from Windows' }
         Fail '安全启动开着：内核没有签名，开着就起不来。进固件设置关掉安全启动后再运行' 'Secure Boot is on: the kernel is unsigned. Turn Secure Boot off in firmware setup, then run this again'
