@@ -24,6 +24,8 @@
 
 #include <dirent.h>
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -86,8 +88,14 @@ class Lights : public BnLights {
             // 其余类型本机没有硬件。返回成功而不是报错：框架对失败会重试并刷日志。
             return ::ndk::ScopedAStatus::ok();
         }
+        // ★ 这个 HAL 对背光【永远】返回 ok()，失败只记日志（LIVE-1 / PERF-1 / APP-7）。
+        //   框架不接错误：LightsService.setLightUnchecked 不捕获 ServiceSpecificException，
+        //   它在 DisplayPowerState$PhotonicModulator 线程里抛出 ⇒ system_server 被杀、整机
+        //   软重启。2026-10-02 dropbox 里实有一条（code -5 = 下面原来返回的 -EIO，亮灭屏过渡中）。
+        //   丢一次写入的代价远小于软重启：熄屏过渡中丢的那次本来就看不见；亮屏那次若丢了，
+        //   面板停在旧亮度，直到下一次调亮度（自动亮度 / 滑条）覆盖。
         if (mPath.empty()) {
-            return ::ndk::ScopedAStatus::fromServiceSpecificError(-ENODEV);
+            return ::ndk::ScopedAStatus::ok();  // 构造时已经报过 ERROR，这里不再刷屏
         }
 
         uint32_t v = RgbToBrightness(state.color);          // 0..255
@@ -97,9 +105,24 @@ class Lights : public BnLights {
         out = std::max(0, std::min(mMax, out));
 
         if (!::android::base::WriteStringToFile(std::to_string(out), mPath + "/brightness")) {
-            PLOG(ERROR) << "写 " << mPath << "/brightness 失败（权限？看 init 里的 chown）";
-            return ::ndk::ScopedAStatus::fromServiceSpecificError(-EIO);
+            const int err = errno;  // 先存下来，后面的日志调用会改 errno
+            // 限流：一串连续失败只记第一条和之后每第 kLogEvery 条，恢复时补一条总数。
+            // 根因未实测（怀疑面板 / DSI 下电时 himax_bl_update_status 仍发 DCS），
+            // 所以第一条一定要带 errno 与要写的值 —— 下次复现靠它查。
+            ++mFailStreak;
+            if (mFailStreak == 1 || mFailStreak % kLogEvery == 0) {
+                LOG(ERROR) << "写 " << mPath << "/brightness=" << out << " 失败: "
+                           << strerror(err) << " (errno " << err << ")，连续第 " << mFailStreak
+                           << " 次；上次成功写入的值 " << mLastOk
+                           << "（EACCES 看 init 里的 chown；忽略本次，不向框架报错）";
+            }
+            return ::ndk::ScopedAStatus::ok();
         }
+        if (mFailStreak > 0) {
+            LOG(WARNING) << "背光写入恢复（此前连续失败 " << mFailStreak << " 次），当前值 " << out;
+            mFailStreak = 0;
+        }
+        mLastOk = out;
         return ::ndk::ScopedAStatus::ok();
     }
 
@@ -117,8 +140,13 @@ class Lights : public BnLights {
 
   private:
     static constexpr int32_t kBacklightId = 0;
+    static constexpr int kLogEvery = 100;
     const std::string mPath;
     int mMax = 255;
+    // 只在 binder 线程里改。线程池上限是 0（main 里），只有 main 线程自己
+    // joinThreadPool 处理调用 ⇒ 单线程，不用加锁。
+    int mFailStreak = 0;
+    int mLastOk = -1;  // -1 = 本次开机还没写成功过
 };
 
 }  // namespace aidl::android::hardware::light
