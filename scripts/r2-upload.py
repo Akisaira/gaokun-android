@@ -19,6 +19,16 @@ buckets, while these keys can only touch object storage.
 
     r2-upload.py <bucket> <local-file> <key> [content-type]
     r2-upload.py --delete <bucket> <key>
+    r2-upload.py --check <bucket> <local-file> <key>
+        exit 0 = the key does not exist yet, or holds exactly these bytes
+                 (ETag == MD5 of the local file);
+        exit 3 = the key exists with DIFFERENT bytes (refuse to overwrite);
+        exit 4 = the key exists but its ETag is not a plain MD5 (multipart),
+                 so it cannot be compared;
+        exit 1 = any other error (HTTP status other than 200/404).
+        scripts/release.sh runs this on every immutable key before uploading
+        (REL-13): two builds made on the same day get the same zip name, and
+        a silent overwrite would change what an already-published link serves.
 
 Notes
   * Signs with x-amz-content-sha256: UNSIGNED-PAYLOAD. R2 accepts that over
@@ -84,7 +94,8 @@ def _auth_headers(method, host, canon_uri, extra, canon_qs=''):
     return headers
 
 
-def _send(method, canon_uri, extra, body=None, attempts=4, qs='', want_body=False):
+def _send(method, canon_uri, extra, body=None, attempts=4, qs='', want_body=False,
+          want_headers=False):
     ep = os.environ['R2_ENDPOINT'].rstrip('/')
     host = ep.split('://', 1)[1]
     last = None
@@ -98,6 +109,8 @@ def _send(method, canon_uri, extra, body=None, attempts=4, qs='', want_body=Fals
                 url, data=body() if body else None,
                 headers=headers, method=method)
             with urllib.request.urlopen(req, timeout=3600) as resp:
+                if want_headers:                    # HEAD：只要状态码与响应头（REL-13 的 --check）
+                    return resp.status, dict((k.lower(), v) for k, v in resp.getheaders())
                 return resp.status, (resp.read() if want_body else b'')
         except urllib.error.HTTPError as e:
             # A 4xx will not fix itself; fail immediately with the server's
@@ -120,6 +133,39 @@ def put(bucket, path, key, ctype):
     print('  %-56s %8.1f MiB  HTTP %s%s'
           % (key, size / 1048576.0, code, '' if ok else '  ' + msg))
     return ok
+
+
+def check(bucket, path, key):
+    """REL-13：上传前核对同名对象。返回码见模块文档的 --check 一节。
+
+    ★ 判据是 ETag == 本地文件的 MD5：R2 对【单次 PUT】上传的对象，ETag 就是内容的 MD5
+      （与 S3 相同）；本文件的 put() 只做单次 PUT，所以 release.sh 传上去的对象都满足。
+      ETag 里带 '-' 的是分段上传（S3 约定为"各段 MD5 再 MD5 + 段数"），比不了 ⇒ 返回 4，让人去看。
+    ⚠️ "R2 单次 PUT 的 ETag 等于 MD5"是按 S3 兼容语义写的，⬜ 第一次真跑时核对一次：
+      对一个已有对象跑 --check 应当报"字节相同"；若报 4 或 3，就是这个前提不成立。
+    """
+    code, hdr = _send('HEAD', '/%s/%s' % (bucket, key), {}, want_headers=True)
+    if code == 404:
+        print('  %-56s 不存在，可以传' % key)
+        return 0
+    if code != 200:
+        print('  %-56s HEAD 返回 HTTP %s：%s' % (key, code, hdr))
+        return 1
+    etag = (hdr.get('etag') or '').strip().strip('"').lower()
+    rsize = hdr.get('content-length')
+    if not etag or '-' in etag:
+        print('  %-56s 已存在，ETag=%r 不是普通 MD5（分段上传？），无法比较' % (key, etag))
+        return 4
+    md5 = hashlib.md5()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8 << 20), b''):
+            md5.update(chunk)
+    if md5.hexdigest() == etag:
+        print('  %-56s 已存在且字节相同（MD5 %s），重传无害' % (key, etag))
+        return 0
+    print('  %-56s ✗ 已存在且内容不同：远端 MD5 %s（%s 字节），本地 MD5 %s（%d 字节）'
+          % (key, etag, rsize, md5.hexdigest(), os.path.getsize(path)))
+    return 3
 
 
 def delete(bucket, key):
@@ -219,6 +265,8 @@ def main():
         sys.exit(0 if cmd_du(args[1]) else 1)
     if args[0] == '--delete':
         sys.exit(0 if delete(args[1], args[2]) else 1)
+    if args[0] == '--check':
+        sys.exit(check(args[1], args[2], args[3]))
     bucket, path, key = args[0], args[1], args[2]
     ctype = args[3] if len(args) > 3 else 'application/octet-stream'
     sys.exit(0 if put(bucket, path, key, ctype) else 1)

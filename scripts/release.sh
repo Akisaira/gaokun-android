@@ -69,6 +69,10 @@
 #     拦不拦：只有真要往 ota/ 发的那一次（不带 --dry-run、不带 --stage-only）拦；
 #     --dry-run 与 --stage-only 只警告 —— 候选版就是用 --dry-run 构建出来的，那时它的戳刚生成、
 #     不可能已经有验收报告；验完再用 --no-build（可先加 --dry-run 彩排一遍看警告）发。
+#
+#   ★ REL-13 同名覆盖闸门（2026-10-05）：正式上传前，builds/<zip> 与 install/<ver>/ 的三个载荷若在 R2 上
+#     已存在且字节不同（同一天的另一版已经发过 —— OTA 包名只含日期）就停下、一个都不传。
+#     GK3_R2_OVERWRITE=1 才照样覆盖（撤回坏包之类，对外可见，先想清楚）。用的是 scripts/r2-upload.py --check。
 
 set -euo pipefail
 
@@ -78,7 +82,10 @@ KTREE=${GK3_KTREE:-$HOME/gk3-kernel-iris}
 
 BUCKET=${BUCKET:-gaokun-android}
 HOST=${HOST:-https://ota.072172.xyz}
-UPLOAD=${UPLOAD:-$HOME/r2-upload.py}
+# ★ REL-13（2026-10-05）：默认改用本仓的 scripts/r2-upload.py（第 4 步前要用它新加的 --check）。
+#   原来默认是构建机上的 ~/r2-upload.py —— 一份不入库的拷贝，没有 --check：拿旧拷贝跑 --check 会把
+#   "--check" 当成桶名去 PUT，报错退出（不会误传，但会拦下发版）。要用别的拷贝就显式设 UPLOAD。
+UPLOAD=${UPLOAD:-$REPO/scripts/r2-upload.py}
 DRY=0; STAGE_ONLY=0; NO_BUILD=0
 for a in "$@"; do
     case "$a" in
@@ -564,6 +571,35 @@ if [ "$STAGE_ONLY" = 1 ]; then
     echo "  （经 $HOST 取时 URL 是 $HOST/staging/$VER/<文件名>，前提是自定义域对整个桶开放 —— 本脚本不核实）"
     exit 0
 fi
+
+# ═══ REL-13：同名对象不许悄悄换内容 ═══
+# OTA 包名只含日期（crDroidAndroid-16.0-<日期>-gaokun3-….zip），VER 就是它去掉 .zip。同一天出两个版本，
+# builds/<zip> 与 install/$VER/* 的键完全相同 —— 后传的会悄悄盖掉先发的，已经贴出去的链接（发版说明 /
+# GitHub 发布页里的 R2 链接）就换了内容。所以：这几个键在 R2 上已存在、且字节与本地不同 ⇒ 一个都不传、停下。
+#   字节相同（重跑同一版，例如上次传到一半断了）照常放行。判据是 ETag == MD5（r2-upload.py check() 的注释）。
+#   ota/gaokun3.json 本来就是每版覆盖的，不查；staging/ 按约定可以覆盖（--stage-only 在上面已经 exit），也不查。
+#   GPL 附件（kernel-source.txt 等）每次 --no-build 重跑会重新生成，内容可能带时间，不查 —— 载荷一致就说明是同一版。
+#   ⚠️ 真要替换已发布的同名对象（例如撤回一版坏包）：GK3_R2_OVERWRITE=1 —— 这是对外可见的改动，先想清楚。
+echo "═══ 4a. 上传前核对：已有的同名载荷必须字节相同（REL-13）═══"
+R2_CONFLICT=()
+r2_check() {   # $1=本地文件 $2=键
+    local rc=0
+    python3 "$UPLOAD" --check "$BUCKET" "$1" "$2" || rc=$?
+    [ "$rc" = 0 ] || R2_CONFLICT+=("$2（--check 退出码 $rc）")
+}
+r2_check "$S/$(basename "$ZIP")" "builds/$(basename "$ZIP")"
+for f in install-artifacts.sha256 boot.img super.img.zst; do
+    r2_check "$S/$f" "install/$VER/$f"
+done
+if [ ${#R2_CONFLICT[@]} != 0 ]; then
+    printf '    %s\n' "${R2_CONFLICT[@]}" >&2
+    if [ "${GK3_R2_OVERWRITE:-}" = 1 ]; then
+        echo "⚠️ GK3_R2_OVERWRITE=1：照样覆盖上面这些已发布的对象（REL-13）" >&2
+    else
+        die "R2 上已有同名、但内容不同的载荷（见上）—— 多半是同一天的另一版已经发过。别覆盖已发布的链接；确要覆盖设 GK3_R2_OVERWRITE=1（REL-13）"
+    fi
+fi
+ok "R2 同名对象核对通过"
 
 echo "═══ 4. 上传：★产物先传，清单【最后】传 ═══"
 python3 "$UPLOAD" "$BUCKET" "$S/$(basename "$ZIP")" "builds/$(basename "$ZIP")" application/zip
