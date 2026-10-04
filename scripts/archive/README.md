@@ -24,8 +24,13 @@
 | `mesa-relocate-abs-paths.py` | 把 mesa `Android.bp` 里 `~/aosp` 的绝对路径改成 `~/crdroid` | 2026-08-19 换树时的一次性修补 |
 | `lpdump.py` | 读 `/dev/nvme0n1p8` 的 LP 元数据头 | 硬编码分区号的一次性调试；要看 super 里的分区用 `scripts/lpext.py` |
 
+2026-10-04 归档（1.0 计划 INST-19）：
+
+| 脚本 | 原本做什么 | 为什么退役 / 取代者 |
+|---|---|---|
+| `deploy-from-ubuntu.sh` | 在开发机的救援 Ubuntu 里从构建机拉产物，刷 super、换内核 / DTB / ramdisk | 08-20 全内置化前后的开发流程脚本。⚠️ 写死了开发机的 machine-id 与 `SUPER_PART=/dev/nvme0n1p8` —— 安装器现在的整盘布局里（带救援时）p8 是 **userdata**，照跑会把 super 镜像写进用户数据；注释里"默认启动项是救援、挂死自动回落"也早已不成立（`docs/INSTALL.md` 的救援一节）。取代者：升级 / 重刷系统用 `scripts/install-ota-local.sh` 或图形安装器的「重新安装 Android」；全新安装用图形安装器或 `scripts/install-gaokun3.sh` |
+
 **还留在 `scripts/` 顶层、但只在特定情形才用的**（不是过时，别误挪）：
-`deploy-from-ubuntu.sh`（Android 起不来时从救援 Ubuntu 重刷；其中 `rollback` 子命令已过时，脚本里有警告）·
 `slpi-sensors-setup.sh`（Linux 侧复现 SLPI 传感器通路，`device.mk:561` 引用）·
 `collect-hw-inventory.sh`（给别的机型采硬件清单）·
 `verify-*.sh`（各子系统的上机验收，仍然有效）。
