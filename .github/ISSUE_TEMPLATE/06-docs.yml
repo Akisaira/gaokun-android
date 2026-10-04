@@ -1,5 +1,5 @@
-name: 📚 Documentation correction / 案卷纠错
-description: Something in docs/ or the README is wrong, out of date, or has been overturned by a measurement. / docs/ 或 README 里有一条错了、过时了，或者被实测推翻了。
+name: 📚 Documentation correction / 文档纠错
+description: Something in docs/, the README, the install guide, the FAQ or a release note is wrong, out of date, or has been overturned by a measurement. / docs/、README、安装指南、FAQ 或发版说明里有一条错了、过时了，或者被实测推翻了。
 title: "[Docs] "
 labels: ["documentation"]
 body:
@@ -14,7 +14,7 @@ body:
     attributes:
       label: Where / 位置
       description: File and line, or the section heading. / 文件加行号，或者小节标题。
-      placeholder: "docs/stage4-findings.md #40  /  README.md, Status table, Headphone jack row"
+      placeholder: "docs/INSTALL.md, Updating  /  README.md, Status table, Headphone jack row  /  docs/stage4-findings.md #40"
     validations:
       required: true
 
@@ -27,6 +27,7 @@ body:
         - "Out of date — fixed or changed since / 过时了，后来已经变了"
         - "Unclear or missing a step someone will trip on / 说不清楚，或者漏了一步会让人踩坑"
         - "Broken link, path or command / 链接、路径或命令是坏的"
+        - "The Chinese and English versions disagree, or one is missing / 中英两版对不上，或者缺了一版"
         - "Typo / formatting / 错别字或排版"
     validations:
       required: true

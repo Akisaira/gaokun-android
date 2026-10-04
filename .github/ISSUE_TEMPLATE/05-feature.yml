@@ -9,8 +9,8 @@ body:
         Wishes are welcome. Two things worth knowing before you write one, so it does not get closed with a link:
         提需求是欢迎的。写之前先知道两件事，免得被一条链接关掉：
 
-        **Some of this is not "not done yet" — it is "cannot be done on this machine today".** The fingerprint reader (FocalTech FTE7001) and the TPM have no driver anywhere. There is **no magnetometer** in this tablet, so there can be no compass. Enabling the ambient light sensor poisons the whole DSP session, so there is no auto-brightness. UCSI PPM init times out, so no USB-C DisplayPort. Standby resumes into a machine reset — and it does so identically under Ubuntu on the same kernel, so it is a kernel/EC bug, not an Android setting.
-        **有些事不是"还没做"，而是"目前这台机器做不到"。** 指纹（FocalTech FTE7001）和 TPM 全世界都没有驱动；本机**没有磁力计**，所以不可能有指南针；光感一使能就污染整个 DSP 会话，所以没有自动亮度；UCSI PPM 初始化超时，所以没有 USB-C 外接显示；待机是"挂得下去醒不回来然后整机复位"，而且同一内核在 Ubuntu 下一模一样 —— 那是内核/EC 的缺陷，不是某个 Android 开关。
+        **Some of it is already being worked on, and a little of it cannot be done.** There is **no magnetometer** in this tablet, so there can be no compass, and the TPM is not supported. The **fingerprint reader** (FocalTech FTE7001) is in progress: Huawei's signed matching code already loads into the secure world on this machine, but the driver and the Android side are not written yet. **Auto-brightness** is blocked because enabling the ambient light sensor crashes the sensor DSP; that is being investigated. **USB-C DisplayPort** has simply never been tested. Check [docs/TODO.md](https://github.com/vahiru/gaokun-android/blob/main/docs/TODO.md) for where each of these stands before asking for it.
+        **有些事已经在做，少数做不到。** 本机**没有磁力计**，所以不可能有指南针；TPM 不支持。**指纹**（FocalTech FTE7001）正在做：华为签名的比对程序已经能在本机的安全环境里加载，驱动和 Android 这一侧还没写。**自动亮度**卡在一使能光感，传感器 DSP 就崩，正在查。**USB-C 外接显示**只是从来没测过。提之前先在 [docs/TODO.md](https://github.com/vahiru/gaokun-android/blob/main/docs/TODO.md) 里看看它们现在到哪一步了。
 
         **One thing is a deliberate "no":** raising a game's render resolution by spoofing the device model. Some titles pin their render buffer by a device allowlist; faking the model carries account risk, so it is not done here.
         **有一件事是故意不做的：** 用伪装机型去提高游戏渲染档位。有些游戏按设备白名单钉住渲染缓冲，伪装机型有账号风险，所以本项目不做。
@@ -23,7 +23,7 @@ body:
     attributes:
       label: Pre-flight / 提交前确认
       options:
-        - label: "I checked the [status table](https://github.com/vahiru/gaokun-android#status) — this is not already working. / 对过现状表，确认它现在还不能用。"
+        - label: "I checked the [status table](https://github.com/vahiru/gaokun-android#status) and the [latest release notes](https://github.com/vahiru/gaokun-android/releases/latest) — this is not already working. / 对过现状表和[最新发版说明](https://github.com/vahiru/gaokun-android/releases/latest)，确认它现在还不能用。"
           required: true
         - label: "I checked [docs/TODO.md](https://github.com/vahiru/gaokun-android/blob/main/docs/TODO.md) and the [Help wanted](https://github.com/vahiru/gaokun-android#help-wanted) list, and searched existing issues. / 看过 TODO 和 Help wanted，也搜过现有 issue。"
           required: true
@@ -92,8 +92,8 @@ body:
     attributes:
       label: Can you help? / 你能出力吗？
       description: |
-        ⚠️ If you intend to write the code yourself, use the **Task / feature proposal** template instead — it asks for the first verifiable step, which is how work here actually gets moved.
-        ⚠️ 如果你打算自己写代码，请改用 **开发任务** 模板 —— 那个会问"第一个可验证的步骤"，本项目就是这么推进的。
+        ⚠️ If you intend to write the code yourself, use the **Other (development task, proposal, question)** template instead — it asks for the first verifiable step, which is how work here actually gets moved.
+        ⚠️ 如果你打算自己写代码，请改用 **其他（开发任务、提案、提问）** 模板 —— 那个会问"第一个可验证的步骤"，本项目就是这么推进的。
       options:
         - "I can test builds on real hardware / 我能在实机上帮测"
         - "I have the hardware but cannot test unattended / 我有机器，但不方便反复折腾"

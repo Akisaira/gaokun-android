@@ -1,25 +1,28 @@
 name: 🐞 Bug report / 缺陷报告
-description: The system boots, but something behaves wrong. / 系统能起来，但某个功能不对。
+description: Android boots, but something behaves wrong. / 系统能起来，但某个功能不对。
 title: "[Bug] "
 labels: ["bug", "needs-triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Measurements beat adjectives. `logcat -b all` and `dmesg` are worth more than any description of how it felt.
-        实测比形容词有用：`logcat -b all` 和 `dmesg` 比"卡了"值钱得多。
+        Measurements beat adjectives. Logs are worth more than any description of how it felt — how to collect them is in the [FAQ](https://github.com/vahiru/gaokun-android/blob/main/docs/FAQ.md).
+        实测比形容词有用：日志比"卡了"值钱得多。怎么抓日志见 [FAQ](https://github.com/vahiru/gaokun-android/blob/main/docs/FAQ.md)。
 
-        ⚠️ **Redact before pasting: Wi-Fi SSID, MAC addresses, public IP, serial numbers.**
-        ⚠️ **贴日志前先删掉：Wi-Fi SSID、MAC 地址、公网 IP、序列号。**（这个仓库曾为此改写过一次 git 历史。）
+        ⚠️ **Redact before pasting: Wi-Fi SSID, MAC addresses, public IP, serial numbers, account names.**
+        ⚠️ **贴日志前先删掉：Wi-Fi 名称（SSID）、MAC 地址、公网 IP、序列号、账号名。**（这个仓库曾为此改写过一次 git 历史。）
+
+        If the machine does not boot far enough to use, or the installer failed, use **Install / boot failure** instead. A game or app that crashes or refuses to run goes to **Game & app compatibility**.
+        开不了机或安装失败，请改用 **安装与开机失败**；某个游戏 / App 崩溃或拒绝运行，请用 **游戏与 App 兼容**。
 
   - type: checkboxes
     id: preflight
     attributes:
       label: Pre-flight / 提交前确认
       options:
-        - label: "This is not one of the [known issues](https://github.com/vahiru/gaokun-android#known-issues) — s2idle resume, no working recovery, audio/Bluetooth deadlock after long uptime, ambient light sensor, USB adb drop, permissive SELinux. / 确认不是已知问题里那几条。"
+        - label: "This is not in the known issues of the [latest release notes](https://github.com/vahiru/gaokun-android/releases/latest) or the [README](https://github.com/vahiru/gaokun-android#known-issues). / 确认不在[最新发版说明](https://github.com/vahiru/gaokun-android/releases/latest)或 README 的已知问题里。"
           required: true
-        - label: "I searched the existing issues. / 搜过现有 issue。"
+        - label: "I searched the existing issues, open and closed. / 搜过现有 issue（包括已关闭的）。"
           required: true
 
   - type: dropdown
@@ -28,44 +31,45 @@ body:
       label: Area / 涉及部件
       options:
         - Boot / stability — reboots, hangs, black screen / 开机与稳定性
+        - Standby / suspend — will not sleep, will not wake, drains battery / 待机
         - Display — brightness, refresh rate, rotation / 显示
         - GPU / rendering / Vulkan / 图形
-        - Audio — speakers, headphone jack, microphones / 音频
-        - Wi-Fi / Bluetooth / 网络与蓝牙
+        - Audio — speakers, headphone jack, microphones, speaker enhancement / 音频
+        - Wi-Fi / hotspot / Bluetooth / 网络、热点与蓝牙
         - Touchscreen / keyboard / touchpad / 输入
         - Sensors / auto-rotate / 传感器与自动旋转
+        - Camera / 摄像头
         - Battery / charging / thermal / 电池、充电与温控
-        - USB / USB-C DisplayPort / USB
-        - OTA / updates / A-B slots / OTA 与槽位
-        - Apps / framework / 应用与框架
+        - USB / USB-C / USB
+        - OTA / system update / A-B slots / 系统更新与槽位
+        - Apps / framework / settings / 应用、框架与设置
         - Other / 其他
     validations:
       required: true
 
   - type: input
-    id: hardware
+    id: release
     attributes:
-      label: Machine / 机器
+      label: Release / 发布版本
       description: |
-        Model, SKU and **BIOS version** (from the label on the back and the UEFI setup screen).
-        ⚠️ BIOS **2.17 is not supported** — the touch SPI bus and GPIO numbering differ from 2.16, which is what the upstream driver targets.
-        型号、SKU 和 **BIOS 版本**（机身标签 + UEFI 设置界面）。⚠️ **BIOS 2.17 不支持**，触摸的 SPI 总线和 GPIO 编号与 2.16 完全不同。
-      placeholder: "GK-W7X, SKU C233, BIOS 2.16, 2022"
+        The release tag you installed or last updated to, or "self-built".
+        你装的或最后一次更新到的发布 tag；自己编的写"自编"。
+      placeholder: "v0.7.1-alpha"
     validations:
       required: true
 
   - type: textarea
     id: build
     attributes:
-      label: Build / 版本
+      label: Build stamp and kernel / 构建戳与内核
       description: |
-        Paste the output of, over adb or in a terminal on the device:
-        请贴下面这条命令的输出（adb 或设备上的终端）：
+        The **build stamp** (`ro.build.date.utc`, a 10-digit number) says exactly which build you are on; every release note lists it. Paste the output of this, over adb:
+        **构建戳**（`ro.build.date.utc`，一个 10 位数字）能精确确定你装的是哪一版，每份发版说明里都写着它。请用 adb 跑下面这条并贴输出：
         ```
-        getprop ro.build.display.id; getprop ro.build.date; getprop ro.build.date.utc; getprop ro.build.fingerprint; getprop ro.crdroid.device; uname -a; bootctl get-current-slot; getprop ro.boot.slot_suffix
+        getprop ro.build.date.utc; getprop ro.build.version.incremental; getprop ro.build.fingerprint; uname -a; getprop ro.boot.slot_suffix
         ```
-        If the machine will not boot far enough for adb, use the **Install / boot failure** template instead.
-        如果机器根本起不到 adb，请改用 **安装 / 开机失败** 模板。
+        No computer at hand? Write the version line from *Settings → About* (looks like `v12.11-20261003`) and say that is what it is. Note that `12.11` is crDroid's version number, not this project's.
+        手边没电脑：写下「设置 → 关于」里的版本那一行（形如 `v12.11-20261003`）并注明来源。注意 `12.11` 是 crDroid 的版本号，不是本项目的版本。
       render: shell
     validations:
       required: true
@@ -74,12 +78,29 @@ body:
     id: install-path
     attributes:
       label: How this build got onto the machine / 这个版本是怎么装上去的
+      description: Pick every step that applies, e.g. installed with the graphical installer, then updated through system update. / 经过的每一步都选上，例如"图形安装器装的，后来走系统更新升上来"。
+      multiple: true
       options:
-        - Fresh install with scripts/install-gaokun3.sh / 用安装脚本全新安装
-        - OTA through Settings → System update / 设置里的系统更新
-        - OTA sideloaded with update_engine_client --payload=file:// / 本地 payload 装的
+        - Graphical installer — Erase the whole disk / 图形安装器：清除整个磁盘
+        - Graphical installer — Keep the current system (dual boot with Windows) / 图形安装器：保留现有系统（与 Windows 双系统）
+        - Graphical installer — Reinstall Android (data kept) / 图形安装器：重新安装 Android（保留数据）
+        - Graphical installer — Reinstall Android (data wiped) / 图形安装器：重新安装 Android（清除数据）
+        - Command-line installer scripts/install-gaokun3.sh / 命令行安装脚本
+        - System update in Settings (OTA) / 设置里的系统更新（OTA）
+        - Local payload — scripts/install-ota-local.sh or update_engine_client / 本地 payload 安装
         - Self-built from source / 自己编的
         - Other / unsure / 其他或不确定
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Machine / 机器
+      description: |
+        Model, SKU and BIOS version. Any BIOS version is supported — this is for statistics. Over adb: `cat /sys/class/dmi/id/product_name /sys/class/dmi/id/product_sku /sys/class/dmi/id/bios_version`; otherwise from the label on the back and the UEFI setup screen.
+        型号、SKU、BIOS 版本。BIOS 版本不限，填它是为了统计。adb 下可用上面那条命令读；读不到就看机身标签和 UEFI 设置界面。
+      placeholder: "GK-W7X, SKU C233, BIOS 2.16"
     validations:
       required: true
 
@@ -95,10 +116,10 @@ body:
     id: repro
     attributes:
       label: Steps to reproduce / 复现步骤
-      description: Numbered, from a fresh boot if possible. Include the exact commands you ran. / 从冷启动开始编号写，命令请原样贴。
+      description: Numbered, from a fresh boot if possible. Include the exact commands you ran and the exact app names. / 尽量从冷启动开始编号写，命令和应用名原样写。
       placeholder: |
         1. Boot, wait for the desktop
-        2. adb shell tinyplay ...
+        2. Open ...
         3. ...
     validations:
       required: true
@@ -112,21 +133,7 @@ body:
         - Often, not always / 经常但不是每次
         - Happened once / 只出现过一次
         - Only after long uptime / 只在长时间运行后出现
-    validations:
-      required: true
-
-  - type: dropdown
-    id: rescue-repro
-    attributes:
-      label: Does it also happen in the rescue Linux on the same kernel? / 在同一内核的救援 Linux 里是否同样出现？
-      description: |
-        This single answer often decides everything: if it reproduces under Ubuntu, it is a kernel or firmware problem and nothing to do with Android or this device tree. That is exactly how the suspend bug was pinned down.
-        这一条常常一句定性：如果 Ubuntu 下同样出现，那就是内核/固件的事，与 Android 和设备树无关 —— 待机那个 bug 就是这么定性的。
-      options:
-        - Not applicable / 不适用
-        - Not tested / 没测
-        - "Yes — reproduces in Ubuntu too / 是，Ubuntu 下也出现"
-        - "No — Android only / 否，只有 Android 上有"
+        - Only after standby / 只在待机唤醒后出现
     validations:
       required: true
 
@@ -135,13 +142,13 @@ body:
     attributes:
       label: Logs / 日志
       description: |
-        Attach as files if long. Useful sources on this device:
-        长日志请以文件附件上传。本机能拿到的东西：
-        * `adb logcat -b all -d > logcat.txt`
-        * `adb shell dmesg > dmesg.txt` (or `journalctl -k` from the rescue system)
-        * `adb shell 'ls /data/vendor/gaokun3/'` — the hang watchdog writes `hangdump-<uptime>/` when a thread sits in D state for two minutes / 死锁取证看门狗的输出目录
-        * `/sys/fs/pstore` and `/var/lib/systemd/pstore/` — ⚠️ **empty is normal for early-boot failures**: Android init calls `reboot()` instead of panicking / ⚠️ **早期启动失败时它是空的，这是正常的**
-        * audio: `adb shell 'cat /proc/asound/card0/pcm0p/sub0/status'` and `tinymix` / 音频看这两个
+        Attach as files if long. The [FAQ](https://github.com/vahiru/gaokun-android/blob/main/docs/FAQ.md) explains how to turn on USB debugging and collect each of these.
+        长日志请以文件附件上传。怎么打开 USB 调试、怎么抓下面这些，见 [FAQ](https://github.com/vahiru/gaokun-android/blob/main/docs/FAQ.md)。
+        * `adb logcat -b all -d > logcat.txt` — taken soon after it happened / 出问题后尽快抓
+        * the kernel log / 内核日志：`adb shell su -c dmesg > dmesg.txt` (needs root / 需要 root)
+        * hangs and freezes: the hang watchdog writes `hangdump-<uptime>/` under `/data/vendor/gaokun3/` when a thread sits in D state for two minutes — `adb shell su -c 'ls /data/vendor/gaokun3/'` / 卡死类问题：死锁取证看门狗会在这个目录里留 `hangdump-*`
+        * crashes: the newest file in `/data/tombstones/` / 崩溃：`/data/tombstones/` 里最新那个
+        * `adb bugreport` collects everything at once, but it contains a lot of personal data (Wi-Fi names, account names, app list) — read it before attaching it publicly / `adb bugreport` 一次全收，但里面个人信息很多（Wi-Fi 名、账号名、应用列表），公开上传前请自己过一遍
       render: shell
 
   - type: textarea
