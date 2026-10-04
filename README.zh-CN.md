@@ -16,7 +16,7 @@ UEFI。这不是一次常规移植 —— 它是 **AOSP on mainline**，每一�
 >
 > 装之前还要知道：**`/data` 没有加密**、**内核里内置了 root**、镜像用的是
 > **Android 公开的测试密钥签名**，而且到 v0.7.1 为止**网络 adb 不要授权就能连**。
-> 详见[已知限制](#已知限制)。
+> 详见[已知限制](#已知限制)；常见问题（抓日志、开机菜单、卖机前清数据）见 [FAQ](docs/FAQ.zh-CN.md)。
 
 [**English → README.md**](README.md)
 
@@ -55,6 +55,8 @@ UEFI。这不是一次常规移植 —— 它是 **AOSP on mainline**，每一�
 | USB-C | ⚠️ | UCSI 起得来，两个连接器都注册了（[#112](docs/stage4-findings.md)）。数据角色跟着对面实际是什么走 —— 接电脑时我们是设备；接 hub 或 U 盘时应当切成主机，这是按设计做的、还没拿真硬件试过（[`patches/0048`](patches/)，v0.7.0）—— v0.7.1 起 Android 的 USB 服务也起来了，应用能用 USB 设备（[#13](https://github.com/vahiru/gaokun-android/issues/13)）。⚠️ **回插之后（在待机后出现过）这个口可能坏掉，要重启才恢复** —— 按代码推断，那之后到重启为止整机也不再待机。⚠️ **不能和电脑传文件**（没有 MTP/PTP），**U 盘不会挂载**（Android 侧还没有可移动存储的配置）。DP 外接显示没测过 |
 | 指纹 | ❌ | 进行中：华为签名的指纹 TA 已经能在本机加载进安全世界（[#125](docs/stage4-findings.md)）；驱动和 HAL 还没有 |
 | 手写笔（M-Pencil）、TPM | ❌ | 不支持 |
+| Root | ⚠️ | 每个内核都**内置了** KernelSU（ReSukiSU 分支），关不掉。不装 ReSukiSU 管理器 App 时处于休眠；装了之后，只有你在管理器里批准的应用才能拿到 root。检测 root 或未锁定启动链的应用可能拒绝运行（[详情](docs/known-limitations.zh-CN.md#默认带-rootkernelsu--resukisu)） |
+| DRM（Widevine） | ❌ | 系统里完全没有 DRM 模块：Netflix、Disney+、Prime Video 这类放不了正片（[详情](docs/known-limitations.zh-CN.md#无法播放受-drm-保护的视频没有-widevine)） |
 | SELinux | ⚠️ | `permissive`。为转 enforcing 已经做了七轮策略；enforcing 试跑时主要功能都正常，相机也在内（[#129](docs/stage4-findings.md)） |
 
 ### 三件反直觉的事
@@ -145,6 +147,14 @@ Secure Boot。安装器有两个：
 > 本页以前写的是"约 25 GiB 的 Ubuntu 救援分区、默认启动项"。那一套 2026-09-24
 > 已经撤掉，见 [`docs/INSTALL.md`](docs/INSTALL.md#about-the-rescue-system)。
 
+**SSH 登录救援系统**要用你自己的公钥，安装之前先放到安装器 U 盘上 —— 发布的镜像里不带任何人的公钥。
+见 [`docs/INSTALL.md`](docs/INSTALL.md#about-the-rescue-system)。
+
+**国内下载：** GitHub 的下载服务器慢或者连不上时，系统镜像（`boot.img`、`super.img.zst`、
+`install-artifacts.sha256`）有镜像站：`https://ota.072172.xyz/install/<build>/<文件名>`，
+`<build>` 是该版 OTA 包去掉 `.zip` 的文件名 —— 见 [`docs/INSTALL.md`](docs/INSTALL.md#downloads)。
+图形安装器自己就是从这个镜像站下载的；安装器本身的文件目前只在 GitHub 上。
+
 **更新：** v0.2.x 起都在设置里更新 —— 系统内的更新程序装进非活动槽位，下次重启生效。
 
 ---
@@ -197,17 +207,26 @@ m bacon superimage
   `super.img` 互不相认（[`scripts/release.sh`](scripts/release.sh)）。
 * 编 **`userdebug`**，不要编 `user`：`user` 构建会强制 SELinux enforcing，而本机的
   策略还撑不起 enforcing 开机。
+* 默认编出来的是**发布构建**（变体仍是 `userdebug`）：adb 默认关、要用户自己打开，每台电脑都要授权；
+  不监听 TCP 5555；`ro.debuggable` 为 0；镜像里没有 adb 公钥。
+  `GAOKUN3_DEV_BUILD=1 m bacon superimage` 编出的是**开发构建**，带着以前那几样开发便利
+  （adb 免授权、TCP 5555、`ro.debuggable=1`、烤进你的公钥）—— 绝不要拿它发布。
+  开关在 [`lineage_gaokun3.mk`](device/huawei/gaokun3/lineage_gaokun3.mk)，v0.7.1-alpha 之后才有。
 * 有几样构建输入**不在**本仓库里，各目录的 README 写了怎么准备：`firmware/`（华为
   固件，从你自己的机器上取 —— [`firmware/README.md`](device/huawei/gaokun3/firmware/README.md)）、
   `hexagonrpcd-root/`（传感器 DSP 用的文件）、`prebuilt-boot/`（内核，见下）、
-  `effects/prebuilt/`（Histen 库；缺了构建照样通过，只是悄悄没了扬声器增强）、
-  `adb_keys`（你自己的 adb 公钥：`cp ~/.android/adbkey.pub device/huawei/gaokun3/adb_keys`）。
+  `effects/prebuilt/`（Histen 库；缺了构建照样通过，只是悄悄没了扬声器增强）。
+  开发构建还要 `adb_keys`（你自己的 adb 公钥：`cp ~/.android/adbkey.pub device/huawei/gaokun3/adb_keys`）；
+  发布构建不用它。
 
-内核单独构建：主线 v7.2-rc2 加上
-[`linux-gaokun-buildbot`](https://github.com/KawaiiHachimi/linux-gaokun-buildbot) 的补丁，
+内核单独构建，分几层：主线 **v7.2-rc2**（`8cdeaa50eae8dad34885515f62559ee83e7e8dda`），
+上面是 [`linux-gaokun-buildbot`](https://github.com/KawaiiHachimi/linux-gaokun-buildbot) 的补丁，
 再打本仓 [`patches/`](patches/) 里的补丁（`scripts/kernel-apply-patches.sh <内核树>`，幂等）
-和 ReSukiSU（`scripts/kernel-setup-resukisu.sh <内核树>`）。Android 相关的配置断言在
-[`scripts/kernel-config-android.sh`](scripts/kernel-config-android.sh)；`vmlinuz.efi` 与
+和 ReSukiSU（`scripts/kernel-setup-resukisu.sh <内核树>`）。某一版内核到底用了哪些源码，
+看那一版 release 附件里的 `kernel-source.txt`（v0.7.1-alpha 发布时还没有这个附件，见
+[`docs/relnotes/v0.7.1-alpha-sources.md`](docs/relnotes/v0.7.1-alpha-sources.md)）。
+`scripts/clone-refs.sh` 拉的是 buildbot 的 `main` 分支，只供参考，不代表发版用的就是它。
+Android 相关的配置断言在 [`scripts/kernel-config-android.sh`](scripts/kernel-config-android.sh)；`vmlinuz.efi` 与
 DTB 怎么编、放哪里，见
 [`prebuilt-boot/README.md`](device/huawei/gaokun3/prebuilt-boot/README.md)。
 

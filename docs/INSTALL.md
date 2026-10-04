@@ -282,11 +282,22 @@ comes up. It is never the default entry.
 > lasted until the first Android boot, so the installer now simply defaults
 > to Android.)
 
-To boot Android from the rescue system without the menu:
+To get back to Android from the rescue system, a plain `reboot` is enough: the
+rescue entry is never the default, so the menu falls through to Android after
+15 seconds. To skip the menu, or to pick a particular slot, set a one-time
+entry. The entry IDs begin with a machine-ID that you will not know by heart —
+and it is not the rescue system's own (`/etc/machine-id`), which is generated
+anew on every boot — so look the ID up first:
 
 ```sh
-bootctl set-oneshot <machine-id>-android-a.conf && reboot
+bootctl list                   # find the entry whose ID ends in -android-a.conf (or -android-b.conf)
+bootctl set-oneshot <that full ID> && reboot
 ```
+
+⬜ Not yet tried in the rescue system — including whether its image carries
+`bootctl` at all, and whether `bootctl list` finds the ESP without mounting it
+first. A small helper that does the lookup for you (`gk3-boot-android a|b`) is
+planned ([`v1.0-plan.md`](v1.0-plan.md), INST-12).
 
 ## Firmware
 
@@ -318,6 +329,13 @@ options* (tap *Build number* in Settings → About tablet seven times), then
 *USB debugging* or *Wireless debugging*. Both work the standard Android way:
 the tablet asks you to authorize each computer.
 
+In release builds after v0.7.1-alpha, *USB debugging* switches itself back off
+at every reboot, so turn it on again after each restart. That is a known
+limitation of this port, not a setting that failed to save: the part of
+Android that normally remembers it (its USB device manager) does not run on
+the mainline kernel. See [Known limitations](known-limitations.md).
+⬜ Not yet confirmed on hardware.
+
 > Releases up to v0.7.1-alpha were different: they listened for adb on TCP port
 > 5555 on every network, **without asking for authorization**, so anyone on the
 > same network could get a root shell. Release builds after v0.7.1-alpha no
@@ -337,11 +355,20 @@ minute, and you only do it once.
    bash scripts/google/gsf-android-id.sh
    ```
 
-   (It needs `adb root`. The ID lives in Google Play services' private storage —
-   the widely-quoted `sqlite3 .../gsf/databases/gservices.db` recipe no longer
-   works on current Play services, which is why this script exists.
-   ⚠️ Release builds after v0.7.1-alpha no longer allow `adb root`; a way to do
-   this on the tablet itself is being worked on.)
+   It needs a checkout of this repository on the computer, [adb](#adb), and
+   root, because the ID lives in Google Play services' private storage (the
+   widely-quoted `sqlite3 .../gsf/databases/gservices.db` recipe no longer
+   works on current Play services, which is why this script exists). How the
+   script gets root:
+
+   * **Development builds:** through `adb root`; the script does that itself.
+   * **Release builds** (after v0.7.1-alpha) no longer allow `adb root`.
+     Install the ReSukiSU manager app first and grant root to **Shell** in it;
+     the script then falls back to `adb shell su -c …` on its own.
+     ⬜ Not yet tried on a release build.
+
+   A page in the tablet's own settings that shows this ID, so that no computer
+   is needed, is planned ([`v1.0-plan.md`](v1.0-plan.md), INST-14).
 3. Open <https://www.google.com/android/uncertified/> **signed in as the same
    Google account**, paste the ID, and register it.
 4. Give it a few minutes, then clear the Play Store's data:
@@ -416,7 +443,9 @@ afterwards. For 1.0 this is to be taken over by a fastboot for this machine
 **To really erase `/data` today:** boot the graphical installer (the rescue
 entry in the boot menu, or the USB stick) → **Reinstall Android**, leaving
 *Keep user data* off — wiping is that mode's default. ⬜ The wiping variant has
-so far only run on test disks, not on real hardware.
+so far only run on test disks, not on real hardware. Step by step, including
+before you sell the machine or send it for repair: see the
+[FAQ](FAQ.md#factory-reset--wiping-before-you-sell).
 
 ## Recovery — built, but it does not boot yet
 
@@ -460,6 +489,17 @@ That is what it is for.
 ## Reporting problems
 
 Open an issue with your **BIOS version**, **SKU**, the installer version if you
-used it, what you did and what happened. `dmesg` and `logcat -b all` from the
-rescue system or over adb are worth more than a description. Reports of what
-breaks are as useful as patches.
+used it, what you did and what happened. Logs are worth more than a
+description: if Android boots, the first choice is
+
+```sh
+adb bugreport gaokun3-bugreport.zip
+```
+
+which collects the system log, the kernel log and the crash records in one go.
+It also contains personal data — Wi-Fi network names, account names, the list
+of installed apps — so read it before you attach it publicly. If Android does
+not boot, take the logs from the rescue system. How to set up adb, how to get
+individual logs, and what to collect when the machine does not boot are all in
+the [FAQ](FAQ.md#collecting-logs-for-the-developers). Reports of what breaks are
+as useful as patches.

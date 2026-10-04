@@ -20,7 +20,7 @@ body:
     attributes:
       label: Pre-flight / 提交前确认
       options:
-        - label: "This is not in the known issues of the [latest release notes](https://github.com/vahiru/gaokun-android/releases/latest) or the [README](https://github.com/vahiru/gaokun-android#known-issues). / 确认不在[最新发版说明](https://github.com/vahiru/gaokun-android/releases/latest)或 README 的已知问题里。"
+        - label: "This is not in the known issues of the [latest release notes](https://github.com/vahiru/gaokun-android/releases/latest) or the [README's known limitations](https://github.com/vahiru/gaokun-android#known-limitations). / 确认不在[最新发版说明](https://github.com/vahiru/gaokun-android/releases/latest)的已知问题或 [README 的已知限制](https://github.com/vahiru/gaokun-android/blob/main/README.zh-CN.md#已知限制)里。"
           required: true
         - label: "I searched the existing issues, open and closed. / 搜过现有 issue（包括已关闭的）。"
           required: true

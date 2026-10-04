@@ -109,7 +109,13 @@ The quickest and most complete option:
 adb bugreport gaokun3-bugreport.zip
 ```
 
-It contains the system log, the kernel log, crash records and more. If you only want parts of it:
+It contains the system log, the kernel log, crash records and more — including the crash dumps under
+`/data/tombstones`, which you cannot read without root otherwise.
+
+⚠️ **A bug report contains personal data**: Wi-Fi network names, account names, the list of installed apps. Read it
+before you attach it publicly.
+
+If you only want parts of it:
 
 ```sh
 adb logcat -b all -d > logcat.txt          # the whole system log (-d: dump and exit)
@@ -149,6 +155,8 @@ Pick `gaokun3 rescue (runs from RAM)` in the menu (or boot the installer USB sti
 * Crash records: look in `/sys/fs/pstore/` and `/var/lib/systemd/pstore/`. **Copy them to `/media/gk3/gaokun3/diag/`
   before you reboot**: the second one lives in RAM and is lost on reboot.
 * To fetch it all over SSH: `scp -r root@<IP>:/media/gk3/gaokun3/diag .` (SSH needs a key first; see the next section).
+* Booted from the installer USB stick? Then `/media/gk3` is the stick itself: its FAT partition, volume label
+  **`GK3LIVE`**. Plug the stick into any computer and the files are in `gaokun3/diag/`.
 
 ---
 
@@ -241,6 +249,10 @@ The menu names below are the standard Android / crDroid ones; go by what your de
 Turn on **USB debugging** in Developer options and connect the cable. From 1.0, the tablet asks "Allow USB debugging?":
 check the computer's key fingerprint, tick *Always allow from this computer*, and allow. A computer that has not been
 allowed cannot connect.
+
+From 1.0, **USB debugging switches itself back off at every reboot**: turn it on again after each restart. This is a
+known limitation of this port (see [known limitations](known-limitations.md)), not a setting that failed to save. Not
+yet confirmed on hardware.
 
 ### Wireless debugging
 1. Put the tablet and the computer on the same Wi-Fi.

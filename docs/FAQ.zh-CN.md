@@ -99,7 +99,9 @@
 
 ### 有电脑、机器能开机时
 <!-- 内核日志：shell 用户在 enforcing 下没有 syslog_read（refs/lineage-sepolicy/private/ 下 shell.te 没有授权，dumpstate.te:211 有）⇒
-     首选 bugreport（含 dmesg、logcat、墓碑）。pstore 要 root（docs/stage4-findings.md #58："ls /sys/fs/pstore/ 需要 root"）。
+     首选 bugreport（含 dmesg、logcat、墓碑；墓碑：refs/lineage-sepolicy/private/dumpstate.te:426-428 允许 dumpstate 读
+     /data/tombstones）。隐私提醒与 .github/ISSUE_TEMPLATE/01-bug.yml 的日志一栏同口径。
+     pstore 要 root（docs/stage4-findings.md #58："ls /sys/fs/pstore/ 需要 root"）。
      hangdump：device/huawei/gaokun3/etc/hangdump.rc:13（/data/vendor/gaokun3，0770 root system）。 -->
 最省事、最全的一份：
 
@@ -107,7 +109,11 @@
 adb bugreport gaokun3-bugreport.zip
 ```
 
-它包含系统日志、内核日志、崩溃记录等。只想要一部分时：
+它包含系统日志、内核日志、崩溃记录等，也包括 `/data/tombstones` 下的崩溃转储（墓碑）—— 那个目录不用 root 是读不到的。
+
+⚠️ **错误报告里有个人信息**：Wi-Fi 名称、账号名、装了哪些应用。公开上传前请自己过一遍。
+
+只想要一部分时：
 
 ```sh
 adb logcat -b all -d > logcat.txt          # 全部系统日志（-d：导出后退出）
@@ -142,7 +148,9 @@ adb shell getprop ro.build.date.utc               # 构建戳，例如 179105320
 ### 机器进不了 Android 时怎么抓日志
 <!-- gk3-diag：scripts/live/overlay-common/etc/motd:9（/media/gk3/gaokun3/diag/，开机 45 秒后写）；
      .github/ISSUE_TEMPLATE/02-install-boot.yml:141-143（journalctl -k、/sys/fs/pstore、/var/lib/systemd/pstore/）。
-     ⚠️ 未验证：Debian 的 systemd-pstore 是否会在救援系统里把 EFI 里的记录挪进内存里的 /var/lib/systemd/pstore（重启即失）。 -->
+     ⚠️ 未验证：Debian 的 systemd-pstore 是否会在救援系统里把 EFI 里的记录挪进内存里的 /var/lib/systemd/pstore（重启即失）。
+     U 盘卷标：scripts/live/build-usb.sh:96-97（mformat -v GK3LIVE）；介质挂在 /media/gk3：scripts/live/initramfs-init:131；
+     诊断写回介质、U 盘插别的机器能读：scripts/live/overlay-common/usr/lib/gaokun3/gk3-diag:2-9。 -->
 在菜单里选 `gaokun3 rescue (runs from RAM)`（或者从安装器 U 盘启动）。
 
 * 它开机 45 秒后会自动把诊断信息写到 `/media/gk3/gaokun3/diag/`。这个目录在盘上，重启后还在。
@@ -150,6 +158,8 @@ adb shell getprop ro.build.date.utc               # 构建戳，例如 179105320
 * 崩溃记录：看 `/sys/fs/pstore/` 和 `/var/lib/systemd/pstore/`。**重启前先把它们拷到 `/media/gk3/gaokun3/diag/`**，
   后一个目录在内存里，重启就没了。
 * 用 SSH 取回：`scp -r root@<IP>:/media/gk3/gaokun3/diag .`（SSH 要先授权，见下一节）。
+* 是从安装器 U 盘启动的？那 `/media/gk3` 就是 U 盘本身：它的 FAT 分区，卷标 **`GK3LIVE`**。
+  把 U 盘插到任何一台电脑上，文件就在 `gaokun3/diag/` 里。
 
 ---
 
@@ -247,8 +257,14 @@ adb shell getprop ro.build.date.utc               # 构建戳，例如 179105320
 2. 之后在 **设置 → 系统 → 开发者选项** 里能找到它。
 
 ### USB 调试
+<!-- 每次重启复位成关：device/huawei/gaokun3/init.gaokun3.usb.rc:59-64（本机没有 UsbDeviceManager；重启后 AdbService 按
+     persist.sys.usb.config 复位，发布构建里它为空）。AdbService 那半是按 frameworks/base 写的，本地 refs 没有那棵树，
+     待构建机核实；上机核对列在 B1 的 needs_verification 里。依赖 D1 / B1。 -->
 在开发者选项里打开 **USB 调试**，用线连上电脑。从 1.0 起，平板上会弹出"是否允许 USB 调试"：确认电脑的指纹，
 勾上"一律允许"再点允许。没有授权的电脑连不上。
+
+从 1.0 起，**"USB 调试"每次重启都会自己复位成关**：每次重启之后要重新打开。这是本机移植的已知限制
+（见[已知限制](known-limitations.zh-CN.md)），不是设置没存上。还没在实机上确认过。
 
 ### 无线调试
 1. 平板和电脑连同一个 Wi-Fi。

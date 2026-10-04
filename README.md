@@ -24,7 +24,8 @@ of upstream drivers.
 > Before you install, also know: **`/data` is not encrypted**, **root is built
 > into the kernel**, the images are **signed with Android's public test keys**,
 > and up to v0.7.1 **adb over the network is open without authorization**.
-> Details in [Known limitations](#known-limitations).
+> Details in [Known limitations](#known-limitations); common questions (logs,
+> the boot menu, wiping before you sell) in the [FAQ](docs/FAQ.md).
 
 [**中文说明 → README.zh-CN.md**](README.zh-CN.md)
 
@@ -64,6 +65,8 @@ numbers (#NN) are in [`docs/stage4-findings.md`](docs/stage4-findings.md).
 | USB-C | ⚠️ | UCSI comes up and both connectors register ([#112](docs/stage4-findings.md)). The data role follows what is on the other end — a computer gets us as a device; a hub or flash drive should get us as the host, which is designed for but not yet tried with real hardware ([`patches/0048`](patches/), v0.7.0) — and since v0.7.1 Android's USB service runs, so apps can use USB devices ([#13](https://github.com/vahiru/gaokun-android/issues/13)). ⚠️ **After replugging (seen after standby) the port can stop working until a reboot** — and, going by the code, the machine then also stays out of standby until that reboot. ⚠️ **No file transfer** to a computer (no MTP/PTP), and **USB flash drives are not mounted** (Android has no removable-storage configuration yet). DisplayPort alt-mode is untested |
 | Fingerprint | ❌ | In progress: Huawei's signed fingerprint app loads into the secure world on this machine ([#125](docs/stage4-findings.md)); there is no driver or HAL yet |
 | Stylus (M-Pencil), TPM | ❌ | No support |
+| Root | ⚠️ | KernelSU (the ReSukiSU fork) is **built into every kernel** and cannot be switched off. It stays dormant until you install the ReSukiSU manager app; then only apps you approve there get root. Apps that look for root or an unlocked boot chain may refuse to run ([details](docs/known-limitations.md#root-is-built-in-kernelsu--resukisu)) |
+| DRM (Widevine) | ❌ | No DRM module at all: Netflix, Disney+, Prime Video and the like do not play their shows ([details](docs/known-limitations.md#no-drm-protected-video-no-widevine)) |
 | SELinux | ⚠️ | `permissive`. Seven rounds of policy work towards enforcing; in enforcing trial runs the main functions work, the camera included ([#129](docs/stage4-findings.md)) |
 
 ### Three things that will surprise you
@@ -170,6 +173,20 @@ generic live USB you get Android only.
 > as the default boot entry. That is gone (2026-09-24); see
 > [`docs/INSTALL.md`](docs/INSTALL.md#about-the-rescue-system).
 
+**Logging in to the rescue system over SSH** needs your public key, put on the
+installer stick before installing — the published image carries nobody's key.
+See
+[`docs/INSTALL.md`](docs/INSTALL.md#about-the-rescue-system).
+
+**Downloading from mainland China:** if GitHub's download servers are slow or
+unreachable, the system images (`boot.img`, `super.img.zst`,
+`install-artifacts.sha256`) are mirrored at
+`https://ota.072172.xyz/install/<build>/<file>`, where `<build>` is the name of
+that release's OTA package without `.zip` — see
+[`docs/INSTALL.md`](docs/INSTALL.md#downloads). The graphical installer
+downloads from this mirror itself; the installer's own files are on GitHub only
+for now.
+
 **Updating:** from v0.2.x onward, update in Settings — the in-system updater
 installs into the inactive slot and the new version starts on the next reboot.
 
@@ -236,20 +253,36 @@ m bacon superimage
   recognise each other ([`scripts/release.sh`](scripts/release.sh)).
 * Build **`userdebug`**, not `user`: a `user` build forces SELinux enforcing,
   and this port's policy cannot boot that yet.
+* By default this is a **release build** (still the `userdebug` variant): adb
+  is off until you enable it and asks to authorize each computer, nothing
+  listens on TCP 5555, `ro.debuggable` is 0 and no adb key is built in.
+  `GAOKUN3_DEV_BUILD=1 m bacon superimage` gives a **development build** with
+  the old conveniences (adb without authorization, TCP 5555,
+  `ro.debuggable=1`, your key built in) — never publish one. The switch is in
+  [`lineage_gaokun3.mk`](device/huawei/gaokun3/lineage_gaokun3.mk); it is new
+  since v0.7.1-alpha.
 * Some build inputs are **not** in this repository; each directory's README
   says how to produce them: `firmware/` (Huawei firmware, from your own
   machine — [`firmware/README.md`](device/huawei/gaokun3/firmware/README.md)),
   `hexagonrpcd-root/` (sensor DSP files), `prebuilt-boot/` (the kernel, below),
-  `effects/prebuilt/` (the Histen library; without it the speaker enhancement
-  is silently absent), and `adb_keys` (your own adb public key:
-  `cp ~/.android/adbkey.pub device/huawei/gaokun3/adb_keys`).
+  and `effects/prebuilt/` (the Histen library; without it the speaker
+  enhancement is silently absent). Development builds also need `adb_keys`
+  (your own adb public key:
+  `cp ~/.android/adbkey.pub device/huawei/gaokun3/adb_keys`); release builds
+  do not use it.
 
-The kernel is built separately: mainline v7.2-rc2 plus the patches from
-[`linux-gaokun-buildbot`](https://github.com/KawaiiHachimi/linux-gaokun-buildbot),
-then this repository's [`patches/`](patches/)
+The kernel is built separately, in layers: mainline **v7.2-rc2**
+(`8cdeaa50eae8dad34885515f62559ee83e7e8dda`), the
+[`linux-gaokun-buildbot`](https://github.com/KawaiiHachimi/linux-gaokun-buildbot)
+patches on top, then this repository's [`patches/`](patches/)
 (`scripts/kernel-apply-patches.sh <tree>`, idempotent) and ReSukiSU
-(`scripts/kernel-setup-resukisu.sh <tree>`). The Android-specific configuration
-is asserted by [`scripts/kernel-config-android.sh`](scripts/kernel-config-android.sh);
+(`scripts/kernel-setup-resukisu.sh <tree>`). Exactly which sources went into a
+given release's kernel is listed in that release's `kernel-source.txt`
+attachment (for v0.7.1-alpha, which predates it:
+[`docs/relnotes/v0.7.1-alpha-sources.md`](docs/relnotes/v0.7.1-alpha-sources.md)).
+`scripts/clone-refs.sh` checks out the buildbot's `main` branch as a reference
+only; that is not necessarily what a release was built from. The
+Android-specific configuration is asserted by [`scripts/kernel-config-android.sh`](scripts/kernel-config-android.sh);
 how to build `vmlinuz.efi` and the DTB and where to put them is in
 [`prebuilt-boot/README.md`](device/huawei/gaokun3/prebuilt-boot/README.md).
 
