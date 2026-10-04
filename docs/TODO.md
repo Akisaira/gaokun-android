@@ -33,6 +33,8 @@
 
 ### ▶ 1.0 批 0/1 已合并、待构建与验证（2026-10-05）
 
+> **★★ 2026-10-05 统一启动入口两道门槛在真机上过了（无人值守）**：E3 `gk3probe.efi` 06:14（缓冲区 LoadImage + StartImage 在华为固件可用、高通 USB device 协议在，日志 `docs/hw/gk3probe-e3-20261005.txt`）；**E4 `gk3boot.efi` 观察模式 07:13 从 `boot_b` 分区直接起到 1.0.0-dev.3 开机完成**（入口 189 ms、misc 未动、efi_pstore/efivars/KASLR 照常，日志 `docs/hw/gk3boot-e4-20261005.txt`）⇒ 方案 Y 的 H2 路线成立。代码：tools/gk3boot/（S2–S5），设计稿 §6 E3/E4 结果行。⬜ 下一步：fail-open 改"写 OneShot 再复位" → E5（观察模式做默认、带 +3 计数）→ 动作模式（扣 tries / BCB 分派）→ 执行端 S7。
+
 > **★ 2026-10-05 06:32 第三个 1.0 发布构建上机：`1.0.0-dev.3`，构建戳 `1791151679`，槽 `_b`**（`out/v1dev3-1791151679/`）。= dev.2 + **批 2 内核**（`patches/0072` 电池 / `0073` 初始 LID / `0074` 后摄隐私灯 + 配置项 `2942da8`，内核 #16 `505c1be7…`、dtb `877878de…`，构建机 `~/gk3-kernel-iris` 上 `--verify` 绿、配置断言 161/2 过；旧内核备份 `out/prebuilt-boot-backup-v071/`）+ smmustall 墙钟心跳 `c1d11dc`。
 > * 实测：`initial lid state: open (0x03)`（0073）；电池多出 `capacity_level=Normal`、`ec_raw`（`status=0x02 w98=0x00c0 w9c=0x0baf wa0=0x20d0`，0072）；ncam-smoke 后摄出流时 `white:indicator` 亮约 3 秒、停流即灭（0074），141 帧 0 失败；smmustall 息屏时每 60 秒一行心跳 ⇒ A15 过。验收 PASS 44，FAIL 只剩 A3（开发机持久化 5555）。
 > * ★ 新查出：`CONFIG_DEFAULT_HUNG_TASK_TIMEOUT=120` 进了内核，但 **AOSP `init.rc:322`（on init）无条件写 0** ⇒ LIVE-8 实际没开。已改 `init.gaokun3.rc` on boot 写回 120 + vendor_init 规则（`0030c79`），⬜ 下个构建验；不走 `ro.khungtask.enable`（llkd.rc 会顺带写 `hung_task_panic 1`）。本次开机已手动写成 120 / panic 0。
