@@ -576,17 +576,25 @@ bool gk3_log_open_seq(gk3_logfile *lf, EFI_HANDLE dev, const CHAR16 *dir, const 
      * 却留下一个起始簇为 0（= 指向根目录）的目录项 —— FAT 坏了、目录成环（README §10 espfull 场景）。
      * 日志永远不值得冒这个险。拿不到 FileSystemInfo 也按"别写"处理。 */
     {
+        /* 卷标是变长的（FAT 最多 11 个字符）；不够大就按固件报的大小再要一次 */
         union {
             EFI_FILE_SYSTEM_INFO fi;
             uint8_t raw[sizeof(EFI_FILE_SYSTEM_INFO) + 128];
         } u;
+        EFI_FILE_SYSTEM_INFO *fi = &u.fi, *big = NULL;
         UINTN sz = sizeof(u);
-        st = root->GetInfo(root, (EFI_GUID *)&guid_fs_info, &sz, &u);
-        if (EFI_ERROR(st) || u.fi.FreeSpace < GK3_LOG_MIN_FREE) {
+        st = root->GetInfo(root, (EFI_GUID *)&guid_fs_info, &sz, fi);
+        if (st == EFI_BUFFER_TOO_SMALL && sz <= 4096 && (big = gk3_alloc(sz)) != NULL) {
+            fi = big;
+            st = root->GetInfo(root, (EFI_GUID *)&guid_fs_info, &sz, fi);
+        }
+        uint64_t free_bytes = EFI_ERROR(st) ? 0 : fi->FreeSpace;
+        gk3_free(big);
+        if (EFI_ERROR(st) || free_bytes < GK3_LOG_MIN_FREE) {
             if (EFI_ERROR(st))
                 gk3_logf("!! log: GetInfo(FileSystemInfo): %s, not writing\n", gk3_efi_strerror(st));
             else
-                gk3_logf("!! log: ESP free space %llu bytes < %u, not writing\n", (unsigned long long)u.fi.FreeSpace,
+                gk3_logf("!! log: ESP free space %llu bytes < %u, not writing\n", (unsigned long long)free_bytes,
                          GK3_LOG_MIN_FREE);
             root->Close(root);
             return false;
