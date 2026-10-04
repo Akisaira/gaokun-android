@@ -53,3 +53,19 @@ on property:persist.vendor.gaokun3.allow_suspend=1 && property:debug.tracing.scr
     # init 的 stop 是 SIGKILL 整个进程组；role_device 一上来先拿 wakelock，不变量不受影响。
     stop gaokun3_role_host
     start gaokun3_role_device
+
+# ── USB-2（v1.0，2026-10-05）：port0 在 host 时停掉 adbd 的 USB 传输 ──────────────
+# 来龙去脉在 bin/gaokun3-usbrole.sh 的 USB-2 一段：adbd 等不到 FUNCTIONFS_BIND 就每秒重开 functionfs、
+# 重设 sys.usb.ffs.ready=1，init.usb.configfs.rc 每秒重写 UDC 报 busy。上游给的开关是 sys.usb.adb.disabled，
+# 由 system 的 init.usb.rc:23-24 从 vendor.sys.usb.adb.disabled 拷过去。
+# 脚本只能设 vendor.gaokun3.*（vendor.sys.usb.adb.disabled 是 vendor_default_prop，只有 init / vendor_init 能设，
+# refs/lineage-sepolicy/private/domain.te:802），所以这里转一手。用两条字面量而不是 ${…} 展开：
+# 展开在 vendor_init 里做，它没有读 vendor_gaokun3_prop 的规则；触发条件由 init 自己判断，不受影响。
+# 上机判据（⬜ 未上机）：port0 插 U 盘停在 host 时 `getprop sys.usb.adb.disabled` = 1、dmesg 不再每秒出现
+#   "write … UDC … busy" / "read descriptors"；拔掉 U 盘换插 PC、切回 device 后 = 0，USB adb 2 秒左右回来；
+#   开发构建 `adb root`（重启 adbd）之后照常。
+on property:vendor.gaokun3.usbrole.adb_pause=1
+    setprop vendor.sys.usb.adb.disabled 1
+
+on property:vendor.gaokun3.usbrole.adb_pause=0
+    setprop vendor.sys.usb.adb.disabled 0

@@ -36,6 +36,47 @@ has_downstream() {
 #   不持久 —— 口坏了要重启才好，重启后它自然没了。供以后 Parts 发"USB 口异常，重启后恢复待机"的通知。
 BROKEN=vendor.gaokun3.usbrole.broken
 
+# ── USB-2（v1.0，2026-10-05）：port0 在 host 时让 adbd 的 USB 传输停下 ──────────────
+# 现象（1.0.0-dev.1 实机 dmesg）：port0 停在 host 时每秒一组 init 的 "symlink … File exists" +
+#   "write …/UDC … Device or resource busy"，外加 f_fs 的 "read descriptors" / "bcdVersion"。
+# 谁在每秒重设 sys.usb.ffs.ready —— adbd 自己（LineageOS packages_modules_adb lineage-23.2 的上游副本）：
+#   · daemon/usb.cpp:274-282：UsbFfsConnection 的监视线程等 FUNCTIONFS_BIND 只等 1 秒，等不到就断开重来；
+#   · daemon/usb.cpp:742-766：usb_ffs_open_thread 随即重开 functionfs —— daemon/usb_ffs.cpp:282-302 重写描述符
+#     （f_fs 打 "read descriptors"）并 SetProperty("sys.usb.ffs.ready", "1")；
+#   · 同值 setprop 也会触发（init 无条件 NotifyPropertyChange），于是 init.usb.configfs.rc:20-24 每秒重跑一遍：
+#     symlink 已存在、写 UDC 失败 —— host 模式下 a600000.usb 这个 UDC 根本不存在，configfs 的 gadget 驱动是
+#     match_existing_only（linux v7.2-rc2 drivers/usb/gadget/configfs.c:1985），注册时找不到 UDC 就返回 -EBUSY
+#     （drivers/usb/gadget/udc/core.c:1733-1737），udc_name 随即清空（configfs.c:295-303）⇒ 不会挂起等待，下一秒再来。
+# 上游早就留了开关，正是为这种情况：usb.cpp:728-740 —— "When the device is acting as a USB host, we'll be unable
+#   to bind to the USB gadget…"，读 sys.usb.adb.disabled，为真就在 open_functionfs 之后停在 PropertyMonitor 里等它
+#   变回假（:751-755）；init.usb.rc:23-24（refs/lineage-system-core/rootdir/）把 vendor.sys.usb.adb.disabled 拷过去。
+# ⇒ 我们按【实际角色】设它：host ⇒ 1，device ⇒ 0。只停 adbd 的 USB 传输：不动 sys.usb.config（B1 的「USB 调试」
+#   开关语义、init.gaokun3.usb.rc 里 init.svc.adbd 的桥接都不受影响），TCP / 无线调试照常。
+#   切回 device、设回 0 之后：adbd 起连接 → 1 秒等不到 BIND → 重开 ffs → ffs.ready=1 → init 写 UDC（此时 UDC 已在）
+#   → 绑上，USB adb 约 1–2 秒回来 —— 与现在"切回 device 后靠每秒重试碰上"是同一条路，只是 host 期间不再空转。
+# 属性链：本脚本 setprop vendor.gaokun3.usbrole.adb_pause（vendor_gaokun3_prop，本域有 set_prop）→ etc/usbrole.rc
+#   用两条字面量触发器 setprop vendor.sys.usb.adb.disabled（vendor_default_prop：只有 init / vendor_init 能设，
+#   refs/lineage-sepolicy/private/domain.te:802；vendor_init 有 set_prop，vendor_init.te:306）→ init.usb.rc 拷成
+#   sys.usb.adb.disabled（system_prop，adbd 能读：core_property_type，private/domain.te:461/467）。
+# ⚠️ 读源码得出、未上机。判据见 etc/usbrole.rc 的 USB-2 一段。
+ADB_PAUSE=vendor.gaokun3.usbrole.adb_pause
+adb_gate() {
+    r=""
+    read -r r 2>/dev/null < "$S"
+    case "$r" in
+        host)   want=1 ;;
+        device) want=0 ;;
+        *) return 0 ;;
+    esac
+    [ "$(getprop $ADB_PAUSE)" = "$want" ] && return 0
+    setprop $ADB_PAUSE $want
+    if [ $want = 1 ]; then
+        say "role=host ⇒ $ADB_PAUSE=1（adbd 的 USB 传输停下，不再每秒重绑 UDC，USB-2）"
+    else
+        say "role=device ⇒ $ADB_PAUSE=0（adbd 的 USB 传输恢复，USB-2）"
+    fi
+}
+
 case "$WANT" in
     host|device|follow) ;;
     *) say "用法: $0 host|device|follow"; exit 2 ;;
@@ -69,10 +110,16 @@ if [ "$WANT" = follow ]; then
         esac
         return 1
     }
-    miss=0; tried=""; settled=0
+    miss=0; tried=""; settled=0; last_role=""; gate_n=0
     say "follow 启动"
     while :; do
         sleep 2
+        # USB-2：角色一变（包括内核 / UCSI 自己切的）就同步 adbd 的 USB 暂停开关；另外约每分钟对一次账。
+        cur_role=""; read -r cur_role 2>/dev/null < "$S"
+        gate_n=$((gate_n + 1))
+        if [ "$cur_role" != "$last_role" ] || [ $gate_n -ge 30 ]; then
+            adb_gate; last_role=$cur_role; gate_n=0
+        fi
         if ! partner_present; then miss=0; tried=""; settled=0; continue; fi
         if [ "$(getprop persist.vendor.gaokun3.allow_suspend)" = 1 ] &&
            [ "$(getprop debug.tracing.screen_state)" != 2 ]; then miss=0; continue; fi
@@ -99,6 +146,7 @@ if [ "$WANT" = follow ]; then
         [ "$next" = device ] && echo $WL > /sys/power/wake_lock
         echo "$next" > "$S" 2>/dev/null
         say "受电、$cur 模式约 6 秒没见到对端 → 切 $next（已试: $tried）"
+        # 不在这里 adb_gate：dwc3 切换是异步的，下一轮（2 秒后）按读回的角色同步（见循环开头）
     done
 fi
 
@@ -147,6 +195,7 @@ echo $WL > /sys/power/wake_lock
 #   ⚠️ 源码推断，未实测：要用户在场插 U 盘做息屏→亮屏（v1.0 计划 PWR-5 的验收）。
 if [ "$WANT" = device ] && [ "$(cat "$S" 2>/dev/null)" = host ] && has_downstream; then
     say "role=host 且 xhci 下有下游设备（$(ls "$D"/xhci-hcd.*/usb* 2>/dev/null | grep -E '^[0-9]+-[0-9.]+$' | tr '\n' ' ')）→ 保持 host、不切 device；wakelock 保持持有"
+    adb_gate     # USB-2：停在 host ⇒ adbd 的 USB 传输停下（开机那次尤其要紧：follow 还没起来）
     exit 0
 fi
 
@@ -173,6 +222,7 @@ while [ $i -lt 60 ]; do
 done
 
 NX=$(ls -d "$D"/xhci-hcd.*/driver 2>/dev/null | wc -l)
+adb_gate         # USB-2：按读回来的实际角色同步（切不成时角色没变，它也就不动）
 if [ "$WANT" = host ]; then
     if [ "$OK" = 1 ]; then
         echo $WL > /sys/power/wake_unlock
