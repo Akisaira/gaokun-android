@@ -23,8 +23,17 @@ product      /product      ext4  ro,barrier=1  wait,logical,first_stage_mount,sl
 vendor       /vendor       ext4  ro,barrier=1  wait,logical,first_stage_mount,slotselect
 
 # 物理分区
+#
+# STOR-5：/data 加 reservedsize=128M。fs_mgr 每次挂载前（fs_mgr.cpp:780-787 →
+# tune_reserved_size :412-450）比对超级块，保留块数或 resgid 不符就跑
+# `tune2fs -r <128M/块大小> -g 1065(AID_RESERVED_DISK)`，上限 2%。两个作用：
+#   ① 给 system_server / installd / vold 这些带 reserved_disk 组的进程留 128 MiB，
+#      /data 被应用写满时它们还能写 packages.xml 之类、不至于卡开机（vold.has_reserved 随之变 1）；
+#   ② 收回 mkfs.ext4 默认的 5% root 保留区 —— 开发机实测 Reserved block count
+#      4928507（正好 5%）、gid 0，约 18.8 GiB 应用用不到。老用户 OTA 后第一次开机自动改掉。
+# 语法 `reservedsize=128M` 照 fs_mgr/tests/fs_mgr_test.cpp:358，ParseByteCount 认 K/M/G 后缀（fstab.cpp:283-290）。
 /dev/block/by-name/metadata  /metadata  ext4  noatime,nosuid,nodev,discard  wait,formattable,first_stage_mount,check
-/dev/block/by-name/userdata  /data      ext4  noatime,nosuid,nodev,discard  wait,formattable,check
+/dev/block/by-name/userdata  /data      ext4  noatime,nosuid,nodev,discard  wait,formattable,check,reservedsize=128M
 
 # ★ A/B 必需（M6）。libboot_control 把 bootloader_control 结构写在这里，
 # 而 get_misc_blk_device()（bootable/recovery/bootloader_message/
@@ -32,3 +41,23 @@ vendor       /vendor       ext4  ro,barrier=1  wait,logical,first_stage_mount,sl
 # 没有 /dev/block/by-name/misc 的回退路径 —— 少了这一行 boot HAL 起不来。
 # 类型写 emmc 是 fs_mgr 对"裸分区、不挂载"的约定写法。
 /dev/block/by-name/misc      /misc      emmc  defaults                      defaults
+
+# ★ STOR-1 / BKUP-6：U 盘（vold 公共卷）。vold 只给 fstab 里带 voldmanaged= 的行建
+# DiskSource，块设备 uevent（DEVTYPE=disk）的 DEVPATH 要 fnmatch 上第一列才会建 Disk；
+# 匹配不上就静默忽略 —— 此前没有这两行，所以 U 盘内核认得到、Android 里什么都没有。
+#   * fnmatch 的 flags 是 0（不带 FNM_PATHNAME），`*` 可以跨 '/'，所以写到控制器为止、
+#     后面一个 `*` 就盖住 xhci-hcd.N.auto/usbX/hub/…/block/sdX 的任意层级。依据：
+#     lineage recovery 里 vold 的同源代码 refs/lineage-bootable-recovery/volume_manager/
+#     include/volume_manager/VolumeManager.h:78-80；本机 /system/bin/vold 反汇编，
+#     全部 7 处 fnmatch 调用都是 `mov w2, wzr`（flags=0）。
+#   * 不写 xhci-hcd 编号：它会漂（本机 port1 现在是 xhci-hcd.0.auto，Ubuntu 下是 .3）。
+#   * 5 列且带 voldmanaged= 的行，mount_all 跳过（fs_mgr.cpp:1505-1506），OTA 工具也跳过
+#     （releasetools/common.py:1214-1221，不是 5 列会直接报错）；本文件同时是 recovery fstab。
+#   * 语法 voldmanaged=<label>:auto 照 fs_mgr/libfstab/fstab.cpp:232-251、fs_mgr_test.cpp:364。
+#   * multiport 控制器（a4f8800.usb/a400000.usb）没写：它下面只有键盘接口（3-3），用户插不了 U 盘。
+# port1：a8f8800.usb/a800000.usb，固定 host（DT label usb_1；consumer:typec:port1）
+/devices/platform/soc@0/a8f8800.usb/a800000.usb/*  auto  auto  defaults  voldmanaged=usb:auto
+# port0：a6f8800.usb/a600000.usb，平时是 device（adb），只在 usbrole 切 host 时才有 xhci 子树，
+# device 模式下这一行什么也匹配不上。⚠️ 依赖 PWR-5/STOR-2 的 has_downstream（有下游设备就别切回
+# device）—— 否则亮屏/开机会把挂着的 U 盘硬拔掉。那条修复没进同一版时，先把这一行注释掉。
+/devices/platform/soc@0/a6f8800.usb/a600000.usb/*  auto  auto  defaults  voldmanaged=usb:auto
