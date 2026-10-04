@@ -6,7 +6,12 @@
 #       (VK_ERROR_INCOMPATIBLE_DRIVER)
 # 库存高通设备上对应的 /dev/kgsl-3d0 同样是 0666。
 /dev/dri/renderD*         0666   system     graphics
-/dev/dri/card*            0666   system     graphics
+# ★ v1.0 SEC-14（2026-10-05）：KMS 主节点 card* 0666 → 0660。应用只需要上面的 render 节点；
+#   主节点（modeset / DRM master）原先任何 App 都能打开，攻击面比需要的大，enforcing 之后也照样靠 DAC 放行
+#   （标签 gpu_device，核心策略给应用开着）。1.0.0-dev.1 实机逐进程查 /proc/*/fd：打开 card1 的只有 HWC
+#   （android.hardware.composer.hwc3-service.drm，uid 1000 = 节点属主），SurfaceFlinger / 应用 / 相机只开 renderD128。
+#   上机判据：ls -l /dev/dri/card1 = crw-rw---- system graphics；开机出画、亮灭屏、游戏（turnip）、录屏、相机预览照常。
+/dev/dri/card*            0660   system     graphics
 
 # FastRPC 到 SLPI 传感器 DSP。hexagonrpcd（上游自带的 hexagonrpcd-sdsp.rc）
 # 跑在 user/group system 下，而 /dev/fastrpc-* 默认 root 独占 —— 不给权限就
