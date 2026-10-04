@@ -22,6 +22,35 @@
 
 ## 一、安全与隐私（请先读这一节）
 
+### 到 v0.7.1 为止，网络 adb 不要授权就能连
+<!-- B1 / D1（docs/v1.0-plan.md:40-47 的 SEC-1、OTA-1 等）：⬜ 未构建、未上机，发版前核对。
+     v0.7.1 的状态（tag v0.7.1-alpha = 21e24fd）：device/huawei/gaokun3/device.mk:43 persist.adb.tcp.port=5555；
+     lineage_gaokun3.mk:64 WITH_ADB_INSECURE := true（ro.adb.secure=0）、:89 system_ext 的 ro.debuggable=1、
+     :143 PRODUCT_ADB_KEYS := device/huawei/gaokun3/adb_keys（维护者公钥）。
+     "所有网卡、含热点口"：v1.0-plan.md:41-42（B1 复核：热点下同样暴露，#11 之后 hostapd 已进镜像）；adbd 的监听地址
+     没从源码核实（packages/modules/adb 不在本地 refs），待构建机核实。
+     发布构建（B1 改动，91df0b7）：lineage_gaokun3.mk:49-130（及 :190-192 的 PRODUCT_ADB_KEYS）只在 GAOKUN3_DEV_BUILD=1 时给这几样；
+     device.mk:27-43 同理。
+     "老用户 OTA 后自动生效"：build.prop 里的默认值不落盘 —— refs/lineage-system-core/init/property_service.cpp:424-425
+     只有经 setprop（socket）且 persist 属性已载入后才 WritePersistentProperty。自己 setprop 过 persist.adb.tcp.port
+     的人 /data/property 里会留着它 —— 清除办法 ⬜ 待上机核实（v1.0-plan.md:46 的"还要验证"）。
+     "「USB 调试」每次重启复位成关"：device/huawei/gaokun3/init.gaokun3.usb.rc:59-64（本机没有 UsbDeviceManager，
+     只在 /sys/class/android_usb 存在时才建；重启后 AdbService 按 persist.sys.usb.config 复位，发布构建里它为空）；
+     AdbService 那半句按 frameworks/base 推断，本地 refs 没有那棵树，待构建机核实（usb.rc:68-69 的 ⚠️）。 -->
+* **现象**：在 v0.7.1 及以前的版本上看不出任何异常 —— 问题恰恰在这里。
+* **原因**：v0.7.1 及以前的镜像会在所有网卡（包括 Wi-Fi 热点那个口）上监听 TCP 5555 端口的 adb，连接时**不弹**
+  "允许调试吗？"的授权框。镜像是可调试的（`ro.debuggable=1`），连上后再 `adb root` 就是 root。镜像里还带着维护者的
+  adb 公钥。连在同一个 Wi-Fi 上、或者连上你热点的任何人，都能接管这台机器。
+  从下一个发布版（计划是 1.0）起：adb 默认关闭，每台电脑都要你授权，不再监听 5555，不能 `adb root`，镜像里也不带
+  维护者的公钥。老用户通过 OTA 更新后自动生效，不用做什么：原来的 5555 设置来自镜像里的默认值，Android 从不把这种
+  默认值存进 `/data`。例外是自己 setprop 过 `persist.adb.tcp.port` 的人。
+* **替代办法**：
+  * 下一个发布版出来后尽快更新。在那之前，不要连不信任的 Wi-Fi，也不要让陌生人连你的热点。
+  * 自己设过 `persist.adb.tcp.port` 的：更新后怎么清掉它，会补在这里（⬜ 待上机核实）。
+  * 从那一版起，开发者选项里的 **USB 调试**每次重启都会自己变回关闭，要用时再打开一次。这是已知限制：Android 里
+    平时负责记住这个开关的那一部分（USB 设备管理器）在这台机器上不运行。想通过网络用 adb，请用 **无线调试**
+    （[常见问题](FAQ.zh-CN.md#无线调试)）。
+
 ### 系统用 AOSP 公开的测试密钥签名
 <!-- B2 / SEC-2（用户 2026-10-04 定 D2：保留 test-key、披露）。证据：实机 otacerts.zip 只有 testkey.x509.pem，
      与 refs/aosp-build/target/product/security/testkey.x509.pem 逐字相同；framework-res 的证书 = platform.x509.pem；
@@ -85,8 +114,9 @@
 
 <!-- SEC-10 / REL-15（D20：披露 + 准备不带 Histen 的构建开关）。证据：device/huawei/gaokun3/firmware/README.md 清单表与
      "不可公开再分发"一句（:36）；docs/TODO.md:86-96（Histen，用户 2026-09-28 定"带着发"）；TODO B23（zap shader 随
-     live 镜像发，用户 2026-09-27 定）；device/huawei/gaokun3/lineage_gaokun3.mk:188-201（MindTheGapps）。
-     ⚠️ NOTICE 还只写着"本仓库不含"，没覆盖二进制发布 —— 那一节由别的条目改（见 handoff）。 -->
+     live 镜像发，用户 2026-09-27 定）；device/huawei/gaokun3/lineage_gaokun3.mk:238-250（MindTheGapps）。
+     ✅ NOTICE 已覆盖二进制发布（本次，2026-10-05）：NOTICE 的 "Third-party proprietary components in the binary
+     releases" 一节逐个列了文件名（以 firmware/README.md:26-31 的表为准）、hexagonrpcd-root、Histen、MindTheGapps。 -->
 本项目的源码按 GPL 等开源许可发布（见 [NOTICE](../NOTICE)）。但**发布的系统镜像、OTA 包和安装器镜像**里还带着下面这些
 **不属于本项目、也不是开源软件**的组件。没有它们，GPU、Wi-Fi、蓝牙、声音、传感器都无法工作：
 
@@ -125,7 +155,9 @@
   * 插着电脑 USB 口时这台机器不会进入待机（这是有意的设计，避免待机时整机复位），传完记得拔线。
 
 ### 插 U 盘没有反应
-<!-- STOR-1 / BKUP-6（批 1 计划修：fstab 加 voldmanaged）。⚠️ 维护：修好并实测后删掉这一条。 -->
+<!-- STOR-1 / BKUP-6：fstab 的 voldmanaged 行已写（8da5974，device/huawei/gaokun3/fstab.gaokun3 末尾），⬜ 未构建、未上机。
+     ⚠️ 维护：上机通过后把这一条改写成"port1 可用、port0 要等 usbrole 切到 host"，并写明哪个物理孔是 port1
+     （STOR-3，要用户看一眼）。在那之前正文不改。 -->
 * **现象**：U 盘、移动硬盘插上后，文件管理器里看不到。
 * **原因**：内核其实认到了设备，但系统的分区表配置里没有登记"可移动存储"，Android 不会去挂载它。
 * **替代办法**：暂时没有。需要拷文件请用网络。
@@ -202,7 +234,7 @@
   把设备登记一次，Play 商店就能正常用。Play Integrity 没有办法解决。
 
 ### 系统里带的是 Google 应用，国内用不上，也没有国内应用商店
-<!-- APP-12（用户定 D7：只发 GApps 版、不发 vanilla）。证据：lineage_gaokun3.mk:188-201；LIVE-6（GMS 开机后常崩 4 次，用户是否看得到未确认）。
+<!-- APP-12（用户定 D7：只发 GApps 版、不发 vanilla）。证据：lineage_gaokun3.mk:238-250；LIVE-6（GMS 开机后常崩 4 次，用户是否看得到未确认）。
      GMS 在国内不断重试联网的耗电：未测。 -->
 * **现象**：不翻墙时，Play 商店和 Google 服务都连不上，Google 服务还会在后台反复尝试联网（耗电没测过）。系统里没有国内的应用商店。
 * **原因**：我们只发带 Google 应用的版本。
@@ -219,8 +251,56 @@
 
 这几条属于缺陷，不属于取舍，修好就会从这里删掉。
 
-<!-- NET-2（批 2）。v0.7.1 发版说明里"芯片只能二选一"的说法不准确：iw 显示驱动支持 STA+AP，是软件配置没开。 -->
-* **打开 Wi-Fi 热点时，平板自己会断开 Wi-Fi**：机器没有基带，所以热点没有网络可分享。原因是目前的软件配置不支持同时开 Wi-Fi 和热点，
-  不是芯片的限制。
+### 长时间运行后，音频和蓝牙可能一起卡死
+<!-- A1 / AV-6（v1.0-plan.md:126）。docs/stage4-findings.md #38：用户报告，我们从未复现。
+     取证看门狗：device/huawei/gaokun3/bin/gaokun3-hangdump.sh（同一 tid 连续三次采样在 D 状态，即 ≥2 分钟，
+     就写到 /data/vendor/gaokun3/hangdump-<uptime>/，:63；盘上留最近 5 份，:28-34）、etc/hangdump.rc、device.mk:567。
+     目录 0770 root system ⇒ 要 root 才能读；抓取命令在 FAQ.md / FAQ.zh-CN.md 的"有电脑、机器能开机时"一节。
+     "没有目录也是线索"：docs/TODO.md:515-516。 -->
+* **现象**：机器连续运行很久以后，声音和蓝牙都不工作了，只有重启才能恢复。这是用户报告的，我们自己还没复现过。
+* **原因**：还不清楚。音频和蓝牙共用一条到 DSP 的通路，怀疑是这条通路卡住了。
+* **替代办法**：重启。系统里有一个看门狗，发现卡死时会自动把证据存到 `/data/vendor/gaokun3/hangdump-*`，重启后还在。
+  报告问题时请附上它（需要 root，命令见[常见问题](FAQ.zh-CN.md#有电脑机器能开机时)）。如果没有这个目录，也请说明，
+  那本身就是线索。
+
+### USB-C 口回插后可能坏掉，直到重启
+<!-- A6 / PWR-4 / HW-14（v1.0-plan.md:111）。"之后整机不再待机"是按代码推断的（role_host 一直失败、持有 wakelock），
+     不是实测；README.md:64 同口径。PWR-4 的止损（失败时置 vendor.gaokun3.usbrole.broken，11ace25）未上机；
+     Parts 通知不在本批。 -->
+* **现象**：往 USB-C 口上拔下再插回东西（多见于待机之后），这个口可能就不工作了：USB adb 连不上，插 USB 设备也认不到，
+  一直到重启为止。按代码推断，在重启之前整机也不会再进入待机，息屏时电量照样往下掉。
+* **原因**：USB 控制器这一侧的根因还没找到。口坏着的时候，负责切换这个口角色的服务会一直失败，并一直让机器保持唤醒。
+* **替代办法**：重启。重启之前，adb 和传文件请走 Wi-Fi。
+
+### 手掌压在屏上会碎成好几个触点
+<!-- DISP-7 / T1（v1.0-plan.md:221、:359：要在驱动里做跨帧形态判断，推迟到 1.0 之后）。v0.7.1 发版说明 Known issues 同口径。 -->
+* **现象**：手掌或手的侧面搭在屏幕上，会被认成好几个分开的触点，可能误点、误缩放或误滚动。
+* **原因**：触点是内核驱动从原始电容数据里自己算出来的，它还分不出手掌和手指，于是一大块接触面被拆成了几个触点。
+* **替代办法**：操作时别把手掌搭在屏幕上。
+
+### 《英雄联盟手游》（Wild Rift）点开就退
+<!-- #15（docs/TODO.md:150：没有日志，不再并入 #12）；README.md:57。 -->
+* **现象**：游戏一打开就退出。
+* **原因**：还不知道。这是 [#15](https://github.com/vahiru/gaokun-android/issues/15) 里报告的，我们还没拿到日志。
+* **替代办法**：如果你也遇到，请在它退出后马上抓崩溃日志（见[常见问题](FAQ.zh-CN.md#有电脑机器能开机时)），附到那个 issue 上。
+
+### 用低功率电源时显示"正在充电"，电量却在掉
+<!-- BATT-1（BATT-2 已并入，v1.0-plan.md:109、:386）。README.md:56 同口径（09-14 实例）。 -->
+* **现象**：接在电脑的 USB 口、小功率手机充电器这类弱电源上时，电池显示"正在充电"，百分比却一直往下掉。
+  这时 Android 不会做低电量自动关机，到 0% 机器会直接断电，没保存的东西会丢。
+* **原因**：电池状态来自华为的嵌入式控制器（EC）。要么是驱动把其中一些状态值解错了，要么是控制器自己就报了"正在充电"，
+  是哪一种还没查清。
+* **替代办法**：用真正充得进电的充电器（例如原装充电器）。接弱电源时看百分比而不是看充电图标，电量低之前保存好东西。
+
+### 打开 Wi-Fi 热点时，平板自己会断开 Wi-Fi
+<!-- NET-2（批 2）。v0.7.1 发版说明里"芯片只能二选一"的说法不准确：iw 显示驱动支持 STA+AP，是软件配置没开。
+     发版说明已加勘误（docs/relnotes/v0.7.1-alpha.md 的 Wi-Fi 一节）。 -->
+* **现象**：打开热点后，平板自己的 Wi-Fi 连接会断开。机器没有基带，所以热点没有网络可分享。
+* **原因**：目前的软件配置不支持同时开 Wi-Fi 和热点，不是芯片的限制。
+* **替代办法**：暂时没有。请让别的设备直接连路由器。
+
+### 系统没有自带中文输入法
 <!-- DISP-3（D10：找得到许可证合适、物理键盘可用的就预置，否则写文档）。⚠️ 维护：预置了就删掉这一条。 -->
-* **系统没有自带中文输入法**：自带的键盘不支持中文。请自己装一个中文输入法（从输入法官网下载 APK）。
+* **现象**：自带的键盘不支持中文。
+* **原因**：系统里还没有预装中文输入法。
+* **替代办法**：自己装一个中文输入法（从输入法官网下载 APK）。

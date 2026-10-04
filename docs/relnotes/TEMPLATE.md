@@ -16,9 +16,15 @@
   * 发版前把 docs/known-limitations.md 逐条对一遍：这一版修好的就删掉，取舍变了的就改写（SELinux、root 管理器是否预装、
     恢复出厂、MTP、U 盘……），然后照着改下面的摘要。
   * 降级：只要这一版改了 /data 里的东西（数据库升级、新的 persist 属性等），就在 Alpha 框里写一句"不保证能降级回去"。
-  * Files 表：每个文件同时给 GitHub 和 R2 两个链接（国内打不开 GitHub）。R2 的路径规则见 scripts/release.sh:141、:166-169
-    （OTA 包 = builds/<zip 名>；安装文件 = install/<zip 名去掉 .zip>/<文件名>）。
-  * GPL 对应源码：REL-7 落地后，在 Source 一行填 kernel-source 清单的链接；落地之前删掉那一行，别留空链接。
+  * Files 表：每个文件同时给 GitHub 和 R2 两个链接（国内打不开 GitHub）。R2 的路径规则以 scripts/release.sh 的
+    "═══ 4. 上传"一段为准（行号会漂，按这串标题找）：OTA 包 = builds/<zip 名>；安装文件与源码清单 =
+    install/<zip 名去掉 .zip>/<文件名>；域名 = release.sh 里的 HOST（默认 https://ota.072172.xyz）。
+    ⚠️ release.sh 结尾目前【只】打印清单的 curl 核对命令，不打印本版的 R2 链接（INST-5 建议加，还没做）——
+    在那之前按上面的规则自己拼，贴之前每条 curl -sI 一下要 200。
+  * GPL 对应源码（REL-7 已落地，2bf59e1）：release.sh 每版生成 kernel-source.txt、kernel-config.txt、
+    kernel-base-patches.tar.gz，能拿到 repo 时还有 crdroid-manifest.xml（gen_kernel_sources；没生成的那一行从
+    Files 表里删掉，别留空链接）。Files 表里那四行与 Source 一行的 kernel-source.txt 链接都要填。
+    GitHub release 要带上这几个附件，并像载荷一样逐个用 gh release view --json assets 核对服务端字节数。
   * 用户在中国的多：中文版另出一份（REL-4），结构相同。
 -->
 Android 16 (crDroid) for the **Huawei MateBook E Go** (Snapdragon 8cx Gen 3 /
@@ -86,10 +92,14 @@ update. For a **fresh install** you want `super.img.zst` and `boot.img`.
 | `boot.img` (<size>) | GitHub · [R2](https://ota.072172.xyz/install/crDroidAndroid-16.0-<YYYYMMDD>-gaokun3-v12.11/boot.img) | kernel + device tree + first-stage ramdisk |
 | `install-artifacts.sha256` | GitHub · [R2](https://ota.072172.xyz/install/crDroidAndroid-16.0-<YYYYMMDD>-gaokun3-v12.11/install-artifacts.sha256) | checksums of the three files above |
 | `gaokun3.json` | GitHub | the updater manifest for this build |
+| `kernel-source.txt` | GitHub · [R2](https://ota.072172.xyz/install/crDroidAndroid-16.0-<YYYYMMDD>-gaokun3-v12.11/kernel-source.txt) | kernel corresponding source (GPL-2.0): exact base, patch series and rebuild steps |
+| `kernel-config.txt` | GitHub · [R2](https://ota.072172.xyz/install/crDroidAndroid-16.0-<YYYYMMDD>-gaokun3-v12.11/kernel-config.txt) | the kernel `.config`, extracted from this `boot.img` |
+| `kernel-base-patches.tar.gz` | GitHub · [R2](https://ota.072172.xyz/install/crDroidAndroid-16.0-<YYYYMMDD>-gaokun3-v12.11/kernel-base-patches.tar.gz) | the kernel patches between the upstream tag and the build tree |
+| `crdroid-manifest.xml` | GitHub · [R2](https://ota.072172.xyz/install/crDroidAndroid-16.0-<YYYYMMDD>-gaokun3-v12.11/crdroid-manifest.xml) | exact revisions of the crDroid source tree |
 
 Build stamp `<ro.build.date.utc>`, incremental `<YYYYMMDDhhmmss>`. The checks above were run
 on a machine running exactly this build. Not run on it: <list what was not tested>.
 
-Source: tag [`v<X.Y.Z>`](https://github.com/vahiru/gaokun-android/tree/v<X.Y.Z>) · kernel source manifest: <link, once REL-7 lands>
+Source: tag [`v<X.Y.Z>`](https://github.com/vahiru/gaokun-android/tree/v<X.Y.Z>) · kernel source manifest: [`kernel-source.txt`](https://github.com/vahiru/gaokun-android/releases/download/v<X.Y.Z>/kernel-source.txt) ([R2](https://ota.072172.xyz/install/crDroidAndroid-16.0-<YYYYMMDD>-gaokun3-v12.11/kernel-source.txt))
 
 The graphical installer is <unchanged — use `<installer version>` from [v<…>](https://github.com/vahiru/gaokun-android/releases/tag/v<…>) / attached: `gaokun3-installer-<version>-…`>.

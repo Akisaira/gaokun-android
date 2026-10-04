@@ -9558,6 +9558,15 @@ Android 给 Wi-Fi 下发的 `TcpBufferSizes` = `524288,1048576,2097152,…`（`d
 （批的间隔至少约 200 ms）。SLPI 固件把 smp2p 的 ready/handover 位当成了数据就绪门铃。
 ⇒ `patches/0014` 的 ratelimit 就是正解，没有要根治的东西。B9 结案。
 
+> **更正（2026-10-04，本段为事后追加，上面原文不改）**：表里"没人读 → **0**"那一行是**停掉 sensors HAL** 测的，
+> 不能读成"没有订阅者时 SSC 就安静"。HAL 在跑、但框架没有任何订阅者时并**不是 0** —— 当时的 HAL
+> 一建好会话就让 SSC 连续上报 accel + gyro、从不停（表里"HAL 在跑 = 25"一行就是这个状态；按当时 `SscHub.cpp` 的常开写法，与有没有订阅者无关，`docs/v1.0-plan.md:108`），
+> SLPI 因此一直不睡（同一条：7 小时只睡了约 7 ms）。所以"B9 结案"只对中断次数成立
+> （门铃本身是良性的），功耗那一半没有结案。
+> 功耗问题由 PWR-3 / LIVE-2 / HW-3 修（`4db08bc`：SscHub 按订阅启停 SSC，无订阅时 Disable、读线程睡到下次 activate），
+> ⬜ 未构建、未上机。上机判据（实现组留下的待验项）：息屏、无订阅时 `smp2p-slpi` 与 `q6v5 handover` 两个中断
+> 10 秒内不再增长，`qcom_stats/slpi` 的计数开始增长。
+
 ### 5. B18 修了：remoteproc 兜底不再泄漏引用
 
 `bin/gaokun3-rproc-kick.sh` 只对不在 running 的 DSP 写 start（幂等），rc 改成 `start gaokun3_rprockick`；

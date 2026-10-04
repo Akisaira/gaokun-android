@@ -41,3 +41,49 @@ under other licenses; those keep their own terms.
   topology blobs, and the SLPI sensor configuration) is NOT contained in this
   repository. See device/huawei/gaokun3/firmware/README.md and
   device/huawei/gaokun3/hexagonrpcd-root/README.md for how to obtain it.
+
+Third-party proprietary components in the binary releases
+---------------------------------------------------------
+The paragraph above is about the source repository. The **binary releases**
+(the OTA package, super.img / boot.img and the installer images published on
+GitHub Releases and on the update server) DO contain the following third-party
+components. They are **not** covered by this project's GPL license, they are
+not open source, and their copyright belongs to their respective owners
+(Huawei, Qualcomm, Google). We have no license from those owners to
+redistribute them. They are listed here so that anyone who mirrors or
+redistributes the images knows what is inside. Plain-language summary and
+consequences: section 2 of docs/known-limitations.md
+("Proprietary components shipped in the images").
+
+* Huawei firmware for this device, installed under
+  /vendor/firmware/qcom/sc8280xp/HUAWEI/gaokun3/ (and copied into the boot.img
+  ramdisk; the installer images carry the GPU zap shader as well):
+      qcdxkmsuc8280.mbn                       GPU zap shader
+      qcadsp8280.mbn, qccdsp8280.mbn,
+      qcslpi8280.mbn                          ADSP / CDSP / SLPI firmware
+      audioreach-tplg.bin                     audio topology (also installed a
+                                              second time under another name
+                                              in /vendor/firmware/qcom/sc8280xp/)
+      qcvss8280.mbn                           voice services
+      adspr.jsn, adspua.jsn, battmgr.jsn,
+      cdspr.jsn                               pd_mapper service tables
+  Source: Huawei's Windows driver packages. File list:
+  device/huawei/gaokun3/firmware/README.md.
+* Sensor DSP configuration served to the SLPI, installed under
+  /vendor/etc/hexagonrpcd-root/ (sensor JSON configuration, the sns_reg.conf
+  registry index, socinfo files and the SLPI companion blob RSCS.bin).
+  Source: the same Windows driver packages (Qualcomm reference configuration).
+  See device/huawei/gaokun3/hexagonrpcd-root/README.md.
+* Huawei Histen audio engine, /vendor/lib64/soundfx/libhw_histen_processing.so:
+  proprietary to Huawei, not licensed for redistribution, and binary-modified
+  (patched so that Android's bionic linker can load it). It processes audio only
+  when "Speaker enhancement (experimental)" is turned on. See
+  device/huawei/gaokun3/effects/README.md and
+  device/huawei/gaokun3/effects/prebuilt/README.md.
+* Google apps and services (MindTheGapps: Play Store, Play services, ...),
+  under Google's own terms.
+
+Not affected by the above: the GPU microcode (qcom/a660_sqe.fw,
+qcom/a660_gmu.bin), the Wi-Fi firmware (ath11k/WCN6855/) and the Bluetooth
+firmware (qca/wcnhpbtfw21.tlv, qca/wcnhpnv21g.bin) come from linux-firmware and
+are redistributed under their own redistributable licenses, as published there.

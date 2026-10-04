@@ -23,6 +23,28 @@ Problems specific to one release are in that release's [release notes](relnotes/
 
 ## 1. Security and privacy (read this part first)
 
+### Up to v0.7.1, network adb lets anyone in without asking
+<!-- B1 / D1 (SEC-1, OTA-1 and others in docs/v1.0-plan.md): ⬜ not built, not tested on hardware. Check before the
+     release. Evidence in the Chinese file. -->
+* **What you see**: on v0.7.1 and earlier, nothing. That is the problem.
+* **Why**: v0.7.1 and earlier images open adb on TCP port 5555 on every network interface, the Wi-Fi hotspot included,
+  and accept connections **without** the "Allow debugging?" prompt. The images are debuggable (`ro.debuggable=1`), so
+  `adb root` then gives a root shell. They also carry the maintainer's adb public key. Anyone on the same Wi-Fi, or
+  connected to your hotspot, can take over the machine.
+  From the next release (planned as 1.0) adb is **off** by default, asks you to authorize each computer, does not
+  listen on port 5555, cannot `adb root`, and the image carries no maintainer key. Existing users get this with the
+  OTA update, nothing to do: the old port-5555 setting came from the image's built-in defaults, and Android never
+  saves those to `/data`. The exception is anyone who set `persist.adb.tcp.port` themselves.
+* **What to do**:
+  * Update to the next release as soon as it is out. Until then, stay off Wi-Fi networks you don't trust, and don't
+    let strangers join your hotspot.
+  * If you set `persist.adb.tcp.port` yourself: how to clear it after updating will be added here (⬜ not yet verified
+    on hardware).
+  * From that release on, the **USB debugging** switch in Developer options turns itself off at every reboot; turn it
+    on again when you need it. This is a known limitation: the part of Android that normally remembers this switch
+    (the USB device manager) does not run on this machine. For adb over the network, use **Wireless debugging**
+    ([FAQ](FAQ.md#wireless-debugging)).
+
 ### The system is signed with Android's public test keys
 <!-- B2 / SEC-2 (user decision D2, 2026-10-04: keep test-keys, disclose). -->
 * **What you see**: nothing. The build information says `release-keys`, but that is only a label.
@@ -83,8 +105,8 @@ Problems specific to one release are in that release's [release notes](relnotes/
 
 ## 2. Proprietary components shipped in the images
 
-<!-- SEC-10 / REL-15 (D20: disclose, and prepare a build switch without Histen). NOTICE still says only "not in this
-     repository" and does not cover binary releases; that is handled by another item. -->
+<!-- SEC-10 / REL-15 (D20: disclose, and prepare a build switch without Histen). NOTICE now covers the binary
+     releases too (its section "Third-party proprietary components in the binary releases", 2026-10-05). -->
 The source code of this project is released under GPL and other open-source licenses (see [NOTICE](../NOTICE)). The
 **system images, OTA packages and installer images** we publish also contain the components below, which are **not
 part of this project and not open source**. Without them there is no GPU, Wi-Fi, Bluetooth, sound or sensors:
@@ -125,7 +147,9 @@ yourself, you should know that they contain these components.
     state resets the board). Unplug when you are done.
 
 ### USB sticks are not recognised
-<!-- STOR-1 / BKUP-6 (planned for batch 1: voldmanaged in fstab). Delete once fixed and tested. -->
+<!-- STOR-1 / BKUP-6: the voldmanaged lines are in fstab (8da5974), ⬜ not built, not tested on hardware.
+     Once tested, rewrite this entry as "port1 works; port0 only once usbrole has switched it to host", and say which
+     physical port is port1 (STOR-3: needs the user to look). Body text unchanged until then. -->
 * **What you see**: a USB stick or external drive does not appear in the file manager.
 * **Why**: the kernel does see it, but the system's partition table doesn't declare any removable storage, so Android
   never mounts it.
@@ -225,10 +249,63 @@ yourself, you should know that they contain these components.
 
 These are bugs, not trade-offs, and they will be removed from this list once fixed.
 
+### Audio and Bluetooth can deadlock after a long uptime
+<!-- A1 / AV-6 (#38: reported by a user, never reproduced by us). -->
+* **What you see**: after the machine has been running for a long time, sound and Bluetooth stop working, and only a
+  reboot brings them back. Reported by users; we have never reproduced it.
+* **Why**: not known yet. Audio and Bluetooth share one path to the DSPs, and the suspicion is that this path gets
+  stuck.
+* **What to do**: reboot. A watchdog collects evidence automatically when it detects the hang, in
+  `/data/vendor/gaokun3/hangdump-*`, and keeps it across reboots. Please attach it to your report (it needs root; the
+  command is in the [FAQ](FAQ.md#with-a-computer-when-the-machine-boots)). If there is no such folder, say so: that is
+  a clue too.
+
+### The USB-C port can stop working after replugging, until a reboot
+<!-- A6 / PWR-4 / HW-14. The "no standby" half is inferred from the code (role switch keeps failing and holds the
+     machine awake), not observed; README.md:64 says the same. -->
+* **What you see**: after you unplug and plug something back into the USB-C port (seen mostly after standby), the port
+  stops working: no USB adb, USB devices are not detected. It stays like that until you reboot. Going by the code, the
+  machine also no longer goes into standby until that reboot, so the battery drains with the screen off.
+* **Why**: the root cause in the USB controller is not known yet. While the port is broken, the service that switches
+  the port's role keeps failing and keeps the machine awake.
+* **What to do**: reboot. Until then, use Wi-Fi for adb or file transfer.
+
+### A palm on the screen turns into several touches
+<!-- DISP-7 / T1 (after 1.0: needs shape tracking across frames in the driver). -->
+* **What you see**: resting your palm or the side of your hand on the screen produces several separate touches, which
+  can tap, zoom or scroll by accident.
+* **Why**: the touch points are computed by the kernel driver itself from raw capacitance data, and it cannot tell a
+  palm from fingers yet, so a large contact area is split into several touches.
+* **What to do**: keep your palm off the screen while you use it.
+
+### *League of Legends: Wild Rift* closes right after launch
+<!-- #15 (docs/TODO.md:150). No log yet. -->
+* **What you see**: the game closes right after you open it.
+* **Why**: not known. It was reported in
+  [#15](https://github.com/vahiru/gaokun-android/issues/15), and we have no log yet.
+* **What to do**: if it happens to you, collect the crash log right after it closes (see the
+  [FAQ](FAQ.md#with-a-computer-when-the-machine-boots)) and attach it to that issue.
+
+### On a low-power charger the battery says *charging* while it drains
+<!-- BATT-1 (BATT-2 merged into it). -->
+* **What you see**: on a weak power source (a computer's USB port, a small phone charger) the battery shows
+  *charging*, but the percentage keeps going down. Android then never does its low-battery shutdown, and at 0% the
+  machine switches off hard; unsaved work is lost.
+* **Why**: the battery status comes from Huawei's embedded controller. Either the driver decodes some of its status
+  values wrongly, or the controller itself reports *charging*; which one is not settled yet.
+* **What to do**: charge with a charger that can actually charge the machine, such as the one that came with it. On a
+  weak source, watch the percentage rather than the charging icon, and save your work before it runs low.
+
+### Turning on the Wi-Fi hotspot disconnects the tablet from Wi-Fi
 <!-- NET-2 (batch 2). The v0.7.1 notes blamed the chip; iw shows the driver supports STA+AP, the software config does not. -->
-* **Turning on the Wi-Fi hotspot disconnects the tablet from Wi-Fi.** With no modem, the hotspot then has no
-  connection to share. The current software configuration cannot run Wi-Fi and the hotspot at the same time; this is
-  not a limit of the chip.
+* **What you see**: when you turn on the hotspot, the tablet drops its own Wi-Fi connection. With no modem, the hotspot
+  then has no connection to share.
+* **Why**: the current software configuration cannot run Wi-Fi and the hotspot at the same time. This is not a limit
+  of the chip.
+* **What to do**: nothing yet; connect your other devices to the router directly.
+
+### No Chinese input method is included
 <!-- DISP-3 (D10). Delete once a Chinese IME is preinstalled. -->
-* **No Chinese input method is included.** The built-in keyboard has no Chinese. Install a Chinese IME yourself
-  (download the APK from the IME's website).
+* **What you see**: the built-in keyboard has no Chinese.
+* **Why**: no Chinese input method is preinstalled yet.
+* **What to do**: install a Chinese IME yourself (download the APK from the IME's website).
