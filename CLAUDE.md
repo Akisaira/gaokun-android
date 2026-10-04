@@ -80,7 +80,7 @@
 >
 > ### 现在设备上跑的是什么
 > ★★★ **2026-10-04 14:00 起：槽 `_a` = 候选版 `1791053208`**（incremental `20261003184648`，`install-ota-local.sh` 装、oneshot 开机成功后 boot_control 把 **ESP default 同步成了 `_a`**、`_a` 已 marked successful）。`_b` = SELinux 第七轮测试版 `1790702971`（回落）；v0.7.0-alpha `1790605865` 已被覆盖，载荷仍在 `out/v070-1790605865/`。
-> 装机验收：热点开得起来（#11）、`usb` 服务在（#13）、挂起/恢复 10/10 且 GFP_DMA 高阶分配 0（#16）、SAE 升级已关、avc 0；⬜ App 冒烟与出声音游要用户解锁 / 在场。
+> 装机验收：热点开得起来（#11）、`usb` 服务在（#13）、挂起/恢复 10/10 且 GFP_DMA 高阶分配 0（#16）、SAE 升级已关、avc 0；App 冒烟 8/8、出声音游（#130 §7）也过了；⬜ 只剩热点让真设备连上网。
 > 以下是装机前的记录：
 > ★★ **2026-10-04 issues 测试（#131）**：这次开机是 oneshot 到当时的 `gaokun3-issues-k3.conf`（k2 内核 #15 = 48 位 + 0070 + 看门狗 120 / panic 10，配 0071 的 dtb）——**下次重启回 `_b` 的原版 #13**，ESP default 没动。
 > 测试条目与 `slot_test/`、`slot_k2/` 已按用户要求删掉（ESP 回到约 46 MB 空余）。`prebuilt-boot/` 已换成 k2 内核 + k3 dtb，旧版备份在 `out/prebuilt-boot-backup-v070/`。
