@@ -1,5 +1,7 @@
 # MateBook E Go（gaokun3）fastboot 设计
 
+> ⚠️ **2026-10-05 已被 [`boot-entry-design.md`](boot-entry-design.md) 取代推荐一节**：用户澄清"fastboot"指的是**统一的、承载启动 Android 的入口**（类 ABL），不是经 OneShot 进入的旁路环境。本文 §3.3 的 C′ 推荐与 §7.1 的 U1–U7 作废；§4 里 `gk3-fastbootd` 的协议、白名单、清除语义、USB 与界面设计作为新设计的"fastboot 执行端"沿用。
+
 > **状态**：设计稿，尚未实现，也还没上机。日期 2026-10-04。
 > **起因**：用户 2026-10-04 定 **D4：做一个 fastboot**（`docs/v1.0-plan.md:85`、`:316`），由它承接 B6 恢复出厂（OTA-4 / INST-13 / SEC-8 / BKUP-8）、`adb reboot bootloader|fastboot`，以及 `fastboot -w / flash / update / set_active`。
 > **依据**：4 份摸底（启动链、recovery、USB/分区、live）、3 套方案（A recovery 内 fastbootd / B UEFI 层 fastboot / C′ ESP 常驻 initramfs）、3 份评审（风险 / 体验 / 成本）。正文引用沿用摸底和评审里核对过的 `文件:行号`；本文写作时补核了 `refs/lineage-bootable-recovery/fastboot/fastboot.cpp:75-115`、`recovery_ui/screen_ui.cpp:1585-1603`、`refs/lineage-system-core/init/init.cpp:1165-1190`、`init/reboot.cpp:975-995`、`fs_mgr/libsnapshot/snapshot.cpp:4195-4240`、`snapshot.proto:131-157`、`scripts/boot-oneshot.sh`。

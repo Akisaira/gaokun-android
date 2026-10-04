@@ -1,0 +1,756 @@
+# MateBook E Go（gaokun3）统一启动入口设计
+
+> **状态**：设计稿，还没有实现，也还没有上机。日期 2026-10-05。
+> **起因**：用户 2026-10-05 澄清，说要"做一个 fastboot"，指的是**一个统一的、承载启动 Android 的入口**，作用和手机上的 ABL / bootloader 一样：选 A/B 槽，做启动失败计数和回落，读 misc 的 BCB，执行 bootonce-bootloader / recovery / wipe 这些意图；需要时进 fastboot 模式（刷机、`-w`、`set_active`）；恢复出厂和 `adb reboot bootloader` 也由它分派。
+> **地位**：本文取代 [`fastboot-design.md`](fastboot-design.md) §3.3"推荐"一节。该文 §4 中 `gk3-fastbootd` 的协议、白名单、清除语义、USB 与界面设计，在本文里作为 **"fastboot 执行端"** 引用（记作 C′ §x.y）。
+> **依据**：4 份摸底（固件、启动契约、开源基础、与现有链路共存）、3 套方案（X：ABL 骨架 + UEFI 内 USB；Y：入口做 efi 条目，fastboot 交给 Linux；Z：systemd-boot 驱动做决策层），3 份评审（风险、体验、成本）。正文引用的 `文件:行号` 沿用摸底和评审里核对过的那些。
+> **源码位置**：上游源码浅克隆在会话 scratchpad 的 `src/` 下，**没有入库**：systemd v257.13（70b5d110）、hardware-interfaces boot/（1a56e38）、GBL（gbl-mainline e8577449）、CodeLinaro ABL（uefi.lnx.5.0.r53-rel / 6.0.r49-rel）、edk2 / mu-silicium（sparse）。BIOS 2.16 拆包产物在 scratchpad 的 `bios/`，分析工具在 `fwa/`。实施第 0 步要把它们纳入 `scripts/clone-refs.sh`，固件拆包留档到 `docs/hw/`（见 §5）。下文用 `boot.c`、`drivers.c`、`linux.c` 指 systemd v257.13 的 `src/boot/` 下的文件。
+> **实机**：本轮所有摸底和评审进行时设备都离线（`adb devices -l` 为空），本文写作时复查也一样。实机事实一律引自已存日志（`out/v070-accept/census/logcat.txt`、`out/issues-1791053208/boot.img`）和上一轮的只读 misc dump。
+> **冲突优先级**：实机实测 > 案卷 > 本文。标了"待 Ex / 待核"的内容，核实之前不能当作事实。
+
+---
+
+## 0. 一句话结论与推荐
+
+**推荐方案是 Y（修正版）**：新增一个自研 UEFI 应用 `gk3boot.efi`，作为所有 Android 启动必经的唯一入口。它挂在 systemd-boot 下面，是一个带启动计数、并且是默认项的 `efi` 条目。它做这些事：
+- 读 misc：BCB、`bootloader_control`、virtual_ab；
+- 按 libboot_control 的语义选槽、扣 tries、自动回落；
+- 分派 BCB 意图；
+- 直接从 `boot_a/b` 分区读 boot.img，按 systemd-boot 已验证的契约交给内核的 EFI stub；
+- 需要 fastboot、恢复出厂、恢复菜单时，用**同一个内核**加一个静态 initramfs，拉起 C′ 的 `gk3-fastbootd`（Linux 执行端）。
+
+UEFI 内 USB fastboot（X 的核心）推到 1.x，届时只替换执行端的传输层。Z（systemd-boot 驱动）不作为终点，只在"入口自己交接内核"这道门槛（E4）完全不通时，作为退化形态。
+
+分阶段：
+1. 先离线做完决策核心和 QEMU 夹具；
+2. 第一、二周内用户在场做 E3（只读探针）和 E4（缓冲区 LoadImage 真内核），这是硬门槛；
+3. 入口先以观察模式上开发机，再转正；执行端与之并行开发；
+4. 随 1.0 发布。
+
+预计总工作量约 **8–10 人周**，需要用户在场 6–8 次。
+
+---
+
+## 1. 目标与范围
+
+### 1.1 目标
+
+用户原话：**"一个统一的用来承载启动安卓的入口"**。落到行为上：
+
+| # | 要求 | 对应 |
+|---|---|---|
+| G-E1 | 每一次 Android 启动都经过同一个入口，由它决定启动哪个槽、要不要进 fastboot | §4.2 |
+| G-E2 | A/B：选槽、未确认的槽扣 tries、tries 用完自动回落到旧槽，也就是 OTA 坏了能自动回滚（今天没有，`v1.0-plan.md` G6） | §4.3.2 |
+| G-E3 | BCB 意图都有消费者：`adb reboot bootloader / fastboot / recovery`、设置里的"清除所有数据"、RescueParty | §4.3.4 |
+| G-E4 | fastboot 模式：`getvar`、`download`、`flash`、`erase`、`-w`、`set_active`、`reboot*` | §4.4 |
+| G-E5 | 不接键盘也能走通：自动回落、BCB 驱动的进入方式都不依赖按键 | §4.3.6 |
+| G-E6 | 入口自己坏了不会让两个槽一起起不来，能自动或手动回到今天的启动路径 | §4.12 |
+
+### 1.2 1.0 范围
+
+- `gk3boot.efi`：决策层（GPT / misc / boot.img 解析，选槽与 tries，BCB 分派，存量 BCB 迁移，GK3 记录）、交接（从 `boot_x` 读，读不到时用 ESP 副本）、fail-open 阶梯、观察模式。
+- 执行端：C′ 的子集，由入口直接引导，不再经过 OneShot 和 Android 关机桥。
+- Android 侧：boot HAL 加一个"开机完成"线程（确认入口条目、清连续失败计数、导出事件属性）；Parts 弹通知。
+- 部署：postinstall 部署入口、条目轮换、分阶段激活；安装器初始化 misc；`release.sh` 断言；开发脚本改造；Windows 脚本避开 `EFI\gaokun3`。
+- 文档与发布物：INSTALL / FAQ，`flash-all.sh/.bat`。
+
+### 1.3 1.0 明确不做
+
+- **UEFI 内的 USB fastboot**（固件 UsbDevice 协议 + ABL FastbootLib 移植）：推到 1.x，前提是 E4u 实测 core0 能枚举。
+- **gk3boot 直接坐 `BOOTAA64.EFI`**、取代 systemd-boot：不承诺。
+- **退役 ESP 上的 `slot_x` 副本和直连条目**，HAL 回到上游 `boot-service.default`：推到 1.x，前提是 live 和救援改为自带内核。
+- **在 gk3boot 里链式启动 Windows**：会改变 BitLocker 度量链，Windows 继续由 systemd-boot 启动。
+- AVB、`flashing lock`、Secure Boot 签名、recovery（#39）、逻辑分区 / `update-super` / `fastboot boot` / `fetch`。
+- `androidboot.bootreason`（要 EFI_RESETREASON，提供方未证实）、改 `serialno`。
+- 中文 / 横屏的 UEFI 图形界面（1.0 的交互界面在 Linux 执行端，英文）。
+- 开机"按住音量下"直接进 fastboot（理由见 §4.3.5）。
+- 安全擦除（NVMe Sanitize / Deallocate）。
+
+### 1.4 术语
+
+| 术语 | 含义 |
+|---|---|
+| 入口 / gk3boot | `\EFI\gk3boot\<ver>\gk3boot.efi`，本文的主角 |
+| 外壳 | systemd-boot 257.13，仍在 `EFI/BOOT/BOOTAA64.EFI` |
+| 直连条目 | 今天的 `<mid>-android-{a,b}.conf`，直接启动 ESP 上的 `slot_x` 副本。1.0 起降为回落路径 |
+| 执行端 | 同一内核 + `fastboot.img`（静态 initramfs）+ `gk3-fastbootd`，负责 fastboot、恢复出厂、恢复 / 引导菜单 |
+| BCB / BCAB / VAB 消息 | misc 偏移 0 的 `bootloader_message`；偏移 2048 的 `bootloader_control`（魔数 `BCAB`）；偏移 32 KiB 的 `misc_virtual_ab_message` |
+| GK3 记录 | misc 偏移 8 KiB 的自有结构（延续 C′ §4.2.6 的位置，内容改了，见 §4.5） |
+| H2 / H1 交接 | H2：从 `boot_x` 分区读到内存缓冲区后 LoadImage；H1：按文件设备路径 LoadImage ESP 上的 `slot_x/Image` |
+| bless | 把条目文件名里的启动计数（`+N[-M]`）去掉，表示"已确认可用" |
+
+---
+
+## 2. 现状与约束（附出处）
+
+C′ 的 §2（引导链、意图丢失、BCB 残留、#39、分区、VAB、USB、live）仍然有效，这里只补充和修正本轮新核实的部分。
+
+### 2.1 固件（BIOS 2.16，"EFI v2.7 by Qualcomm Technologies"）
+
+- **启动选择**：QcomBds 用的是 edk2 UefiBootManagerLib。本机没有 Boot####，所以走回落路径 `\EFI\BOOT\BOOTAA64.EFI`。启动选项执行前会设 5 分钟看门狗（`edk2 BmBoot.c:2148`）。
+- **华为启动失败计数**：`CheckResetCount`（QcomBds 0x8c24）读写 `OemConfig` 变量，有 `BootFail count = 3, System ShutDown!` 这条字符串。⇒ **入口绝不能把错误返回给固件**。
+- **systemd-boot 的返回值语义**：chainload 的程序返回错误时，`run()` 直接 `return err` 给固件（`boot.c:2971-2973`）；返回 `EFI_SUCCESS` 时显示菜单，并把 timeout 置 0（`:2975-2976`）。
+- **没有设备树服务**：固件不安装 DTB 配置表，也没有任何 DT_FIXUP 协议（对 `pe/*.efi` 逐字节扫描零命中）。DTB 一直是 systemd-boot 自己装的（`devicetree.c:78`、`:105-106`）。
+- **存储**：NvmExpressDxe 提供 BlockIo / BlockIo2 / PassThru；PartitionDxe 是 edk2 原版，带 `EFI_PARTITION_INFO`（8cf2f62c-…，`PartitionInfo.h:23-55`）。主备 GPT 不一致时，PartitionDxe 会**自动写盘修复备份表**。**NVMe 分区上没有 EraseBlock**：这个 GUID 不在 NvmExpressDxe 里，PartitionDxe 只是把父设备的能力往下转发（风险评审字节扫描）。ABL 按 `gEfiNvme0Guid` 过滤根设备，本机不适用（`Board.c:383`）。
+- **USB（只有静态证据）**：
+  - UsbDeviceDxe 的依赖条件是 TRUE，会无条件安装 `EFI_USB_DEVICE_PROTOCOL` d9d9ce48-44b8-4f49-8e3e-2a3b927dc6c1，9 个函数的顺序与 ABL `EFIUsbDevice.h:359-370` 一致。
+  - UsbConfigDxe 响应 `InitUsbControllerGuid` 1c0cffce-fc8d-4e44-8c78-9c9e5b530d36，但只在 core0 空闲时才把它起成 device，否则打印 "already enumerate…skip" 后返回成功（0x65f0-0x6734）。
+  - 运行时 core0 处于什么状态**完全没验证**。
+- **显示**：帧缓冲是竖装原生的 1600×2560。RotateScreen 会追加"宽高互换"的虚拟 GOP 模式，但只对 Blt 生效（0x155c-0x16b0）。
+- **输入**：ButtonsDxe 提供 SimpleTextIn/Ex（音量上下、电源键），键位映射没能静态解出。CheckPostHotkey 在 POST 阶段自己读这三个键，用来进设置或 F12 菜单。I2cTouchPanel 会把 gpio174 配成 I2C，也就是已知坑 #26 那根脚。
+- **度量**：FV 里有 MeasureBootDxe；607f766c 这个 GUID 同时对应 TrEE 和 TCG2 ⇒ 镜像度量**多半是开着的**（风险评审），待核。
+- **其他**：RngDxe 提供 EFI_RNG；HwBcdOneKey 用 `HwStartImage` 钩住镜像启动；HwOpenWdtDxe 在 POST 时打开 EC 看门狗，谁、什么时候关掉它不明。
+
+### 2.2 boot.img 与内核契约
+
+- boot.img 是 **header v2**，单个分区里装 kernel + ramdisk + dtb，没有 vendor_boot / init_boot / AVB（`BoardConfig.mk:90-105`）。实际解析 `out/issues-1791053208/boot.img`（28,848,128 字节）：page 2048；kernel 15,589,888 字节，以 `MZ`+`zimg` 开头，是 EFI zboot PE；ramdisk 13,080,354 字节（gzip）；dtb 173,345 字节；cmdline 在 `@64[512]`，extra 在 `@608[1024]`（为空），**不含 slot_suffix**。
+- **完整性校验可行**：头里偏移 576 的 `id` 等于 SHA1(kernel‖len, ramdisk‖len, second‖len, recovery_dtbo‖len, dtb‖len)。对上面那份文件复算得 `9274d5f8…e885e0`，与头里一致（Y 核实，风险评审复算）。
+- **加载器的契约早有预留**：BoardConfig 写着"槽位后缀由加载器按 misc 里的槽位自己追加"（`BoardConfig.mk:107-110`）；postinstall 头注释写着自研 EFI 加载器就位后，拆包到 ESP 那一步就退役（`gaokun3-ota-postinstall.sh:19-20`）。
+- **内核**：`CONFIG_EFI_STUB=y`、`EFI_ZBOOT=y`、`EFI_ARMSTUB_DTB_LOADER=y`、`CONFIG_CMDLINE=""`、`RANDOMIZE_BASE=y`；`# CONFIG_BOOT_CONFIG is not set` ⇒ androidboot.* **只能走 cmdline**（`init/property_service.cpp:1392-1408`）。
+- **只能经 EFI stub 交接**：dtb 的 `/memory@80000000` reg 大小为 0（`sc8280xp.dtsi:389-393`），内存布局只能来自 EFI 内存图。所以要照 systemd-boot 的做法：LoadImage → LoadOptions（UCS-2 cmdline）→ `InstallConfigurationTable(DEVICE_TREE_GUID b1b621d5-f19c-41a5-830b-d9152c69aae0)` → initrd 走挂在 `LINUX_EFI_INITRD_MEDIA_GUID 5568e427-68fc-4f3d-ac74-ca555231cc68` 设备路径上的 LoadFile2 → StartImage（`include/linux/efi.h:382`、`:420`；`libstub/fdt.c:244-271`；`efi-stub-helper.c:511-624`；`initrd.c:9-120`）。**不能**像 GBL 那样 ExitBootServices 后直接跳（`gbl/efi/src/android_boot.rs:100-102`），那样会丢掉 EFI 内存图、ACPI、efivars 和 efi_pstore。
+- **★ 缓冲区 LoadImage 在本机从没跑过**：systemd-boot 的 type1 条目走 `image_start → make_file_device_path → shim_load_image(path)`，是按文件设备路径加载的（`boot.c:2563-2576`）；`linux_exec`（`linux.c:80-144`）只有 UKI stub 一处调用（`stub.c:1275`）。X 和契约摸底说的"从内存 LoadImage 已在本机验证"**是错的**（三份评审一致纠正）。
+- **slot_suffix 是硬依赖**：缺了它，libboot_control 的 `Init` 失败（`libboot_control.cpp:198-206`），本机 HAL 的 `CHECK(impl_.Init())` 崩溃（`BootControl.cpp:27-29`），fs_mgr 也选不了槽（`libfstab/slotselect.cpp:46-53`）。
+
+### 2.3 misc 布局（已核实）
+
+| 偏移 | 内容 | 出处 |
+|---|---|---|
+| 0–2 KiB | BCB：`command[32] status[32] recovery[768] stage[32] reserved[1184]` | `bootloader_message.h:67-84` |
+| 2048 | `bootloader_control`，32 字节：`slot_suffix[4]`、magic `0x42414342`、version 1、9 位位域（nb_slot:3 / recovery_tries:3 / merge_status:3）、`slot_info[4]`，**每槽 u16**（priority:4、tries:3、successful:1、verity_corrupted:1）、`crc32_le`（前 28 字节） | `hardware-interfaces boot/1.1/default/boot_control/include/private/boot_control_definition.h:41-48`、`:59-107`；GBL `libgbl/src/slots/android.rs:72-121`、`:200-212` |
+| 2K–16K | 按定义归"Vendor's bootloader"所有，我们就是这个 vendor bootloader | `bootloader_message.h:24-30` |
+| 8 KiB | **GK3 记录**（本设计，"无人使用"待 E1 核实） | §4.5 |
+| 16 KiB | wipe package | `bootloader_message.h:24-35` |
+| 32 KiB | `misc_virtual_ab_message`：v2，magic `0x56740AB0`，merge_status，source_slot | `bootloader_message.h:155-160`；`libboot_control.cpp:403-440` |
+
+- **实机 dump 解码**（上一轮只读读出）：`misc+0x800 = 5f61 0000 4243 4142 0102 0000 9f00 0e00 … 67dd c320`。按上表布局对前 28 字节算 zlib CRC32，得 `67ddc320`，与盘上一致 ⇒ 布局确认。解码为 `_a`=0x009f（priority 15、tries 1、已成功），`_b`=0x000e（priority 14、tries 0，不可启动）。上一轮"每槽 1 字节"的推断不对。32K 处是 v2、NONE、source 0。
+- **libboot_control 语义**：
+  - `setActive`：目标槽 priority 15、tries 6，其他槽中 ≥15 的降到 14，并清 verity_corrupted（`:282-314`）；
+  - `markBootSuccessful`：successful=1、tries=1（`:316-330`）；
+  - CRC 坏时重建：每槽 priority 7、tries 7，只有当前槽标 successful（`:140-180`）；
+  - `kDefaultBootAttempts=7`（`:42`）。
+- **GBL 的 set_active 写 7/7/6，与 HAL 不同 ⇒ 我们一律照 libboot_control 写。**
+- **选槽算法**（GBL 语义）：在 `successful || tries>0` 的槽里取 priority 最高的，同分时 `_a` 优先；未成功的槽启动前 tries−1 并写回；已成功的槽不扣（`slots/android.rs:280-305`、`:328-377`）。
+- **VAB**：libsnapshot 写状态时会经 HAL 同步 merge_status（`snapshot.cpp:3276-3316`）⇒ bootloader 不用挂 `/metadata`。MERGING 时禁止切槽；SNAPSHOTTED 或 MERGING 时禁止擦写 userdata / metadata / misc（`fastboot/device/commands.cpp:72-88`、`:351-368`）。回到源槽时，first-stage init 会写 rollback-indicator（`snapshot.cpp:2459-2497`）⇒ **只要入口扣 tries，VAB 就能自愈。今天没有任何组件扣 tries。**
+
+### 2.4 Android 侧现状
+
+- **init 写 BCB**（`init/reboot.cpp:899-965`）：
+  - `bootloader` → `bootonce-bootloader`；
+  - `fastboot`（本机有动态分区）→ `boot-recovery` + `recovery\n--fastboot\n`；
+  - `recovery` → command 为空时才写 `boot-recovery`（`:923-937`）。
+  - 恢复出厂由 uncrypt 写 `--wipe_data`。
+  - 内核丢掉 reboot 参数（`efi=noruntime`，reboot-mode 没有 mode）。
+- **★ `markBootSuccessful` 只在当前槽还没标成功时才被调用**（`update_verifier.cpp:331-381`，在 zygote-start 时 `exec_start`，`init.rc:1137-1140`；fstab 里 `/data` 没有 checkpoint）。
+  - ⇒ C′ §2.1 写的"markBootSuccessful 每次开机都重写 default"**不对**：只有 OTA 后第一次成功开机时才会重写。
+  - ⇒ 任何"靠它在每次开机清零或确认"的设计都不成立（Z 的决策看门狗、Y 的 ESP 写入频率论证，都栽在这里）。
+- update_verifier 看到 `veritymode` 为空或 disabled 时会跳过块校验（`update_verifier.cpp:340-357`）。
+- **HAL 的 EspSlot**：`setActiveBootSlot` 写完 misc 后，把 loader.conf 的 default 改成 `*-android-x.conf`，改不成就整个调用失败（`EspSlot.cpp:45-47`、`:142-194`；`BootControl.cpp:114-149`）。
+- **postinstall**（来自新 vendor、在旧系统里执行，`POSTINSTALL_OPTIONAL=false`）：拆 `boot_<目标槽>` 到 ESP，同步 options，铺 recovery-ramdisk（`gaokun3-ota-postinstall.sh:57-187`；`BoardConfig.mk:213-218`）。它的域**没有 misc 权限**（`sepolicy/postinstall.te:49`）。
+- **属性**：`sys.boot_completed` 是 `boot_status_prop`（`refs/lineage-sepolicy/private/property_contexts:952`），vendor_init 可以读（`private/vendor_init.te:316`）。`ro.boot.*` 落在 `bootloader_prop`（`:1046`），`ro.bootloader` 同样（`:1074`）。
+
+### 2.5 systemd-boot 257.13 的相关行为（本轮源码核实）
+
+- **默认项选择优先级**：`LoaderEntryOneShot` > `LoaderEntryDefault` 变量 > loader.conf 的 `default` > 第一个条目（`boot.c:1788-1824`）。OneShot 在 drivers 之后读取并删除（`:1637-1640`，删除时带 NON_VOLATILE 属性）。
+- **排序**：先比计数是否用完（tries_left==0 的排最后，`:1710-1714`），再比 sort-key、machine-id、version（降序）、id；default 和 OneShot 都用 `efi_fnmatch`，取排序后的第一个匹配（`:1708-1783`）。
+- **启动计数**：文件名 `名字+剩余[-已用].conf`，条目 id 会去掉计数部分（`:1340-1376`、`:1365-1371`）。启动前改名递减，并设易失变量 `LoaderBootCountPath`（`:1384-1421`）。
+- type1 条目的 `linux` / `efi` 文件不存在时，**整个条目被跳过**（`:1531-1535`）。
+- efi 条目会把 `options` 作为 LoadOptions 传过去，也会装 devicetree（`:2543` 起、`:2600-2624`）。
+- 启动条目前会先 `process_random_seed`（`image_start` 之前，约 `:2967-2969`）⇒ 被它启动的入口天然继承随机种子表。
+- `LoaderConfigTimeoutOneShot` 会强制下一次显示菜单（`:1617-1630`、`:2922-2934`）。
+- **按键**：菜单里任何按键都会取消倒计时（约 `:881`），音量键移动高亮（约 `:908`）；`menu-hidden` 时先读 100 ms 按键，音量键查不到条目时直接开菜单（`:2925-2934`）；音量上下 = 移动，SCAN_SUSPEND = 确认（`:899-949`）。等待按键时每 5 分钟重新武装一次看门狗（`console.c:81-97`）。
+- **drivers**：只加载 `\EFI\systemd\drivers\*aa64.efi`，且必须是 BS/RT driver 镜像。返回 EFI_ABORTED 不计入成功数，因而不触发 reconnect（`drivers.c:21-45`、`:100-112`）。这一条只与 Z 相关。
+- **Windows**：ESP 上有 `bootmgfw.efi` 时自动加 `auto-windows`；BitLocker 场景用 BootNext 重启（`:2081-2150`）。
+
+### 2.6 安装器 / Windows 脚本 / 开发脚本
+
+- **安装器**：
+  - 把 misc 整块清零（`installer-lib.sh:838-843`），同一份 boot.img 同时写进 `boot_a` 和 `boot_b`；
+  - 直连条目的 sort-key 为 `zandroid<槽>`（`:921-929`），options 是 `$cmdline androidboot.slot_suffix=_$slot`（`:918`）；
+  - **会把"别的 machine-id 目录下的 `*-android-[ab].conf`"改名停用**（`:879-887`），这条会误伤新条目；
+  - 救援条目借用 `slot_a` 的内核（`:965`），cmdline 用 `gk3__rescue_cmdline`（`:1092-1098`）。
+- **Windows 脚本**：`-Uninstall` 递归删除 `EFI\gaokun3`（`gaokun3-setup.ps1:267`）；`Format-LoaderConf` 只在 loader.conf 不存在时才写（`:184-187`、`:480-483`）。
+- **`install-ota-local.sh` 第 4 步**只把 loader.conf 的 default 改回旧槽，不动 misc（`:140-152`）。入口改为以 misc 为准之后，这张安全网**会静默失效**。
+- **`boot-oneshot.sh:51-53`** 用"文件是否存在"来检查条目，而 OneShot 匹配的是去掉计数之后的 id。
+
+### 2.7 硬约束汇总
+
+| # | 约束 | 依据 |
+|---|---|---|
+| E-K1 | 入口出错不能返回错误码，也不能停在不倒计时的菜单上 | §2.1、§2.5 |
+| E-K2 | 只能经内核 EFI stub 交接：LoadImage + LoadOptions + DTB 表 + LoadFile2 initrd | §2.2 |
+| E-K3 | 每次都追加 `androidboot.slot_suffix=_x` | §2.2 |
+| E-K4 | `bootloader_control` 只按 libboot_control 原语读写，写前算 CRC、写后读回；CRC 无效时**不写** | §2.3 |
+| E-K5 | MERGING 时不切槽、不清数据 | §2.3 |
+| E-K6 | 入口不能是两个槽共用的单点：失败要能回到今天的直连路径 | G-E6 |
+| E-K7 | 存量 BCB 要先迁移（只清不执行），再启用任何 BCB 消费（C′ 的 K3） | C′ §2.3 |
+| E-K8 | 入口文件不能放进 `EFI\gaokun3\`；新条目不能被安装器的停用逻辑误伤；测试条目不能匹配 `*-android-[ab].conf` | §2.6 |
+| E-K9 | 正常路径不碰 USB，不启用触摸，不切 GOP 模式 | §2.1 |
+| E-K10 | "开机完成"信号要挂在 `sys.boot_completed` 上，不能挂在 `markBootSuccessful` 上 | §2.4 |
+| E-K11 | 上机实验要征得用户同意，并有人在场能长按电源键 | CLAUDE.md 操作禁忌 3 |
+
+---
+
+## 3. 方案比较与推荐
+
+### 3.1 三套方案
+
+- **X**：以高通开源 ABL（LinuxLoader + FastbootLib）为骨架，用 EDK2 / C 写 gk3boot。fastboot 直接跑在固件的 UsbDevice 协议上（d9d9ce48 / 1c0cffce），USB 不通时退到 Linux 执行端。UEFI 内还要同步 ESP、清数据。
+- **Y**：用 Rust 写 gk3boot，从 `boot_x` 读 boot.img，按 misc 选槽、扣 tries、分派 BCB，以带计数的默认 efi 条目挂在 systemd-boot 下。fastboot 由 gk3boot 引导"同一内核 + 静态 initramfs"，跑 C′ 的 `gk3-fastbootd`。
+- **Z**：在 `\EFI\systemd\drivers\` 放一个策略驱动 `gk3policy`，只读 misc、写 `LoaderEntryOneShot`，内核仍由 systemd-boot 加载 ESP 副本；fastboot 是 C′ 原样（独立内核 + OneShot 条目）。
+
+### 3.2 比较表
+
+| 维度 | X：ABL 骨架 + UEFI USB | Y：efi 条目入口 + Linux 执行端 | Z：systemd-boot 驱动 + C′ |
+|---|---|---|---|
+| 可行性 | USB 只有静态证据，运行时 core0 状态未知（E4u）；缓冲区 LoadImage 未验证，却被当成"已验证"（事实错误） | 缓冲区 LoadImage 未验证，但被正确标成门槛（E4），退路明确；执行端可以在容器里离线测全 | 只用 systemd-boot 已验证的路径，可行性最高 |
+| 风险 | UEFI 里写盘、刷 super、FAT 同步，变砖面最大；交棒前就 bless，交接故障不消耗计数 | 交棒前重新武装计数，同样兜不住交接故障（已修正，见 §4.12）；每次开机两次 FAT 改名 | 每次开机写 NV 变量；决策看门狗在正常使用中会自己跳闸；自禁用不粘滞；驱动在所有启动路径前运行，可能被度量进 PCR4 |
+| 体验 | 最像手机，入口内就有 fastboot；但 ConOut 文字在竖屏上可能是侧着的，`is-userspace=no` 会让 `fastboot reboot fastboot` 报错 | 定位最清楚；执行端用 fbcon，文字是横的，按键名已核实；冷启动进 fastboot 避开 #52 / A6 | 不是"一个入口"：菜单按槽列，内核来自 ESP 副本，进 fastboot 要冷启一个独立内核；在菜单里改选 Windows 会白扣 tries |
+| 用户需求覆盖 | 完整 | 完整（缺入口内 USB，1.x 补） | 约 85–90% 功能，观感达不到 |
+| 成本 | 代码面最大；评审重估 10–12 周以上，E4u 不过再加 2–3 周；上机 7–9 次 | 方案自估 6–8 周，评审重估 **8–10 周**；上机 5–6 次；引入 Rust 是长期成本 | 8–11 周，其中执行端 4–5 周省不掉；1.x 还要另写入口，驱动多半作废 |
+| 风险评审 | 4.5 | **6.5** | 6 |
+| 体验评审 | 6.5 | **7** | 4.5 |
+| 成本评审 | 5 | **7** | 6 |
+| **平均** | **5.3** | **6.8** | **5.5** |
+
+### 3.3 推荐：Y 为骨架（含 §8 的修正），Z 作门槛不过时的退化形态，X 的 UEFI USB 作为 1.x 演进
+
+三份评审都选 Y 作 1.0 骨架，同时都要求下面这些修正，本文全部采纳：
+
+1. **缓冲区 LoadImage 是第一道上机门槛（E4）**。不通时退化为 **H1**：仍由 gk3boot 做全部决策，只是改按文件设备路径加载 ESP 上的 `slot_x/Image`，也就是 systemd-boot 已在本机验证过的那类调用。决策层的成果全部保留，不必退回 C′ 的关机桥（成本评审）。如果连 H1 也不通，才退化成 Z 的形态：决策用 OneShot 表达，交接留给 systemd-boot。
+2. **计数改由 Android 侧在 `sys.boot_completed` 时 bless**，入口自己不碰计数。这样交接故障也会消耗计数（风险、体验、成本三份评审一致）。
+3. **入口更新做成分阶段激活**（一次只换一样）；0.7→1.0 那一跳是唯一例外（§4.10）。
+4. **1.0 不在 UEFI 里放任何写盘代码**：恢复出厂、刷写都交给 Linux 执行端（NVMe 上本来也没有 EraseBlock）。
+5. **"开机按住音量下"不作为 1.0 的进入方式**：会被 systemd-boot 吃掉（§4.3.5）。
+6. **工作量按 8–10 周排期**。
+7. **语言改由用户决定**（U2）。本文建议用 C，与执行端共用同一份核心库，三份 misc 解析降到两份（核心库 + HAL 的 libboot_control）。
+
+Z 的几项可取之处吸收进 Y：
+- 用户在菜单里选 Windows 不扣 tries（Y 天然如此：只有 Android 条目才会运行 gk3boot）；
+- 执行端里的"引导菜单"用 evdev 读按键，可以直接选 Windows、安装器、救援（§4.4.4）；
+- 未知命令要清掉，不然会堵住 BCB 通道。
+
+X 的价值留到 1.x：UEFI 内的 USB 传输（ABL `FastbootMain.c:163-259` 加 `UsbDescriptors.c`，BSD 许可），以及基于它的 `fastboot boot <img>`。
+
+---
+
+## 4. 推荐方案详细设计
+
+### 4.1 组件与代码基础
+
+```
+ESP（vfat，可能与 Windows 共用）
+├─ EFI/BOOT/BOOTAA64.EFI              systemd-boot 257.13（不变：外壳 + 兜底菜单）
+├─ EFI/systemd/systemd-bootaa64.efi    （不变）
+├─ EFI/gk3boot/<ver>/gk3boot.efi       ★入口（约 0.3–0.6 MB，待实测）
+├─ EFI/gk3boot/<ver>/fastboot.img      ★执行端 initramfs（2–4 MiB，C′ §4.2.2）
+├─ EFI/gk3boot/<prev>/…                上一版（已确认可用的那版）
+├─ loader/loader.conf                  default *-android-a.conf（HAL 照旧写，1.0 不改语义）
+├─ loader/entries/
+│   ├─ gk3boot-android-{a,b}[+3].conf  ★ efi 条目，sort-key 0gk3，title "Android"
+│   ├─ gk3prev-android-{a,b}.conf      ★ 上一版入口（只在有过轮换时才有）
+│   ├─ gk3boot-tools.conf              ★ efi 条目，options gk3.action=menu，title "Android 引导菜单 / Fastboot"
+│   ├─ <mid>-android-{a,b}.conf        直连条目（今天的老路，降为回落，title 改为 "Android 直连 a/b（救急）"）
+│   └─ gaokun3-live.conf / <mid>-int-ubuntu.conf / auto-windows（不变）
+└─ <mid>/android/slot_{a,b}/{Image,gaokun3.dtb,ramdisk.img,cmdline.txt}   回落副本（1.0 继续铺；live / 救援借用）
+```
+
+| 组件 | 语言 / 位置 | 职责 |
+|---|---|---|
+| `libgk3core` | freestanding C（U2 选了 Rust 就是 no_std crate）；`tools/gk3boot/core/` | GPT（头 CRC + 表 CRC，只信主表）、boot.img v0–2 加 SHA1(id)、BCB、BCAB、virtual_ab、GK3 记录、选槽 / 扣 tries / set_active 原语、cmdline 变换。**同一份代码**编进 gk3boot.efi、执行端 `gk3-fastbootd`，以及主机测试和 `gk3-misc` CLI |
+| `gk3boot.efi` | `tools/gk3boot/efi/`，arm64 Docker（与 live 同款）里构建 | 定位盘与分区、决策、交接（H2 / H1）、fail-open、观察模式、最简 ConOut 错误页 |
+| 执行端 | C′ §4.2.1–4.2.2 子集 + 改动（§4.4） | fastboot、恢复出厂、恢复菜单、引导菜单 |
+| `gk3-misc` | 主机版和 aarch64 静态版 CLI，链接 `libgk3core` | 安装器初始化 misc；开发时只读 dump / 解码（取代 C′ 的 `misc-decode.sh`） |
+| `gk3-esp-sync` | C′ §4.2.5 | postinstall、执行端、安装器共用的 ESP 写入规则 |
+| boot HAL 改动 | `device/huawei/gaokun3/boot_control/` | 开机完成线程（§4.6.1） |
+
+**代码基础与取舍**（依据 oss 摸底和三份方案）：
+
+- **交接**：照 systemd-boot `linux.c:93-144`、`initrd.c:9-120`、`devicetree.c:78-107` 的**写法重写**，不拷代码，避免 LGPL-2.1+ 牵连入口的许可证（U10）。
+- **GBL**：不作基础。它不认 zboot（`load.rs:629-667`）；slot_suffix 只写进 bootconfig（`mod.rs:220`），而本机没开 BOOT_CONFIG，OsConfiguration 协议也没有改 cmdline 的接口；出错时走 `cold_reset`（`efi/src/ops.rs:395-396`）；构建只支持 Linux x86_64 + Bazel。只拿它的 BCAB 实现和单测（`libgbl/src/slots/android.rs`）、BCB 解析（`libmisc/src/lib.rs`）做**对照测试向量**。
+- **ABL**：不能整体用。它的 A/B 存在 GPT 属性位里，会改写与 Windows 共用的 GPT（`PartitionTableUpdate.h:138-148`）；选 DTB 要 qcom,msm-id；交接是直跳；还依赖 4 个固件里没有的协议。1.x 只移植它的 USB 传输件。
+- **EDK2 EmbeddedPkg / U-Boot**：不用（只认 v0 头；U-Boot 的 EFI app 只支持 x86）。
+
+### 4.2 启动流程总览
+
+```
+上电 → 固件 POST（CheckPostHotkey：电源 / 音量键 → 设置或 F12 菜单，不归我们管）
+ → QcomBds：无 Boot#### → \EFI\BOOT\BOOTAA64.EFI = systemd-boot 257.13
+ → systemd-boot：OneShot > LoaderEntryDefault > loader.conf default
+      default "*-android-x.conf" 排序后先命中 gk3boot-android-x[+N]（sort-key 0gk3 < zandroid*）
+      （带计数时：改名递减，设 LoaderBootCountPath）→ StartImage(gk3boot, LoadOptions=options)
+ → gk3boot
+      0 解析 LoadOptions（gk3.hint / gk3.mid / gk3.action / gk3.observe）；SetWatchdogTimer(120 s)（是否真会复位待 E6）
+      1 定位本盘：LoadedImage→DeviceHandle 的设备路径去掉 HD 节点 = 整盘 → BlockIo → 自己解析主 GPT
+        → misc / boot_a / boot_b / super / userdata / metadata 各恰好出现一次
+      2 读 misc 0–64 KiB：BCB、BCAB、GK3、virtual_ab
+      3 首跑迁移（没有迁移标记时）→ 清存量 BCB，本次不执行
+      4 GK3 一次性意图（执行端留下的"下次去 systemd-boot 菜单"等）
+      5 gk3.action / BCB 分派 → 去执行端（fastboot / wipe / 菜单）或继续
+      6 连续未完成启动计数 ≥ 阈值 → 执行端菜单（why=bootloop）
+      7 选槽 + 扣 tries（BCAB）
+      8 加载 boot_S（H2）并校验 SHA1(id)；失败 → 另一槽 / ESP 副本（H1）
+      9 拼 cmdline → 交接：LoadImage → LoadOptions → DTB 表 → LoadFile2 → StartImage
+      ✗ 任何内部错误 → fail-open 阶梯（§4.12），绝不 return 错误码
+ → 内核 EFI stub（zboot）→ Android
+ → Android：zygote-start 时 update_verifier → markBootSuccessful（只在未成功时）
+           sys.boot_completed=1 → HAL 开机完成线程：bless 入口条目、清 GK3 连续计数、导出事件、激活分阶段的新入口
+```
+
+### 4.3 启动流程细节
+
+#### 4.3.1 正常启动
+
+- 正常路径**不等按键、不画界面、不碰 USB / GOP / 触摸**（E-K9）。只有观察模式会在 ConOut 打印一行 trace。
+- **读取量**：misc 64 KiB，加上选中槽的 boot.img（约 29 MB）和一次 SHA1。目标额外耗时 < 0.5 s，E4 实测。
+- **cmdline** = 头里的 `cmdline` + `extra_cmdline`（即 BOARD_KERNEL_CMDLINE，`BoardConfig.mk:123-134`），再追加：
+  - ` androidboot.slot_suffix=_S`（必需）；
+  - ` androidboot.bootloader=gk3boot-<ver>`（→ `ro.bootloader`，`property_service.cpp:1355`；属性上下文 `property_contexts:1074`）；
+  - ` androidboot.gk3boot.event=<none|fallback|boot_corrupt|bcb_dropped|wipe_failed|…>`；
+  - ` androidboot.gk3boot.entry=<自己条目的文件名>`（取自 `LoaderBootCountPath`，供 bless 用）。
+  - 不再加 systemd-boot 为兼容老内核追加的 `initrd=\…`。
+- 不开 CONFIG_BOOT_CONFIG，boot.img 格式和内核**都不用为入口改**。
+
+#### 4.3.2 A/B 选槽与 tries
+
+1. **BCAB 无效**（magic / version / CRC 任一不对，或 nb_slot≠2）：**不写**，按 `gk3.hint` 启动（hint 就是 HAL 镜像进 default 的那个字母），交给 HAL 初始化。
+2. **可启动**：`tries>0 || successful`。在可启动的槽里取 priority 最高的，同分时取 `_a`。
+3. **选中的槽未成功**：tries−1 → 重算 CRC → 写回 → FlushBlocks → 读回比对 → 启动。已成功的槽不扣。入口**只改 tries**：priority 和 successful 归 HAL 与执行端的 `set_active` 管。
+4. **VAB**：
+   - `merge_status==MERGING` 时**禁止换槽**：选中的槽不可启动就不回落，改进执行端（why=merging）并显示原因；
+   - SNAPSHOTTED 时允许回落到源槽，由 first-stage init 自愈；
+   - SNAPSHOTTED 且当前槽 == source_slot 时视为 NONE（`bootloader_message.cpp:307-315`）。
+5. **两个槽都不可启动**：进执行端（why=noslot），不去猜一个槽硬启动。
+6. **成功确认**：Android 侧不变（update_verifier → markBootSuccessful）。
+7. **回滚时序**：setActive 给新槽 tries 6；每次没起来扣 1；内核 panic（`CONFIG_PANIC_TIMEOUT=10`，`docs/relnotes/v0.7.1-alpha-config.txt:7761`）或 init 的 `reboot()` 会自动消耗一次，硬挂要长按电源键（固件看门狗能否自动复位待 E6）；扣完后回到旧槽，event 记为 `fallback`，Parts 通知。
+
+#### 4.3.3 启动失败的回落（由内向外）
+
+| 失败 | 谁接住 | 结果 |
+|---|---|---|
+| `boot_S` 头或 SHA1 不对 | gk3boot：本次换另一个可启动的槽，**不写 misc**（可能只是瞬时读错）；两个都坏 → H1 用 ESP 副本；再坏 → 执行端（内核取 ESP 副本） | event=`boot_corrupt` |
+| 新槽内核 / init 起不来（未确认） | BCAB tries | 回到旧槽 |
+| 已确认的槽之后反复起不来 | GK3 "连续未完成启动"计数（入口每次 +1，开机完成时清零）≥5 → 执行端菜单（why=bootloop） | 用户可以选另一槽、fastboot、恢复出厂 |
+| 交接本身有故障（新入口） | 入口条目计数（只有新部署 / 新激活的入口才带 `+3`，开机完成才 bless）→ gk3prev → 直连条目 | 回到今天的路径 |
+| gk3boot 内部错误 | fail-open 阶梯（§4.12） | 直连条目 |
+| ESP 或 systemd-boot 坏了 | U 盘 live（插着 U 盘时固件优先走 U 盘的 ESP，`docs/hw-inventory.md` 8quater） | 重新安装并保留数据，或删掉入口 |
+
+#### 4.3.4 BCB 各命令
+
+| BCB（command + recovery 字段） | 来源 | gk3boot 的处理 |
+|---|---|---|
+| 空 | — | 正常启动 |
+| `bootonce-bootloader` | `adb reboot bootloader` | **先清 command 并写回**（GBL 语义：执行端坏了也不会循环），再进执行端，why=bootloader |
+| `boot-recovery` + `--fastboot`、`boot-fastboot` | `adb reboot fastboot` | 同上，why=fastboot（fastbootd 也是进入时就清，`fastboot/fastboot.cpp:96`） |
+| `boot-recovery` + `--wipe_data`（含 `--reason=…`） | 设置 → 清除所有数据 | 进执行端，why=wipe。**BCB 由执行端擦完后才清**（可重入）。GK3 给同一份 BCB 计次，连续 3 次进入都没被清 → gk3boot 自己清掉，正常启动，event=`wipe_failed`，Parts 通知 |
+| `boot-recovery` + `--prompt_and_wipe_data` | RescueParty | why=prompt_wipe，执行端必须按键确认，**永不自动清** |
+| 只有 `boot-recovery`，或带 `--update_package` / `--sideload` / `--wipe_cache` / `--rescue` 等 | `adb reboot recovery` 等 | why=recovery → 执行端的恢复菜单（说明哪些不支持），由执行端清除。**永不启动 recovery ramdisk ⇒ 绕开 #39** |
+| `boot-quiescent`、`boot-rescue`、乱码 | — | 原文记进 GK3，**清掉**，正常启动。不清的话，init 以后只在 command 为空时才写，通道会被堵住（`reboot.cpp:923-937`） |
+
+- **存量 BCB**：迁移标记写入之前的 BCB 一律只清不执行（§4.10）。
+- **分派计数**放在 GK3，**不借** BCAB 的 `recovery_tries_remaining`，保持 BCAB 只按 libboot_control 的语义被写。
+- 执行端存在之前（分阶段交付），BCB 分派开关保持关闭：只记录、不消费，与今天一样。
+
+#### 4.3.5 进 fastboot / 菜单的方式
+
+1. **BCB**（adb、设置、RescueParty）：无需按键，主路径。
+2. **systemd-boot 菜单里的 `gk3boot-tools.conf`**：title "Android 引导菜单 / Fastboot"，sort-key 紧跟 gk3boot-android。接键盘盖时可以选；只用音量键 / 电源键能不能操作取决于 INST-18（E3）。
+3. **自动进入**：两槽都不可启动、bootloop 阈值、MERGING 下选中的槽不可启动。
+4. **执行端菜单**里的"Fastboot"。
+5. **"开机按住音量下"不进 1.0**：systemd-boot 显示菜单时任何键都会取消倒计时，音量键还会移动高亮（`boot.c` 约 `:881`、`:908`）；`menu-hidden` 时 100 ms 读键会直接开菜单（`:2925-2934`）。所以按键永远到不了 gk3boot。1.x 若改成 `menu-disabled`，再由 gk3boot 自己读键，前提是 E3 证明按键在那一刻还留在 ConIn 里（U3）。
+
+#### 4.3.6 无键盘
+
+- 不需要按键也能走通的：tries 回落、入口计数回落、BCB 驱动（`adb reboot bootloader`、设置里恢复出厂）、两槽都坏 / bootloop 自动进执行端菜单。
+- **执行端菜单**用 evdev 读 `pmic_pwrkey`、`pmic_resin`、`gpio-keys`（C′ §4.8 已核实设备名），音量上下选择、电源键确认。**这是 1.0 给平板姿态的主通道**，不依赖 UEFI 的键位映射。
+- 双系统用户在平板姿态下切 Windows：Android 里 `adb reboot bootloader`，或用 Parts 的"重启到引导菜单"（走标准 `reboot,bootloader`）→ 执行端菜单 → "Windows"（§4.4.4）。
+
+### 4.4 fastboot 模式（执行端）
+
+#### 4.4.1 进入
+
+gk3boot 用和 Android 同一套交接代码引导：
+- **内核**按顺序取：最近一个已成功槽的 `boot_x`（SHA1 通过）→ 另一个槽 → ESP 上的 `slot_x/{Image,gaokun3.dtb}`。内核与 Android 永远是同一版，C′ 的 R8 不再存在，也**不需要** C′ §4.2.3 的独立内核副本（ESP 省 13–16 MB）。
+- **initramfs**：`\EFI\gk3boot\<ver>\fastboot.img`，与 gk3boot 同版本、同目录，一起轮换。
+- **cmdline**：从 boot.img 的 cmdline 变换而来。规则与 `installer-lib.sh:1092-1098` 相同（去掉 `androidboot.*`、`init=`、`firmware_class.path=`），再去掉 `deferred_probe_timeout=10`（`BoardConfig.mk:130`），加上 `panic=10 gk3.mode=fastboot gk3.why=<…> gk3.slot=<x> gk3.bootver=<ver> gk3.disk=<misc 的 PARTUUID>`。
+  - 执行端据 `gk3.disk` 确定目标盘，不再需要 C′ §4.4 的 `LoaderDevicePartUUID` 推断；
+  - 不过仍要校验六个名字在这块盘上各恰好出现一次。
+- 进入一定是冷启动 ⇒ 不受 #52 / A6 影响；执行端照 C′ §4.7：不挂起，不 unbind dwc3。
+
+#### 4.4.2 命令（沿用 C′ §4.5，以下是改动）
+
+- `getvar`：
+  - `version-bootloader` = gk3boot 的版本；
+  - `current-slot` 取自 `gk3.slot`；
+  - `slot-successful / slot-unbootable / slot-retry-count` 直接解 BCAB。布局已用实机 CRC 核实，C′ 那条"X2 之前 FAIL"的限制取消；E1 仍要核对 crDroid 树里的常量与 AOSP 1a56e38 一致。
+- `is-userspace`：**yes**，沿用 C′ 的决定，`fastboot reboot fastboot` 走软重新枚举。代价是带 `super_empty.img` 的 `fastboot update` 会被主机端引向逻辑分区路径（`fastboot.cpp:1702-1711`、`:2122-2142`），1.0 对 `update-super` 和逻辑分区一律 FAIL，并在 INFO 里写明"请用 flash-all 或不带 super_empty 的 zip"。见 U4。
+- `set_active`：照 libboot_control 原语写（目标槽 15/6，其他 ≥15 的降到 14，清 verity_corrupted），由 `libgk3core` 实现，并对拍 HAL 的逐字节结果。同步 loader.conf 的 default（直连回落要用）。MERGING 时拒绝；目标槽 unbootable、或 ESP 上缺 `slot_x` 时拒绝。
+- `flash boot_a|boot_b`：写入 → 读回比对 → 同一条命令里调 `gk3-esp-sync`。ESP 同步失败时返回 FAIL，写明"boot 已写入，回落路径仍是旧内核"。入口以分区为准，所以不会出现 K4 那种"空刷"。
+- `flash super`：只支持整块；刷完后若 active 槽不在新 LP 元数据服务的槽里，按 set_active 规则切过去。
+- `reboot`：冷重启，BCB 为空就正常启动。`reboot-bootloader` / `reboot-fastboot`：软重新枚举。`reboot-recovery`：原地切到恢复菜单。
+- `oem device-info`：增加 gk3boot 版本、GK3 记录、event、BCAB 和 VAB 解码。
+- VID/PID 仍是 `18D1:4EE0`，接口 `0xff/0x42/0x03`（C′ §4.2.1）。
+
+#### 4.4.3 恢复出厂
+
+完全沿用 C′ §4.6：
+- userdata：BLKDISCARD，再把开头和末尾各 1 MiB 写零，读回确认开头 4 KiB 全零；
+- metadata：32 MiB 清零；
+- 由 fs_mgr 识别 formattable 后重建（`partition_utils.cpp:42-66`、`fs_mgr.cpp:1634-1690`，**本机未实测，E10**）；
+- misc 只清 BCB；
+- VAB 守卫：MERGING 拒绝；Unverified 先回滚再擦（依赖 E1）。
+- **免二次确认的条件**：迁移标记已存在，且 `gk3.why=wipe` 来自 BCB，且执行端读到的 BCB 原文与 gk3boot 记进 GK3 的摘要一致。这取代 C′ 的"意图记录"论证：标记之后出现的 BCB 只可能是 Android 写的。
+
+#### 4.4.4 菜单（执行端，tty1 英文，fbcon 已横向）
+
+- **恢复 / 引导菜单**：Boot Android（current slot）/ Boot other slot（高级）/ Fastboot / Factory reset（二次确认）/ Other systems / Reboot / Power off / Device info。
+- **"Other systems"**：读 ESP 的 `loader/entries/`，列出 `auto-windows`（存在 `EFI/Microsoft/Boot/bootmgfw.efi` 时）、`gaokun3-live`、救援。
+  - 选中后写 `LoaderEntryOneShot = <id>`：照 `scripts/boot-oneshot.sh` 的写法（属性 0x07、UTF-16LE + 双 NUL、先 `chattr -i`、写后回读），走内核的 uefisecapp。执行端不加载 SELinux 策略。然后重启。
+  - 于是 Windows 仍由 systemd-boot 直接启动，度量链与今天手选 Windows 完全相同。
+  - **efivarfs 写入在执行端里是否可用待 E6**。不可用时退化为：在 GK3 写一次性意图 `next=sdboot-menu`，gk3boot 下一次读到后直接返回 `EFI_SUCCESS`，systemd-boot 就停在不倒计时的菜单上（`boot.c:2975-2976`）。**不写** `LoaderConfigTimeoutOneShot`：它会留到下一次开机，再强制弹一次菜单（X 的错误）。
+- **Boot other slot**：只做一次性启动，不改 active。通过 GK3 一次性意图 `next=slot:x` 实现，gk3boot 消费后清除，**不扣 tries**。
+- 确认页没有超时自动执行。无主机连接、无按键 30 分钟后关机（C′ U6）。
+
+### 4.5 GK3 记录（misc 8 KiB）
+
+| 字段 | 写者 | 用途 |
+|---|---|---|
+| magic、version、CRC32 | 全部 | 有效性 |
+| 迁移标记 + 被清掉的存量 BCB 摘要 | gk3boot（首跑）、安装器 | E-K7 |
+| 分派记录：why、来源 BCB 摘要、当次的槽、同一份 BCB 的进入次数 | gk3boot | 免确认判据、3 次上限 |
+| 连续未完成启动计数 | gk3boot +1；HAL 开机完成线程清零 | bootloop 检测 |
+| 一次性意图：`next=sdboot-menu / slot:x / none` | 执行端写、gk3boot 消费后清除 | 菜单出口 |
+| 事件环（最近 N 条：fallback、boot_corrupt、bcb_dropped、wipe_failed、refused_merging…）+ 已通知位 | gk3boot、执行端写；HAL 读后置已通知位 | Android 通知 |
+
+- 所有写入：先算 CRC，写完读回。CRC 无效时视为"无记录"，**不影响启动**。
+- 首跑迁移会重建这个结构，并且只在 8 KiB 处写。
+- "8 KiB 处无人使用"必须在 E1 用 grep 核实 libboot_control、libsnapshot、recovery。
+
+### 4.6 Android 侧改动
+
+#### 4.6.1 boot_control HAL
+
+- **1.0 不改 setActive / markBootSuccessful 的语义**。EspSlot 照旧把槽镜像进 `default *-android-x.conf`；这个通配先命中 gk3boot 条目，default 里的槽字母只决定"入口计数用完时走哪条直连条目"。
+- **新增"开机完成线程"**：
+  - **触发**：vendor rc 写 `on property:sys.boot_completed=1` → `setprop vendor.gaokun3.boot.done 1`（vendor_init 可以读 `boot_status_prop`，`private/vendor_init.te:316`），HAL 等自己的 vendor 属性。这样 HAL 不用去读 `boot_status_prop`。该属性是 `system_restricted_prop`（`public/property.te:60`），vendor 直接读是否放行**待编译验证**，所以走 vendor 属性中转。
+  - 动作 1：读 `ro.boot.gk3boot.entry`，那个条目文件名带计数就 rename 成不带计数的名字（**bless**），用的是已有的 ESP 挂载和写权限。
+  - 动作 2：清 GK3 的连续未完成启动计数。HAL 已有 misc 读写权限。
+  - 动作 3：有 `EFI/gk3boot/<new>/` 加 `gk3boot-android-*.conf.staged` 时，执行**分阶段激活**（§4.11）。
+  - 动作 4：把 GK3 事件环和 `ro.boot.gk3boot.event` 导出成 `vendor.gaokun3.bootentry.*` 属性，供 Parts 通知；读完置已通知位。
+  - 动作 5：`ro.boot.gk3boot` 为空 ⇒ 这次没经过入口（入口计数用完回落了，或者用户在菜单里按 `d` 设了 `LoaderEntryDefault`，`boot.c:1788-1824`），设 `vendor.gaokun3.bootentry.bypassed=1` 并通知。
+- **1.x**：EspSlot 退役，回到上游 `android.hardware.boot-service.default`（`hardware-interfaces boot/aidl/default/Android.bp:37-61`）。前提是直连回落条目不再依赖 default 字母，live / 救援自带内核。
+
+#### 4.6.2 OTA postinstall
+
+- 保留：拆 `boot_<目标槽>` 到 ESP、同步 options（回落副本）。
+- **停铺** recovery-ramdisk，并删掉 ESP 上已有的那份和 `*-recovery-x.conf`（OTA-8，每槽约 15 MB）。
+- **部署入口**：从 `/vendor/boot/gk3boot/<ver>/{gk3boot.efi,fastboot.img,SHA256SUMS}` 取文件，写到 `EFI/gk3boot/<ver>/`，每个文件都走 `.new` → cmp → rename。
+  - **ESP 上还没有任何 gk3boot**（0.7→1.0）：直接写 `gk3boot-android-{a,b}+3.conf` 和 `gk3boot-tools.conf`，立即生效。
+  - **已有 gk3boot**：只写 `gk3boot-android-{a,b}.conf.staged`（不以 `.conf` 结尾，systemd-boot 不读），由新槽开机完成后激活（§4.11）。
+- 核空间时按真实写入量算（M4b 的教训）。postinstall **不碰 misc**（没有权限，还撞 neverallow）。
+
+#### 4.6.3 BCB / 重启意图
+
+**零改动**：init、uncrypt、RescueParty 按上游标准写 BCB。C′ 的 `gk3-bootintent`、`on shutdown` 钩子、efivarfs 类型、genfscon、`--boot` 重新路由**全部不需要**。
+
+#### 4.6.4 cmdline / bootconfig
+
+- 静态部分照旧：BoardConfig → mkbootimg → boot.img 头。动态部分由 gk3boot 追加（§4.3.1）。
+- 直连回落条目的 options 由 postinstall / `gk3-esp-sync` 从 `cmdline.txt` 同步，两条路径的 cmdline 同源。
+- 不开 BOOT_CONFIG，不改内核格式。`serialno` 保持 `gaokun3`（C′ U5）；`bootreason` 推迟。
+
+### 4.7 安装器与 Windows 脚本
+
+**图形安装器**（`scripts/live/installer-lib.sh`）：
+- **文件清单**：`gk3__esp_files`（`:654-662`）加入 `EFI/gk3boot/<ver>/{gk3boot.efi,fastboot.img}`（来源是 Release 附件，校验 sha256），去掉 recovery-ramdisk，保留 `slot_a/b` 三件套。
+- **条目**：写 `gk3boot-android-{a,b}+3.conf`：
+  ```
+  title   Android
+  efi     /EFI/gk3boot/<ver>/gk3boot.efi
+  options gk3.hint=<x> gk3.mid=<mid>
+  sort-key 0gk3
+  version <ver>
+  ```
+  另写 `gk3boot-tools.conf`。直连条目的 title 改为"Android 直连 a/b（救急）"。`default *-android-a.conf` 不变。
+- **必须修**：`:879-887` 的停用匹配收紧为 `^[0-9a-f]{32}-android-[ab]\.conf$`。反过来，旧版安装器 0.1.0-preview 在 1.0 的机器上会把 gk3boot 条目停用，结果退回直连路径，这是**安全的失败方向**。
+- **misc**：清零后用 `gk3-misc init --slot a` 写一份合法的 BCAB：`_a` 为 priority 15、tries 6、未成功；**`_b` 为 priority 0、tries 0**（新装机器的 `_b` 没有 system，LP slot1 是陈旧元数据，C′ §2.6）。同时写 GK3 迁移标记。"重新安装 + 保留数据"同样处理。
+- **loader.conf 的 timeout**：按 U3。
+- **`gk3_esp_info`** 报告入口的版本、条目状态（计数、是否 staged）。
+- **test-apply 新用例**：0.7.x 布局升 1.0；停用逻辑不碰 gk3 条目；ESP 上已有更新的入口（不降级）；空间不足；misc 字节核对。
+- `build-usb.sh` 的 U 盘介质：只有 `esp` 分区，入口在 U 盘上找不到 misc，会走 fail-open。所以 U 盘介质**不放** gk3boot 条目，保持现状。
+
+**Windows 脚本**（`scripts/windows/`）：
+- 入口放在 `EFI\gk3boot\`，**绝不放进** `EFI\gaokun3\`（`-Uninstall` 会递归删除它，`:267`）。
+- `Format-LoaderConf` 只在 loader.conf 不存在时写，保持不动。
+- 1.0 建议新增 `-RepairBoot`：Windows 更新或用户覆盖了回落路径时，把 systemd-boot 拷回 `BOOTAA64`，入口和条目不用碰。至少写进 FAQ。
+
+### 4.8 0.7.x → 1.0 迁移
+
+1. update_engine 把 1.0 写进 `_b`。
+2. 新 postinstall（在 0.7.x 系统里执行）：ESP 上还没有 gk3boot ⇒ 直接部署 `gk3boot-android-{a,b}+3.conf`、`gk3boot-tools.conf` 和二进制；停铺 recovery-ramdisk。
+3. 旧 HAL 执行 setActive(b)：misc 里 b 为 15/6，default 写成 `*-android-b.conf`。它与第 2 步的先后**不影响结果**（命名兼容）。
+4. 重启：systemd-boot 选中 `gk3boot-android-b+3`，改名为 `+2-1`。gk3boot 首跑：
+   - 没有迁移标记 ⇒ 存量 BCB 抄进 GK3、清零、写标记、本次不执行（含 `--wipe_data` 时标记"需通知"）；
+   - b 未成功 ⇒ tries 6→5；校验 `boot_b` 的 SHA1 → 交接。
+5. 1.0 的 Android 起来：update_verifier 调 markBootSuccessful（新 HAL）；开机完成线程把 `gk3boot-android-b+2-1.conf` bless 成 `gk3boot-android-b.conf`。
+
+各种失败的去向：
+
+| 失败 | 结果 |
+|---|---|
+| gk3boot 起不来或交接有故障 | 每次消耗一次入口计数（panic=10 自动复位，硬挂要长按电源键）；3 次后 default 通配落到直连的 `<mid>-android-b.conf`，即今天的行为；Android 发现没有 `ro.boot.gk3boot` 就通知 |
+| 1.0 系统本身起不来 | 每次同时消耗入口计数和 b 的 tries。入口计数先用完 ⇒ 落到直连 b，**这一跳里就没有 tries 回滚了**（直连路径不扣 tries），与今天一样，要靠手选直连 a 或 U 盘。这是 0.7→1.0 这一跳**唯一的已知缺口**（U8） |
+| 两者都坏 | U 盘 |
+| 代价：用户恰好在 OTA 装完、重启之前点了恢复出厂 | 这次请求被当成存量清掉，GK3 留着原文，Android 侧通知"检测到一次未执行的恢复出厂请求，已取消，请重新操作"（C′ R6） |
+
+### 4.9 双系统
+
+- 固件看到的东西不变（`BOOTAA64` 仍是 systemd-boot），Windows Boot Manager、HwBcdOneKey 的行为与今天相同。
+- gk3boot **只在用户选 Android 条目时**才被 systemd-boot 加载。经 systemd-boot 启动 Windows 时，gk3boot 不在那次启动的镜像链里 ⇒ 入口的新增和升级**推断不会**改变 Windows 那次启动的 PCR4 度量（Z 的驱动每次都会被加载，正好相反）。这一点待群友机器核实（T11）。
+- 在 systemd-boot 菜单里选 Windows **不扣**任何槽的 tries（Z 的副作用在 Y 里不存在）。
+- 入口只在自己所在的那块盘上找分区，不碰 Windows 分区。GPT 只读，并且只信主表。
+- ESP 空间：入口两版合计 ≤ 12 MiB（含 initramfs），停铺 recovery-ramdisk 腾出约 30 MB，**净值为正**。
+- 双系统机器上固件默认先走 Windows Boot Manager 的 Boot#### 还是回落路径，**未知**（C′ T10）。若是前者，入口只在用户进 systemd-boot 时才生效，要写进 INSTALL。
+
+### 4.10 存量 BCB 迁移
+
+- 由 gk3boot **第一次运行**时做：没有迁移标记时，只清 0–2 KiB，原文摘要存进 GK3，写标记，本次不执行任何 BCB。
+- 不放在 postinstall 里做：没有 misc 权限，还撞 neverallow（`postinstall.te:49`；`private/domain.te` 的 misc neverallow）。
+- 新装机器由安装器直接写标记。
+- 如果 BCB 分派开关在后续版本才打开（分阶段交付），迁移随**开关打开的那一版**的 gk3boot 一起做（迁移标记里带"分派版本"字段）。
+
+### 4.11 入口自身的更新与回滚
+
+- **版本化目录**：`EFI/gk3boot/<ver>/`。版本号同时写进目录名、条目的 `version` 和二进制里的字符串；sha256 清单随 vendor 下发，`release.sh` 断言附件与 vendor 里那份一致。
+- **分阶段激活（1.0 起，"一次只换一样"）**：
+  1. OTA：postinstall 只写新目录和 `.staged` 条目；
+  2. 重启后，**旧入口**启动**新槽**（boot.img 契约不变），新槽 tries 照常；
+  3. 新槽开机完成：HAL 线程把当前已确认的 `gk3boot-android-*.conf` 改名为 `gk3prev-android-*.conf`，把 `.staged` 改名为 `gk3boot-android-*+3.conf`，删除没有任何条目引用的旧目录；
+  4. 下一次开机由新入口启动；连续 3 次没走到开机完成 ⇒ gk3prev（已知可用的入口 + 已知可用的槽）。
+- **手动回滚**：删掉 `EFI/gk3boot/<ver>/`，条目会因 efi 文件不存在而被跳过（`boot.c:1531-1535`）。live、救援、Windows 里都能做。全删 `EFI/gk3boot/` 就回到 0.7 的直连路径。
+- **systemd-boot 本身**不随 OTA 更新，只由安装器写。
+
+### 4.12 安全与兜底
+
+**fail-open 阶梯**（gk3boot 的任何内部错误、panic handler、StartImage 返回）：
+1. 写 `LoaderEntryOneShot = <mid>-android-<已选槽或 hint>.conf`（直连条目），然后 `ResetSystem(Cold)`。下一次就是今天的老路。
+2. 写变量失败 ⇒ 把自己的条目改名为 `+0`（计数用完，排到最后），再复位。
+3. 两样都失败 ⇒ ConOut 显示原因和"长按电源键 / 插 U 盘"的指引，等待按键后复位，**不自动循环**。
+4. GPT 或 misc 不可用、有歧义：不写任何东西，直接走第 1 步。
+5. **绝不** `return` 错误码（华为 BootFail 计数），也不返回 `SUCCESS`（会停在不倒计时的菜单上）。唯一例外是 GK3 一次性意图 `next=sdboot-menu`，那时返回 SUCCESS 正是想要的效果。
+
+**写盘范围最小**，gk3boot 只写这些：
+- misc 里未成功槽的 tries；
+- 已消费的 BCB command（bootonce / `--fastboot` / 未知命令 / wipe 3 次上限之后）；
+- GK3 记录；
+- 失败时自己条目的计数（`+0`），或一次 OneShot。
+
+**从不写** `boot_x`、super、userdata、metadata、GPT、loader.conf、`BOOTAA64`。正常路径对 ESP **零写入**：计数由 systemd-boot 改名，bless 由 Android 做，而且只在入口新部署后那几次开机。
+
+**交接防御**：
+- 不切 GOP 模式；
+- StartImage 返回时撤掉 LoadFile2 和 DTB 表再走阶梯；
+- 交接前把看门狗设成 0 由 ExitBootServices 处理？**不**：EFI stub 退出启动服务时会关掉 UEFI 看门狗，gk3boot 不额外处理。进入菜单类交互只发生在 Linux 执行端。
+
+**观察模式**（`gk3.observe=1`）：决策照算，屏幕打印一行 trace；**不写 misc、不扣 tries、不消费 BCB**；交接走同一段代码。上机顺序：非默认条目经 OneShot 进入 → 开发机默认条目开 N 次机 → 切到动作模式。
+
+**QEMU 预验证**：
+- 环境：QEMU aarch64 + AAVMF + systemd-boot 257.13 + 与真机同名的 GPT 夹具，另有双系统 128 项 GPT、重名、缺失的变体。
+- "内核"用一个测试 PE 桩：打印 LoadOptions，校验 DTB 表与 LoadFile2 initrd 的 sha，然后复位。
+- 覆盖：选槽、tries、VAB、全部 BCB 分支、迁移、SHA1 损坏、fail-open 阶梯、计数改名与 bless、在 misc 写入之间断电注入。
+- BCAB 和 BCB 与 GBL 的单测向量、libboot_control 的行为逐字节对拍。真内核只能上机验证。
+
+**攻击面**：fastboot 不认证、恒为解锁（C′ §4.10），要披露。能进入的只有拥有已授权 adb 的人或能物理接触的人，后者本来就能用 U 盘写盘。Secure Boot 必须保持关闭（入口和内核都没签名；systemd-boot 在 SB 开启时会跳过 DTB，`boot.c:2577-2582`）。
+
+**华为固件特有**：
+- HwBcdOneKey 的 `HwStartImage` 钩子对 gk3boot 自身的加载与今天的 efi 条目相同（#73 有三轮 chainload 实测），但对**缓冲区** LoadImage 的影响未知（E4）；
+- EC 看门狗（HwOpenWdtDxe）只影响长时间停留在 UEFI 的场景，1.0 的入口不在 UEFI 里停留（交互都在 Linux 执行端）；
+- 触摸：不碰 AbsolutePointer。
+
+### 4.13 界面
+
+| 场景 | 界面 |
+|---|---|
+| 正常开机 | 无（只有固件 logo，以及 loader.conf 的菜单策略，U3） |
+| 观察模式 | ConOut 一行 trace |
+| gk3boot 出错 | ConOut 英文错误页（方向待 E3 拍照） |
+| 执行端 | tty1 英文文本，fbcon=rotate:1，evdev 按键（C′ §4.8），INSTALL 给中文对照 |
+| systemd-boot 菜单 | 条目 title 改清楚："Android"、"Android 引导菜单 / Fastboot"、"Android（上一版入口）"、"Android 直连 a/b（救急）"、Windows、安装器、救援 |
+
+UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起做。
+
+### 4.14 SELinux
+
+- **gk3boot 和执行端**：不在 Android 策略的管辖范围内。
+- **Android 侧净减少**：没有 efivarfs，没有 bootintent 域。
+- **新增**：
+  - vendor rc 的 `vendor.gaokun3.boot.done` 属性上下文和 vendor_init 的 set；
+  - hal_bootctl 读该属性、设 `vendor.gaokun3.bootentry.*`；
+  - Parts 读 `vendor.gaokun3.bootentry.*` 和 `ro.boot.gk3boot.*`（`bootloader_prop`）。
+  - HAL 原有的 misc 和 ESP 规则不变。
+  - 随下一轮 SELinux 在 enforcing 下验证。
+- postinstall：复核第五轮已补的 ESP 写规则能否覆盖 `EFI/gk3boot/` 的写入和改名。
+
+### 4.15 开发流程改动
+
+- **`install-ota-local.sh` 第 4 步必须改**：
+  1. 装完后 `bootctl set-active-boot-slot <当前槽>` 撤销激活（`libboot_control.cpp:306-310` 的注释说明了这种用法）；
+  2. 用 OneShot 走新槽的**直连条目**验收（绕过入口）；
+  3. 验收通过后显式 `set-active` 到新槽。
+  - 或者信任入口的 tries 回落，但必须有人在场。
+- **`boot-oneshot.sh`**：存在性检查改为同时匹配 `name+*.conf`，OneShot 写去掉计数后的 id；`--list` 显示计数和 `gk3-misc` 的解码。
+- **测试内核**：继续用直连条目，文件名不能匹配 `*-android-[ab].conf`；也可以写一个 efi 测试条目，用 `gk3.kernel=<ESP 路径>`（只在 observe 构建里认）让入口加载测试内核。
+- **`scripts/misc-dump`**：调 `gk3-misc dump`，只读。
+
+---
+
+## 5. 实施步骤
+
+| # | 内容 | 工作量 | 需要 | 产物 |
+|---|---|---|---|---|
+| S0 | **零风险准备**：`clone-refs.sh` 加入 systemd v257.13、hardware-interfaces boot/、GBL（gbl-mainline 钉提交）、CLO ABL；BIOS 2.16 拆包与 `fwa/` 工具留档到 `docs/hw/`；本文的引用复核 | S | 联网 | 可复现的 refs |
+| S1 | **构建机只读核实（E1）**，light 档，用完 stop | S | 构建机 | crDroid 树 libboot_control 常量与布局；misc 8 KiB 是否空闲；update_engine 里 SetActive 与 postinstall 的先后；Settings / uncrypt 写 BCB 的确切参数；libsnapshot 的源槽与 forward-merge 取法 |
+| S2 | **`libgk3core`** + 主机测试：真实 misc dump（CRC 67ddc320）、boot.img（SHA1 9274d5f8…）、安装器 loop 夹具的 GPT、GBL / libboot_control 向量 | M | 本机；U2 先定语言 | 库 + golden 向量（执行端共用） |
+| S3 | **工具链与 QEMU 夹具**：arm64 Docker（与 live 同款）+ AAVMF + systemd-boot 257.13 + 测试 PE 桩 + 夹具盘 | M | colima（本机当前没在运行），qemu-efi-aarch64 | `scripts/gk3boot/test-*.sh` |
+| S4 | **`gk3probe.efi`**（只读探针，见 E3） | S | S3 | 探针 |
+| S5 | **gk3boot 主体**：定位、决策、H2 / H1 交接、fail-open、观察模式、cmdline、事件 | L | S2、S3；E3 / E4 门槛 | `gk3boot.efi` |
+| S6 | **BCB 分派与执行端引导**：迁移、分派计数、bootloop 计数、一次性意图、内核来源三级回落 | M | S5 | — |
+| S7 | **执行端**：C′ §5 的第 1、2、4、5、6 步子集，改为读 `gk3.why/disk/slot`；`set_active` 与 slot getvar 用 `libgk3core`；"Other systems" 写 OneShot | L（3–5 周） | 本机 Docker + platform-tools；E6 | `fastboot.img` |
+| S8 | `gk3-esp-sync` 抽取 + 静态 bootimg_extract（C′ 第 3 步） | M | 并入 ROM 构建 | 共用件 |
+| S9 | **Android 侧**：HAL 开机完成线程、vendor rc、属性与 sepolicy、Parts 通知；postinstall 部署 / staged / 停铺 recovery-ramdisk；vendor 里加 `/vendor/boot/gk3boot/`；prebuilt 目录 + `sync-device-tree.sh` 断言 | M | 一次 ROM 构建（rom 档，并入已排的批次） | — |
+| S10 | **安装器**：清单、条目、misc 初始化、收紧停用匹配、`gk3_esp_info`、test-apply 用例；release.sh 附件和断言 | M | 安装器重建 | — |
+| S11 | **开发脚本**：install-ota-local 第 4 步、boot-oneshot 认识计数、misc-dump | S | 本机 | — |
+| S12 | **Windows 脚本**：入口路径约束回归、`-RepairBoot`（或 FAQ） | S | Parallels 克隆机 | — |
+| S13 | **文档与发布物**：INSTALL（中英）"启动入口与 fastboot"一章（进入方式、port0 是哪个物理口、计数回落、准备 U 盘、不认证、不是安全擦除、英文界面对照）、FAQ、flash-all.sh/.bat、发版说明 | S | E3、E6 结果；用户目视确认 port0 | — |
+| S14 | **上机验收** E2–E11 | L | 用户在场 6–8 次 | 案卷 |
+
+**顺序与里程碑**：
+- **第 1–2 周**：S0–S4 离线完成；S1 开一次构建机；同时排 E2（只读）、E3、E4 两次上机。**E4 是硬门槛**：通过就走 H2；不过试 H1；H1 也不过就退化为 Z 形态（决策用 OneShot 表达），请用户重新定。
+- **第 3–5 周**：S5、S6，在 QEMU 全绿后上开发机做观察模式（E5）→ 计数互操作（E6 前半）。
+- **第 3–8 周**（并行）：S7 执行端。
+- **第 6–9 周**：S8–S12 集成，一次 ROM 构建 + 一次安装器重建；E7–E11。
+- **第 9–10 周**：S13，发版。
+- **可提前交付的部分**（执行端延期时）：入口 + A/B tries 自动回滚可以单独发，满足 G6；BCB 分派开关关闭，迁移随开关打开的那一版做。
+- **约束**：BCB 分派开关的打开，必须与执行端、迁移在**同一版本**发布（E-K7）。
+
+---
+
+## 6. 验证实验（按安全顺序）
+
+| 编号 | 内容 | 只读 | 需重启 | 用户在场 | 写 ESP | 写 misc | 擦数据 |
+|---|---|---|---|---|---|---|---|
+| E0 | 离线：`libgk3core` 主机测试 + QEMU 全分支与断电注入；执行端在容器里走 loop 盘 + TCP 与真 fastboot 对拍 | ✔（不碰设备） | — | — | — | — | — |
+| E1 | 构建机 light 档只读 grep（S1 的清单） | ✔ | — | — | — | — | — |
+| E2 | 设备只读：`cat /proc/cmdline`、`getprop \| grep ro.boot.`、`bootctl get-current-slot / is-slot-bootable / is-slot-marked-successful`、`ls -l /dev/block/by-name`、`dd` 只读读 misc 0–64 KiB 并用 `gk3-misc` 解码、对 `boot_a/b` 复算 SHA1(id)、`dmesg \| grep -i efi`。**征得同意后**：私有挂载点 ro 挂 efivarfs 读 Loader* / UsbConfig 变量；ro 挂 ESP 列出条目、slot、余量、有没有 recovery-ramdisk | ✔ | — | — | — | — | — |
+| E3 | `gk3probe.efi`，非默认条目经 OneShot 进入，拍照记录：设备路径 → 整盘、GPT 名单、读 misc / boot 与 SHA1 的耗时；ConIn 对音量上下、电源键、键盘盖的扫描码；GOP 模式与 ConOut 方向；内存图；`LoaderBootCountPath`；**缓冲区 LoadImage 一个测试 PE 并 StartImage**；可选：停留 6 分钟测 EC 看门狗 | 不写 misc | ✔ | ✔ | ✔（一个探针 + 一个条目） | — | — |
+| E4 | **门槛**：gk3boot 观察模式，非默认条目经 OneShot 进入，第一次真正启动 Android（H2：缓冲区 LoadImage 真内核 + DTB + LoadFile2）。核对 `/proc/cmdline`、`ro.boot.slot_suffix`、`ro.bootloader`、HAL 无崩溃、avc、efi_pstore / efivars 是否可用、RNG / KASLR、开机耗时与直连对比。不过就换 H1 再测 | 不写 misc | ✔ | ✔ | ✔ | — | — |
+| E4u | （仅为 1.x，可选）UEFI USB 门槛：fastboot 桩只做 getvar / download（进内存）/ reboot；SignalEvent(1c0cffce) → StartEx → 主机能否枚举、速率、吞吐 | 不写盘 | ✔ | ✔（port0 接 Mac） | ✔ | — | — |
+| E5 | 观察模式设为开发机默认（带 `+3`），连续开机 ≥10 次：每次用 `gk3-misc` 对照"入口会怎么选"和实际槽；检查条目文件名递减，以及开机完成后被 bless | — | ✔ | 第一次在场 | ✔ | — | — |
+| E6 | 计数与 fail-open：故意 fail-open 的测试版（非默认，经 OneShot）→ 应自动落到直连条目，不需按电源键；故意挂死版 → 测看门狗（可能要长按电源键）；分阶段激活演练。执行端（非默认 `gk3boot-tools` 条目）：`fastboot getvar all`；目标用 `gk3.disk` 指向**外接盘**沙盒做 flash；"Other systems"写 OneShot 是否可用；请用户确认 port0 的物理位置 | — | ✔ | ✔ | ✔ | — | — |
+| E7 | 切到动作模式（开发机默认）：`adb reboot bootloader / fastboot / recovery` 各 2–3 次，确认 BCB 被正确清除或保留、fastboot reboot 能回 Android；手工写一条假的存量 BCB 验证首跑迁移只清不执行并通知；写 `boot-quiescent`，确认会被清掉；`bootctl set-active-boot-slot` 当前槽让 successful=0 → 入口扣 tries → 开机完成 | — | ✔ | ✔ | ✔ | ✔ | — |
+| E8 | 自动回滚演练：用改过第 4 步的 `install-ota-local` 往 `_b` 装一个故意 panic 的版本（`init=/nonexistent`），set-active b，不再碰机器：观察 tries 6→0 后回到 `_a`、event 和通知；**必须用真正写过 super 的 OTA**，不能直接 set-active 到现在这个陈旧的 `_b` | — | ✔（多次自动） | ✔ | ✔ | ✔ | — |
+| E9 | 执行端写内置盘：`flash boot_b`（用与现有内容逐字节相同的镜像），核对 ESP 同步；`set_active` 的守卫；整块 `flash super` **只在**开发机有完整备份、用户同意时做，同时测吞吐 | — | ✔ | ✔ | ✔ | ✔ | 可能 |
+| E10 | **用户另行明确同意 + 先把 adb_keys、Wi-Fi、ksu 等备份到外接盘**：设置 → 清除所有数据 → 入口分派 → 执行端免确认清除 → fs_mgr 重建 → 开机向导；`--prompt_and_wipe_data` 应出现确认页；`fastboot -w`。"合并中拒绝"只在 QEMU 和容器里测 | — | ✔ | ✔ | — | ✔ | ✔ |
+| E11 | 0.7.1 → 1.0 迁移：开发机走一遍 OTA，核对 postinstall 部署、首跑迁移、扣 tries、bless、ESP 余量；安装器 loop 夹具和 Parallels 克隆机回归安装器与 Windows 脚本；双系统机器上的同类检查放到群友机器只读做（`bcdedit /enum firmware`、BitLocker 状态） | — | ✔ | ✔ | ✔ | ✔ | — |
+
+纪律：每一次需要重启的实验都要先征得用户同意，并确认有人能长按电源键；实验条目一律非默认、经 OneShot 进入；ESP 用私有挂载点（不叫 `/mnt/esp`）。
+
+---
+
+## 7. 需要用户决定的问题、技术未知与风险
+
+### 7.1 需要用户决定
+
+| # | 问题 | 建议 |
+|---|---|---|
+| U1 | 采纳本文路线吗：Y（修正版）作 1.0；E4 不过退到 H1，再不过退到 Z 形态；UEFI USB fastboot 放 1.x | 采纳 |
+| U2 | 入口用什么语言：C（freestanding，与执行端共用 `libgk3core`，构建链与 live 相同）还是 Rust（no_std + uefi crate，边界检查更强，本机能直接出 .efi，但要多一门语言和一套工具链） | **C**：misc / BCAB 的实现从三份降到两份，单人维护成本更低；用主机侧 ASan / UBSan 和 fuzz 补足安全性 |
+| U3 | loader.conf 的菜单策略 | 观察期保持 15 秒；入口转正 + E3 证明不接键盘也能操作 systemd-boot 菜单之后，改为 `timeout menu-hidden`，文档写"开机按任意键 = 引导菜单"，菜单第一、二项是"Android"和"Android 引导菜单 / Fastboot"；E3 不通过就改 `timeout 3`。`menu-disabled` 加入口自己读键放到 1.x |
+| U4 | `is-userspace` 报 yes 还是 no | **yes**（沿用 C′）：`fastboot reboot fastboot` 可用；带 super_empty 的 `fastboot update` 和逻辑分区操作明确 FAIL 并给提示，随版提供 flash-all 和不带 super_empty 的 zip（C′ U3） |
+| U5 | 入口计数策略：Android 侧在开机完成时 bless + 分阶段激活，还是 Y 原案的"每次开机重新武装 `+3`" | **前者**：交接故障也会消耗计数；正常开机对 ESP 零写入；"每次重新武装"会让每次开机都在共用 ESP 上多一次 FAT 改名 |
+| U6 | fastboot 不认证、恒为解锁 | 1.0 只披露，不加门槛（同 C′ U2） |
+| U7 | bootloop 自动进菜单：阈值多少，是否 1.0 就开 | 开，阈值 5 次连续未走到开机完成（包括用户在开机过程中强制关机的情况，要写进 FAQ） |
+| U8 | 0.7→1.0 这一跳的缺口：入口和新槽同时变，入口计数先用完时这一跳没有 tries 回滚 | 接受，写进发版说明，并建议用户准备 U 盘；之后的版本都由分阶段激活覆盖 |
+| U9 | `androidboot.bootloader=gk3boot-<ver>` 会改变 `ro.bootloader` 的值 | 采用（Settings 的"关于"会显示入口版本），E4 时检查有没有应用依赖旧值 |
+| U10 | 入口的许可证 | 与仓库其他自研代码一致；不拷贝 systemd（LGPL）代码，只照写法重写；1.x 移植 ABL 件时保留 BSD-3-Clause-Clear 声明 |
+| U11 | C′ 遗留的 U3（update zip）、U5（serialno）、U6（空闲关机）照旧 | 按 C′ 的建议 |
+
+### 7.2 技术未知
+
+| # | 未知 | 如何核实 |
+|---|---|---|
+| T1 | **缓冲区 LoadImage 本机的 zboot PE**：SecurityDxe、HwBcdOneKey 的 `HwStartImage` 会不会拦截或干扰带厂商设备路径的缓冲区镜像 | E3（测试 PE）、E4（真内核） |
+| T2 | 华为固件的 FAT 驱动对 systemd-boot 计数改名（SetInfo）是否可靠 | E5 |
+| T3 | ButtonsDxe 的扫描码、在不在 ConIn 里、键盘盖在 UEFI 下能不能用、POST 热键窗口多长（INST-18） | E3 |
+| T4 | UEFI 看门狗到期是否真的复位；EC 看门狗的行为 | E3（6 分钟）、E6 |
+| T5 | crDroid 树的 libboot_control 是否与 AOSP 1a56e38 一致；misc 8 KiB 是否空闲；update_engine 里 SetActive 与 postinstall 的先后 | E1 |
+| T6 | 执行端里经 uefisecapp 写 efivarfs 是否可用（"Other systems"） | E6 |
+| T7 | 只清 userdata / metadata 开头能否让本机 fs_mgr 稳定重建 | E10 |
+| T8 | 读约 29 MB 加 SHA1 在 UEFI NVMe BlockIo 上的耗时 | E3、E4 |
+| T9 | 只用一份 `libgk3core` 能否同时编进 UEFI（无 libc）和静态 Linux 二进制（应当可以，需要 S2 证明） | S2 |
+| T10 | `vendor.gaokun3.boot.done` 的中转方案在 enforcing 下是否只需本文列的规则 | 下一轮 SELinux |
+| T11 | 双系统：固件先走 Windows Boot Manager 还是回落路径；只在 Android 启动时加载 gk3boot 是否真的不影响 Windows 那次启动的度量；Windows 更新会不会覆盖 `\EFI\Boot\bootaa64.efi` | 群友机器只读；Parallels 克隆机 |
+| T12 | 执行端的 C′ 未知照旧：initramfs 下 fbcon 能否出字、dwc3 何时就绪、UCSI 插拔会不会把 role 改成 host | E6 |
+| T13 | （1.x）core0 在 UEFI 下的运行时状态、能否枚举、SuperSpeed、512 MiB 连续内存 | E4u、E3 |
+| T14 | EFI_RESETREASON（A022155A-…）在本机由谁提供（决定 1.x 能否补 bootreason） | 离线反汇编 ResetRuntimeDxe |
+
+### 7.3 风险
+
+| # | 风险 | 缓解 |
+|---|---|---|
+| R1 | 入口挡在两个槽共用的路径上 | 拓扑本身就是安全网：入口计数 → gk3prev → 直连条目 → U 盘；fail-open 阶梯；观察模式先行；正常路径零 ESP 写入 |
+| R2 | E4 不过（缓冲区 LoadImage 不行） | H1：文件路径加载 ESP 副本，决策层全部保留；再不行退化为 Z 形态 |
+| R3 | 0.7→1.0 那一跳入口与新槽同时变（U8） | 计数回落到直连；发版说明；U 盘 |
+| R4 | 自写代码量大，只有一个人懂 | `libgk3core` 单一实现 + golden 向量 + QEMU 夹具 + 本文；执行端保留以后换成正版 fastbootd 的替换点 |
+| R5 | 用户在菜单里按 `d` 或手选直连条目，绕过了入口 | HAL 检测到没有 `ro.boot.gk3boot` 就通知；直连条目 title 写明"救急" |
+| R6 | 迁移误取消用户刚点的恢复出厂 | GK3 留原文 + 通知，不静默 |
+| R7 | 工作量超出 | 可提前交付"入口 + tries 回滚"；BCB 分派随执行端一起发 |
+| R8 | 双系统下 Windows 更新覆盖回落路径，Android 完全不可达 | `-RepairBoot` / FAQ / U 盘 |
+| R9 | bootloop 计数误触发（用户在开机中强制关机） | 阈值 5；菜单默认项是"Boot Android"；FAQ 说明 |
+
+---
+
+## 8. 与上一轮 C′ 设计的关系，以及采纳评审修正的记录
+
+### 8.1 与 C′ 的关系
+
+| C′ 的内容 | 本文中的地位 |
+|---|---|
+| §3.3"1.0 做 C′，1.0 之后加轻量分派器" | **作废**。入口（分派器的超集，还负责交接）提到 1.0，成为主角；C′ 降为执行端 |
+| §4.2.1 `gk3-fastbootd`（FunctionFS、协议核心、GPT 白名单、sparse、LP 只读、state 解析） | **沿用**；misc / BCAB 部分改用 `libgk3core`；efivarfs 写 OneShot 只留给"Other systems" |
+| §4.2.2 fastboot initramfs | **沿用**；改放在 `EFI/gk3boot/<ver>/fastboot.img`，由入口引导 |
+| §4.2.3 独立内核副本、`gaokun3-fastboot.conf` + OneShot 进入 | **作废**：内核用 `boot_x` 里的同一个；条目改为 `gk3boot-tools.conf`（efi 条目） |
+| §4.2.4 `gk3-bootintent`（关机桥 + `--boot` 重新路由）、§4.9 的 efivarfs sepolicy | **作废**，R1 / R2 随之消失 |
+| §4.2.5 `gk3-esp-sync` | **沿用** |
+| §4.2.6 misc 8 KiB 的 `GK3I` 意图记录 | **位置沿用、内容改了**：变成 GK3 记录（§4.5），写者改为入口、执行端和 HAL |
+| §4.3 进入路径 | 由 §4.3.4 / §4.3.5 取代 |
+| §4.4 分区映射 | **沿用**；目标盘由 `gk3.disk` 给出，仍要校验唯一性 |
+| §4.5 命令、§4.6 清除语义与 VAB 守卫、§4.7 USB 与电源、§4.8 界面、§4.10 攻击面 | **沿用**（改动见 §4.4） |
+| K1 / K2 | K1 由入口读 misc 解决；**K2 作废**：现在入口条目就是 default，靠命名兼容 HAL |
+| K3、K4–K10 | 沿用；K4 弱化（入口以分区为准，ESP 副本只用于回落） |
+| U7（独立内核） | 作废 |
+| R8（fastboot 内核落后一个版本） | 消失 |
+
+### 8.2 采纳评审修正的记录
+
+| # | 被纠正的论断 | 出处 | 纠正 | 依据 |
+|---|---|---|---|---|
+| 1 | "从内存 LoadImage 加载 zboot 已在本机验证（linux.c:80-144）" | X、契约摸底 | 本机 type1 条目按文件设备路径加载；`linux_exec` 只服务 UKI stub ⇒ 缓冲区加载是第一道上机门槛（E4），退路 H1 | `boot.c:2563-2576`；`stub.c:1275`（三份评审） |
+| 2 | 入口交棒前就 bless 自己（X）/ 每次开机重新武装 `+3`（Y） | X、Y | 两种做法都让交接故障不消耗计数，可能陷入 panic 循环 ⇒ 改为 Android 在 `sys.boot_completed` 时 bless，并做分阶段激活 | 风险、体验、成本评审 |
+| 3 | "markBootSuccessful / HAL 每次开机都重写 loader.conf" | C′ §2.1、Y safety、Z 决策看门狗 | 只在当前槽未标成功时才调用 ⇒ "开机完成"信号挂在 `sys.boot_completed` 上 | `update_verifier.cpp:331-381`；`init.rc:1137-1140` |
+| 4 | UEFI 里先"尽力 EraseBlock"再清数据 | X | NVMe 分区上没有 EraseBlock ⇒ 清数据只在 Linux 执行端做（BLKDISCARD + 写零） | 风险评审字节扫描 |
+| 5 | 固件"只有 TrEE、没有 TCG2"，度量情况不明 | Z、fw 摸底 | 607f766c 同时是 TrEE 和 TCG2，FV 有 MeasureBootDxe ⇒ 度量多半开着；本设计让入口只在 Android 启动时加载，不进 Windows 的度量链（T11 待核） | 风险评审 |
+| 6 | "Boot menu"先写 `LoaderConfigTimeoutOneShot` 再返回 SUCCESS | X | 返回 SUCCESS 本身就会停在菜单上；那个变量会留到下一次开机，再强制弹一次菜单 ⇒ 不写 | `boot.c:1617-1630`、`:2975-2976`（体验、成本评审） |
+| 7 | "开机按住音量下进 fastboot" | X、Y | systemd-boot 的菜单 / 100 ms 读键会先吃掉按键 ⇒ 1.0 不做，改为菜单项 + BCB + 执行端菜单 | `boot.c` 约 `:881`、`:908`、`:2925-2934`（体验评审） |
+| 8 | `is-userspace=no`（X）/ `yes` 可以不管 update（Y） | X、Y | no：`fastboot reboot fastboot` 报错；yes：带 super_empty 的 update 会走逻辑分区 ⇒ 选 yes，并明确 FAIL、给提示 | `fastboot.cpp:1575-1591`、`:1702-1711`、`:2122-2142` |
+| 9 | Z 的决策看门狗、`Gk3PolicyArm` 自禁用 | Z | 看门狗只在 markBootSuccessful 时清零，正常使用中会跳闸；自禁用不粘滞；每次开机写 NV 变量 ⇒ Z 不作终点；本文的 bootloop 计数放在 misc，由开机完成时清零 | 风险评审 |
+| 10 | 工作量 X 7–9 周、Y 6–8 周 | X、Y | 执行端按 C′ 原估 3–5 周算 ⇒ Y 约 8–10 周，X 10–12 周以上 | 成本评审 |
+| 11 | set_active 写 7/7/6 | GBL | 照 libboot_control 写 15/6/14，与 HAL 一致 | `libboot_control.cpp:282-314`；`gbl slots/android.rs` |
+| 12 | `bootloader_control` 每槽 1 字节；"本地没有布局源码" | 上一轮、C′ §2.3 | 每槽 u16；按实机 dump 复算 CRC 得 67ddc320，布局确认（crDroid 树一致性待 E1） | `boot_control_definition.h:59-107`；契约摸底 |
+| 13 | GBL 作主干（oss 摸底） | oss | 不认 zboot、只写 bootconfig、直跳不填 /memory、出错 cold_reset、只能在 x86 上用 Bazel 构建 ⇒ 只作测试向量 | `load.rs:629-667`；`mod.rs:220`；`ops.rs:395-396`；`sc8280xp.dtsi:389-393` |
+| 14 | ABL 整体作启动器 | — | A/B 存在 GPT 属性位里，会改写共用 GPT；要 msm-id；直跳；缺 4 个协议 ⇒ 只在 1.x 移植 USB 件 | `PartitionTableUpdate.h:138-148`；oss 摸底 |
+| 15 | 执行端以 OneShot + 关机桥进入、用独立内核 | C′ | 改为入口读 BCB 后直接引导、用同一个内核 | 本文 §4.4.1 |
+| 16 | 安装器停用逻辑"不受影响"（Z） / 未提及 | Z | `*-android-[ab].conf` 的匹配会误伤 gk3boot 条目 ⇒ 收紧为 `^[0-9a-f]{32}-android-[ab]\.conf$` | `installer-lib.sh:879-887`（成本评审） |
+| 17 | 用 BCAB 的 `recovery_tries_remaining` 当分派计数 | Z | 改放 GK3，保证 BCAB 只按 libboot_control 语义被写 | 本文 §4.3.4 |
+| 18 | boot.c 行号 2969-2971 / 2973-2974 | Y | 实际是 `:2971-2973`（return err）、`:2975-2976`（SUCCESS 停在菜单） | 风险、成本评审 |
+| 19 | Z 用易失 OneShot | Z | systemd-boot 删除时带 NON_VOLATILE 属性，属性不匹配；本设计正常路径不写 OneShot，只在 fail-open 和"Other systems"时写 NV OneShot | `boot.c:1638-1640` |
+| 20 | HAL 直接读 `sys.boot_completed` | 本文起草时 | `boot_status_prop` 是 `system_restricted_prop`，vendor 直接读未确认 ⇒ 用 vendor_init 中转成 vendor 属性 | `property_contexts:952`；`public/property.te:60`；`private/vendor_init.te:316` |

@@ -118,7 +118,7 @@
 | **现在什么状态、有什么禁忌** | 本文件上面那个框 |
 | **还剩什么没做、优先级** | `docs/TODO.md` —— 顶上有一张「现在在做 / 待办」总表 |
 | **发 1.0.0 之前要修什么、按什么顺序** | `docs/v1.0-plan.md`（2026-10-04 全项目调研 + 逐条复核：发版标准、7 个阻断项、分批路线、23 项待用户拍板的决定；用户已定的写在第 6 节开头） |
-| **fastboot（1.0 承接恢复出厂，设计稿）** | `docs/fastboot-design.md`（方案 C′：ESP 常驻 initramfs 里的 `gk3-fastbootd`，OneShot 进入；实施步骤、实验 X0–E10、待定 U1–U7） |
+| **统一启动入口 / fastboot（1.0 承接恢复出厂，设计稿）** | `docs/boot-entry-design.md`（方案 Y：`gk3boot.efi` 读 misc 选槽 / BCB 分派 / 从 boot_x 直接启动，fastboot 执行端 = 同内核 + initramfs 里的 `gk3-fastbootd`；实验 E0–E11、待定 U1–U11）；旧稿 `docs/fastboot-design.md` 只剩执行端细节有效 |
 | **触摸调参的实机记录与工具** | `docs/stage4-findings.md` #114–#116 + `scripts/touch/README.md`（手册 `docs/archive/touch-morning-runbook.md` 已完成使命，留作 2026-09-16 那一晚的操作记录）|
 | **某个结论是怎么来的**（最权威） | `docs/stage4-findings.md`，按 `#NN` 编号的案卷；Stage 5/6/7 另有专档 |
 | 那一周发生了什么 | `docs/project-log.md`（本文件的历史，原样搬过去的） |
