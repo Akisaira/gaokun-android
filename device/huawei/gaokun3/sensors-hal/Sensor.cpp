@@ -243,7 +243,11 @@ AccelSensor::AccelSensor(int32_t sensorHandle, ISensorsEventCallback* callback) 
     mSensorInfo.maxRange = 78.4f;  // +/- 8g
     mSensorInfo.resolution = 1.52e-5;
     mSensorInfo.power = 0.001f;          // mA
-    mSensorInfo.minDelayUs = 10 * 1000;  // microseconds
+    // ★ v1.0 HW-12（2026-10-05）：10 ms → 20 ms，与 SSC 实际的 50 Hz 一致（SscHub.cpp 的 kRateHz）。
+    //   原来宣称 100 Hz，订阅方按 100 Hz 拿到的是同一个 SSC 样本复读两次（实机 dumpsys sensorservice：
+    //   陀螺仪相邻两条数值成对相同、间隔 10 ms）。CDD 对加速度计 / 陀螺仪的下限是 50 Hz，20 ms 正好满足。
+    //   长期做法（透传 SSC 速率与报告时间戳）见 v1.0-plan HW-12，未做。
+    mSensorInfo.minDelayUs = 20 * 1000;  // microseconds
     mSensorInfo.maxDelayUs = kDefaultMaxDelayUs;
     mSensorInfo.fifoReservedEventCount = 0;
     mSensorInfo.fifoMaxEventCount = 0;
@@ -375,7 +379,8 @@ GyroSensor::GyroSensor(int32_t sensorHandle, ISensorsEventCallback* callback) : 
     mSensorInfo.maxRange = 1000.0f * M_PI / 180.0f;
     mSensorInfo.resolution = 1000.0f * M_PI / (180.0f * 32768.0f);
     mSensorInfo.power = 0.001f;
-    mSensorInfo.minDelayUs = 10 * 1000;  // microseconds
+    // ★ v1.0 HW-12：同加速度计，20 ms = SSC 实际的 50 Hz（见 AccelSensor 那段）。
+    mSensorInfo.minDelayUs = 20 * 1000;  // microseconds
     mSensorInfo.maxDelayUs = kDefaultMaxDelayUs;
     mSensorInfo.fifoReservedEventCount = 0;
     mSensorInfo.fifoMaxEventCount = 0;
