@@ -22,7 +22,9 @@
 #
 # 用法（在构建机上跑）：
 #   R2_ENDPOINT=... R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=... \
-#     scripts/release.sh [--dry-run] [--stage-only]
+#   GK3_VERSION=<版本号> [GK3_ACCEPT_REPORT=<report.txt>] \
+#     scripts/release.sh [--dry-run] [--stage-only] [--no-build]
+#   （两个 GK3_* 变量见下面 REL-5 / REL-6 两段）
 #
 #   --dry-run     只构建与校验，不上传
 #   --stage-only  产物传到 staging/<ver>/ 而【不更新】ota/gaokun3.json。
@@ -43,6 +45,30 @@
 #   每版还附一份内核的"对应源码清单"（GPL-2.0 §3，见 gen_kernel_sources）。它要读构建内核的那棵树：
 #     GK3_KTREE  内核树，默认 ~/gk3-kernel-iris（编发布内核的那棵；旧树 ~/gk3-kernel 还打着 upstream-venus）
 #     GK3_REPO   本仓 checkout，默认本脚本所在的仓库（要它的 patches/ 与 kernel-*.sh）
+#
+#   ★ REL-5 版本属性（2026-10-05）：
+#     GK3_VERSION  项目版本号（如 0.8.0-alpha）。device.mk 把它写成 vendor 属性
+#                  ro.vendor.gaokun3.version（PRODUCT_VENDOR_PROPERTIES；ro.vendor. 前缀在 vendor 允许
+#                  清单里，refs/lineage-sepolicy/build/soong/selinux_contexts.go:377）。
+#                  第 2 步断言 vendor/build.prop 里那一行 = 这个值（--stage-only 只警告）。
+#                  非 --stage-only（含 --dry-run）必须设：属性是【构建时】烤进去的，
+#                  所以构建候选版时和用 --no-build 发它时要设【同一个】GK3_VERSION。
+#                  不动 gaokun3.json 的 version 字段（Updater 的兼容判断可能用到它）。
+#                  ⚠️ 环境变量能否传进 Kati 的产品配置【待构建机核实】—— 与 GAOKUN3_DEV_BUILD 是同一个问题
+#                  （核法见 docs/build-machine.md「开发构建与发布构建」一节）。
+#
+#   ★ REL-6 / G11 验收闸门（2026-10-05）：正式发版前必须有【这个戳】的 A 档验收报告且全过。
+#     GK3_ACCEPT_REPORT  scripts/accept.sh 写的 report.txt 的路径。
+#                  ⚠️ 为什么要手动 scp：accept.sh 在【维护者的 Mac】上跑（它走 adb 连设备），报告写在那边的
+#                  out/accept/<戳>-<时间>/report.txt（accept.sh:49-51）；本脚本在【构建机】上跑。两台机器，
+#                  报告不会自己过来。做法：scp out/accept/<戳>-<时间>/report.txt 构建机:… 再设这个变量。
+#                  没设时退而找 $GK3_REPO/out/accept/<本版戳>-*/report.txt 里最新的一份（目录名按时间排序）。
+#     判据全按 accept.sh 的实际输出：① 第一行含 profile=release 且不含"只读"（:75）；
+#     ② 有一行恰好是 "  [PASS] A1 ro.build.date.utc = <本版戳>"（:73、:81；没给 --stamp 跑出来的那一行
+#     后面带"（没给 --stamp，只记录）"，不算）；③ 最后一条"═══ 汇总："行含"FAIL 0 "、不含"中断（adb 掉线）"（:65、:340）。
+#     拦不拦：只有真要往 ota/ 发的那一次（不带 --dry-run、不带 --stage-only）拦；
+#     --dry-run 与 --stage-only 只警告 —— 候选版就是用 --dry-run 构建出来的，那时它的戳刚生成、
+#     不可能已经有验收报告；验完再用 --no-build（可先加 --dry-run 彩排一遍看警告）发。
 
 set -euo pipefail
 
@@ -69,6 +95,10 @@ ok()  { echo "✓ $*"; }
 # 开发构建发不出去：构建前就拦（否则要白等一整次构建，第 2 步才拦下）。--no-build 时看产物。
 if [ "$NO_BUILD" = 0 ] && [ "${GAOKUN3_DEV_BUILD:-}" = 1 ] && [ "$STAGE_ONLY" = 0 ]; then
     die "GAOKUN3_DEV_BUILD=1 是开发构建（adb 免授权 / TCP 5555 / 开发者公钥），只能 --stage-only"
+fi
+# REL-5：版本号要在构建时就进 vendor/build.prop —— 构建前拦，免得白等一次构建（第 2 步还会对产物再断言）
+if [ "$NO_BUILD" = 0 ] && [ "$STAGE_ONLY" = 0 ] && [ -z "${GK3_VERSION:-}" ]; then
+    die "没设 GK3_VERSION —— 它在构建时写进 ro.vendor.gaokun3.version；构建时和发版时要设同一个 GK3_VERSION"
 fi
 # ═══ REL-7 / SEC-11：内核的"对应源码清单"（GPL-2.0 §3），每版一份 ═══
 # boot.img 里是 GPL-2.0 的内核二进制，而内核在 AOSP 树外编（prebuilt-boot/），配方分在四处：
@@ -437,6 +467,62 @@ vendor_dlkm vendor_dlkm/etc/build.prop
 EOF
 [ "$PD_BAD" = 1 ] || ok "各分区的构建日期与 system 一致（${UTC}）"
 
+# ★ REL-5（2026-10-05）：项目版本号 ro.vendor.gaokun3.version 必须就是这次要发的 GK3_VERSION。
+#   --no-build 发的是之前构建的 out/，构建当时必须已经设了同一个值 —— 发版时设的这个只用来核对。
+#   用 -F（固定串）：版本号里的 "." 不能当正则。
+GV=$(sed -n 's/^ro\.vendor\.gaokun3\.version=//p' "$OUT/vendor/build.prop" | tail -1)
+if [ -n "${GK3_VERSION:-}" ]; then
+    if grep -Fqx "ro.vendor.gaokun3.version=$GK3_VERSION" "$OUT/vendor/build.prop"; then
+        ok "版本属性 ro.vendor.gaokun3.version=$GK3_VERSION"
+    else
+        MSG="vendor/build.prop 里 ro.vendor.gaokun3.version=${GV:-<无>} ≠ GK3_VERSION=$GK3_VERSION —— 构建时设的不是这个值（或没设 / 没传进 Kati）"
+        [ "$STAGE_ONLY" = 1 ] || die "$MSG"
+        echo "⚠️ ${MSG}（--stage-only 不拦）" >&2
+    fi
+elif [ "$STAGE_ONLY" = 1 ]; then
+    echo "· 版本属性 ro.vendor.gaokun3.version=${GV:-<无>}（没设 GK3_VERSION，--stage-only 不核对）"
+else
+    die "没设 GK3_VERSION（产物里是 ${GV:-<无>}）—— 构建时和发版时要设同一个 GK3_VERSION"
+fi
+
+# ★ REL-6 / G11（2026-10-05）：正式发版前必须有这个戳的 A 档验收报告且全过（判据与来由见头注释）。
+#   accept.sh 在维护者的 Mac 上跑、报告要 scp 过来（GK3_ACCEPT_REPORT）；没设就在 $REPO/out/accept/ 下找。
+ACC=${GK3_ACCEPT_REPORT:-}
+if [ -z "$ACC" ]; then
+    for f in "$REPO"/out/accept/"$UTC"-*/report.txt; do   # glob 按名字排序，目录名 <戳>-<YYYYmmdd-HHMMSS> ⇒ 最后一个最新
+        [ -f "$f" ] && ACC=$f
+    done
+fi
+ACC_BAD=()
+if [ -z "$ACC" ]; then
+    ACC_BAD+=("没有验收报告：GK3_ACCEPT_REPORT 没设，$REPO/out/accept/$UTC-*/report.txt 也没有 —— 在 Mac 上跑 SER=gaokun3 bash scripts/accept.sh --stamp ${UTC}，再把 report.txt scp 过来")
+elif [ ! -f "$ACC" ]; then
+    ACC_BAD+=("GK3_ACCEPT_REPORT=$ACC 不是文件")
+else
+    L1=$(head -1 "$ACC")
+    case $L1 in *profile=release*) ;; *) ACC_BAD+=("第一行没有 profile=release（是 --profile dev 跑的？）：$L1") ;; esac
+    case $L1 in *只读*) ACC_BAD+=("这是 --readonly 跑的（相机 / 麦克风 / 真解视频都没测）：$L1") ;; esac
+    grep -Fqx "  [PASS] A1 ro.build.date.utc = $UTC" "$ACC" \
+        || ACC_BAD+=("没有 \"[PASS] A1 ro.build.date.utc = $UTC\" —— 报告不是这个戳的，或跑的时候没给 --stamp $UTC")
+    SUM=$(grep '^═══ 汇总：' "$ACC" | tail -1 || true)
+    if [ -z "$SUM" ]; then
+        ACC_BAD+=("没有汇总行 —— accept.sh 没跑完（中途被杀？）")
+    else
+        case $SUM in *"FAIL 0 "*) ;; *) ACC_BAD+=("汇总不是 FAIL 0：$SUM") ;; esac
+        case $SUM in *"中断（adb 掉线）"*) ACC_BAD+=("验收中途 adb 掉线，后面的检查没跑：$SUM") ;; esac
+    fi
+fi
+if [ ${#ACC_BAD[@]} = 0 ]; then
+    ok "验收报告：$ACC —— $SUM"
+else
+    printf '    %s\n' "${ACC_BAD[@]}" >&2
+    if [ "$DRY" = 1 ] || [ "$STAGE_ONLY" = 1 ]; then
+        echo "⚠️ 验收报告不过关（见上）—— --dry-run / --stage-only 不拦，正式发版时这里会停（REL-6）" >&2
+    else
+        die "这个戳（${UTC}）没有过关的 A 档验收报告（见上）—— 发版前先装机跑 scripts/accept.sh（REL-6 / G11）"
+    fi
+fi
+
 VER=$(basename "$ZIP" .zip)
 echo "═══ 3. 打包安装产物 ═══"
 S=$(mktemp -d); trap 'rm -rf "$S"' EXIT
@@ -468,6 +554,12 @@ if [ "$STAGE_ONLY" = 1 ]; then
         python3 "$UPLOAD" "$BUCKET" "$S/$f" "staging/$VER/$f" "$(gpl_ctype "$f")"
     done
     ok "已 staging。要发布，重跑本脚本不带 --stage-only"
+    echo "staging 里的对象（桶 ${BUCKET}；⚠️ 只给自己验，不给用户 —— 别贴进发版说明，正式发版会重传到 builds/ 与 install/）："
+    for f in boot.img super.img.zst install-artifacts.sha256 gaokun3.json "$(basename "$ZIP")" \
+             ${GPL_FILES[@]+"${GPL_FILES[@]}"}; do
+        echo "  staging/$VER/$f"
+    done
+    echo "  （经 $HOST 取时 URL 是 $HOST/staging/$VER/<文件名>，前提是自定义域对整个桶开放 —— 本脚本不核实）"
     exit 0
 fi
 
@@ -495,9 +587,19 @@ PY
 python3 "$UPLOAD" "$BUCKET" "$S/gaokun3.json" "ota/gaokun3.json" application/json
 ok "清单已发布 —— 设备端「系统更新」现在能看到 $VER"
 
+# INST-5：本版全部 R2 链接，贴进发版说明 Files 表的 R2 列（docs/relnotes/TEMPLATE.md）。
+#   与上面的上传路径一一对应：OTA 包在 builds/，其余在 install/$VER/。
+R2_LINKS="  $HOST/builds/$(basename "$ZIP")"
+for f in boot.img super.img.zst install-artifacts.sha256 ${GPL_FILES[@]+"${GPL_FILES[@]}"}; do
+    R2_LINKS+=$'\n'"  $HOST/install/$VER/$f"
+done
+
 cat <<EOF
 
-发布完成。剩下要人做的：
+发布完成。本版的 R2 链接（贴进发版说明 Files 表的 R2 列，国内用户靠它下载）：
+$R2_LINKS
+
+剩下要人做的：
   * 用【设备】而不是构建机去验一次抓取（沙箱会挡出站 HTTP，那边的结论不可信）：
       curl -sI $HOST/ota/gaokun3.json | head -3      # 必须 200，不能是 3xx
   * GitHub Release 另发（gh release create），把 install/$VER/ 那几个文件带上 ——

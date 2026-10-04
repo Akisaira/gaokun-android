@@ -96,3 +96,58 @@ CLAUDE.md「环境」一节有简版；本文是细则与依据。
 | 2026-09-29 | D32as_v5 | StandardSSD | 整包增量 `m bacon superimage`（改动只在 device/ 与 sepolicy；机器刚开、lunch 冷缓存约 2 分钟） | **16 分 46 秒**（+ release.sh --dry-run 打包约 2 分钟） | SELinux 第七轮 ROM，戳 1790702971（#129） |
 
 要不要为大构建临时把盘切回 Premium（停机时 `az disk update --sku Premium_LRS`，数据不受影响）：等上表有了新盘的数据再定。
+
+---
+
+## 5. 开发构建与发布构建（B1，2026-10-04）
+
+**默认就是发布构建**：adb 要授权（`ro.adb.secure=1`）、`ro.debuggable=0`、不开 TCP 5555、镜像里没有开发者公钥
+（`product/etc/security/adb_keys`）。开关在 [`device/huawei/gaokun3/lineage_gaokun3.mk`](../device/huawei/gaokun3/lineage_gaokun3.mk)
+「开发构建 / 发布构建」一段（`ifeq ($(GAOKUN3_DEV_BUILD),1)`）与 [`device.mk`](../device/huawei/gaokun3/device.mk) 的 TCP 5555 那段。
+
+| 要什么 | 怎么编 |
+|---|---|
+| 开发构建（自己机器上调试用，adb 免授权 / TCP 5555 / 开发者公钥 / `ro.debuggable=1`） | `GAOKUN3_DEV_BUILD=1 m bacon superimage`，或 `GAOKUN3_DEV_BUILD=1 scripts/release.sh --dry-run --stage-only` |
+| 候选版、正式版 | **一律不设** `GAOKUN3_DEV_BUILD`。候选版就是要发的那一版（`release.sh --no-build` 发的必须是验过的那一版），所以它也必须是发布构建。`release.sh` 开头那段 `GAOKUN3_DEV_BUILD` 检查会拦：设了又不带 `--stage-only` 就在构建前停 |
+
+几条要记住的：
+
+* **同一棵 `out/` 从开发构建换到发布构建前，先 `m installclean`**（AOSP 自己的说法见 `refs/aosp-build/core/build-system.html:291`）。
+  不清的话上一次装进 `out/target/product/gaokun3/product/etc/security/adb_keys` 的公钥会残留，镜像是从 `out/` 的目录打的 ——
+  `release.sh` 第 2 步的 adb 断言照拦。
+* `scripts/sync-device-tree.sh` 只在**本机**环境设了 `GAOKUN3_DEV_BUILD=1` 时才要求构建机上有 `adb_keys`
+  （[`sync-device-tree.sh`](../scripts/sync-device-tree.sh) 头注释 :24-26，判断在 :87-89）；平时只报大小。它仍排除在 `--delete` 之外，留给开发构建。
+* 开发机装发布构建（候选版）之前，先把 adb 便利持久化进 `/data`，否则装上后 adb 全断 —— 要哪几样见 `lineage_gaokun3.mk` 那段的 ⚠️ 注释。
+* ⚠️ **构建机上不入库的 `~/iris-work/rom-build.sh`**：如果用它出发版 ROM，`m` 之前要加 `rm -f $OUT/vendor/build.prop`
+  （OTA-11，同 `release.sh` 第 1 步那条 `rm` 的注释：`vendor/build.prop` 的 Make 规则只依赖属性文件，增量构建里它不重生成，
+  日期、指纹、incremental —— 还有下面的 `ro.vendor.gaokun3.version` —— 都停在老构建）。否则用 `--no-build` 发版时第 2 步的日期断言会停。
+  ⬜ 那个脚本本身要等下次开构建机再改。
+
+### `release.sh` 读的环境变量
+
+除了 R2 的三个凭据（`R2_ENDPOINT` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`），还有：
+
+| 变量 | 默认 | 用途 |
+|---|---|---|
+| `GAOKUN3_DEV_BUILD` | 不设（= 发布构建） | 见上。设成 `1` 只能 `--stage-only` |
+| `GK3_KTREE` | `~/gk3-kernel-iris` | 编发布内核的那棵树，生成内核的对应源码清单（REL-7）用。旧树 `~/gk3-kernel` 还打着 upstream-venus |
+| `GK3_REPO` | 脚本所在的仓库 | 本仓 checkout（要它的 `patches/`、`kernel-*.sh`、`out/accept/`）。**构建机上不是从本仓 checkout 跑 `release.sh` 就要设** |
+| `GK3_VERSION` | 无 | 项目版本号（如 `0.8.0-alpha`），构建时写进 vendor 属性 `ro.vendor.gaokun3.version`（REL-5）。非 `--stage-only` 必须设；**构建候选版时和用 `--no-build` 发它时要设同一个值** —— 属性是构建时烤进去的，发版时设的只用来核对 |
+| `GK3_ACCEPT_REPORT` | `$GK3_REPO/out/accept/<戳>-*/report.txt` 里最新的一份 | 这个戳的 A 档验收报告（REL-6 / G11）。`scripts/accept.sh` 在**维护者的 Mac** 上跑（走 adb），报告写在 Mac 的 `out/accept/<戳>-<时间>/report.txt`；`release.sh` 在构建机上跑 —— 两台机器，所以要先 `scp` 过去再设这个变量。正式发版（不带 `--dry-run` / `--stage-only`）时报告不过关就停；判据见 `release.sh` 头注释 |
+
+### ⚠️ 待构建机核实：两个开关变量能不能进 Kati
+
+`GAOKUN3_DEV_BUILD` 与 `GK3_VERSION` 都是靠**环境变量**传进产品配置（`lineage_gaokun3.mk` / `device.mk`）的。
+本地参考树里查不到 crDroid 16 的 soong_ui 是否把任意环境变量透传给 Kati 的产品配置阶段，**没在构建机上验过**。
+下次开机（`light` 档就够，不跑 `m`）在 `source build/envsetup.sh && lunch lineage_gaokun3-bp4a-userdebug` 之后带与不带变量各跑一次对照：
+
+```bash
+get_build_var PRODUCT_ADB_KEYS                                   # 应为空
+GAOKUN3_DEV_BUILD=1 get_build_var PRODUCT_ADB_KEYS               # 应为 device/huawei/gaokun3/adb_keys
+get_build_var PRODUCT_SYSTEM_EXT_PROPERTIES                      # 不应有 ro.debuggable=1 / persist.adb.tcp.port=5555
+GAOKUN3_DEV_BUILD=1 get_build_var PRODUCT_SYSTEM_EXT_PROPERTIES  # 应多出上面两条
+GK3_VERSION=test get_build_var PRODUCT_VENDOR_PROPERTIES         # 应含 ro.vendor.gaokun3.version=test（device.mk 里那行合入以后）
+```
+
+两边一样就说明变量没传进去：开发构建会悄悄变成发布构建（`release.sh` 第 2 步看得出来），而 `GK3_VERSION` 会是空值（第 2 步的版本断言会停）。
+不管哪种，产物断言都兜得住，只是要白等一次构建 —— 所以先在 `light` 档上对照，别在 `rom` 档上试。
