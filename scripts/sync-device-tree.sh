@@ -20,6 +20,10 @@
 #   device.mk 对它用 wildcard —— 缺了构建【照样通过】，ROM 里只是悄悄没了 Histen，
 #   正是上面那种"静默消失"。所以同样排除在 --delete 之外、单独同步、按 sha256 断言。
 #   确实不想带它构建时（例如别人的构建机）：GK3_ALLOW_NO_HISTEN=1。
+#
+# ★ 2026-10-04（B1）：adb_keys 只有开发构建（GAOKUN3_DEV_BUILD=1）才用 —— 发布构建不设
+#   PRODUCT_ADB_KEYS（见 lineage_gaokun3.mk），缺了它照样能编。所以第 3 步只在本机环境里
+#   GAOKUN3_DEV_BUILD=1 时才要求它在；平时只报大小。它仍排除在 --delete 之外（留给开发构建）。
 set -euo pipefail
 HOST=${1:?用法: $0 <构建机 IP>}
 SSH="ssh -o StrictHostKeyChecking=no -o BatchMode=yes"
@@ -79,16 +83,19 @@ else
     echo "· 本机没有 Histen 引擎，保留构建机上的那份（若有）"
 fi
 
-echo "═══ 3. 断言：构建机上四样不入库的输入都在 ═══"
-$SSH "vahiru@$HOST" 'cd ~/crdroid/device/huawei/gaokun3
+echo "═══ 3. 断言：构建机上不入库的构建输入都在 ═══"
+# adb_keys 的下限：开发构建要 >500 字节（一把 RSA 公钥约 720），发布构建不要求（0）。
+if [ "${GAOKUN3_DEV_BUILD:-}" = 1 ]; then AK_MIN=500; AK_WHAT="adb_keys（开发构建）"
+else AK_MIN=-1; AK_WHAT="adb_keys 不要求（发布构建；开发构建设 GAOKUN3_DEV_BUILD=1 再跑）"; fi
+$SSH "vahiru@$HOST" "AK_MIN=$AK_MIN; "'cd ~/crdroid/device/huawei/gaokun3
   fw=$(find firmware -type f ! -name README.md 2>/dev/null | wc -l)
   hx=$(find hexagonrpcd-root -type f ! -name README.md 2>/dev/null | wc -l)
-  ak=$(wc -c < adb_keys 2>/dev/null || echo 0)
+  ak=$( (wc -c < adb_keys) 2>/dev/null || echo 0)
   dtb=$(ls prebuilt-boot/dtb/*.dtb 2>/dev/null | wc -l)
   echo "firmware=$fw hexagonrpcd=$hx adb_keys=${ak}B dtb=$dtb"
-  [ "$fw" -eq 18 ] && [ "$hx" -eq 34 ] && [ "$ak" -gt 500 ] && [ "$dtb" -eq 1 ] && [ -f prebuilt-boot/vmlinuz.efi ]' \
+  [ "$fw" -eq 18 ] && [ "$hx" -eq 34 ] && [ "$ak" -gt "$AK_MIN" ] && [ "$dtb" -eq 1 ] && [ -f prebuilt-boot/vmlinuz.efi ]' \
   | tee /dev/stderr | tail -1 >/dev/null || die "构建机上缺构建必需的输入 —— 见上一行；恢复方法在 firmware/README.md 与 hexagonrpcd-root/README.md"
-ok "18 个固件 · 34 个 hexagonrpcd 文件 · adb_keys · 1 个 dtb · vmlinuz.efi 都在"
+ok "18 个固件 · 34 个 hexagonrpcd 文件 · 1 个 dtb · vmlinuz.efi 都在 · $AK_WHAT"
 
 echo "═══ 3b. 断言：Histen 引擎在、且是核对过的那一份 ═══"
 # 期望值与来源见 effects/prebuilt/README.md。

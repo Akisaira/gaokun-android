@@ -24,6 +24,15 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/ueventd.gaokun3.rc:$(TARGET_COPY_OUT_VENDOR)/etc/ueventd.rc
 
 # ------------------------------------------------------------------ 属性
+# ★ B1（2026-10-04）：下面这段 adb 便利【只在开发构建】（GAOKUN3_DEV_BUILD=1）里给，
+#   发布构建不开 TCP adb —— 它在所有网卡（含 #11 的热点口）上监听，开发构建里还不要授权。
+#   开关与其余三样（WITH_ADB_INSECURE / ro.debuggable / PRODUCT_ADB_KEYS）见 lineage_gaokun3.mk。
+#   开发机跑发布构建（候选版）时靠 /data 里持久化的 persist.adb.tcp.port 保住 TCP adb
+#   （运行期 setprop persist.* 会写进 /data/property/persistent_properties，OTA 不丢；
+#    build.prop 里的默认值则【不】落盘 —— refs/lineage-system-core/init/property_service.cpp:424-425
+#    只在有 socket（= 运行期 setprop）时写 ⇒ 老用户 OTA 到发布构建后，除非自己 setprop 过，没有残留）。
+#
+# 当初的理由（开发构建仍成立）：
 # adb 默认开，且不要求授权 —— Stage 2 的验收就是 adb 能连上。
 # persist.adb.tcp.port=5555：首次开机就把 adb over TCP 打开，
 #   免得换 ROM 后 USB 侧不通就彻底失联（本机 UCSI 拔插会丢 adb，见坑 #27）。
@@ -39,8 +48,10 @@ PRODUCT_COPY_FILES += \
 #   PRODUCT_SYSTEM_EXT_PROPERTIES，设备上 /system_ext/etc/build.prop 核过），这里删掉；
 #   只靠这里发的是 persist.adb.tcp.port —— 丢了它，全新装的机器第一次开机就没有 TCP adb。
 #   system_ext 用 init 的身份加载，不受这条检查。
+ifeq ($(GAOKUN3_DEV_BUILD),1)
 PRODUCT_SYSTEM_EXT_PROPERTIES += \
     persist.adb.tcp.port=5555
+endif
 
 # 屏幕密度
 # [measured] 1600x2560，物理 266x166 mm -> 对角 12.34"，约 245 dpi

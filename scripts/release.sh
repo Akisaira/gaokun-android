@@ -34,6 +34,12 @@
 #                 流程应该是：构建一次 → 装到机器上验 → 用 --no-build 发那一版。
 #                 （2026-08-21 亲自踩过：我在设备上验了 1787246871，
 #                   然后跑 release.sh 又构建了一次，staging 里成了 1787247612。）
+#
+#   ★ 构建出来默认就是【发布构建】（B1，2026-10-04）：adb 要授权、ro.debuggable=0、
+#     不开 TCP adb、镜像里没有开发者公钥。环境里 GAOKUN3_DEV_BUILD=1 才是开发构建
+#     （见 device/huawei/gaokun3/lineage_gaokun3.mk），它只能 --stage-only：
+#         GAOKUN3_DEV_BUILD=1 scripts/release.sh --dry-run --stage-only
+#     第 2 步对产物逐条断言（--stage-only 只报不拦，与 allow_suspend 那条同一个规矩）。
 
 set -euo pipefail
 
@@ -52,6 +58,11 @@ done
 
 die() { echo "✗ $*" >&2; exit 1; }
 ok()  { echo "✓ $*"; }
+
+# 开发构建发不出去：构建前就拦（否则要白等一整次构建，第 2 步才拦下）。--no-build 时看产物。
+if [ "$NO_BUILD" = 0 ] && [ "${GAOKUN3_DEV_BUILD:-}" = 1 ] && [ "$STAGE_ONLY" = 0 ]; then
+    die "GAOKUN3_DEV_BUILD=1 是开发构建（adb 免授权 / TCP 5555 / 开发者公钥），只能 --stage-only"
+fi
 
 [ -n "${ANDROID_BUILD_TOP:-}" ] || die "先 source build/envsetup.sh && lunch"
 cd "$ANDROID_BUILD_TOP"
@@ -136,6 +147,62 @@ if [ "$STAGE_ONLY" = 1 ]; then
 else
     [ "$AS" = 1 ] || die "vendor/build.prop 里 persist.vendor.gaokun3.allow_suspend=${AS:-<无>} —— 发版必须是 1（TODO S1）"
     ok "待机默认开（persist.vendor.gaokun3.allow_suspend=1）"
+fi
+
+# ★ B1（2026-10-04）：发给用户的版本不能带开发期的 adb 便利。v0.7.1 及以前的公开镜像全带着：
+#   ro.adb.secure=0 + ro.debuggable=1 + persist.adb.tcp.port=5555（所有网卡、含热点口）
+#   + 维护者的 adb 公钥 ⇒ 同一网段的任何人 adb connect 进来不弹授权框，再 adb root 就是 root。
+#   开关在 lineage_gaokun3.mk（GAOKUN3_DEV_BUILD）。判据只看产物，--no-build 也能查：
+#   · 每一份 build.prop 里都不许出现 ro.adb.secure≠1、ro.debuggable≠0、persist.adb.tcp.port、
+#     含 adb 的 persist.sys.usb.config —— init 按 system → system_ext → vendor → odm → product
+#     加载、后者覆盖前者（lineage_gaokun3.mk 的机制 2），所以哪一份都不能有；
+#   · 且至少有一处 ro.adb.secure=1 —— adbd 读它时缺省按 false（lineage_gaokun3.mk 引的
+#     adb/daemon/main.cpp:223-226），"哪儿都没写"等于不要授权；
+#   · product/etc/security/adb_keys 不存在或为空（/adb_keys 是指向它的符号链接）。
+#     ⚠️ 开发构建之后接着编发布构建，out/ 里可能残留上一次装进去的 adb_keys，
+#     而镜像是从 out/ 的目录打的 —— 这里照拦，先 `m installclean` 再编。
+ADB_BAD=$(python3 - "$OUT" <<'PY'
+import os, sys
+out = sys.argv[1]
+props = ["system/build.prop", "system_ext/etc/build.prop", "vendor/build.prop",
+         "odm/etc/build.prop", "product/etc/build.prop"]
+bad, secure1 = [], False
+for rel in props:
+    p = os.path.join(out, rel)
+    if not os.path.isfile(p):
+        continue
+    for n, line in enumerate(open(p, encoding="utf-8", errors="replace"), 1):
+        line = line.strip()
+        if line.startswith("#") or "=" not in line:
+            continue
+        k, v = (x.strip() for x in line.split("=", 1))
+        where = "%s:%d %s" % (rel, n, line)
+        if k == "ro.adb.secure":
+            if v == "1":
+                secure1 = True
+            else:
+                bad.append(where)
+        elif k == "ro.debuggable" and v != "0":
+            bad.append(where)
+        elif k == "persist.adb.tcp.port":
+            bad.append(where)
+        elif k == "persist.sys.usb.config" and "adb" in v.split(","):
+            bad.append(where)
+if not secure1:
+    bad.append("没有任何一份 build.prop 写 ro.adb.secure=1")
+k = os.path.join(out, "product/etc/security/adb_keys")
+if os.path.isfile(k) and os.path.getsize(k) > 0:
+    bad.append("product/etc/security/adb_keys 在（%d 字节）" % os.path.getsize(k))
+print("\n".join(bad))
+PY
+) || die "adb 断言脚本本身失败了（python3 退出码非 0）"
+if [ -z "$ADB_BAD" ]; then
+    ok "发布构建：adb 要授权、ro.debuggable=0、无 TCP adb、无开发者公钥"
+elif [ "$STAGE_ONLY" = 1 ]; then
+    echo "· 这是开发构建（--stage-only 不拦）："; echo "$ADB_BAD" | sed 's/^/    /'
+else
+    echo "$ADB_BAD" | sed 's/^/    /' >&2
+    die "产物带着开发期的 adb 便利（见上）—— 发版必须是发布构建（不设 GAOKUN3_DEV_BUILD，B1）"
 fi
 
 VER=$(basename "$ZIP" .zip)

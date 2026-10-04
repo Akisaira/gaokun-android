@@ -44,7 +44,34 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit.mk)
 # 正是我们旧的 aosp_gaokun3.mk 用过、并产出可用镜像的那条链。
 $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base.mk)
 
-# ★ 关掉 adb 授权 —— 必须在 inherit crDroid 配置【之前】设。
+# ═══════════════ 开发构建 / 发布构建（B1，2026-10-04）═══════════════
+#
+# ★ 默认 = 发布构建 = 安全。只有构建时环境里 GAOKUN3_DEV_BUILD=1 才是开发构建：
+#     GAOKUN3_DEV_BUILD=1 m bacon superimage
+# 下面四样开发便利【只在开发构建里】给（此前开发与发布共用一份配置，
+# v0.7.1 及以前的公开镜像全带着，见 docs/v1.0-plan.md B1）：
+#   ① WITH_ADB_INSECURE            adb 不要授权（ro.adb.secure=0）
+#   ② system_ext 的 ro.debuggable=1 adb root / adb remount（D1：发布版一起关）
+#   ③ PRODUCT_ADB_KEYS             开发机的个人公钥烤进 /product/etc/security/adb_keys
+#   ④ persist.adb.tcp.port=5555    开机即开 TCP adb（在 device.mk）
+# 发布构建四样都没有：ro.adb.secure=1（/system/build.prop 本来就写 1，见下面机制 1）、
+# ro.debuggable=0、镜像里没有 adb_keys、不开 TCP adb；USB adb 默认关
+# （init.gaokun3.usb.rc 只跟 persist.sys.usb.config 走，发布构建不设它，见那里的注释）。
+# 用户要 adb：开发者选项里打开「USB 调试」（弹授权框）或「无线调试」（配对码）。
+#
+# ★ init 能不能 permissive 由 Soong 的 Debuggable 决定（只看变体：
+#   refs/aosp-build/core/soong_config.mk:58 → refs/lineage-system-core/init/Android.bp:126-134
+#   的 ALLOW_PERMISSIVE_SELINUX），与 ro.debuggable 无关 ⇒ 发布构建仍是 userdebug 变体、
+#   cmdline 的 androidboot.selinux=permissive 照样生效。⚠️ 待构建机核实：
+#   `grep -rn ProductNotDebuggableInUserdebug build/soong` 没有去改 Debuggable 的消费者。
+#
+# ⚠️ 开发机装发布构建（候选版就是发布构建 —— release.sh --no-build 发的必须是验过的那一版）
+#   之前要先在开发机上把这几样持久化进 /data，否则装上后 adb 全断：
+#   persist.sys.usb.config=adb、persist.adb.tcp.port=5555、开发主机公钥进 /data/misc/adb/adb_keys。
+#   发布镜像的 release.sh 第 2 步逐条断言上面四样都不在。
+ifeq ($(GAOKUN3_DEV_BUILD),1)
+
+# ★ 关掉 adb 授权 —— 必须在 inherit crDroid 配置【之前】设。（仅开发构建）
 #
 # 2026-08-19 首次上机踩到：crDroid 起来了，但 adb 一直是 unauthorized，
 # 而设备端没有 ssh、也就没法远程重启，等于失联（只能靠人去点屏幕）。
@@ -56,6 +83,8 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base.mk)
 #                                             PRODUCT_NOT_DEBUGGABLE_IN_USERDEBUG := true
 # 后一个分支还会把 userdebug 的 ro.debuggable 压成 0 ——
 # 那样 adb root / adb remount 都不能用，而 M3 部署 turnip 全靠 overlay。
+# （发布构建要的正是这个分支。⚠️ 那段逻辑是 crDroid 树里的 vendor/lineage，本地 refs 没有，
+#   待构建机核实：`sed -n 25,50p vendor/lineage/config/common.mk`。）
 #
 # ⚠️ 我们 device.mk 里那句 PRODUCT_PROPERTY_OVERRIDES += ro.adb.secure=0
 #    落在 vendor/build.prop，被 init 的 CheckPermissions 静默拒绝
@@ -73,6 +102,12 @@ WITH_ADB_INSECURE := true
 #        else:                     return "user"
 #    所以 /system/build.prop 被硬写成 ro.adb.secure=1 + ro.debuggable=0
 #    + ro.allow.mock.location=0，与 TARGET_BUILD_VARIANT=userdebug 无关。
+#    ro.build.type=user / ro.build.flavor=gaokun3-user 也出自这里（实机 /system/build.prop
+#    与 /product/etc/build.prop 都写 user），而指纹里是 :userdebug —— 不一致（SEC-5）。
+#    没改：发布构建 ro.debuggable=0、ro.adb.secure=1，运行期行为本来就和 user 一致，
+#    "user" 反倒是对外如实的身份；指纹里的 userdebug 是真实变体，也不该改。
+#    ⚠️ docs/TODO.md 另有一说"是 crDroid 的 spoof 只改了一半"；本地 refs 没有 soong 源码，
+#    两说哪个对待构建机核实：`grep -n -A6 'def get_build_variant' build/soong/scripts/gen_build_prop.py`。
 #
 # 2) init 的属性加载是【后来者覆盖】（property_service.cpp:807-815
 #    的 map 插入：已存在且不同就 it->second = value），
@@ -85,8 +120,14 @@ WITH_ADB_INSECURE := true
 #
 # system_ext 用 init context 且在 system 之后加载 → 能正确覆盖。
 # WITH_ADB_INSECURE 走的就是这条路（PRODUCT_SYSTEM_EXT_PROPERTIES）。
+#
+# 连带效应：refs/aosp-build/tools/post_process_props.py:33-42 见到某个 build.prop 里
+# ro.debuggable=1 就往【同一个文件】补 persist.sys.usb.config=adb（实机 system_ext 那份
+# 的最后一行就是它）⇒ 开发构建开机即开 USB adb；发布构建没有这一行，也就没有那一条。
 PRODUCT_SYSTEM_EXT_PROPERTIES += \
     ro.debuggable=1
+
+endif # GAOKUN3_DEV_BUILD
 
 # ★★ Codec2 HAL 选 AIDL —— 没有这行就一个解码器都没有。
 #
@@ -118,7 +159,7 @@ PRODUCT_SYSTEM_EXT_PROPERTIES += \
 PRODUCT_SYSTEM_EXT_PROPERTIES += \
     media.c2.hal.selection=aidl
 
-# ★ 把开发机的 adb 公钥烤进镜像 —— 不依赖 ro.adb.secure 的那条路。
+# ★ 把开发机的 adb 公钥烤进镜像 —— 不依赖 ro.adb.secure 的那条路。（仅开发构建）
 #
 # 2026-08-19 实测：即使 system_ext 里 ro.adb.secure=0 已经写进产物，
 # 实机 adbd 仍然要求授权（adbd 的判定见 packages/modules/adb/daemon/main.cpp:223-226：
@@ -136,11 +177,19 @@ PRODUCT_SYSTEM_EXT_PROPERTIES += \
 #
 # PRODUCT_ADB_KEYS → soong 的 AdbKeys（build/make/core/soong_config.mk:377），
 # 且只在 eng/userdebug 保留（product_config.mk:493-494），正合我们。
+# ⚠️ 反过来说：发布构建也是 userdebug，构建系统【不会】替我们清掉它
+#    （refs/aosp-build/core/product_config.mk:488-495 只在非 eng/userdebug、或设了
+#    RELEASE_BUILD_PURGE_PRODUCT_ADB_KEYS 时清）⇒ 必须由这个 ifeq 挡在发布构建之外。
+#    ro.adb.secure=1 时这把钥匙就是"免确认进每一台用户机器"的后门（SEC-6）。
+#    它是单值产品变量（refs/aosp-build/core/product.mk:252），本仓之外没人设（本地 refs
+#    的 build/make 里没有；vendor/lineage 待构建机核实），release.sh 断言产物里没有它。
 #
 # ⚠️ adb_keys 文件本身【不入版本库】（.gitignore 挡着）——
 #    它是开发机个人密钥，仓库是公开的。换机器时执行：
 #        cp ~/.android/adbkey.pub device/huawei/gaokun3/adb_keys
+ifeq ($(GAOKUN3_DEV_BUILD),1)
 PRODUCT_ADB_KEYS := device/huawei/gaokun3/adb_keys
+endif
 
 # crDroid 的「平板 + 无 modem」组合（叠在 AOSP 基座之上）：
 #   common_full_tablet_wifionly.mk = common_mobile_full + tablet + wifionly
