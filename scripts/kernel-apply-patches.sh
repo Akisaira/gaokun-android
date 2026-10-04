@@ -192,6 +192,8 @@ KPATCHES=(
     #   （0% 且没在净充电、或 EC 危急位且 <= critical_max_capacity ⇒ Critical —— Android 有了它就只看它关机）、
     #   只读 ec_raw 给实测用。1.0 计划 BATT-1/2/3。⬜ 带负载放电实测（current_now 正负号、危急位阈值）。
     0072-power-supply-gaokun-battery-decode-status-bits-and-capacity-level.patch
+    # 0073：【本地】EC probe 时读一次盖子状态并补报 SW_LID（原来只在事件里报，合盖开机会被当成开着）。DISP-1。
+    0073-platform-arm64-gaokun-ec-report-initial-lid-state.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
