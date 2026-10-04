@@ -164,16 +164,37 @@
       —— 要插着国内 SIM 才生效，本机没有基带，永远落不到那份。
 
       框架按列表顺序挨个试、失败就试下一个，成功的那个下次排最前
-      （core/java/android/util/NtpTrustedTime.java:350-366），所以全球的放第一个、
-      国内三个（与 Lineage 那份相同）跟在后面：国外用户不受影响，国内用户第一次多等一个超时（5 s）。
+      （core/java/android/util/NtpTrustedTime.java:350-366）—— 但只在本次开机内有效，每次开机又从头排。
+      ★ 2026-10-04 起 ntp.aliyun.com 排第一（v1.0 计划 NET-12）：原来 time.android.com 在前，国内每轮对时
+        都要先在它上面耗掉一个超时（mTimeout=PT5S）。那次开机从连上网到第一次对时成功用了 7 分 12 秒，
+        前 5 轮全失败（同期在做 #16 的挂起测试、网络 id 100→122 换个不停，混杂因素没排除），成功的是 aliyun。
+        time.android.com 挪到第二：国外用户若连不上 aliyun，多等的也只是一个 5 s 超时，随后本次开机就排到最前。
+        ⚠️ aliyun 在海外的可达性没有实测过（开发机在国内、走代理，测不出来）。
       ⚠️ 设置项 ntp_server 优先于这里（NtpTrustedTime.java:647-653）；开发机上手动设过的话，
          验证这份覆盖前先 settings delete global ntp_server。
     -->
     <string-array translatable="false" name="config_ntpServers">
-        <item>ntp://time.android.com</item>
         <item>ntp://ntp.aliyun.com</item>
+        <item>ntp://time.android.com</item>
         <item>ntp://ntp.tencent.com</item>
         <item>ntp://ntp.ntsc.ac.cn</item>
     </string-array>
+
+    <!--
+      ★ 对时失败后一直按短间隔重试，不再"失败 3 次就等 18 小时"（v1.0 计划 NET-12 复核）。
+      2026-10-04 实机 dumpsys network_time_update_service：mNormalPollingIntervalMillis=64800000（18 h）、
+      mShortPollingIntervalMillis=60000、mTryAgainTimesMax=3；PT4M8S 那次第 4 连败后 mTryAgainCounter 归 0、
+      下次对时排到 PT18H3M54S —— 那次能在 7 分钟对上，只是挂起测试又触发了几次 "network available"。
+      网络一直稳的普通用户若前几轮都失败（DNS 还没就绪之类），时钟可能 18 小时不校，而本机 RTC 本来就会漂（B22：慢过 41 分钟）。
+
+      依据（本机 services.jar 反汇编，源码行号待构建机核实）：NetworkTimeUpdateService.<init> 用
+      Resources.getInteger(0x010e010e) 读本项（framework-res.apk 里 0x010e010e = config_ntpRetry，
+      0x010e010c / 0x010e010d = config_ntpPollingInterval / config_ntpPollingIntervalShorter）；
+      EngineImpl.refreshAndRescheduleIfRequired 在失败时：mTryAgainTimesMax < 0 ⇒ mTryAgainCounter 固定为 1、
+      下次按短间隔（60 s）；否则计数超过上限就归 0、改按 18 h。成功一次计数即归 0，回到 18 h 的正常周期。
+      代价：只在"对时一直失败"时每分钟发一轮 NTP 请求；排程用的闹钟类型是 3（ELAPSED_REALTIME，不唤醒），
+      睡着时不会因此醒来。
+    -->
+    <integer name="config_ntpRetry">-1</integer>
 
 </resources>

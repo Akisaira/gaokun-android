@@ -22,4 +22,24 @@
       与 issue #2（纯 WPA3 关联后被踢，TODO A6b）不是一回事，那条仍未复现。
     -->
     <bool name="config_wifiSaeUpgradeEnabled" translatable="false">false</bool>
+
+    <!--
+      软件 PNO（v1.0 计划 NET-1）：息屏且系统醒着时（插电、后台下载 / 播放持锁），Wi-Fi 一断就再也连不回来，
+      直到亮屏。2026-10-04 实机 dumpsys wifi：断开后 6 次 "PnoScanListener onFailure: reason: -3 not supported"，
+      之后 WifiConnectivityManager 放弃（"Failed to successfully start PNO scan for 5 times"），已保存的网络
+      -34 dBm 就在旁边也不连。根因：ath11k 没有 sched_scan（iw phy 里没有 start_sched_scan），硬件 PNO 不可用；
+      而软件 PNO（定时单次扫描代替固件 PNO）默认关着。
+      ⚠️ 不要动 config_wifi_background_scan_support —— 那是硬件 PNO 的开关，ath11k 开了也只会在 wificond 里失败。
+
+      依据（2026-10-04 从本机 apex 里取出的 ServiceWifiResources.apk / service-wifi.jar 反汇编，源码行号待构建机核实）：
+        * 资源在 overlayable "WifiCustomization" 里、policy 含 vendor，id 0x7f02006c，默认 false（dumpsys 的 WifiResourceCache 同）；
+        * 唯一读取点 WifiGlobals.isSwPnoEnabled()，用在两处：
+          WifiScanningServiceImpl$WifiPnoScanStateMachine$StartedState.processMessage —— 硬件 PNO 不支持时，
+            isSwPnoEnabled() && DeviceConfigFacade.isSoftwarePnoEnabled() 才转进 SwPnoScanState，否则回 -3 "not supported"；
+          WifiServiceImpl.isPnoSupported() —— 对外报告"支持 PNO"。
+      ⚠️★ 所以光改这里还不够：还有第二道门 DeviceConfig wifi/software_pno_enabled（DeviceConfigFacade
+         .updateDeviceConfigFlags 里默认 false），本机上它被显式置成了 false（device_config list wifi，
+         wifi 命名空间 94 项，多半是 GMS 同步下来的，来源未核实）。那一道要另想办法（docs/v1.0-plan.md 的 NET-1）。
+    -->
+    <bool name="config_wifiSwPnoEnabled" translatable="false">true</bool>
 </resources>
