@@ -33,6 +33,13 @@
 
 ### ▶ 1.0 批 0/1 已合并、待构建与验证（2026-10-05）
 
+> **★ 2026-10-05 04:43 第二个 1.0 发布构建上机：`1.0.0-dev.2`，构建戳 `1791144960`**（`out/v1dev2-1791144960/`；= dev.1 + 批 1 剩余 14 项 `27b50f8`…`bb8abf2` 的 cherry-pick + 审查修复 `e16beb0` + tree-fix [18]）。构建机上 tree-fixes [1]–[18] 全过（[18] 锚点命中、Wi-Fi 从源码编）；`release.sh --dry-run` 第 2 步全过（缺发版说明 / 验收报告两条只在正式发版拦）。
+> * 装机：在**发布构建上**跑 `install-ota-local.sh` 照常（KSU root 够用）。新 postinstall 当场生效：删掉没有启动项引用的 `slot_b/recovery-ramdisk.img`，ESP 可用 87 → 104 MB（OTA-8/9）；oneshot 进 `_a` 50 秒起来。
+> * 属性：`ro.opengles.version=196610`（APP-8）、`ro.hw_timeout_multiplier=2`（APP-9）、`/dev/dri/card1` 0660（SEC-14，出画正常）、有 `sensor.gyroscope` 无 `sensor.compass`（HW-7）、accel/gyro maxRate 50 Hz（HW-12）、hangdump 启动并记下 remoteproc 基线（AV-6）。
+> * 验收 `out/accept/1791144960-*`：PASS 43；FAIL = A3 两项（开发机持久化的 5555，预期）+ **A15 smmustall 心跳缺失** —— 查明是 LIVE-4 的退避把心跳挤没了（suspended 分支 `continue` 在心跳之前），服务本身在跑、照常清 CFCFG ⇒ 已改成按墙钟每 60 秒一行（`c1d11dc`），⬜ 下个构建验。
+> * Parts 的 USB 通知服务（V4）没起来是**预期**：有锁屏密码，用户状态 `RUNNING_LOCKED`，BOOT_COMPLETED 要等解锁。⬜ 小改进：接收器改 directBootAware + `LOCKED_BOOT_COMPLETED`，解锁前也能报口坏。
+> * ⬜ 还要人：V10–V13（同 dev.1）；USB-2 / USB-1 的通知要插 U 盘 / 插 Mac 复现；NET-1 软件 PNO 要断 AP 实测（V13）。
+
 > **★ 2026-10-05 03:10 第一个 1.0 发布构建上机：`1.0.0-dev.1`，构建戳 `1791138567`**（incremental 见 OTA zip，`out/v1dev-1791138567/` 有 payload 与 sha256；内核与 v0.7.1 相同 `6d3f7c67`）。
 > * 构建：V1 全绿后 `m installclean` + `release.sh --dry-run`（构建机 `~/v1-work/build.sh`，D32 约 29 分钟）。第 2 步断言**全过**（B1 四条、OTA-11 日期一致、REL-5 版本属性、allow_suspend 默认 1）；第 3 步打包时 `release.sh` 自己退 128 —— `GK3_REPO` 是 git archive 副本时 `RDIRTY=$(git status … | wc -l)` 经 pipefail + set -e 静默退出，已修（`bed602c`），`--no-build` 重跑全过、源码清单生成（`repo manifest -r` 没跑成，⬜ 查原因）。
 > * V1 结论：`ProductNotDebuggableInUserdebug` 只被 `gen_build_prop.py` 用（只影响属性），Soong 的 Debuggable 不受影响 ⇒ init 仍 `ALLOW_PERMISSIVE_SELINUX=1`；`get_build_var` 对照证明 `GAOKUN3_DEV_BUILD` / `GK3_VERSION` 都能进 Kati。
