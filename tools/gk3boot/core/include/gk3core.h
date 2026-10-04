@@ -424,6 +424,7 @@ typedef struct {
     const char *bootloader;     /* "gk3boot-<ver>"，NULL 不加 */
     const char *event;          /* androidboot.gk3boot.event，NULL 不加 */
     const char *entry;          /* androidboot.gk3boot.entry（自己条目的文件名），NULL 不加 */
+    const char *mode;           /* androidboot.gk3boot.mode=observe|action（E4/E5 的观察模式要能从 Android 侧认出来），NULL 不加 */
 } gk3_android_args;
 
 /* Android 交接用：base 里已有的同名键先删掉（避免重复），再按顺序追加。值里只允许
