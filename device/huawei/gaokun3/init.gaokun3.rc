@@ -57,6 +57,11 @@ on property:persist.vendor.gaokun3.allow_suspend=1
 # ✅ SELinux：这个节点已由 sepolicy/genfs_contexts 标成 sysfs_leds（设备 ls -LZ 实查），
 #    vendor_init 对它的 chown/chmod（setattr）核心策略现成。
 on boot
+    # LIVE-8：内核默认 DEFAULT_HUNG_TASK_TIMEOUT=120（kernel-config-android.sh），但 AOSP 的 init.rc:322（on init）
+    #   无条件写 0 把 khungtaskd 关了。这里（on boot，晚于 on init）写回 120：只告警不 panic（hung_task_panic 保持 0）。
+    #   不走 AOSP 的 ro.khungtask.enable：llkd.rc 那条路会顺带写 hung_task_panic 1 —— 一次误判就整机重启。
+    #   1.0.0-dev.3 实测：没有这一行时 /proc/sys/kernel/hung_task_timeout_secs = 0。
+    write /proc/sys/kernel/hung_task_timeout_secs 120
     chown system system /sys/class/backlight/ae96000.dsi.0/brightness
     chmod 0664 /sys/class/backlight/ae96000.dsi.0/brightness
 
