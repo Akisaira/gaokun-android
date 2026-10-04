@@ -4,14 +4,16 @@
 #   SER=gaokun3 bash scripts/perf/game-perf.sh [-p 包名] [-t 总秒数] [-i 采样间隔秒] [-o 输出目录]
 #     -p  不给就取当前前台 Activity 的包名
 #     -t  默认 1200（三角洲那一档是 20 分钟）；中途 Ctrl-C 也会出摘要
-#     -i  默认 5：每 5 秒出一行 CSV（帧数据每秒抓一次，见下）
+#     -i  默认 5：每 5 秒出一行 CSV（帧数据每 0.5 秒抓一次，见下）
 #     -o  默认 out/perf/<包名>-<时间>/
 #   产物：samples.csv（每行一个间隔）、frames.txt（每帧的上屏时刻，ns）、summary.txt、header.txt
 #
 # 每一列从哪来（都是只读的 sysfs / dumpsys，2026-10-04 在 1791053208 上逐个核对过路径）：
 #   帧          dumpsys SurfaceFlinger --latency <图层名>：最近 128 帧的 desired / actual present / frame ready 三列（ns）。
-#               取第 2 列（实际上屏时刻），去掉 0 与 INT64_MAX（还没上屏）。窗口只有 128 帧 ⇒ 120 Hz 下约 1 秒，
-#               所以【每秒】抓一次、按时间戳去重拼接；两次之间没有重叠 = 中间丢了帧，frames.txt 里记一行 GAP，
+#               取第 2 列（实际上屏时刻），去掉 0 与 INT64_MAX（还没上屏）。窗口只有 128 帧 ⇒ 120 Hz 下约 1.067 秒
+#               （实机刷新周期 8333341 ns），所以两次抓取的间隔必须 < 128 / 刷新率：每轮 sleep 0.5 再加一次 adb
+#               （USB 约 30 ms，TCP 更慢）与宿主机上的 awk / sort —— 原来 sleep 1 一轮就超窗口，120 fps 时 GAP 会成常态。
+#               按时间戳去重拼接；两次之间没有重叠 = 中间丢了帧，frames.txt 里记一行 GAP，
 #               跨 GAP 的间隔不进帧时间统计（CSV 的 gap 列 = 1 说明这一行的 fps 偏低是采样丢的，不是游戏掉的）。
 #               图层名从 --list 里找 "SurfaceView[包名/…](BLAST)"（游戏都画在 SurfaceView 上，2026-10-04 timestats 里
 #               三角洲 / 卡拉彼丘 / 明日方舟 / Phigros / Arcaea 都是这个形状），找不到再退回包名的普通窗口。
@@ -30,7 +32,7 @@
 # debug.graphics.game_default_frame_rate.disabled=true —— header.txt 里会记下这两个属性、当前刷新率与图层的 frameRate 投票，
 # 平均 fps 贴着 60 还是 120，要对照它们解读。
 #
-# ⚠️ 只读：不 setprop、不 --latency-clear、不 timestats -clear、不改刷新率。每秒一次 adb shell，开销很小但不是零。
+# ⚠️ 只读：不 setprop、不 --latency-clear、不 timestats -clear、不改刷新率。每秒两次 adb shell，开销很小但不是零。
 set -u
 export MSYS_NO_PATHCONV=1
 SER=${SER:-${SERIAL:-}}
@@ -125,12 +127,14 @@ echo "t_s,fps,frames,gap,cpu0_mhz,cpu0_top_pct,cpu4_mhz,cpu4_top_pct,gpu_mhz,gpu
 : > "$OUT/frames.txt"
 TS0=$(timestats_frames)
 A "$SNAP" > "$TMPD/first.txt"; cp "$TMPD/first.txt" "$TMPD/prev.txt"
-LAST=0; NEWN=0; GAPIN=0; TICK=0; EMPTY=0; START=$(date +%s); STOP=0
+LAST=0; NEWN=0; GAPIN=0; EMPTY=0; START=$(date +%s); NEXT=$((START + INT)); STOP=0
 trap 'STOP=1' INT TERM
 
 while [ "$STOP" = 0 ] && [ $(( $(date +%s) - START )) -lt "$DUR" ]; do
-    TICK=$((TICK + 1))
-    snap=0; [ $((TICK % INT)) -eq 0 ] && snap=1
+    # 采样点按墙钟走（每 INT 秒一次），不按轮数：一轮的耗时随 adb 与快照大小变
+    # （落后了就从现在重新起算，不连发几行补课 —— 那几行的 dt 很小、fps 很吵）
+    now=$(date +%s); snap=0
+    if [ "$now" -ge "$NEXT" ]; then snap=1; NEXT=$((NEXT + INT)); [ "$NEXT" -gt "$now" ] || NEXT=$((now + INT)); fi
     if [ $snap = 1 ]; then A "echo @LAT; dumpsys SurfaceFlinger --latency '$LAYER'; $SNAP" > "$TMPD/tick.txt"
     else A "echo @LAT; dumpsys SurfaceFlinger --latency '$LAYER'" > "$TMPD/tick.txt"; fi
     # 第 2 列 = 实际上屏时刻；0 = 还没记、≥ 9e18 = INT64_MAX（还没上屏）
@@ -143,9 +147,9 @@ while [ "$STOP" = 0 ] && [ $(( $(date +%s) - START )) -lt "$DUR" ]; do
         n=$(wc -l < "$TMPD/new.txt" | tr -d ' ')
         if [ "$n" -gt 0 ]; then cat "$TMPD/new.txt" >> "$OUT/frames.txt"; LAST=$(tail -1 "$TMPD/new.txt"); NEWN=$((NEWN + n)); fi
     else
-        # 连续 3 秒一帧都没有：游戏暂停 / 切走，或者图层没了（游戏重启后图层名里的 #序号会变）。重新找一次
+        # 连续 6 轮（约 3 秒）一帧都没有：游戏暂停 / 切走，或者图层没了（游戏重启后图层名里的 #序号会变）。重新找一次
         EMPTY=$((EMPTY + 1))
-        if [ "$EMPTY" -ge 3 ]; then
+        if [ "$EMPTY" -ge 6 ]; then
             EMPTY=0; L2=$(find_layer)
             if [ -n "$L2" ] && [ "$L2" != "$LAYER" ]; then
                 LAYER=$L2; echo "图层换成：$LAYER" | tee -a "$OUT/header.txt"; echo GAP >> "$OUT/frames.txt"; LAST=0; GAPIN=1
@@ -160,7 +164,7 @@ while [ "$STOP" = 0 ] && [ $(( $(date +%s) - START )) -lt "$DUR" ]; do
         echo "$(( $(date +%s) - START )),$FPS,$NEWN,$GAPIN,$D" | tee -a "$OUT/samples.csv"
         mv "$TMPD/cur.txt" "$TMPD/prev.txt"; NEWN=0; GAPIN=0
     fi
-    sleep 1
+    sleep 0.5   # 必须让一轮 < 128 / 刷新率（120 Hz 下 1.067 s），见头注释；macOS 与 Linux 的 sleep 都认小数
 done
 trap - INT TERM
 

@@ -34,7 +34,8 @@ bad()  { echo "  [FAIL] $*"; FAIL=$((FAIL + 1)); }
 info() { echo "  [INFO] $*"; }
 A() { $ADB shell "$@" 2>/dev/null | tr -d '\r'; }
 
-$ADB wait-for-device
+# 不用 wait-for-device：没有设备时它会一直阻塞，到不了"退出 2"
+$ADB get-state >/dev/null 2>&1 || { echo "adb 不通（SER=${SER:-未设}），停"; exit 2; }
 [ -n "$(A getprop sys.boot_completed)" ] || { echo "adb 不通，停"; exit 2; }
 
 # GMU 死亡链与 recover：两个来源取较大值（它们重叠，相加会重复计数）。
@@ -105,8 +106,12 @@ if [ "$SECS" -gt 0 ]; then
   echo; echo "═══ 浸泡 ${SECS}s 后复查 ═══"
   sleep "$SECS"
   G2=$(gmu_count); R2=$(recover_count); F2=$(fault_count)
-  [ "${G2:-0}" = "${G:-0}" ] && ok "GMU 错误 ${G:-0} → ${G2:-0}" || bad "浸泡期间新增 GMU 错误：${G:-0} → $G2"
-  [ "${R2:-0}" = "${R:-0}" ] && ok "a6xx_recover ${R:-0} → ${R2:-0}" || bad "浸泡期间新增 a6xx_recover：${R:-0} → $R2"
+  # 用 -gt 判新增：浸泡期间旧行可能从 dmesg / logd 缓冲里滚掉，计数变小不是"新增"
+  # （局限：滚掉 n 行的同时又新增 n 行会看不出来 —— 只在原本就 > 0 时才可能，那时本来就已经 FAIL 了）
+  if [ "${G2:-0}" -gt "${G:-0}" ]; then bad "浸泡期间新增 GMU 错误：${G:-0} → $G2"
+  else ok "GMU 错误 ${G:-0} → ${G2:-0}"; [ "${G2:-0}" -lt "${G:-0}" ] && info "计数变小 = 旧行从日志缓冲里滚掉了，不是好转"; fi
+  if [ "${R2:-0}" -gt "${R:-0}" ]; then bad "浸泡期间新增 a6xx_recover：${R:-0} → $R2"
+  else ok "a6xx_recover ${R:-0} → ${R2:-0}"; [ "${R2:-0}" -lt "${R:-0}" ] && info "计数变小 = 旧行从日志缓冲里滚掉了，不是好转"; fi
   if [ -z "$F2" ]; then bad "浸泡后找不到 smmustall 心跳"
   elif [ "$F2" = "${F0:-0}" ]; then ok "SMMU fault ${F0:-?} → $F2"
   else bad "浸泡期间新增 SMMU fault：${F0:-?} → $F2"; fi

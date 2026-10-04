@@ -6,7 +6,7 @@
 
 | 脚本 | 在哪跑 | 干什么 |
 |---|---|---|
-| `game-perf.sh` | 宿主机（adb） | 游戏前台时每秒抓 SurfaceFlinger 帧时间、每 5 秒一行 CSV（CPU / GPU 频率驻留、温度、温控压频、电池），结束出平均 fps、1% low、最高温 |
+| `game-perf.sh` | 宿主机（adb） | 游戏前台时每 0.5 秒抓 SurfaceFlinger 帧时间、每 5 秒一行 CSV（CPU / GPU 频率驻留、温度、温控压频、电池），结束出平均 fps、1% low、最高温 |
 | `standby.sh` | 宿主机（adb） | 待机采样器的 `once` / `start` / `status` / `pull` / `stop` |
 | `standby-sampler.sh` | 设备（root，常驻） | 每次唤醒（`suspend_stats/success` 变了）追加一行：时间、suspend_stats、电池、qcom_stats 各项、boot reason history；另有 30 分钟一行的心跳（关键进程 PID/RSS/fd、dropbox 计数） |
 
@@ -22,7 +22,8 @@ SER=gaokun3 bash scripts/perf/game-perf.sh -p com.hypergryph.arknights -t 1800  
 产物在 `out/perf/<包名>-<时间>/`：`header.txt`（构建戳、刷新率、帧率上限相关属性、图层的 frameRate 投票）、
 `samples.csv`、`frames.txt`、`summary.txt`。包名是 2026-10-04 实机 `pm list packages -3` 里的。
 
-* **fps**：`dumpsys SurfaceFlinger --latency <图层>` 只给最近 128 帧，120 Hz 下约 1 秒，所以每秒抓一次、按上屏时刻去重拼接。
+* **fps**：`dumpsys SurfaceFlinger --latency <图层>` 只给最近 128 帧，120 Hz 下约 1.067 秒，所以两次抓取的间隔必须小于
+  128 / 刷新率：每轮 `sleep 0.5` 加一次 adb，按上屏时刻去重拼接（原来 `sleep 1` 加 adb 一轮就超窗口）。
   两次之间没有重叠 = 中间丢了帧：`frames.txt` 记 `GAP`，CSV 的 `gap` 列为 1，跨 GAP 的间隔不进帧时间统计。
   结尾另用 `--timestats -dump` 的 `totalFrames` 增量交叉核对一次整段平均。
 * **1% low** = 最慢的 1% 帧的平均帧时间换算成 fps；另给 p99 帧时间与最长帧。
@@ -48,5 +49,11 @@ SER=gaokun3 bash scripts/perf/standby.sh stop
   `persist.sys.boot.reason.history`，对照日志最后一行分辨断电和正常关机。
 * **插着 USB 时 CX 塌缩本来就进不去**（复核 PERF-3），qcom_stats 的 `cxsd` / `aosd` / `ddr` 为 0 不算异常 —— 要拔线测。
 * 开发机 `persist.vendor.gaokun3.allow_suspend` 持久为 0，**不会挂起**。临时改 1 要用户决定，脚本不替你改。
+* 日志字段 `screen=` 是 `debug.tracing.screen_state` 的原始值（Display.state）：**2 = 亮屏，1 = 息屏**
+  （本仓 `device/huawei/gaokun3/bin/gaokun3-usbrole.sh:70`、`:124` 按"= 2 才是亮屏"用它；10-04 实机息屏时读到 1）。别把 1 读成亮屏。
+* ⚠️ **狗粮 / 待机期间别开关 USB 调试、别 `adb root` / `adb unroot`**：采样器是 `setsid nohup` 拉起的，扛得住拔线
+  （`s2loop` 同样写法，#131 里 12/12），但 setsid 出不了 init 给 adbd 建的进程组 cgroup（`gaokun3-usbrole.sh:116-119` 记过，那里也是从源码推断、未实测），
+  adbd 一重启采样器就跟着被杀，而且不留 `stop` 行。`pull` 发现最后一行不是 `stop`、采样器又不在跑时会明确提示"中途死了"。
+  能不能把自己挪出那个 cgroup（比如挪到根 cgroup）**没实测过**，列为待验证。
 * 亮屏硬解 1 小时那种测法要更密的心跳：`HB=300 SER=gaokun3 bash scripts/perf/standby.sh start`。
 * 要 root（qcom_stats 在 debugfs）。adb 不是 root 的发布构建上走 `su -c`，KernelSU 管理器里要先给 shell 授权。

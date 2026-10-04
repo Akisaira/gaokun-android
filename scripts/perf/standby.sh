@@ -10,6 +10,8 @@
 # 典型用法（docs/release-checklist.md 的 C 档；要用户在场拔线）：
 #   1. 插着线 start（会提示当前 allow_suspend；开发机持久 0 的话要【用户决定】临时改 1，本脚本不 setprop）
 #   2. 拔 USB → 息屏放 8 小时（拔线后 USB adb 断开，采样器照跑：setsid + nohup，日志每行 sync）
+#      ⚠️ 期间别开关 USB 调试、别 adb root / unroot：adbd 重启会把采样器一起杀掉（setsid 出不了 adbd 的进程组 cgroup），
+#      不留 stop 行 —— pull 会提示"中途死了"
 #   3. 插回 → pull（摘要里有掉电百分比 / mAh、挂起次数、qcom_stats 增量）→ stop
 #   采样器不会跨重启存活；中途要是重启了，pull 会把【现在的】boot reason history 一起取回，
 #   对照日志最后一行就能分清是断电（电量耗尽 / 复位）还是正常关机。
@@ -114,6 +116,12 @@ pull)
     summarize "$OUT/standby.log" | tee "$OUT/summary.txt"
     echo "--- 现在的 boot reason（对照上面最后一行：变了 = 中途重启过）---"
     head -3 "$OUT/boot-now.txt"
+    # 最后一行不是 stop、采样器又不在跑 = 中途死了（重启，或 adbd 重启把它连同进程组一起杀了）
+    lastev=$(tail -1 "$OUT/standby.log" | sed -n 's/.* ev=\([a-z]*\) .*/\1/p')
+    if [ -n "$lastev" ] && [ "$lastev" != stop ] && [ -z "$(alive)" ]; then
+        echo "⚠️ 采样器中途死了：最后一行是 ev=${lastev}（$(tail -1 "$OUT/standby.log" | cut -d' ' -f1)），没有 stop 行、现在也不在跑。" | tee -a "$OUT/summary.txt"
+        echo "   boot reason 没变 = 不是重启，多半是 adbd 重启（开关 USB 调试 / adb root）把它一起杀了；之后的时段没有数据。" | tee -a "$OUT/summary.txt"
+    fi
     ;;
 stop)
     p=$(alive)
