@@ -216,8 +216,16 @@ PRODUCT_PACKAGES += \
     libGLESv1_CM_angle \
     libGLESv2_angle \
     vulkan.pastel
+# ★ v1.0 APP-8（2026-10-05）：196608（0x30000 = GLES 3.0）→ 196610（0x30002 = GLES 3.2）。
+#   3.0 是 Phase A 软渲染时期的值，Stage 5 之后 ANGLE 的 Vulkan 后端跑在 turnip 上，实机
+#   `dumpsys SurfaceFlinger` 报 "OpenGL ES 3.2.0"（ANGLE … Turnip Adreno (TM) 690）；而下面那份
+#   android.hardware.opengles.aep.xml（AEP 要求 3.1+）早就在声明了 —— 两边自相矛盾。
+#   值的编码 = 主版本 << 16 | 次版本。影响：Play 不再把要求 GLES 3.1/3.2 的应用判成"不兼容"，
+#   读 reqGlEsVersion 选渲染档位的游戏会改走 3.2 的路径 ⇒ 回归要覆盖几个用 3.1/3.2 特性的游戏，不能只测原神。
+#   ⚠️ 读这个属性的是 frameworks/base（ConfigurationInfo.reqGlEsVersion），本地 refs 没有那棵树 —— 待构建机核实读取点；
+#   上机判据：`pm list features` 里 reqGlEsVersion=0x30002。
 PRODUCT_PROPERTY_OVERRIDES += \
-    ro.opengles.version=196608
+    ro.opengles.version=196610
 # ⚠️ ANGLE 库在 /system/lib64/ 根（AOSP 16 默认自带，不在 egl/ 子目录），
 # 加载开关是 persist.graphics.egl（Loader.cpp:67-70 实名核实），
 # ro.hardware.egl 走的是 egl/libEGL_*.so 搜索路径，对 ANGLE 不生效。
