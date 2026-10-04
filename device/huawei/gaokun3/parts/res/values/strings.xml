@@ -15,4 +15,11 @@
     <string name="speaker_fx_switch_summary_on">Media played on the built-in speakers is processed</string>
     <string name="speaker_fx_switch_summary_off">Audio is passed through unchanged</string>
     <string name="speaker_fx_note">Experimental. Only media audio (music, video, games) on the built-in speakers is processed; headphones, Bluetooth and USB audio are never touched. Turning it on applies from the next playback; turning it off applies within about a second. If the sound is distorted or cuts out, turn it off.</string>
+    <!-- USB-C port notices (v1.0 PWR-4 / USB-1, UsbPortNotifier). port0 = the port next to the power button. -->
+    <string name="usb_port_channel">USB-C port</string>
+    <string name="usb_port_channel_desc">Problems with the USB-C port next to the power button</string>
+    <string name="usb_port_broken_title">USB-C port stopped working</string>
+    <string name="usb_port_broken_text">The USB-C port next to the power button failed after standby. USB data and standby will come back after a restart; until then the tablet will not go to sleep and keeps using battery.</string>
+    <string name="usb_port_reversed_title">USB cable connected the wrong way round</string>
+    <string name="usb_port_reversed_text">The tablet is powering the other device and no data connection was made. If this is a computer (USB debugging, file transfer), unplug the cable and plug it in again.</string>
 </resources>

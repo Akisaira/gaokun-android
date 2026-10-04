@@ -43,10 +43,17 @@ vendor_public_prop(vendor_gaokun3_prop)
 # （见 bin/gaokun3-ota-postinstall.sh 与 sepolicy/postinstall.te）
 get_prop(postinstall, vendor_gaokun3_prop)
 
-# ⬜ 没给 system_app / system_server 任何权限：现在没有 UI 去改这两个属性。
+# ★ v1.0 PWR-4 / USB-1（2026-10-05）：system_app 只给【读】—— Parts 的 UsbPortNotifier 亮屏时每 3 秒读
+#    vendor.gaokun3.usbrole.broken / .reversed（gaokun3-usbrole.sh 设），据此发 USB-C 口的提示通知。
+#    能读是因为 vendor_gaokun3_prop 是 vendor_public_property_type：core 侧那条"coredomain 不许读 vendor 属性"的
+#    neverallow 对它有豁免（refs/lineage-sepolicy/private/property.te:193-198）。Parts 是 system_app
+#    （seapp_contexts:180，user=system seinfo=platform）。⬜ 未编译。
+#    写仍然不给、也给不了：coredomain 设 vendor 属性被 private/property.te 里带 system_writes_vendor_properties_violators 的那条 neverallow 禁（本文件顶上那次构建失败；public 类型的豁免只管 :193-203 那两条）。
+#    system_server 仍然没有任何权限（用不到）。
 #    键盘开关与触摸模式走的是 persist.sys.gaokun3.*（system_prop，AOSP 已经
 #    allow system_app 写，见 private/system_app.te:43）——【那两个不要跟着改名】，
 #    改了 Parts 应用反而写不了。#117 第 5 条。
+get_prop(system_app, vendor_gaokun3_prop)
 
 # 扬声器增强（试验功能，PR #7）的总开关镜像：etc/histen.rc 在 vendor 的 rc 里
 # `setprop vendor.gaokun3.histen.on …`，动作跑在 vendor_init 域。
