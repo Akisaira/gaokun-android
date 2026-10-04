@@ -14,6 +14,12 @@
 #
 # 幂等：已经打上的补丁会被跳过（用反向 --check 判定），所以可以反复跑。
 #
+# ★★ 基线：mainline【v7.2.9 stable】（git.kernel.org stable 仓库的 tag v7.2.9 = 5fce161649b4）
+#    + gaokun-buildbot 那一层（19 个提交，git am -3），本表打在它上面。2026-10-05 SEC-9 从 v7.2-rc2 追上来：
+#    0020 / 0022 / 0055 / 0057 已被 stable 收入、移出本表；0056 rebased；新增 0075（撤回 stable 带进来的 0ac05c4）。
+#    ⚠️ 本表【不再适用于 v7.2-rc2 的树】（~/gk3-kernel-iris，#16 及以前）—— 那棵树的配方在本仓 c1062f2。
+#    在旧树上跑 --verify 会报 0056 / 0075 打不上，这是预期的。
+#
 # ⚠️★ --check 在【已经打满】的树上有一个已知盲区（#110）：叠加补丁里靠前的那个
 #    （如 0018 删掉后摄节点、0032 又在同一位置写回）反向 --check 对不上，会被报成"打不上"，
 #    而树其实是对的。--verify 没有这个问题：它不逐个判定，而是把整条链在干净 worktree 上重放，
@@ -58,14 +64,14 @@ KPATCHES=(
     0017-netfilter-port-xt-quota2-from-ack.patch
     # 0018：前摄要工作就得去掉后摄节点（A/B 实测，#81）。只动 camera.dtsi。
     0018-arm64-dts-gaokun3-camera-drop-rear-s5k3l6.patch
-    # ⚠️ 0020 是上游 7.3 的 backport，用来验证 camss 电源域缺陷（#83）的一个
-    #    【待验证假说】—— 它与相机一起用，单独打上无害（只是少注册一个没人用的时钟）。
-    0020-clk-qcom-camcc-sc8280xp-unregister-gdsc-clk.patch
+    # ✅ 0020（上游 499b4cb6710f，camcc 不再注册 CAMCC_GDSC_CLK）**已被 v7.2.y stable 收入**
+    #    （stable b425cc3913fb），基线追到 v7.2.9 起【不再列入】。文件留作案卷（v7.2-rc2 的配方见 c1062f2）。
     # ❌ 0021（给 titan_top 加 NoC 投票）**已被实测否掉**（内核 #6，见 #102），
     #    故意【不列】在这里。文件仍留在 patches/ 下，头部有醒目的"已否"横幅。
-    # 0022 与相机判据零交叉，只在驱动解绑时生效；修 #87 查到的 rebind 撞名。
-    #    ⬜ 它本身**至今未验证** —— 要在干净开机、camss 健康时测（#102 第四节）。
-    0022-clk-qcom-gdsc-tear-down-genpds-in-unregister.patch
+    # ✅ 0022（上游 86b23609d5e1，gdsc_unregister 拆 genpd）**已被 v7.2.y stable 收入**（stable 40bd77fa2857），
+    #    v7.2.9 起【不再列入】。⚠️ 同批 stable 还带进 gdsc.c 的两处行为变化（fade2037ee2a：ALWAYS_ON 域
+    #    gdsc_enable 失败要上报；02533b6cf5f6：poll_status 透传 check_status 的错误）—— 相机 titan 域要回归。
+    #    下面的诊断补丁 0023/0028/0029 是在 v7.2-rc2 + 0022 上写的，在 v7.2.9 上【没试过】能不能打。
     # ⚠️ 0023 是【诊断补丁，不要进发版内核】：每次 titan 域翻转打两行寄存器转储。
     #    它存在的意义是把"读 GDSCR"从 /dev/mem（本机会静默死内核）换成 regmap。
     # ❌ 0024 / 0025 / 0026 三条试验补丁**已被内核 #10 实测否掉**（#104：上电后重试、
@@ -155,15 +161,16 @@ KPATCHES=(
     0053-arm64-dts-qcom-sc8280xp-add-iris-and-videocc.patch
     # 0054：gaokun3 打开 &iris，firmware-name 指向华为签名的 qcvss8280.mbn。依赖 0053 的 iris label。
     0054-arm64-dts-gaokun3-enable-iris.patch
-    # 0055 / 0057：上游 v7.3 的 iris 修复（f87d7ed / 75d7987），v7.2-rc2 没有。
-    0055-media-iris-fix-runtime-PM-reference-leaks.patch
+    # ✅ 0055 / 0057（上游 v7.3 的 iris 修复 f87d7ed / 75d7987）**已被 v7.2.y stable 收入**
+    #    （stable 7a52e76b6309 / cb83cfff8dff），v7.2.9 起【不再列入】。文件留作案卷。
     # 0056：【本地】代替上游 b9c2215。b9c2215 在持 core->lock 断电时 disable_irq() 等中断线程，
     #    而线程开头就要这把锁 ⇒ 死锁；原版 nosync 又会让线程在断电后碰寄存器（本机 = 静默死机）。
     #    这里保留 nosync，线程拿到锁后看 core->hw_powered，断电了就不碰硬件。
+    #    ⚠️ v7.2.y stable 收了 b9c2215 ⇒ 0056 rebased onto v7.2.9，多一行把 disable_irq() 改回 nosync。
     0056-media-iris-irq-thread-skips-hw-access-after-power-off.patch
-    0057-media-iris-handle-runtime-PM-resume-failure-in-core-deinit.patch
     # ❌ 0058（上游 0ac05c4）故意【不列】：在 gen1 上 LOAD_RESOURCES 位一直置着，v7.2-rc2 原版的
     #    `!= DRAIN` 才让"drain 中途 seek 后的 STOP"照常放行；0058 反而把它变成 -EBUSY。见 0058 头部横幅、#128 §3。
+    #    ⚠️ 可 v7.2.y stable 把它收进来了（a5e341a25de3）⇒ 下面 0075 把这一行撤回 rc2 的写法。
     # 0059：上游 v7.4 队列的 cff20ea4 —— UC_REGION 配置被拒时如实报错，而不是"启动成功"后挂死。
     0059-media-iris-fail-firmware-boot-on-invalid-uc_region.patch
     # 0060：【本地】解码器在第一次 SOURCE_CHANGE 前拒绝 CAPTURE G_FMT，让 v4l2_codec2 走 venus 时代
@@ -182,6 +189,8 @@ KPATCHES=(
     # 0067：【本地】drain 之后不 streamoff 也能接着解：EOS 时不自动 FLUSH_OUTPUT（与 venus 同），START 时重置 LAST 状态。
     #    上游 ⇒ 播到结尾后的第一次 seek 没有输出、每隔一次 drain 收不到 EOS（#128 §15）。0644 qcom_iris.eos_flush，默认 N。
     0067-media-iris-no-output-flush-on-eos.patch
+    # 0075：【本地，v7.2.9 起】撤回 stable 收进来的 0ac05c4（即被否的 0058），iris_allow_cmd 回到 rc2 的 `!= DRAIN`。
+    0075-media-iris-restore-rc2-stop-check-reverting-0ac05c4.patch
     # 0070：【本地】MHI 给 ath11k 保留固件 DMA 表跨断电复用 —— issue #16 待机睡死的根治
     #   （恢复时不再赌 order-7 GFP_DMA 分配）。⬜ 实机 s2idle 循环待验（docs/TODO.md 的 issue 一节）。
     0070-bus-mhi-keep-firmware-images-across-power-cycles-for-ath11k.patch
