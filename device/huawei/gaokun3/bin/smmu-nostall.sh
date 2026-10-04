@@ -109,9 +109,15 @@ gpu_suspended() {
 }
 
 log -t smmustall "启动 v2：CB0..CB$((NCB - 1)) @ ${CB_BASE}，无限运行（GPU suspended 时 1 秒一轮）"
+hb=$SECONDS
 while true; do
+    # 心跳按墙钟每 60 秒一行（mksh 的 $SECONDS，不 fork）。原先按"轮"计、又写在 suspended 分支的 continue 之后，
+    # LIVE-4 加了退避以后息屏时一行都没有 ⇒ accept.sh A15 / verify-turnip 误判"服务卡住"（1.0.0-dev.2 实测）。
+    if [ $((SECONDS - hb)) -ge 60 ]; then
+        hb=$SECONDS
+        log -t smmustall "心跳 round=$round 清 CFCFG=${cleared} 抓 fault=${caught}"
+    fi
     if gpu_suspended; then
-        # 心跳照旧按"轮"计（约 600 轮一行）；退避期间一轮 1 秒，心跳会稀一些，这是有意的（熄屏少写日志）。
         round=$((round + 1))
         sleep 1
         continue
@@ -120,9 +126,6 @@ while true; do
     if [ $((round % 20)) -eq 0 ]; then               # 全扫：约每 2s
         cb=1
         while [ $cb -lt $NCB ]; do check_cb $cb; cb=$((cb + 1)); done
-    fi
-    if [ $((round % 600)) -eq 0 ]; then               # 心跳：约每 60s
-        log -t smmustall "心跳 round=$round 清 CFCFG=${cleared} 抓 fault=${caught}"
     fi
     round=$((round + 1))
     sleep 0.1
