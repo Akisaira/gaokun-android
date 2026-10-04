@@ -263,6 +263,12 @@ allow gaokun3_hangdump self:qipcrtr_socket { create getattr read write };
 type gaokun3_qrtr_lookup_exec, vendor_file_type, file_type;
 allow gaokun3_hangdump gaokun3_qrtr_lookup_exec:file rx_file_perms;
 allow gaokun3_hangdump proc_uptime:file r_file_perms;
+# v1.0 AV-6（2026-10-05）：remoteproc 状态签名。实机标签（ls -Z 核过）：
+#   /sys/class/remoteproc/remoteprocN/{name,state} = sysfs；/proc/interrupts = proc_interrupts。
+#   PCM 探针的 .pcm-probe / rproc-events.log 写在 /data/vendor/gaokun3（vendor_data_file，上面已给 create_file_perms，
+#   含 rename / unlink —— mv -f 与 rm -f 要用）。⬜ 未编译、未上机。
+r_dir_file(gaokun3_hangdump, sysfs)
+allow gaokun3_hangdump proc_interrupts:file r_file_perms;
 
 # ── gaokun3-smmu-nostall.sh：只在 userdebug / eng 上放行（2026-09-27，#126）──────────
 # 证据：`gaokun3_smmustall gaokun3_devmem_device:chr_file { read open map write }` 与
