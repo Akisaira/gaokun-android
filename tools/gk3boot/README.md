@@ -3,7 +3,9 @@
 设计稿：[`docs/boot-entry-design.md`](../../docs/boot-entry-design.md)（方案 Y，U1–U11 按建议采纳，U2 = C）。
 这个目录现在有实施步骤 **S2** 的产物：决策核心 `libgk3core` 和它的主机测试，外加只读 CLI `gk3-misc`；
 以及 **S3 / S4**：aarch64 UEFI 工具链（gnu-efi）、QEMU + AAVMF + systemd-boot 257.13 夹具、只读探针 `gk3probe.efi`（§9）；
-**S5 的最小可上机版本** `gk3boot.efi`：观察模式 + H2 交接 + fail-open，给 E4 门槛用（§10）。执行端（S7）还没开始。
+**S5 的最小可上机版本** `gk3boot.efi`：观察模式 + H2 交接 + fail-open，给 E4 门槛用（§10，2026-10-05 真机通过）；
+**S5 后续**：动作模式（扣 tries → 自动回滚、VAB 守卫、GK3 记录）、fail-open 写 OneShot、BCB 分派开关（默认关），
+到"可以当开发机默认条目"的程度，给 E5–E8 用（§11）。执行端（S7）还没开始。
 
 ## 1. 结构
 
@@ -20,17 +22,18 @@ tools/gk3boot/
 │     ├─ bcab.c             bootloader_control：校验、libboot_control 四个原语、安装器初始化、入口选槽扣 tries
 │     ├─ vab.c              misc_virtual_ab_message 只读解析 + SNAPSHOTTED/source_slot 规则
 │     ├─ gk3rec.c           GK3 记录（misc 8 KiB，§4.5）：迁移、分派计数、bootloop 计数、一次性意图、事件环
+│     ├─ dispatch.c         BCB 分派的决定（§4.3.4 的表 + §4.10 迁移；只决定、不写盘）
 │     ├─ bootimg.c          boot.img v0–v2 头解析 + SHA1(id) 复算
 │     └─ cmdline.c          Android 交接 cmdline（§4.3.1）、执行端 cmdline（§4.4.1）、ASCII→UCS-2
 ├─ misc/gk3-misc.c          只读 CLI：dump / select / gpt / bootimg（安装器要的 init 子命令留给 S10）
 ├─ efi/                     UEFI 程序（在容器里构建，§9）
 │  ├─ Makefile              gnu-efi 构建 → build/efi/*.efi，并自检 PE 头
 │  ├─ lib/gk3efi.[ch]       UEFI 侧共用件：GUID、vsnprintf 子集、日志（屏幕 + ESP 文件）、设备路径转文字、
-│  │                        BlockIo → gk3_blk 包装（只读）、计时（CNTVCT）—— 以后 gk3boot.efi 直接复用
+│  │                        BlockIo → gk3_blk 包装（只读 / 动作模式的读写版）、计时（CNTVCT）、列目录、SetVariable
 │  ├─ probe/                gk3probe.efi（S4 / E3 只读探针）+ 内嵌的测试 PE child.c
-│  └─ boot/                 gk3boot.efi（S5 最小版，§10）：gk3boot.c 定位 / 决策 / fail-open，handoff.c H2 交接
+│  └─ boot/                 gk3boot.efi（§10、§11）：gk3boot.c 定位 / 决策 / 写 misc / fail-open，handoff.c H2 交接
 ├─ qemu/                    QEMU 夹具（§9.2、§10.4）：fixture.py 造盘 / 快照 / 比对 / 写变量 / 打 boot.img，qemu_run.py 无头跑，
-│                           check_probe.py / check_boot.py 判 PASS/FAIL，run-tests.sh / run-boot-tests.sh 串起来；
+│                           check_probe.py / check_boot.py / check_misc.py 判 PASS/FAIL，run-tests.sh / run-boot-tests.sh 串起来；
 │                           fake-android.c 冒充直连条目的内核；init.c 是测试 initramfs 的 /init
 └─ test/
    ├─ *.c                   主机单测（ASan + UBSan）
@@ -122,7 +125,8 @@ boot_b 没有 —— 谁写的不知道（不是我们的安装器会做的事�
 | §2.3 libboot_control 语义（setActive / markBootSuccessful / CRC 坏时重建） | `gk3_bcab_set_active` / `_mark_successful` / `_set_unbootable` / `_init_default` | `upstream/test_upstream.cpp`（编译真正的 `libboot_control.cpp:115-354`） |
 | §4.3.2 选槽与 tries（GBL 语义）、VAB 守卫 | `gk3_select_slot`、`gk3_vab_*` | `test_bcab.c`（GBL `android.rs:280-356` 转写参照 + 单测转写 + 回滚时序） |
 | §4.3.4 BCB 各命令 | `gk3_bcb_classify` / `_clear_command` / `_clear` / `_write_recovery` | `test_bcb.c` |
-| §4.5 GK3 记录、§4.10 迁移 | `gk3_rec_*`（布局见 §5） | `test_gk3rec.c` |
+| §4.5 GK3 记录、§4.10 迁移 | `gk3_rec_*`（布局见 §5） | `test_gk3rec.c`、`test_dispatch.c` |
+| §4.3.4 BCB 分派的决定（含 wipe 3 次上限、bootloader / fastboot 先清 command） | `gk3_dispatch_plan` | `test_dispatch.c` |
 | §2.2 boot.img v2、SHA1(id) | `gk3_bootimg_parse` / `_verify_id` | `test_bootimg.c`（实机发布版 + 合成 v0/v1/v2 × 4 种页大小） |
 | §4.3.1 cmdline、E-K3 | `gk3_cmdline_android` | `test_cmdline.c`（与实机 `/proc/cmdline` 逐字节对） |
 | §4.4.1 执行端 cmdline | `gk3_cmdline_fastboot` | `test_cmdline.c` |
@@ -138,7 +142,7 @@ boot_b 没有 —— 谁写的不知道（不是我们的安装器会做的事�
 |---|---|
 | 0 | magic `"GK3R"`（u32 `0x52334B47`） |
 | 4 / 6 | version u16 = 1 / size u16 = 2048 |
-| 8 | flags u32（bit0 = 已迁移） |
+| 8 | flags u32（bit0 = 已迁移；bit1 = 上一次是回落启动 —— 回落只在"进入"那一次记事件、写日志，§11） |
 | 12 | dispatch_ver u32（迁移时的"分派版本"，§4.10） |
 | 16 | seq u32（事件序号） |
 | 20 | boot_streak u8（连续未完成启动，饱和在 255） |
@@ -149,7 +153,8 @@ boot_b 没有 —— 谁写的不知道（不是我们的安装器会做的事�
 | 48 | migrated_digest[20]：迁移时清掉的 BCB 的 SHA-1 |
 | 68 | migrated_command[32]：原文 |
 | 100 | migrated_recovery[256]：原文（截到 255 字节） |
-| 1024 | 事件环 32 条 × 16 字节：seq u32 / code u16 / slot u8 / flags u8（bit0 已通知）/ aux u32 / reserved u32 |
+| 356 | bcb_seen u32：分派开关关着时上一次"看到但没消费"的 BCB 的 CRC32（0 = 没有；算出来恰为 0 时记 1），同一份 BCB 只记一次（§11） |
+| 1024 | 事件环 32 条 × 16 字节：seq u32 / code u16 / slot u8 / flags u8（bit0 已通知）/ aux u32 / reserved u32。code：1 fallback（slot = 启动的槽，aux = 不可启动的 active 槽）、2 boot_corrupt、3 bcb_dropped、4 wipe_failed、5 refused_merging、6 bootloop、7 noslot、8 migrated、9 bcb_ignored（aux = `gk3_bcb_kind`） |
 | 2044 | crc32（前 2044 字节，小端） |
 
 ## 6. 实现里做了、设计稿没写死的决定
@@ -201,9 +206,9 @@ boot_b 没有 —— 谁写的不知道（不是我们的安装器会做的事�
 - 决策编排（§4.2 第 3–7 步串起来的 `gk3_decide`：迁移 → 一次性意图 → BCB 分派 → bootloop 计数 → 选槽）属于 S5/S6，
   这里只提供了它要用的全部原语；
 - `gk3-misc init`（安装器初始化 misc）属于 S10；
-- `gk3boot.efi` 的动作模式（扣 tries、BCB 分派、迁移、GK3 记录、fail-open 阶梯第 1 步、换槽 / H1）——
-  最小的观察模式版本已有（§10）；执行端（S7）；
-- 在 misc 写入之间断电注入的测试：夹具有了，要等 S5 真的写 misc；
+- `gk3boot.efi`：动作模式的扣 tries / GK3 记录 / fail-open 阶梯第 1 步已有（§11）；还没有的：BCB 真正分派（开关默认关，
+  打开也只记录）、首跑迁移、bootloop 阈值动作、boot_x 坏时换槽 / H1、阶梯第 2、3 步、`LoaderEntryDefault` 处理与双系统；执行端（S7）；
+- 在 misc 写入之间断电注入的测试：gk3boot 现在真的写 misc 了（§11），注入还没做；
 - Linux 静态链接版（执行端）只证明了能 freestanding 编译，还没有真正链接成 aarch64 静态二进制（本机没有交叉链接器）。
 
 ## 9. S3 / S4：EFI 工具链、QEMU 夹具与只读探针 gk3probe.efi
@@ -426,7 +431,7 @@ systemd-boot（OneShot = gk3boot-e4.conf）→ gk3boot.efi
 | BCB | 只分类、记"会怎么做"，照常启动（与今天的直连条目一样不消费） | 分派到执行端 |
 | boot_x 坏 | fail-open | 换另一个可启动的槽（不写 misc）→ H1 → 执行端 |
 | 找盘 | 只认自己 ESP 所在的盘 | 找不到时扫全部整盘，要求全局唯一 |
-| `gk3.observe=1` 缺省 | 照样观察模式（这一版没有动作模式），日志里记一行 | 缺省 = 动作模式 |
+| `gk3.observe=1` 缺省 | 照样观察模式（这一版没有动作模式），日志里记一行 | 缺省 = 动作模式（§11 起就是这样） |
 
 **LoadOptions**：`gk3.observe=1`、`gk3.slot=a|b`（强制；决策照算照记）、`gk3.hint=a|b`（BCAB 无效时用，缺省 a）、
 `gk3.hold=<秒>`（fail-open 复位前在屏幕上停留，缺省 5，最大 30）。
@@ -467,6 +472,7 @@ LoadedImage 取 LoadOptions（不看 FilePath / DeviceHandle，所以缓冲区�
 
 ⚠️ **代价**：这一版**不能**当默认条目用。fail-open 后复位又会回到它自己，形成循环（还可能撞上华为的
 `BootFail count = 3, System ShutDown!`，§2.1）。E5（观察模式设为默认）之前必须补上阶梯第 1 步。
+**→ 已补上（§11.3）**：fail-open 现在写 OneShot 指向直连条目再复位，两种模式都是。
 
 其他兜底：看门狗 120 秒（本机会不会真的复位还没验证，E6）；`ResetSystem` 万一返回就原地等看门狗；**从不** return 给
 systemd-boot（`boot.c:2971-2973` 会把错误码原样交给固件）。内核交接之后的故障不归 gk3boot 管：内核 panic 10 秒后重启
@@ -669,6 +675,7 @@ ESP 用私有挂载点（不叫 `/mnt/esp`）。二进制就是 `tools/gk3boot/b
    撤之前先把日志取回来（第 7 步）。
 
 E4 通过后的下一步是 E5（观察模式当开发机默认、带 `+3` 计数连开 ≥10 次）—— **之前必须先补 fail-open 阶梯第 1 步**（10.3）。
+→ 已补，E5 的步骤见 §11.6。
 
 ### 10.6 已知限制与风险
 
@@ -685,3 +692,313 @@ E4 通过后的下一步是 E5（观察模式当开发机默认、带 `+3` 计�
 - 设备上 `boot_a` 的 id（`c56a7f84…`，E3 日志）与 `out/issues-1791053208/boot.img`（`9274d5f8…`）不同（ramdisk 差几百字节），
   头里的 cmdline 相同；real 场景用的是后者，所以 SHA1 一项在设备上要以 E4 日志为准（E3 已在设备上复算 OK）。
 - gk3boot 没签名、PE 没标 NX_COMPAT，Secure Boot 必须关着（设备上本来就关着）。
+
+## 11. S5 后续：动作模式 + fail-open 写 OneShot（开发机默认条目的前提）
+
+设计稿 §4.2–§4.3、§4.5、§4.12；给 E5（观察模式当开发机默认、带 `+3`）、E6（计数与 fail-open）、E7（切到动作模式）、
+E8（自动回滚演练）做准备。E4 那一版（§10）的行为在观察模式下原样保留，只多了"fail-open 写 OneShot"。
+
+### 11.1 两种模式
+
+```
+systemd-boot（默认条目 gk3boot-android-<x>[+N].conf，sort-key 0gk3 排在直连条目 zandroid<x> 前面，
+              loader.conf 的 default "*-android-<x>.conf" 先命中它；或者像 E4 那样经 OneShot 进来）→ gk3boot.efi
+  0 看门狗 120 s；解析 options；hint = gk3.hint > 自己条目名里的 -android-<x> > a
+  1 本盘 + 主 GPT（同 §10）
+  2 读 misc 0–64 KiB → BCB / GK3 / BCAB / VAB → gk3_select_slot（在副本上算）
+      NOSLOT / MERGING（合并中 active 槽不可启动，不许换槽）→ 本该进执行端，执行端没有 → fail-open（目标 = active 槽）
+  3 动作模式：选中的槽未成功 → 写 misc+0x800（只改该槽 tries 与 CRC）→ Flush → 逐块读回 → 再按字节读回、校验 CRC；
+              写不进去 → fail-open（不启动一个没扣到 tries 的未确认槽）
+              GK3 记录（misc+8 KiB）：boot_streak +1、回落 / BCB 事件 → 写 → 读回；写不进去只记日志、照常启动
+  4 读 boot_<x> → SHA1(id) → cmdline（动作模式多一项 androidboot.gk3boot.streak=N）→ H2 交接（同 §10）
+  ✗ 任何一步失败 → fail-open：写 LoaderEntryOneShot = 直连条目 → 冷复位（11.3）
+```
+
+| | 观察模式 `gk3.observe=1` | 动作模式 `gk3.observe=0` 或不带 |
+|---|---|---|
+| misc | 只读（块设备包装没有 write 回调） | 只写两处：未成功槽的 tries（BCAB 槽位 + CRC）、GK3 记录 |
+| tries | 记"会扣 x → y (NOT written)" | 扣；扣到 0 后下一次自然落到另一槽（tries 0 且未成功 = `SetSlotAsUnbootable` 写出的状态，不另写） |
+| GK3 记录 | 记"会 +1 (NOT written)" | boot_streak +1（饱和 255）；记录无效时新建一份**不带迁移标记**的（迁移随分派开关打开的那一版做，§4.10） |
+| BCB | 记"会怎么做" | 分派关：只记一次（事件 `bcb_ignored` + 日志），**不消费、不清除**，照常启动 |
+| ESP 日志 | 每次开机一份 | **只在异常时**写（11.4）；正常路径对 ESP 零写入 |
+| 屏幕 | 打 trace | 正常路径一行不打；fail-open 时打失败原因与倒计时 |
+| EFI 变量 | 只在 fail-open 时写 `LoaderEntryOneShot`（唯一允许的写，日志里有一行） | 同左 |
+| cmdline | `androidboot.gk3boot.mode=observe` | `mode=action` + `androidboot.gk3boot.streak=N`（→ `ro.boot.gk3boot.streak`） |
+
+`event` 的取值：`none` / `fallback`（active 槽不可启动、换了槽）/ `bcab_invalid`（按 hint 启动）/ `forced`（`gk3.slot`）。
+
+**bootloop 阈值动作不启用**：设计稿 §4.3.3 是"连续未完成启动 ≥5 → 执行端菜单"，执行端没有，而且开机完成清零是 Android 侧
+S9 的事（还没做）—— 所以现在 streak 在入口这边只增不减，只报给 cmdline 看。S9 做之前它就是"自从 GK3 记录建起来一共开了几次"。
+
+### 11.2 开关
+
+| 选项 | 含义 |
+|---|---|
+| `gk3.observe=0\|1` | 1 = 观察模式，0 或不带 = 动作模式。⚠️ E4 时代"不带也按观察模式跑"**不再成立** |
+| `gk3.dispatch=0\|1` | BCB 分派开关，缺省 = 编译期 `GK3BOOT_DISPATCH_DEFAULT`（`make -C efi DISPATCH_DEFAULT=0`，出厂 0）。打开后按 `gk3_dispatch_plan`（§4.3.4 的表 + §4.10 迁移）决定去向，但**去向目前只有"记录 + 继续启动"**：日志一行 `note: dispatch: action=… why=… count=…`、GK3 的分派计数照记，BCB 原样不动（执行端 S7 没有；E-K7：开关要与执行端、迁移同版发布） |
+| `gk3.slot=a\|b` | 强制启动这一槽；决策照算照记；动作模式下**不扣 tries**（日志里一行 note） |
+| `gk3.hint=a\|b` | BCAB 无效时按它启动；fail-open 发生在选槽之前时的目标槽。缺省取条目名里的 `-android-<x>`，再没有就是 a |
+| `gk3.mid=<32 位十六进制>` | fail-open 时只认这个 machine-id 的直连条目（缺省自己在 `\loader\entries` 里找） |
+| `gk3.hold=<秒>` | fail-open 复位前在屏幕上停多久，缺省 5，最大 30 |
+
+选项值不合法（如 `gk3.observe=2`）→ fail-open（stage=options）。
+
+### 11.3 fail-open：写 OneShot 指向直连条目，再冷复位（阶梯第 1 步）
+
+- **直连条目** = 本 ESP 上 `\loader\entries\<32 位十六进制>-android-<x>.conf`（安装器的写法，`scripts/live/installer-lib.sh:921`），
+  x = 目标槽（选槽之前失败用 hint，选完之后用要启动的槽；NOSLOT / MERGING 用 active 槽）；这个槽没有就用另一槽的。
+  gk3boot 自己的 `gk3boot-android-<x>…` 前缀不是 machine-id，不会被当成直连条目。有多个 machine-id（多份安装共用 ESP）时取 id
+  最大的那个 —— 与 systemd-boot 的 default 通配在两份直连条目之间会挑的那个一致（`boot.c:1707-1745` 排序、`:1771-1782` 取第一个）。
+- **写法**与 `scripts/boot-oneshot.sh` 相同：属性 `0x07`（NV|BS|RT）、UTF-16LE + 结尾 NUL；写完 `GetVariable` 读回比对（日志
+  `fail-open: LoaderEntryOneShot=… written (attr 0x7, 96 bytes), read back OK`）。**写失败也照样复位**。
+- systemd-boot 下一次读到 OneShot 就删掉它（`boot.c:1637-1640`）⇒ 直连条目**只走一次**，再下一次又回到默认条目（gk3boot）。
+  所以 gk3boot 即使是默认条目，失败一次也不会原地循环：每次失败多一次重启、开出来的是今天的老路。反复失败由 systemd-boot 的条目
+  计数兜底（`+3` 用完后条目排到最后，default 通配命中直连条目，`boot.c:1714`）。
+- 观察模式也写（这是观察模式唯一允许的写）：E4 那种非默认条目本来不写也能回到默认，但写了也只是让下一次明确走直连条目。
+- **没做**：阶梯第 2 步（写变量失败时把自己的条目改名 `+0`）、第 3 步（两样都失败时停在屏幕上等按键）。现在写变量失败就直接复位，
+  靠条目计数兜底（E5 的条目带 `+3`）；没有计数的默认条目 + 变量写不进去 = 每次开机都 fail-open 一次再进默认条目自己 —— 会循环，
+  所以 **gk3boot 当默认条目时一定要带计数**。
+
+### 11.4 动作模式的 ESP 日志：只在异常时写
+
+日志一直记在内存里（`gk3_lg`，256 KiB），出第一件异常事时才在 `\EFI\gk3boot\log\boot-<n>.txt` 建文件、把整段（含异常之前的经过）写进去。
+"异常"分两类，前缀不同：
+
+| 前缀 | 什么时候 | 去向 |
+|---|---|---|
+| `!! FAIL-OPEN at <stage>:` | 任何 fail-open | 写 OneShot、冷复位 |
+| `!! gk3rec: write … failed` | GK3 记录写不进去 / 读回不一致 | 照常启动 |
+| `note: fallback: …` | **进入**回落的那一次（GK3 flags bit1 由 0 变 1）；之后一直停在回落槽的启动不再记 | 照常启动（event=fallback 每次都报） |
+| `note: bcab invalid …` | BCAB 坏（magic / version / CRC / nb_slot），按 hint 启动、不写 BCAB（HAL 开机后会重建） | 照常启动 |
+| `note: bcb: kind=… present; dispatch is off …` | 一份**新的**非空 BCB（CRC32 与 GK3 `bcb_seen` 不同）；同一份 BCB 第二次起不再记 | 照常启动，BCB 原样 |
+| `note: dispatch: …` | 分派打开且决定不是 none | 照常启动，BCB 原样 |
+| `note: gk3.slot=… forces …` | 动作模式下用了 `gk3.slot` | 照常启动，不扣 tries |
+| `note: gk3rec: 8 KiB area held non-zero data …` | 8 KiB 处有东西却不是有效的 GK3 记录（被覆盖前留个底） | 照常启动 |
+
+扣 tries 本身**不算**异常（OTA 之后的第一次开机就是这样），不写日志；扣到 0 的那一次也不写 —— 下一次回落时才记。
+
+### 11.5 QEMU 结果
+
+```sh
+colima start
+bash scripts/gk3boot/test-boot.sh          # 14 个场景、20 次 QEMU 启动，约 8 分钟
+bash scripts/gk3boot/test-boot.sh action-tries failopen-oneshot
+colima stop
+```
+
+动作模式的场景里 gk3boot 是**默认条目**（`fixture.py mkdisk --gk3boot-entry gk3boot-android-<x>[+N].conf --loader-default '*-android-<x>.conf'`，
+sort-key `0gk3`），不写 OneShot；同一块盘、同一个变量库连开几次，**每次**都比对 misc 前后 64 KiB（`qemu/check_misc.py`：
+只准动 BCAB 的槽位与 CRC、GK3 记录；BCB、16 KiB 起的系统区一个字节都不许变；BCAB / GK3 记录用 Python 独立解码、独立算 CRC），
+其余分区与 ESP 照旧逐区 / 逐文件比对，新日志单独取出来判。
+
+| 场景 | 做什么 | 判据（摘要） |
+|---|---|---|
+| （原 8 个） | 同 §10.4，观察模式 | 全过；badsha / miscerr 现在多一条：日志 `LoaderEntryOneShot=<mid>-android-a.conf written … read back OK`，复位后进的就是它 |
+| action-normal | 实机 misc（_a 15/1/已成功），默认条目 `gk3boot-android-a.conf`，不带 observe | 起到 initramfs，`/proc/cmdline` 带 `mode=action streak=1 event=none`；**ESP 上没有新日志**、屏幕上没有 gk3boot 的字；misc 只有 GK3 记录变了（新建、streak=1、无事件），BCAB 逐字节不变 |
+| action-tries | _b 15/3 未成功、_a 14/1 已成功，`gk3.observe=0`；夹具里的"Android"从不标成功；连开 5 次 | 第 1–3 次启动 _b，BCAB `b=15/3→15/2→15/1→15/0`（每次只动 bcab+14 与 CRC 四字节，CRC 对），streak 1→3，无日志；第 4 次 `decision: boot slot=_a active=_b fallback=1`、`event=fallback`、BCAB 不动、GK3 事件 `fallback`（slot _a、aux _b）+ flags bit1、写一份日志；第 5 次仍是 _a、event=fallback，但**不再重复记**（事件仍 1 条、没有新日志） |
+| failopen-oneshot | 默认条目 `gk3boot-android-b+3.conf`、misc = _b 已成功（同开发机）、boot_b 坏一个字节；连开 2 次 | 每次：`!! FAIL-OPEN at boot: boot_b: SHA1(id) MISMATCH`、OneShot=`<mid>-android-b.conf` 写入并读回、屏幕上有 FAIL-OPEN、复位后 `GK3-FAKE-ANDROID booted entry="<mid>-android-b.conf"`；每次运行 gk3boot 只失败一次、直连条目只进一次；运行后变量库里 `LoaderEntryOneShot` 已不在；第 2 次又是 gk3boot 先跑（OneShot 只用一次）；条目计数 `+3 → +2-1 → +1-2`，`androidboot.gk3boot.entry` 跟着变；misc 只有 streak 1→2 |
+| bcb-present | 实机 misc + BCB `boot-recovery` / `--wipe_data --reason=… --locale=…`，分派关；连开 2 次 | 两次都照常启动 _a；**BCB 逐字节不变**；第 1 次日志 `note: bcb: kind=wipe … NOT consumed, NOT cleared`、GK3 事件 `bcb_ignored`（aux 3 = wipe）、`bcb_seen` = CRC32(BCB)；第 2 次没有新日志、事件仍 1 条 |
+| vab-merging | VAB `merge_status=3`（MERGING，源 _a）、_b 15/0 不可启动、_a 14/1 已成功（没有守卫就会回落到 _a） | `decision: merging slot=_b`、`!! FAIL-OPEN at decision: … refusing to fall back to _a (§4.3.2-4)`、OneShot=`<mid>-android-b.conf`；**misc 64 KiB 一个字节不变** |
+| bcb-dispatch | `gk3.dispatch=1` + 已迁移的 GK3 记录 + wipe BCB | `note: dispatch: action=executor why=wipe count=1 -> this build has no executor (S7): recorded only …`；照常启动 _a；BCB 原样；GK3 分派记录 why=3 count=1、迁移标记保留 |
+
+**2026-10-05 的结果**（macOS 27 + colima，QEMU 10.0.13 TCG，`-cpu cortex-a76`；测试内核 Debian `linux-image-6.12.111+deb13-arm64-unsigned`；
+gk3boot `0.2.0-e5.g09442bc9773e`（在提交 `09442bc` 上构建），96203 字节，sha256 `7956352c48f2ae7c392ac2f43616c0c678ed8154ad4180dd7cb0ce69033b136e`；
+主机单测 `libgk3core：通过 402，失败 0`）：
+
+```
+══ 汇总：real=PASS linux-a=PASS linux-b=PASS force-a=PASS strictnx=PASS espfull=PASS badsha=PASS miscerr=PASS action-normal=PASS action-tries=PASS failopen-oneshot=PASS bcb-present=PASS vab-merging=PASS bcb-dispatch=PASS
+```
+
+action-tries 第 4 次的日志（`build/qemu-boot/action-tries/log-4.txt`，节选）：
+
+```
+mode: action dispatch=off force_slot=- hint=_b (from entry name) hold=1 s entry=gk3boot-android-b.conf
+gk3rec: valid not-migrated boot_streak=3 flags=0x0
+bcab: valid  _a=14/1/ok  _b=15/0/unbootable
+decision: boot slot=_a active=_b fallback=1
+slot: _a (event=fallback)
+misc: BCAB not written (slot already successful)
+note: fallback: active slot _b is not bootable (tries exhausted, not marked successful) -> booting _a; GK3 event fallback recorded
+log_file: \EFI\gk3boot\log\boot-0.txt
+gk3rec: written, boot_streak=4 flags=0x2 (read back OK; bootloop threshold not enforced: no executor yet)
+```
+
+五次启动内核看到的 cmdline 尾巴（`/init` 打的 `/proc/cmdline`）：
+
+```
+androidboot.slot_suffix=_b … androidboot.gk3boot.event=none     … androidboot.gk3boot.mode=action androidboot.gk3boot.streak=1
+androidboot.slot_suffix=_b … androidboot.gk3boot.event=none     … androidboot.gk3boot.mode=action androidboot.gk3boot.streak=2
+androidboot.slot_suffix=_b … androidboot.gk3boot.event=none     … androidboot.gk3boot.mode=action androidboot.gk3boot.streak=3
+androidboot.slot_suffix=_a … androidboot.gk3boot.event=fallback … androidboot.gk3boot.mode=action androidboot.gk3boot.streak=4
+androidboot.slot_suffix=_a … androidboot.gk3boot.event=fallback … androidboot.gk3boot.mode=action androidboot.gk3boot.streak=5
+```
+
+failopen-oneshot 第 1 次（日志 + 串口）：
+
+```
+!! FAIL-OPEN at boot: boot_b: SHA1(id) MISMATCH: header c543811c…, computed 928274ba…
+gk3boot.result=fail-open stage=boot target=_b t=503 ms
+fail-open: LoaderEntryOneShot=8a29534fa802480d9fbb71aa18c01d7b-android-b.conf written (attr 0x7, 96 bytes), read back OK
+cold reset in 1 s ...
+GK3-FAKE-ANDROID booted entry="8a29534fa802480d9fbb71aa18c01d7b-android-b.conf" …
+  ✓ LoaderEntryOneShot = (absent)
+  ✓ 条目 = ['loader/entries/gk3boot-android-b+2-1.conf']
+```
+
+vab-merging：
+
+```
+vab: valid merge_status=3 source=_a
+decision: merging slot=_b active=_b fallback=0
+!! FAIL-OPEN at decision: merging: active slot _b is not bootable while a snapshot merge is in progress; refusing to fall back to _a (§4.3.2-4); the executor (why=merging) is not in this build
+fail-open: LoaderEntryOneShot=8a29534fa802480d9fbb71aa18c01d7b-android-b.conf written (attr 0x7, 96 bytes), read back OK
+```
+
+### 11.6 E5 上机步骤（观察模式当开发机默认条目、带 `+3`；这一轮没有上机，由用户执行）
+
+目的（设计稿 §6 E5）：gk3boot 当**默认条目**连续开机 ≥10 次，每次核对"入口的决策"与实际槽；看 systemd-boot 在这台机器的固件上
+能不能给条目计数改名（E3 / E4 都没带计数，`LoaderBootCountPath` 还没在真机上出现过）。**观察模式**：misc 一个字节都不写。
+切到动作模式是 E7 的事（11.7）。
+
+前提：**征得同意、用户在场、能长按电源键**（E-K11；最好接着键盘盖，菜单里能手动选直连条目）；设备在 Android 里，`adb shell`
+是 root（`boot-oneshot.sh` 要）；ESP 用私有挂载点（不叫 `/mnt/esp`）；E5 期间**不做 OTA**。二进制 = `tools/gk3boot/build/efi/gk3boot.efi`
+（`test-boot.sh` 末尾打印 sha256；版本串里不该有 `.dirty`）。`D=out/gk3boot-e5-$(date +%Y%m%d)`。
+
+1. **留基线、看清现状**（只读）：
+
+   ```sh
+   mkdir -p $D
+   bash scripts/boot-oneshot.sh --list | tee $D/entries-before.txt
+   adb shell getprop ro.boot.slot_suffix; adb shell bootctl get-current-slot
+   adb shell cat /proc/cmdline > $D/cmdline-before.txt
+   adb exec-out 'dd if=/dev/block/by-name/misc bs=65536 count=1 2>/dev/null' > $D/misc-before.bin
+   shasum $D/misc-before.bin
+   make -C tools/gk3boot gk3-misc && tools/gk3boot/build/gk3-misc select $D/misc-before.bin b
+   ```
+   核对：`default *-android-<x>.conf` 的 x 就是当前槽（2026-10-05 开发机是 `_b`：`_b` 15/1/已成功、`_a` 14/0 不可启动，下面按 b 写；
+   是 a 就把下面的 b/a 对调）；`<mid>-android-{a,b}.conf` 两个直连条目都在；**`LoaderEntryDefault` 必须是空的**（它优先于 loader.conf，
+   设了就轮不到 gk3boot —— 入口删它的那一步还没做，§4.2 第 0 步）；`LoaderEntryOneShot` 是空的；`gk3-misc select` 说 `boot _b`。
+
+2. **两个条目**（文件名带 `+3`；sort-key `0gk3`；title 只用 ASCII）。两个槽各一个，`gk3.hint` 与文件名里的字母一致 —— HAL 改 default
+   字母（setActive）时，被通配命中的永远是同字母的那个：
+
+   ```sh
+   for x in a b; do cat > /tmp/gk3boot-android-$x+3.conf <<CONF
+   title      gk3boot E5 (observe) slot _$x
+   sort-key   0gk3
+   efi        /EFI/gk3boot/e5/gk3boot.efi
+   options    gk3.observe=1 gk3.hint=$x gk3.hold=10
+   CONF
+   done
+   ```
+   为什么**一直带计数**：`gaokun3-ota-postinstall.sh:110-115` 要求 `*-android-<槽>.conf` 恰好一个，`install-ota-local.sh:149` 也按这个名字找；
+   带计数的 `gk3boot-android-b+3.conf` 不匹配这两个通配（`+3` 在 `.conf` 前面），而 systemd-boot 比 default 时用的是去掉计数的 id
+   `gk3boot-android-b.conf`，照样命中。一旦"祝福"成不带计数的名字，OTA postinstall 就会因为有两个 `*-android-b.conf` 而失败。
+
+3. **拷到 ESP**（预先建好日志目录，§10.3）：
+
+   ```sh
+   adb push tools/gk3boot/build/efi/gk3boot.efi /tmp/gk3boot-android-a+3.conf /tmp/gk3boot-android-b+3.conf /data/local/tmp/
+   adb shell 'set -e; M=/mnt/gk3boot_esp; mkdir -p $M; mount -t vfat /dev/block/by-name/esp $M
+     mkdir -p $M/EFI/gk3boot/e5 $M/EFI/gk3boot/log
+     cp /data/local/tmp/gk3boot.efi $M/EFI/gk3boot/e5/gk3boot.efi
+     cp /data/local/tmp/gk3boot-android-a+3.conf /data/local/tmp/gk3boot-android-b+3.conf $M/loader/entries/
+     sync; sha256sum $M/EFI/gk3boot/e5/gk3boot.efi; ls $M/loader/entries/; grep ^default $M/loader/loader.conf; df -h $M
+     umount $M; rmdir $M; rm /data/local/tmp/gk3boot.efi /data/local/tmp/gk3boot-android-?+3.conf'
+   ```
+   sha256 与宿主上的一致；ESP 剩余远大于 1 MiB。**这一步之后，下一次开机默认就走 gk3boot。**
+
+4. **征得同意、确认有人在场后** `adb reboot`。预期：systemd-boot 菜单（15 秒）里最上面两项是 gk3boot（sort-key 相同时按 id 倒序，
+   `_b` 在前），高亮的是 "gk3boot E5 (observe) slot _b" → gk3boot 打二十来行
+   （不到 1 秒）→ Android。出事时：
+   - 屏幕上 `!! FAIL-OPEN at …`：停 10 秒、写 OneShot、冷复位进 `<mid>-android-b.conf`（直连条目），**不用动手**；拍下那几行。
+     下一次开机又会先进 gk3boot（OneShot 只用一次）—— 想先停下就在 Android 里做第 8 步撤掉。
+   - 停在 UEFI 超过 120 秒：看门狗没起作用（E6 的问题），长按电源键。之后的开机：菜单里手动选 "crDroid … slot _b"，或者什么都不做 ——
+     `+3` 用完（连续 3 次没被重新挂上计数）systemd-boot 自己改走直连条目。
+   - 进了内核但 Android 起不来：与直连条目同一个内核，概率与 E4 相同；panic 10 秒后重启，计数会兜底。
+
+5. **每次开机后核对**：
+
+   ```sh
+   n=1   # 第几次
+   adb shell cat /proc/cmdline > $D/cmdline-$n.txt
+   tr ' ' '\n' < $D/cmdline-$n.txt | grep -E 'slot_suffix|gk3boot|bootloader'
+   adb shell 'getprop | grep -E "ro\.boot\.gk3boot|ro\.bootloader"'; adb shell bootctl get-current-slot
+   bash scripts/boot-oneshot.sh --list | tee $D/entries-$n.txt
+   adb exec-out 'dd if=/dev/block/by-name/misc bs=65536 count=1 2>/dev/null' | shasum   # 与 misc-before 相同
+   ```
+   应该看到：`androidboot.gk3boot.mode=observe`、`event=none`、`entry=gk3boot-android-b+2-1.conf`（**带了计数的新名字** = 固件上
+   systemd-boot 的改名成功了，`LoaderBootCountPath` 也有了）；ESP 上条目变成 `gk3boot-android-b+2-1.conf`；misc sha1 不变；
+   `LoaderEntrySelected = gk3boot-android-b.conf`。改名没发生（文件名还是 `+3`、cmdline 里 entry 是不带计数的 id）也能开机，
+   但说明计数在这台固件上不生效 —— 记下来，这决定了 1.0 的"入口计数回落"能不能用（§4.3.3）。
+
+6. **重新挂上计数**（代替 Android 侧的 bless，S9 还没做）：
+
+   ```sh
+   adb shell 'set -e; M=/mnt/gk3boot_esp; mkdir -p $M; mount -t vfat /dev/block/by-name/esp $M
+     cd $M/loader/entries; for f in gk3boot-android-b+*.conf; do [ "$f" = gk3boot-android-b+3.conf ] || mv "$f" gk3boot-android-b+3.conf; done
+     ls; cd /; sync; umount $M; rmdir $M'
+   ```
+   改回 `+3` 而不是去掉计数（理由见第 2 步）。
+
+7. **重复第 4–6 步，凑满 ≥10 次**。每次从 ESP 取日志看 `decision:`（应为 `boot slot=_b active=_b fallback=0`）与
+   `gk3-misc select` 的输出一致：
+
+   ```sh
+   adb shell 'M=/mnt/gk3boot_esp; mkdir -p $M; mount -t vfat -o ro /dev/block/by-name/esp $M; ls $M/EFI/gk3boot/log/'
+   adb pull /mnt/gk3boot_esp/EFI/gk3boot/log/ $D/
+   adb shell 'umount /mnt/gk3boot_esp; rmdir /mnt/gk3boot_esp'
+   grep -hE '^(decision|slot|boot_b: read|gk3boot.result)' $D/log/boot-*.txt
+   ```
+   **可选（E6 的前半，计数回落）**：连续 3 次开机都**不做**第 6 步：条目依次变成 `+2-1`、`+1-2`、`+0-3`，第 4 次开机 systemd-boot
+   应自己改走 `<mid>-android-b.conf`（`ro.bootloader` 不再是 `gk3boot-…`、`ro.boot.gk3boot.*` 为空）。做完第 6 步就恢复。
+   **可选（E6 的 fail-open 真机验证，不需要特制版本）**：另放一个非默认条目 `gk3boot-e6fail.conf`（文件名不匹配 `*-android-*`），
+   options `gk3.observe=2 gk3.hint=b gk3.hold=10`（`observe=2` 不合法 ⇒ stage=options 的 fail-open），经 `boot-oneshot.sh gk3boot-e6fail.conf`
+   进一次：应看到 FAIL-OPEN、10 秒后复位、进 `<mid>-android-b.conf` —— 证明 gk3boot 在华为固件上写 NV 变量 + 冷复位这条路是通的。
+
+8. **撤回**（任何时候都可以；先把日志取回来）：
+
+   ```sh
+   adb shell 'set -e; M=/mnt/gk3boot_esp; mkdir -p $M; mount -t vfat /dev/block/by-name/esp $M
+     rm -f $M/loader/entries/gk3boot-android-*.conf $M/loader/entries/gk3boot-e6fail.conf
+     rm -rf $M/EFI/gk3boot/e5 $M/EFI/gk3boot/log
+     rmdir $M/EFI/gk3boot 2>/dev/null || true
+     sync; ls $M/loader/entries/; grep ^default $M/loader/loader.conf; umount $M; rmdir $M'
+   bash scripts/boot-oneshot.sh --clear    # 万一还有没被消费的 OneShot
+   bash scripts/boot-oneshot.sh --list     # 条目只剩直连的；LoaderEntryDefault / OneShot 为空
+   ```
+   loader.conf 一个字没改过，删掉条目就回到今天的直连路径。撤回之后的那次开机不需要特别的同意以外的准备（就是直连条目）。
+   Android 起不来、进不了 adb 时：开机菜单里选 "crDroid … slot _b"（直连条目），或用 `gaokun3 installer`（live）挂 ESP 删掉
+   `loader/entries/gk3boot-android-*.conf`。
+
+### 11.7 之后：E7（切到动作模式）
+
+把第 2 步 options 里的 `gk3.observe=1` 改成 `gk3.observe=0`（`gk3.dispatch` 不写 = 关）。从这一刻起 gk3boot 会写 misc：
+- 第一次开机在 misc+8 KiB 建 GK3 记录（实机读出那里全零，`test/vectors/misc-20261005-*.bin`）。⚠️ 设计稿 §4.5 要求的
+  "8 KiB 处无人使用"（grep libboot_control / libsnapshot / recovery / update_engine）**还没有书面结论**：S1 的记录
+  （scratchpad `s1-grep.txt`）只核了 BCAB 布局与偏移常量。**E7 之前先补这一条 grep**（构建机 light 档）；
+- 选中的槽已成功时 BCAB 不动；`bootctl set-active-boot-slot` 当前槽（successful=0、tries 6）之后，下一次开机 tries 6→5，
+  Android 的 update_verifier 标成功后回到 tries 1 / successful（设计稿 E7 的那一条）；
+- `ro.boot.gk3boot.streak` 每次 +1、不会清零（S9 前）——这是预期，不触发任何动作。
+
+撤回动作模式时，GK3 记录留在 misc+8 KiB 无害（没有别人读）；要清就 `dd if=/dev/zero of=/dev/block/by-name/misc bs=2048 seek=4 count=1`
+（**只有** 8192–10239 这 2 KiB；写前先 `dd` 备份整个 64 KiB）。
+
+### 11.8 限制与风险
+
+- **BCB 一律不消费**（分派开关关；打开也只记录）：`adb reboot bootloader / fastboot / recovery` 和"清除所有数据"在 gk3boot 下与今天的直连
+  条目一样 —— 照常进 Android，BCB 一直留着（只在第一次看到时记一条事件与日志）。首跑迁移（§4.10）也没做：GK3 记录建起来时**不带**
+  迁移标记，留给打开分派的那一版。
+- **boot_x 坏不换槽、不走 H1**：直接 fail-open 到该槽的直连条目（它启动的是 ESP 上那份内核，效果上就是 H1）；设计稿 §4.3.3 的
+  "本次换另一个可启动的槽、不写 misc"没做。
+- **fail-open 阶梯只有第 1 步**（11.3）：gk3boot 当默认条目时**必须带计数**。
+- 动作模式下 tries **先扣再读 boot_x**：boot_x 坏导致的 fail-open 也算掉一次 tries（与"内核起不来"同等对待），streak 也会 +1。
+- misc 写入之间断电：BCAB（32 字节，一个块内）与 GK3 记录（2 KiB，跨 4 个 512 字节块）是两次独立的读-改-写；断在 GK3 记录中间会留下
+  CRC 无效的记录 = "无记录"，下一次重建（streak 从 1 数起），不影响启动。还没做断电注入测试（§8）。
+- **`LoaderEntryDefault` 不处理**（§4.2 第 0 步）：用户在菜单里对直连条目按过 `d`，gk3boot 就不会被选中（E5 第 1 步要先查）。
+- **misc+8 KiB 无人使用还没 grep 核实**（11.7）：动作模式每次开机都写这 2 KiB，E7 之前必须补上。
+- MERGING / NOSLOT 走 fail-open 时**不记** GK3 事件（`refused_merging` / `noslot`）：fail-open 路径上除 OneShot 外一律不写。
+- fail-open 选直连条目只认 `<32 位十六进制>-android-<x>.conf`；安装器以外的手写条目（别的名字）不会被选中，那时不写 OneShot、直接复位。
+- 观察模式与动作模式共用同一个二进制：条目 options 写错（漏了 `gk3.observe=1`）就是动作模式 —— E5 的条目一定要带 `gk3.observe=1`，
+  第 5 步看 `androidboot.gk3boot.mode=observe` 确认。
+- 计数改名、`LoaderBootCountPath`、SetVariable(NV) 从 gk3boot 里写：都只在 QEMU（AAVMF）上验过，华为固件上是 E5 / E6 要回答的问题。
