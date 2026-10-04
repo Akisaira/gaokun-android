@@ -5,7 +5,8 @@
 
 .DESCRIPTION
   以管理员身份运行（双击同目录的 gaokun3-setup.cmd）。每一步之前先检查、先说清楚，真动盘之前要你输入 YES：
-    1. 预检：型号 GK-W7X、Windows on ARM、UEFI、安全启动已关；BitLocker 开着时先要你确认拿得到恢复密钥
+    1. 预检：型号 GK-W7X、Windows on ARM、UEFI；BitLocker 开着时先要你确认拿得到恢复密钥、再暂停它 2 次重启
+       （排在安全启动之前：关安全启动本身就可能触发恢复密钥）；然后要求安全启动已关
     2. 让 Windows 自己"压缩卷"（默认 D:），【只】缩出安装器自己要的那一点（按安装包的实际内容算，约 0.5–2 GiB）。
        给 Android 的空间到安装器里再分（用户 2026-09-27："更改磁盘应该在安装的时候进行，安装安装器应该仅划分自己需要的空间"）。
        例外：D: 加了密（BitLocker / 设备加密）时安装器缩不了它、只有 Windows 能 —— 那时会问你要不要现在就缩出给 Android 的空间。
@@ -318,16 +319,32 @@ function Invoke-Setup {
     $model = (Get-CimInstance Win32_ComputerSystem).Model
     if ($model -ne 'GK-W7X' -and -not $SkipModelCheck) { Fail "型号是 $model，这个安装器只给 MateBook E Go 2022（GK-W7X）" "model is $model; this installer is for the MateBook E Go 2022 (GK-W7X) only" }
     Say "型号 $model" "model $model"
-    try { $sb = Confirm-SecureBootUEFI } catch { Fail '不是 UEFI 启动（或读不到安全启动状态）' 'not booted in UEFI mode (or Secure Boot state unreadable)' }
-    if ($sb) { Fail '安全启动开着：内核没有签名，开着就起不来。进固件设置关掉安全启动后再运行' 'Secure Boot is on: the kernel is unsigned. Turn Secure Boot off in firmware setup, then run this again' }
-    Say '安全启动已关' 'Secure Boot is off'
+    # ★ BitLocker 排在安全启动【之前】查（v1.0 计划 GUI-7 / INST-11）：关安全启动本身就会让绑定 PCR7 的
+    #   BitLocker / 设备加密在下次开机要恢复密钥。原先这一条排在"安全启动开着就 Fail"之后 —— 用户照提示关掉
+    #   安全启动、回到 Windows（可能当场就被要恢复密钥），重跑脚本才第一次看到"先确认拿得到恢复密钥"，已经晚了。
+    #   现在：先确认恢复密钥，再暂停保护 2 次重启（关安全启动回来算一次、装完第一次经 systemd-boot 进 Windows 算一次；
+    #   之后 Windows 自己恢复保护、按当时的启动路径重新封存 —— 按 Windows 的行为推断，没在本机上实测过），然后才让用户去关安全启动。
     $bl = $null
+    $blSuspended = $false
     try { $bl = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop } catch { }
     if ($bl -and $bl.ProtectionStatus -eq 'On') {
-        Warn "$env:SystemDrive 开着 BitLocker（或设备加密）。改了启动方式之后，Windows 下次开机可能要你输入恢复密钥。" "BitLocker (or device encryption) is on for $env:SystemDrive. After the boot path changes, Windows may ask for the recovery key."
+        Warn "$env:SystemDrive 开着 BitLocker（或设备加密）。关安全启动、改了启动方式之后，Windows 下次开机可能要你输入恢复密钥。" "BitLocker (or device encryption) is on for $env:SystemDrive. After Secure Boot is turned off or the boot path changes, Windows may ask for the recovery key."
         Warn '先确认你拿得到恢复密钥（Microsoft 账户：https://aka.ms/myrecoverykey），再继续。（这一条没在本机上实测过）' 'Make sure you have the recovery key (https://aka.ms/myrecoverykey) before going on. (Not verified on this machine.)'
-        Confirm-Yes '我已经拿到了恢复密钥。' 'I have the recovery key.'
+        Confirm-Yes "我已经拿到了恢复密钥。接下来暂停 $env:SystemDrive 的 BitLocker 保护 2 次重启。" "I have the recovery key. Next: suspend BitLocker on $env:SystemDrive for 2 restarts."
+        try {
+            Suspend-BitLocker -MountPoint $env:SystemDrive -RebootCount 2 -ErrorAction Stop | Out-Null
+            $blSuspended = $true
+            Say "已暂停 $env:SystemDrive 的 BitLocker 保护：接下来 2 次重启不会要恢复密钥，之后 Windows 自动恢复保护" "BitLocker on $env:SystemDrive is suspended for the next 2 restarts; Windows resumes it by itself afterwards"
+        } catch {
+            Warn "暂停 BitLocker 失败（$($_.Exception.Message)）：照样可以继续，但手上一定要有恢复密钥" "Could not suspend BitLocker ($($_.Exception.Message)): you can go on, but keep the recovery key at hand"
+        }
     }
+    try { $sb = Confirm-SecureBootUEFI } catch { Fail '不是 UEFI 启动（或读不到安全启动状态）' 'not booted in UEFI mode (or Secure Boot state unreadable)' }
+    if ($sb) {
+        if ($blSuspended) { Fail '安全启动开着：内核没有签名，开着就起不来。BitLocker 已经暂停了 —— 现在重启进固件设置关掉安全启动，回到 Windows 后再运行本脚本' 'Secure Boot is on: the kernel is unsigned. BitLocker is suspended now - restart into firmware setup, turn Secure Boot off, then run this again from Windows' }
+        Fail '安全启动开着：内核没有签名，开着就起不来。进固件设置关掉安全启动后再运行' 'Secure Boot is on: the kernel is unsigned. Turn Secure Boot off in firmware setup, then run this again'
+    }
+    Say '安全启动已关' 'Secure Boot is off'
     Test-Bundle $here
     Say '安装包校验通过（sha256）' 'bundle verified (sha256)'
 

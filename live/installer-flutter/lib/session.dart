@@ -45,9 +45,13 @@ class AlongInstalled extends Along {
 }
 
 class AlongNoRoom extends Along {
-  const AlongNoRoom(this.haveMib, this.needMib);
+  const AlongNoRoom(this.haveMib, this.needMib, [this.fixedMib]);
   final int haveMib;
   final int? needMib;
+
+  /// 除 /data 之外要的固定开销（PLANERR fixed_mib；旧后端没有这个字段 → null）。
+  /// 缩分区页拿它把默认值算成"/data 约 64 GiB"（v1.0 计划 GUI-20）
+  final int? fixedMib;
 }
 
 class AlongMbr extends Along {
@@ -62,11 +66,31 @@ class AlongError extends Along {
 /// /run 是 tmpfs：1.2 GiB 的 super.img.zst 放得下，展开是流式写盘的（gk3_net_release 的注释）
 const netPayloadDir = '/run/gaokun3/payload';
 
+/// 安装走到哪一段了。失败页据此分两种（v1.0 计划 GUI-3）：下载阶段失败时盘一个字节都没动，
+/// 可以重试（/run 里下好的部分留着、接着续传）或返回；写盘阶段失败才是"盘可能写了一半"
+enum InstallStage { download, write }
+
 class Session extends ChangeNotifier {
   Session(this.backend);
   final Gk3Backend backend;
 
   void _changed() => notifyListeners();
+
+  // ── 正在写盘 ────────────────────────────────────────────────────────────
+  /// 安装、缩分区、手动调整磁盘在跑的时候为 true：侧栏的重启 / 关机据此禁用（v1.0 计划 GUI-3）
+  bool get writing => _writing > 0;
+  int _writing = 0;
+
+  Future<T> _whileWriting<T>(Future<T> Function() f) async {
+    _writing++;
+    _changed();
+    try {
+      return await f();
+    } finally {
+      _writing--;
+      _changed();
+    }
+  }
 
   // ── 语言 ────────────────────────────────────────────────────────────────
   String language = 'zh';
@@ -156,7 +180,7 @@ class Session extends ChangeNotifier {
     return switch (e?['msg']) {
       'partlabel-conflict' => AlongInstalled(e!['names']),
       'mbr-disk' => const AlongMbr(),
-      'not-enough-space' => AlongNoRoom(e!.intOf('avail_mib'), e.intOf('need_mib')),
+      'not-enough-space' => AlongNoRoom(e!.intOf('avail_mib'), e.intOf('need_mib'), e.fields.containsKey('fixed_mib') ? e.intOf('fixed_mib') : null),
       _ when f == null => AlongNoRoom(0, null),
       _ => AlongError(e?['msg'] ?? 'unknown'),
     };
@@ -176,7 +200,7 @@ class Session extends ChangeNotifier {
   /// 执行一个调整操作（gk3_part_delete / format / create / resize）。成功与否都重新探测这块盘 ——
   /// 分区号、空闲区都可能变了，界面上显示的必须是盘上【现在】的样子
   Future<CallResult> editDisk(String fn, List<String> args, void Function(Gk3Event) onEvent) async {
-    final r = await backend.run(fn, args, onEvent);
+    final r = await _whileWriting(() => backend.run(fn, args, onEvent));
     await probe();
     final again = disks?.where((x) => x.path == disk?.path).firstOrNull;
     if (again != null) disk = again;
@@ -186,7 +210,7 @@ class Session extends ChangeNotifier {
 
   // ── 缩分区 ──────────────────────────────────────────────────────────────
   Future<CallResult> shrink(Shrinkable s, int targetMib, void Function(Gk3Event) onEvent) async {
-    final r = await backend.run('gk3_shrink', [s.part, '$targetMib'], onEvent);
+    final r = await _whileWriting(() => backend.run('gk3_shrink', [s.part, '$targetMib'], onEvent));
     if (r.ok) {
       await probe();
       final again = disks?.where((d) => d.path == disk?.path).firstOrNull;
@@ -317,31 +341,43 @@ class Session extends ChangeNotifier {
   }
 
   // ── 安装 ────────────────────────────────────────────────────────────────
+  /// 现在（或失败时）在哪一段
+  InstallStage? stage;
+
   /// 网络安装先下载（占总进度 0–40%），再走和 U 盘安装完全相同的 gk3_apply
   Stream<Gk3Event> install() async* {
-    var rel = usbRelease?.dir ?? '';
-    final net = source == Source.net;
-    if (net) {
-      var ok = false;
-      await for (final e in backend.call('gk3_net_release', [variant!.base, netPayloadDir])) {
-        if (e is Gk3Progress) {
-          yield Gk3Progress(e.percent * 40 ~/ 100, e.text);
-        } else if (e is Gk3Exit) {
-          ok = e.code == 0;
-          if (!ok) {
+    _writing++;
+    _changed();
+    try {
+      var rel = usbRelease?.dir ?? '';
+      final net = source == Source.net;
+      if (net) {
+        stage = InstallStage.download;
+        var ok = false;
+        await for (final e in backend.call('gk3_net_release', [variant!.base, netPayloadDir])) {
+          if (e is Gk3Progress) {
+            yield Gk3Progress(e.percent * 40 ~/ 100, e.text);
+          } else if (e is Gk3Exit) {
+            ok = e.code == 0;
+            if (!ok) {
+              yield e;
+              return;
+            }
+          } else {
             yield e;
-            return;
           }
-        } else {
-          yield e;
         }
+        if (!ok) return;
+        rel = netPayloadDir;
       }
-      if (!ok) return;
-      rel = netPayloadDir;
-    }
-    final args = ['--release', rel, ..._planArgs()];
-    await for (final e in backend.call('gk3_apply', args)) {
-      yield (net && e is Gk3Progress) ? Gk3Progress(40 + e.percent * 60 ~/ 100, e.text) : e;
+      stage = InstallStage.write;
+      final args = ['--release', rel, ..._planArgs()];
+      await for (final e in backend.call('gk3_apply', args)) {
+        yield (net && e is Gk3Progress) ? Gk3Progress(40 + e.percent * 60 ~/ 100, e.text) : e;
+      }
+    } finally {
+      _writing--;
+      _changed();
     }
   }
 }

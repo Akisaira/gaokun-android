@@ -135,7 +135,14 @@ ch systemctl enable $UNITS >/dev/null 2>&1 || true
 # 污染"失败的单元"与 gk3-diag 的报告（scripts/live/test-boot-container.sh）
 ch systemctl mask apt-daily.timer apt-daily-upgrade.timer e2scrub_all.timer \
     nvmf-autoconnect.service nvmefc-boot-connections.service >/dev/null 2>&1 || true
+# ★ 不许睡（v1.0 计划 B5 / GUI-2）：live 里 a600000.usb 停在 role=device、没有 usbrole 守卫，挂起会整板复位
+#   （docs/stage4-findings.md #52）—— 赶上缩 NTFS 或写 super 就是一块坏盘。logind 的按键与合盖已经在
+#   overlay-common 的 logind.conf.d 里关了；这里把"睡"这条路本身堵上，谁来要都不行。体检逐个核对
+SLEEP_TARGETS="sleep.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target"
+# shellcheck disable=SC2086
+ch systemctl mask $SLEEP_TARGETS >/dev/null 2>&1 || true
 ok "enable：$UNITS"
+ok "mask：$SLEEP_TARGETS"
 
 # ★ 解锁 root：⚠️ 不是"顺手加的" —— Alpine 版 2026-08-23 上机踩出来：root 的密码字段是 `*`
 #   时，配上 `UsePAM no`，sshd 在【检查公钥之前】就拒绝登录，钥匙、权限位、配置全都对也照样
@@ -193,6 +200,7 @@ need_path() { if in_ch "[ -e '$1' ]"; then ok "$1"; else echo "   ✗ 缺 $1"; B
 # ⚠️ 多个候选要【逐个】试（Alpine 版把它们塞进同一个 ls，一个不匹配就整体判失败）
 need_glob() { for pat in "$@"; do if in_ch "ls $pat"; then ok "$pat"; return; fi; done; echo "   ✗ 这些都没有匹配：$*"; BAD=1; }
 need_enabled() { if in_ch "systemctl is-enabled $1 | grep -qx enabled"; then ok "enabled $1"; else echo "   ✗ 没 enable：$1"; BAD=1; fi; }
+need_masked()  { if in_ch "systemctl is-enabled $1 | grep -qx masked"; then ok "masked $1"; else echo "   ✗ 没 mask：$1"; BAD=1; fi; }
 
 if in_ch 'readlink -f /sbin/init | grep -q systemd'; then ok "/sbin/init → systemd"; else echo "   ✗ /sbin/init 不是 systemd"; BAD=1; fi
 for c in sshd sgdisk parted partprobe resize2fs e2fsck mkfs.ext4 mkfs.vfat mkfs.f2fs ntfsresize blkid lsblk findmnt \
@@ -206,6 +214,14 @@ for u in gk3-wifi.service ssh.service gk3-diag.timer avahi-daemon.service; do ne
 # ⚠️ 判据锚定行首的实际指令（Alpine 版第一次 grep 到了自己注释里的"不能用 need"，当场自我误报）
 if in_ch 'grep -qE "^(Requires|BindsTo|Requisite)=" /etc/systemd/system/gk3-wifi.service'; then
     echo "   ✗ gk3-wifi.service 里有硬依赖"; BAD=1; else ok "gk3-wifi 只做排序依赖，没有硬依赖"; fi
+# ★ 写盘期间不许关机 / 挂起（v1.0 计划 B5）：几个睡眠 target 都 mask 了、logind 不管电源键与合盖、
+#   安装器要套的 systemd-inhibit 在。判据锚定行首的实际指令（同上：别 grep 到注释）
+for u in $SLEEP_TARGETS; do need_masked "$u"; done
+for k in HandlePowerKey HandleSuspendKey HandleHibernateKey HandleLidSwitch HandleLidSwitchExternalPower HandleLidSwitchDocked; do
+    if in_ch "grep -qx '$k=ignore' /etc/systemd/logind.conf.d/gaokun3.conf"; then ok "logind：$k=ignore"
+    else echo "   ✗ logind.conf.d/gaokun3.conf 里没有 $k=ignore —— 写盘时按电源键 / 合盖会关机或挂起"; BAD=1; fi
+done
+need_cmd systemd-inhibit
 if in_ch 'grep -q "^root::" /etc/shadow'; then ok "root 账户未锁定"; else echo "   ✗ root 账户是锁定的 —— ssh 公钥登录会被直接拒绝"; BAD=1; fi
 if [ -n "$SSH_KEY" ]; then need_path /root/.ssh/authorized_keys; else ok "没装公钥（live 镜像本该如此）"; fi
 # 网卡名回到 wlan0：屏蔽 systemd 的可预测命名（M0 第一轮实测被改成 wlP6p1s0，gk3-wifi 因此判"没有网卡"）。

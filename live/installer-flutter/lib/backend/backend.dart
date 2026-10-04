@@ -13,6 +13,9 @@ abstract class Gk3Backend {
   String? get demoLabel => null;
 
   Future<void> reboot();
+
+  /// 关机（侧栏的"关机"：不装了、或者要回 Windows 关快速启动 —— v1.0 计划 GUI-3）
+  Future<void> poweroff();
   /// 切到 tty2 的命令行。成功返回 null，失败返回原因（界面拿去告诉用户 —— 不能点了没反应）
   Future<String?> openShell();
 

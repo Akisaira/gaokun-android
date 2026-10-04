@@ -70,6 +70,8 @@ class _OptsPageState extends State<OptsPage> {
         ),
         const SizedBox(height: 20),
         Text(dataLine, style: tt.titleMedium!.copyWith(color: dataBad ? context.cs.error : context.cs.onSurface)),
+        // 新建分区时提醒 /data 太小（重新安装不改分区大小，提醒了也没法改）
+        if (p != null && p.ok && !s.planning && !re) DataSizeWarning(p.userdataMib),
       ]),
     );
   }
@@ -140,7 +142,7 @@ class _AdvPageState extends State<AdvPage> {
                 child: Row(children: [
                   SizedBox(width: 180, child: Text(part.name == 'userdata' ? l.advUserdata : part.name, style: tt.bodyLarge)),
                   Text(fmtMib(part.sizeMib), style: tt.bodyLarge!.copyWith(color: part.name == 'userdata' ? context.cs.primary : context.cs.onSurfaceVariant)),
-                  if (part.name != 'userdata') ...[const SizedBox(width: 12), Text(l.advFixed, style: tt.bodySmall)],
+                  if (part.name != 'userdata') ...[const SizedBox(width: 12), Flexible(child: Text(l.advFixed, style: tt.bodySmall, overflow: TextOverflow.ellipsis))],
                 ]),
               ),
           ]),
@@ -167,6 +169,7 @@ class _AdvPageState extends State<AdvPage> {
               //   plan_userdata_mib + 13776 的硬编码（roadmap 欠账第 4 条）
               Text(l.advTotal(fmtMib(p.fixedMib + p.userdataMib), fmtMib(p.availMib)), style: tt.bodyLarge),
             if (p != null && !p.ok) Text(planErrorText(context, p), style: tt.bodyLarge!.copyWith(color: context.cs.error)),
+            DataSizeWarning(cur.round()),
           ]),
         ),
       ]),
@@ -317,7 +320,7 @@ class _RunPageState extends State<RunPage> {
             if (e.code == 0) {
               go(context, const DonePage(), replace: true);
             } else {
-              go(context, FailPage(log: List.of(_log), code: e.code), replace: true);
+              go(context, FailPage(log: List.of(_log), code: e.code, downloadOnly: context.session.stage == InstallStage.download), replace: true);
             }
         }
       });
@@ -391,26 +394,41 @@ class DonePage extends StatelessWidget {
   }
 }
 
+/// 失败页分两种（v1.0 计划 GUI-3）：
+///   - 下载阶段失败（[downloadOnly]）：盘一个字节都没动 —— 给"重试"（/run 里下好的部分留着，gk3_net_fetch 接着续传）
+///     和"返回修改"（换网络 / 换版本）。原先这里也说"盘可能写了一半"、只有"打开终端"，用户只能长按电源键，
+///     /run 是 tmpfs，下好的几百 MiB 跟着一起没了。
+///   - 写盘阶段失败：盘可能停在中间状态 —— 不许返回、不给重试，让用户先看日志（分区表备份的还原命令在里面）。
+/// 两种都能从侧栏重启 / 关机。
 class FailPage extends StatelessWidget {
-  const FailPage({super.key, required this.log, required this.code});
+  const FailPage({super.key, required this.log, required this.code, this.downloadOnly = false});
   final List<String> log;
   final int code;
+  final bool downloadOnly;
   @override
   Widget build(BuildContext context) {
     final l = context.l, tt = Theme.of(context).textTheme;
     final err = log.lastWhere((x) => x.startsWith('!! '), orElse: () => l.errExit('$code'));
-    final backedUp = log.any((x) => x.contains('sgdisk --load-backup='));
+    final backedUp = !downloadOnly && log.any((x) => x.contains('sgdisk --load-backup='));
     return PopScope(
-      canPop: false,
+      canPop: downloadOnly,
       child: StepPage(
       step: Gk3Step.install,
-        title: l.failTitle,
-        subtitle: l.failSub,
-        bottom: Row(children: [
-          Btn(l.shellOpen, kind: BtnKind.secondary, icon: Icons.terminal, onPressed: () => openShell(context)),
-          const SizedBox(width: 16),
-          Expanded(child: Text(l.shellHint, style: tt.bodySmall)),
-        ]),
+        title: downloadOnly ? l.failDlTitle : l.failTitle,
+        subtitle: downloadOnly ? l.failDlSub : l.failSub,
+        bottom: downloadOnly
+            ? Row(children: [
+                Btn(l.failBackEdit, kind: BtnKind.text, icon: Icons.arrow_back, onPressed: () => Navigator.pop(context)),
+                const SizedBox(width: 12),
+                Btn(l.shellOpen, kind: BtnKind.secondary, icon: Icons.terminal, onPressed: () => openShell(context)),
+                const Spacer(),
+                Btn(l.btnRetry, icon: Icons.refresh, autofocus: true, onPressed: () => go(context, const RunPage(), replace: true)),
+              ])
+            : Row(children: [
+                Btn(l.shellOpen, kind: BtnKind.secondary, icon: Icons.terminal, onPressed: () => openShell(context)),
+                const SizedBox(width: 16),
+                Expanded(child: Text(l.shellHint, style: tt.bodySmall)),
+              ]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Text(err.startsWith('!! ') ? err.substring(3) : err, style: tt.titleMedium!.copyWith(color: context.cs.error)),
           if (backedUp) ...[const SizedBox(height: 8), Text(l.failBackup, style: tt.bodyMedium)],

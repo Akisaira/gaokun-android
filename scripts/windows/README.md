@@ -65,8 +65,11 @@ Windows 的分区序号（`PartitionNumber`）在撤销后变了（中间重启�
 这些脚本是在**没有 Windows 的机器上**写的（唯一一台的 Windows 已在 2026-08-20 抹掉）。纯逻辑有单元测试，
 下面这些只能在 Windows 上验：
 
-1. **BitLocker / 设备加密**：改了启动方式之后，Windows 下次开机可能要恢复密钥。脚本在 BitLocker 开着时
-   要用户先确认拿得到恢复密钥 —— 但会不会触发、触发几次，没实测过。
+1. **BitLocker / 设备加密**：关安全启动、改了启动方式之后，Windows 下次开机可能要恢复密钥。脚本在 BitLocker 开着时
+   要用户先确认拿得到恢复密钥，然后 `Suspend-BitLocker -RebootCount 2`；这一步排在安全启动检查**之前**
+   （2026-10-04，v1.0 计划 GUI-7 / INST-11：原先排在后面，用户照提示关掉安全启动回来时才第一次看到提醒）。
+   会不会触发、暂停 2 次重启够不够（关安全启动回来一次 + 装完第一次经 systemd-boot 进 Windows 一次）、
+   恢复保护时按哪条启动路径重新封存 —— 都没实测过。
 2. **华为固件认不认 `bootsequence`**（UEFI 的 BootNext）。Parallels 的固件认；华为的没验。不认的话会直接进 Windows，脚本提示改用 `-UseFallbackPath`。
 3. ~~`Resize-Partition` / `New-Partition -Offset` / `Format-Volume -FileSystem FAT32` / `mountvol /S`~~ ✅ 虚拟机里验过（上表）。
    ⚠️ 但 2026-09-27 改成"只划自己的空间"之后的新路径（自动算 GK3LIVE 大小、加密卷的提问、关快速启动）只有 `test-setup.ps1`

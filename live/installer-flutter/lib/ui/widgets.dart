@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../app.dart';
 import '../l10n/app_localizations.dart';
 import '../model/model.dart';
 import '../version.dart';
@@ -142,6 +143,8 @@ class _StepRail extends StatelessWidget {
           const SizedBox(height: 28),
           for (final s in Gk3Step.values) _RailItem(step: s, state: s.index.compareTo(current.index)),
           const Spacer(),
+          const _PowerButtons(),
+          const SizedBox(height: 16),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Text('HUAWEI MateBook E Go\n安装器 $kInstallerVersion', style: tt.bodySmall),
@@ -179,6 +182,77 @@ class _RailItem extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 侧栏底部常驻的"重新启动 / 关机"（v1.0 计划 GUI-3）：失败页、缩分区页让用户"回 Windows 关掉快速启动"，
+/// 以前整个安装器只有完成页能重启 —— 别的时候只能长按电源键。
+/// 正在写盘（Session.writing）时禁用并写明原因；点了先弹确认，不是一碰就关。
+class _PowerButtons extends StatelessWidget {
+  const _PowerButtons();
+
+  Future<void> _ask(BuildContext context, String title, Future<void> Function() act) async {
+    final l = L10n.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(title),
+        content: SizedBox(width: 520, child: Text(l.powerBody)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(MaterialLocalizations.of(c).cancelButtonLabel)),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: Text(title.replaceAll(RegExp(r'[？?]$'), ''))),
+        ],
+      ),
+    );
+    if (ok == true) await act();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = SessionScope.maybeOf(context);
+    if (s == null) return const SizedBox.shrink();
+    final l = L10n.of(context);
+    final busy = s.writing;
+    // 一行一个、左对齐（与上面的步骤项对齐）：两个并排时 272 宽的侧栏放不下"重新启动"四个字
+    final st = TextButton.styleFrom(alignment: Alignment.centerLeft, padding: const EdgeInsets.symmetric(horizontal: 16));
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      TextButton.icon(
+        style: st,
+        onPressed: busy ? null : () => _ask(context, l.powerRebootTitle, s.backend.reboot),
+        icon: const Icon(Icons.restart_alt),
+        label: Text(l.railReboot),
+      ),
+      TextButton.icon(
+        style: st,
+        onPressed: busy ? null : () => _ask(context, l.powerPoweroffTitle, s.backend.poweroff),
+        icon: const Icon(Icons.power_settings_new),
+        label: Text(l.railPoweroff),
+      ),
+      if (busy)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Text(l.railBusy, style: context.tt.bodySmall!.copyWith(color: context.cs.onSurfaceVariant)),
+        ),
+    ]);
+  }
+}
+
+/// /data 低于这个值时提醒（v1.0 计划 GUI-20：一个大型手游就要 20–40 GiB，而项目的目标就是跑手游）。
+/// 只是提醒、不拦：真正的下限仍由 gk3_plan 判（GK3_USERDATA_MIN_MIB）
+const kDataWarnMib = 32 * 1024;
+
+/// 黄色（warning 角色）的一行提醒；/data 够大时什么都不画
+class DataSizeWarning extends StatelessWidget {
+  const DataSizeWarning(this.mib, {super.key});
+  final int mib;
+
+  @override
+  Widget build(BuildContext context) {
+    if (mib >= kDataWarnMib) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Text(L10n.of(context).dataSmallWarn(fmtMib(mib < 0 ? 0 : mib)), style: context.tt.bodyMedium!.copyWith(color: context.gk.warning)),
     );
   }
 }

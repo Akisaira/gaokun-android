@@ -440,5 +440,30 @@
         "type": "String"
       }
     }
+  },
+  "railReboot": "重新启动",
+  "railPoweroff": "关机",
+  "railBusy": "正在写盘：完成之前不能重启或关机",
+  "powerRebootTitle": "现在重新启动？",
+  "powerPoweroffTitle": "现在关机？",
+  "powerBody": "安装器会退出。已经做完的缩小分区、磁盘调整会保留；还没开始的安装不会进行。",
+  "failDlTitle": "下载没有完成",
+  "failDlSub": "磁盘没有被改动。已经下好的部分还留着，重试会接着下载；也可以返回，换一个网络或版本。",
+  "failBackEdit": "返回修改",
+  "dataSmallWarn": "/data 只有 {size}：一个大型手游通常就要 20–40 GiB，建议至少留 32 GiB。",
+  "@dataSmallWarn": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "shrinkData": "装好后 /data 约 {size}",
+  "@shrinkData": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
   }
 }

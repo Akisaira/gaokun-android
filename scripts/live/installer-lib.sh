@@ -370,7 +370,8 @@ gk3_plan() {
 
     local need=$(( fixed + GK3_USERDATA_MIN_MIB ))
     if [ "$avail_mib" -lt "$need" ]; then
-        echo "PLANERR msg=not-enough-space avail_mib=$avail_mib need_mib=$need"
+        # fixed_mib：界面拿它推"腾出多少 /data 才有多大"（缩分区页的默认值，v1.0 计划 GUI-20），不在 Dart 里再算一遍固定开销
+        echo "PLANERR msg=not-enough-space avail_mib=$avail_mib need_mib=$need fixed_mib=$fixed"
         return 1
     fi
 
@@ -833,7 +834,11 @@ EOF
         echo "保留用户数据：userdata（${p_data}）与 metadata（${p_meta}）不格式化" >&2
     else
         gk3__run mkfs.ext4 -q -F -L metadata "$p_meta" || return 1
-        gk3__run mkfs.ext4 -q -F -L userdata "$p_data" || return 1
+        # -m 0：不给 root 留 5% 保留块（e2fsprogs 的默认）。Android 的应用全不是 uid 0，那 5% 谁也用不上 ——
+        #   开发机 /data 实测 4928507 块（约 18.8 GiB）就这样白占着（v1.0 计划 STOR-5）。系统的保留空间
+        #   由 fstab 的 reservedsize= 交给 fs_mgr 管（mount 前 tune2fs -r/-g，
+        #   refs/lineage-system-core/fs_mgr/fs_mgr.cpp:412 tune_reserved_size）
+        gk3__run mkfs.ext4 -q -F -m 0 -L userdata "$p_data" || return 1
     fi
     # misc 必须是全零：libboot_control 读到坏 CRC 才会初始化一份新的 bootloader_control。
     # ⚠️ 按分区的【实际大小】清零，不按 GK3_MISC_MIB：重新安装时复用的 misc 可能比 4 MiB 小
@@ -1608,25 +1613,51 @@ gk3__curl_meter() {
 
 # 下载并校验。$1=url $2=目标文件 $3=期望 sha256（可空）[$4=进度起点 $5=进度跨度]
 # （起点/跨度让调用方把这一个文件的 0–100% 映射到总进度里的一段）
+# ★ 停滞判死 + 有上限的续传重试（v1.0 计划 GUI-5）：原先只有 curl 自己的 --retry 3，服务器活着但不再发数据的
+#   那种卡住永远不会超时（TCP keepalive 只管对端死掉），进度条停在那儿、用户分不清是在等还是死了。
+#   现在：60 秒里平均不到 10 KiB/s 就判这一次失败（curl 退出码 28）、20 秒连不上同样；
+#   网络类的失败按 --continue-at 续传重试，总共最多 GK3_NET_TRIES 次，用完了就报失败交给界面（那边有"重试"）。
+#   三个数都能用环境变量改（test-apply.sh 的 E 节把停滞时间压到几秒）。
 gk3_net_fetch() {
-    local url=$1 dst=$2 want=${3:-} lo=${4:-0} span=${5:-100} name rc
+    local url=$1 dst=$2 want=${3:-} lo=${4:-0} span=${5:-100} name rc try=1
+    local tries=${GK3_NET_TRIES:-5}
     name=$(basename "$dst")
     gk3_prog "$lo" "开始下载 $name"
     gk3__curl() {   # $1 = 续传参数（空 = 从头）
         # ⚠️ 用 --continue-at 支持断点续传：这台机器的 WAN 只有 1–2 MB/s，
         #    1.2 GB 要十几分钟，中途断一次全部重来是不可接受的。
-        curl -fL --retry 3 --retry-delay 2 ${1:+--continue-at "$1"} -o "$dst" "$url" 2>&1 \
+        # ⚠️ 不再用 curl 自己的 --retry：重试由下面的循环做，每一次都按文件现有的长度续传
+        curl -fL --connect-timeout "${GK3_NET_CONNECT_TIMEOUT:-20}" \
+            --speed-limit 10240 --speed-time "${GK3_NET_SPEED_TIME:-60}" \
+            ${1:+--continue-at "$1"} -o "$dst" "$url" 2>&1 \
             | gk3__curl_meter "$lo" "$span" "$name" >&2
         # ⚠️★ 取 curl 自己的退出码，不看管道尾巴（CLAUDE.md 运维坑 1）。原先只判
         #   [ -f "$dst" ] —— 断在 77% 的文件也"存在"，于是报下载完成。
         return "${PIPESTATUS[0]}"
     }
-    gk3__curl -; rc=$?
-    if [ "$rc" = 33 ]; then
-        # 服务器不支持续传（HTTP Range）。原先会留着这个半截文件，以后每次重试都 33，
-        # 永远卡在这里 —— 只能删掉从头来。
-        gk3_log "服务器不支持断点续传，从头下载 $name"
-        rm -f "$dst"; gk3__curl ""; rc=$?
+    gk3__curl_once() {   # 续传一次；服务器不支持续传（HTTP Range）就从头
+        gk3__curl -; rc=$?
+        if [ "$rc" = 33 ]; then
+            # 原先会留着这个半截文件，以后每次重试都 33，永远卡在这里 —— 只能删掉从头来。
+            gk3_log "服务器不支持断点续传，从头下载 $name"
+            rm -f "$dst"; gk3__curl ""; rc=$?
+        fi
+    }
+    # 只重试网络类的失败（解析 / 连接 / 超时与停滞 / 半截 / 收发出错）。22（HTTP ≥ 400，含续传一个已经下完的文件时的 416）
+    # 不重试：下面交给 sha256 裁决，或者就是真的没有这个文件
+    gk3__curl_transient() { case "$1" in 6|7|16|18|28|35|52|55|56|92) return 0 ;; esac; return 1; }
+    gk3__curl_once
+    while [ "$try" -lt "$tries" ] && gk3__curl_transient "$rc"; do
+        try=$(( try + 1 ))
+        gk3_log "下载 $name 中断（curl 退出码 ${rc}），${GK3_NET_RETRY_DELAY:-3} 秒后接着下（第 ${try}/${tries} 次）"
+        sleep "${GK3_NET_RETRY_DELAY:-3}"
+        gk3__curl_once
+    done
+    # ⚠️ 重试用完还是网络类的失败：半截文件【留着】、不交给 sha256（那一步不符就删）——
+    #   界面上的"重试"要接着它续传，不能让几分钟的下载白费（v1.0 计划 GUI-3）
+    if gk3__curl_transient "$rc"; then
+        gk3_die "下载 $name 没完成（curl 退出码 ${rc}，试了 ${try} 次）；已下的 $(( $(wc -c 2>/dev/null < "$dst" || echo 0) >> 20 )) MiB 留着，重试会接着下"
+        return 1
     fi
     [ -f "$dst" ] || { gk3_die "下载失败（curl 退出码 ${rc}）"; return 1; }
     if [ "$rc" != 0 ]; then

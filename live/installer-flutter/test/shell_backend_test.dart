@@ -17,6 +17,7 @@ void main() {
       ..writeAsStringSync(r'''
 gk3_demo() { echo "REC n=${#1}"; echo "PROGRESS 50 一半" >&2; echo "arg:$1" >&2; return 3; }
 gk3_wifi_connect() { echo "NET ssid=$1 online=yes"; }
+gk3_part_delete() { echo "PARTOP op=delete part=$1"; }
 ''');
     logf = File('${tmp.path}/installer.log');
     log = logf.openWrite();
@@ -47,5 +48,38 @@ gk3_wifi_connect() { echo "NET ssid=$1 online=yes"; }
     expect(t, contains('<< gk3_demo exit 3'));
     expect(t, contains('>> gk3_wifi_connect hex:6c6162 <密码 14 个字符> hidden'));
     expect(t, isNot(contains('hunter42secret')));
+  });
+
+  // v1.0 计划 B5 / GUI-2：写盘期间电源键、合盖、睡眠都不许把机器关掉或挂起
+  test('写盘的调用套 systemd-inhibit（--what 含 shutdown、sleep、电源键与合盖）；别的调用不套', () async {
+    final rec = File('${tmp.path}/inhibit.log');
+    final fake = File('${tmp.path}/fake-inhibit')
+      ..writeAsStringSync('#!/bin/bash\necho "\$*" >> "${rec.path}"\nwhile [ "\${1#--}" != "\$1" ]; do shift; done\nexec "\$@"\n');
+    await Process.run('chmod', ['+x', fake.path]);
+    final b = ShellBackend(lib.path, log: log, inhibitor: [fake.path]);
+    final ev = await b.call('gk3_part_delete', ['/dev/nvme0n1p6']).toList();
+    expect(ev.whereType<Gk3Record>().single['part'], '/dev/nvme0n1p6'); // 套了一层照样跑、输出照样分流
+    expect((ev.last as Gk3Exit).code, 0);
+    await b.call('gk3_demo', ['x']).toList();
+    final lines = rec.readAsLinesSync();
+    // 第一行是试拿（立刻放掉），第二行才是真的 gk3_part_delete；gk3_demo 不动盘，不套
+    expect(lines.length, 2);
+    for (final w in ['shutdown', 'sleep', 'handle-power-key', 'handle-lid-switch']) {
+      expect(lines.last, contains(w));
+    }
+    expect(lines.last, contains('--mode=block'));
+    expect(lines.last, contains('gk3_part_delete /dev/nvme0n1p6'));
+    expect(ShellBackend.writesDisk('gk3_apply') && ShellBackend.writesDisk('gk3_shrink') && ShellBackend.writesDisk('gk3_part_resize'), isTrue);
+    expect(ShellBackend.writesDisk('gk3_shrink_scan') || ShellBackend.writesDisk('gk3_net_release'), isFalse);
+  });
+
+  test('拿不到 inhibitor（logind 没在跑 / 没有 systemd-inhibit）：照样执行，日志里记一笔', () async {
+    final b = ShellBackend(lib.path, log: log, inhibitor: ['${tmp.path}/no-such-inhibit']);
+    final ev = await b.call('gk3_part_delete', ['/dev/nvme0n1p6']).toList();
+    expect((ev.last as Gk3Exit).code, 0);
+    expect(ev.whereType<Gk3Record>().single['part'], '/dev/nvme0n1p6');
+    await log.flush();
+    await log.close();
+    expect(logf.readAsStringSync(), contains('拿不到 systemd-inhibit'));
   });
 }

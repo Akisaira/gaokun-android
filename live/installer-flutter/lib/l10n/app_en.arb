@@ -210,5 +210,16 @@
   "modeWhyEspOurs": "This EFI partition already carries gaokun3 boot entries (another install uses it). Installing again would overwrite them.",
   "checkSecurebootOff": "off",
   "checkSecurebootOn": "on",
-  "modeWhyNoFree": "There is no free space on this disk, and we need at least {need}. You can shrink an existing partition to make room."
+  "modeWhyNoFree": "There is no free space on this disk, and we need at least {need}. You can shrink an existing partition to make room.",
+  "railReboot": "Restart",
+  "railPoweroff": "Shut down",
+  "railBusy": "Writing to the disk: restart and shut down are unavailable until it finishes",
+  "powerRebootTitle": "Restart now?",
+  "powerPoweroffTitle": "Shut down now?",
+  "powerBody": "The installer will quit. Partitions you already shrank or edited stay that way; an installation that has not started will not happen.",
+  "failDlTitle": "The download did not finish",
+  "failDlSub": "Your disk has not been touched. What was already downloaded is kept, and retrying continues from there; or go back and pick another network or version.",
+  "failBackEdit": "Go back",
+  "dataSmallWarn": "/data is only {size}: one large mobile game alone often needs 20–40 GiB. We suggest at least 32 GiB.",
+  "shrinkData": "/data will be about {size}"
 }

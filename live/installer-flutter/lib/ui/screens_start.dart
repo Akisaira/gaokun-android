@@ -1,4 +1,6 @@
 // 欢迎 / 预检 → 选盘 → 方式 → （缩分区）
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../app.dart';
@@ -365,16 +367,21 @@ class _ShrinkPageState extends State<ShrinkPage> {
   int _pct = 0;
   String? _error;
 
-  /// 双系统至少要多少（gk3_plan 在 PLANERR need_mib= 里报的）。
-  /// 兜底的 20 GiB 只决定滑块的【初始位置】，不参与任何判定 —— 判定在 gk3_shrink 与 gk3_plan 里。
-  int get _needMib {
+  /// 默认让 /data 有多大（v1.0 计划 GUI-20）。与 Windows 脚本 D: 加密时的默认（"回车 = 64"）同一个口径
+  static const _dataDefaultMib = 64 * 1024;
+
+  /// 双系统除 /data 之外的固定开销（gk3_plan 在 PLANERR fixed_mib= 里报的；旧后端没有就退回 need_mib，只会多腾）。
+  /// 兜底的 20 GiB 只决定滑块的【初始位置】与 /data 的估计，不参与任何判定 —— 判定在 gk3_shrink 与 gk3_plan 里。
+  int get _fixedMib {
     final a = context.session.along;
-    return a is AlongNoRoom && a.needMib != null ? a.needMib! : 20 * 1024;
+    return a is AlongNoRoom ? (a.fixedMib ?? a.needMib ?? 20 * 1024) : 20 * 1024;
   }
 
   void _select(Shrinkable s) {
-    // 默认：腾出"至少要的那么多"再多 8 GiB，但不低于 gk3_shrink 自己的下限
-    final want = s.curMib - _needMib - 8192;
+    // 默认：腾出"固定开销 + 64 GiB 的 /data"，但不低于 gk3_shrink 自己的下限。
+    // ⚠️ 原先是"至少要的（固定开销 + 8 GiB 下限）再多 8 GiB" —— 按默认操作的双系统用户 /data 只有约 16 GiB，
+    //    一个大型手游都装不下（v1.0 计划 GUI-20）
+    final want = s.curMib - _fixedMib - _dataDefaultMib;
     setState(() {
       _pick = s;
       _target = want.clamp(s.floorMib, s.curMib - 1024).toDouble();
@@ -488,9 +495,13 @@ class _ShrinkPageState extends State<ShrinkPage> {
                       value: _target,
                       min: p.floorMib.toDouble(),
                       max: (p.curMib - 1024).toDouble(),
-                      onChanged: (v) => setState(() => _target = (v / 1024).round() * 1024.0),
+                      // 取整到 GiB 之后再夹回范围：两端不一定是整 GiB，取整会越界（Slider 断言 value <= max）
+                      onChanged: (v) => setState(() => _target = ((v / 1024).round() * 1024.0).clamp(p.floorMib.toDouble(), (p.curMib - 1024).toDouble())),
                     ),
                     Text(l.shrinkFreed(fmtMib(p.curMib - _target.round())), style: tt.bodyLarge!.copyWith(color: context.gk.success)),
+                    // /data 的估计：腾出来的减去固定开销（腾出来的那段要是紧挨着已有的空闲，实际会更大一点）
+                    Text(l.shrinkData(fmtMib(math.max(0, p.curMib - _target.round() - _fixedMib))), style: tt.bodyLarge),
+                    DataSizeWarning(p.curMib - _target.round() - _fixedMib),
                     const SizedBox(height: 18),
                     Text(l.shrinkWarn, style: tt.bodyMedium!.copyWith(color: context.gk.warning)),
                     if (_error != null) ...[const SizedBox(height: 12), Text(_error!, style: tt.bodyMedium!.copyWith(color: context.cs.error))],

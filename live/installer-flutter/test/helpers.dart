@@ -1,4 +1,5 @@
 // 流程测试与出图共用的辅助。
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -13,9 +14,18 @@ import 'package:gk3_installer/session.dart';
 
 /// 包一层 FixtureBackend：记下每一次调用；可以让某个函数失败
 class Rec extends Gk3Backend {
-  Rec(this.inner, {this.failApply = false, this.shellError});
+  Rec(this.inner, {this.failApply = false, this.shellError, this.failNetOnce = false, this.holdApply});
   final FixtureBackend inner;
   final bool failApply;
+
+  /// 第一次 gk3_net_release 失败（下载中断，盘没动），之后照常
+  bool failNetOnce;
+
+  /// 给了就让 gk3_apply 停在半路、等它完成（看"写盘期间"界面的样子）
+  final Completer<void>? holdApply;
+
+  /// 侧栏 / 完成页发出的重启与关机
+  final power = <String>[];
 
   /// openShell 的结果（null = 切过去了）
   final String? shellError;
@@ -27,6 +37,18 @@ class Rec extends Gk3Backend {
   @override
   Stream<Gk3Event> call(String fn, [List<String> args = const []]) async* {
     calls.add([fn, ...args]);
+    if (fn == 'gk3_net_release' && failNetOnce) {
+      failNetOnce = false;
+      yield const Gk3Progress(30, '下载 super.img.zst（31%）');
+      yield const Gk3Log('下载 super.img.zst 中断（curl 退出码 28），3 秒后接着下（第 5/5 次）');
+      yield const Gk3Log('!! 下载 super.img.zst 没完成（curl 退出码 28，试了 5 次）；已下的 377 MiB 留着，重试会接着下');
+      yield const Gk3Exit(1);
+      return;
+    }
+    if (fn == 'gk3_apply' && holdApply != null) {
+      yield const Gk3Progress(30, '写入 super');
+      await holdApply!.future;
+    }
     if (fn == 'gk3_apply' && failApply) {
       yield const Gk3Progress(5, '写分区表');
       yield const Gk3Log('分区表已备份到 /media/gk3/gaokun3/gpt-backup-nvme0n1-1.bin（还原：sgdisk --load-backup=/media/gk3/gaokun3/gpt-backup-nvme0n1-1.bin /dev/nvme0n1）');
@@ -42,7 +64,9 @@ class Rec extends Gk3Backend {
       : calls.lastWhere((c) => c.first == fn);
 
   @override
-  Future<void> reboot() async {}
+  Future<void> reboot() async => power.add('reboot');
+  @override
+  Future<void> poweroff() async => power.add('poweroff');
   @override
   Future<String?> openShell() async => shellError;
 }
@@ -63,11 +87,18 @@ class DiskBundle extends AssetBundle {
 }
 
 Future<Rec> pumpApp(WidgetTester t, String scenario,
-    {Map<String, String> overrides = const {}, bool failApply = false, double speed = 0, String language = 'zh', String? shellError}) async {
+    {Map<String, String> overrides = const {},
+    bool failApply = false,
+    double speed = 0,
+    String language = 'zh',
+    String? shellError,
+    bool failNetOnce = false,
+    Completer<void>? holdApply}) async {
   t.view.physicalSize = const Size(1280, 800);
   t.view.devicePixelRatio = 1;
   addTearDown(t.view.reset);
-  final rec = Rec(FixtureBackend(scenario, bundle: DiskBundle(), speed: speed, overrides: overrides), failApply: failApply, shellError: shellError);
+  final rec = Rec(FixtureBackend(scenario, bundle: DiskBundle(), speed: speed, overrides: overrides),
+      failApply: failApply, shellError: shellError, failNetOnce: failNetOnce, holdApply: holdApply);
   final session = Session(rec)..language = language;
   await t.pumpWidget(InstallerApp(session: session));
   await settle(t);

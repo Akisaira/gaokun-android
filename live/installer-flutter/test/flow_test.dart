@@ -1,4 +1,6 @@
 // 流程测试：用真后端录的 fixture 把每条路从头点到尾，并核对最后发给后端的调用。
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gk3_installer/model/model.dart';
@@ -393,5 +395,137 @@ void main() {
     await see(t, find.textContaining('分区 super 没解析出来'), findsWidgets);
     await see(t, find.text(l.failBackup));
     expect(find.text(l.btnBack), findsNothing);
+    // 写盘阶段失败：不给重试、不说"盘没动"（v1.0 计划 GUI-3 只给下载失败开这扇门）
+    expect(find.text(l.btnRetry), findsNothing);
+    expect(find.text(l.failDlTitle), findsNothing);
+  });
+
+  /// windows-free 上走网络安装一直到确认页按住开始（WiFi 那条测试的同一条路，只是不再细查键盘）
+  Future<Rec> netInstall(WidgetTester t, {bool failNetOnce = false}) async {
+    final rec = await pumpApp(t, 'windows-free', overrides: {'gk3_release_info': 'release_info-none.txt'}, failNetOnce: failNetOnce);
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await tap(t, find.text(l.modeAlongTitle));
+    await next(t);
+    await see(t, find.text(l.sourceUsbMissing));
+    await next(t);
+    await tap(t, find.text('宿舍网-5G'));
+    for (final k in 'abcdefgh'.split('')) {
+      await tap(t, find.text(k));
+    }
+    await tap(t, find.text(l.netConnect));
+    await see(t, find.textContaining('已连接到'));
+    await next(t);
+    await tap(t, find.text('标准版'));
+    await next(t);
+    await next(t); // 选项
+    await hold(t, l.confirmHoldIdle);
+    return rec;
+  }
+
+  testWidgets('下载失败（盘没动）：失败页如实说、给重试与返回；重试 → 接着下 → 装完（v1.0 计划 GUI-3）', (t) async {
+    final rec = await netInstall(t, failNetOnce: true);
+    await see(t, find.text(l.failDlTitle));
+    await see(t, find.text(l.failDlSub));
+    await see(t, find.textContaining('已下的 377 MiB 留着'), findsWidgets);
+    expect(find.text(l.failTitle), findsNothing);
+    expect(find.text(l.failBackup), findsNothing);
+    expect(rec.last('gk3_apply'), isNull); // 一个字节都没写
+    await tap(t, find.text(l.btnRetry));
+    await see(t, find.text(l.doneTitle));
+    expect(rec.calls.where((c) => c.first == 'gk3_net_release').length, 2);
+    expect(rec.calls.where((c) => c.first == 'gk3_net_release').map((c) => c.join(' ')).toSet().length, 1, reason: '重试用的是同一个 base 与目录（续传）');
+    expect(rec.last('gk3_apply')!.join(' '), contains('--release $netPayloadDir'));
+  });
+
+  testWidgets('下载失败 → 返回修改：回到选项页，什么都没写', (t) async {
+    final rec = await netInstall(t, failNetOnce: true);
+    await see(t, find.text(l.failDlTitle));
+    await tap(t, find.text(l.failBackEdit));
+    await see(t, find.text(l.optsTitle));
+    expect(rec.last('gk3_apply'), isNull);
+  });
+
+  ButtonStyleButton railBtn(WidgetTester t, String label) =>
+      t.widget<ButtonStyleButton>(find.ancestor(of: find.text(label), matching: find.byWidgetPredicate((w) => w is ButtonStyleButton)).first);
+
+  testWidgets('侧栏的关机 / 重新启动：先问一句；取消就什么都不做（v1.0 计划 GUI-3）', (t) async {
+    final rec = await pumpApp(t, 'windows-free');
+    await see(t, find.text(l.welcomeTitle));
+    await tap(t, find.text(l.railPoweroff));
+    await see(t, find.text(l.powerPoweroffTitle));
+    await see(t, find.text(l.powerBody));
+    await tap(t, find.text('取消'));
+    expect(rec.power, isEmpty);
+    await tap(t, find.text(l.railPoweroff));
+    await tap(t, find.text('现在关机'));
+    expect(rec.power, ['poweroff']);
+    await tap(t, find.text(l.railReboot));
+    await tap(t, find.text('现在重新启动'));
+    expect(rec.power, ['poweroff', 'reboot']);
+  });
+
+  testWidgets('写盘期间侧栏的重启 / 关机禁用并写明原因；装完恢复', (t) async {
+    final gate = Completer<void>();
+    final rec = await pumpApp(t, 'blank', holdApply: gate);
+    expect(railBtn(t, l.railReboot).onPressed, isNotNull);
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await tap(t, find.text(l.modeWipeTitle));
+    await next(t);
+    await next(t);
+    await next(t);
+    await hold(t, l.confirmHoldIdle);
+    await see(t, find.text(l.runTitle));
+    await see(t, find.text(l.railBusy));
+    expect(railBtn(t, l.railReboot).onPressed, isNull);
+    expect(railBtn(t, l.railPoweroff).onPressed, isNull);
+    gate.complete();
+    await see(t, find.text(l.doneTitle));
+    expect(find.text(l.railBusy), findsNothing);
+    expect(railBtn(t, l.railPoweroff).onPressed, isNotNull);
+    expect(rec.power, isEmpty);
+  });
+
+  testWidgets('缩分区的默认值：/data 约 64 GiB（不是原先的约 16 GiB）；拖到只腾一点时黄色提醒（v1.0 计划 GUI-20）', (t) async {
+    final rec = await pumpApp(t, 'factory');
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await tap(t, find.text(l.modeShrinkTitle));
+    await next(t);
+    await tap(t, find.textContaining('Data'));
+    // 固定开销 13476 MiB 来自 PLANERR fixed_mib（双系统 + 救援）；Data 现在 344708 MiB
+    await see(t, find.text(l.shrinkData(fmtMib(65536))));
+    expect(find.textContaining('建议至少留 32 GiB'), findsNothing);
+    // 往右拖到头 = 几乎不缩：/data 不够 → 提醒（只提醒，不拦）
+    await t.drag(find.byType(Slider), const Offset(600, 0));
+    await settle(t);
+    await see(t, find.textContaining('建议至少留 32 GiB'));
+    await t.drag(find.byType(Slider), const Offset(-2000, 0)); // 拖回最左再选一次 = 回到默认
+    await settle(t);
+    await tap(t, find.textContaining('Data'));
+    await hold(t, l.shrinkGo);
+    expect(rec.last('gk3_shrink'), ['gk3_shrink', '/dev/nvme0n1p4', '${344708 - 13476 - 65536}']);
+  });
+
+  testWidgets('分区大小页：/data 拖到 32 GiB 以下时黄色提醒（v1.0 计划 GUI-20）', (t) async {
+    await pumpApp(t, 'windows-free');
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await tap(t, find.text(l.modeAlongTitle));
+    await next(t);
+    await next(t); // 来源
+    await see(t, find.text(l.optsTitle));
+    expect(find.textContaining('建议至少留 32 GiB'), findsNothing); // 默认 66.8 GiB
+    await tap(t, find.text(l.optsAdvanced));
+    await see(t, find.text(l.advTitle));
+    expect(find.textContaining('建议至少留 32 GiB'), findsNothing);
+    await t.drag(find.byType(Slider), const Offset(-2000, 0));
+    await settle(t);
+    await see(t, find.textContaining('建议至少留 32 GiB'));
   });
 }

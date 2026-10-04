@@ -12,6 +12,9 @@ class SessionScope extends InheritedNotifier<Session> {
   const SessionScope({super.key, required Session session, required super.child}) : super(notifier: session);
 
   static Session of(BuildContext context) => context.dependOnInheritedWidgetOfExactType<SessionScope>()!.notifier!;
+
+  /// 不在 SessionScope 下面时为 null（侧栏的重启 / 关机据此决定画不画）
+  static Session? maybeOf(BuildContext context) => context.dependOnInheritedWidgetOfExactType<SessionScope>()?.notifier;
 }
 
 extension SessionX on BuildContext {

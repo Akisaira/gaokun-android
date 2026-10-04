@@ -135,6 +135,9 @@ verify_install() {
     [ "$(blkid -o value -s TYPE "$(gk3__bylabel "$d" metadata)")" = ext4 ] \
       && [ "$(blkid -o value -s TYPE "$(gk3__bylabel "$d" userdata)")" = ext4 ] \
       && ok "metadata / userdata 是 ext4" || bad "文件系统类型不对"
+    # v1.0 计划 STOR-5：userdata 不给 root 留 5%（开发机实测白占约 18.8 GiB）
+    [ "$(tune2fs -l "$(gk3__bylabel "$d" userdata)" 2>/dev/null | awk -F: '/^Reserved block count/{gsub(/[ \t]/, "", $2); print $2}')" = 0 ] \
+      && ok "userdata 没有 root 保留块（mkfs -m 0）" || bad "userdata 有 root 保留块（mkfs 没带 -m 0？）"
     p=$(gk3__bylabel "$d" super)
     [ "$(sha_head "$p" "$RAWSZ")" = "$(sha "$W/expect/super.raw")" ] \
         && ok "super 前 $((RAWSZ >> 20)) MiB 与原始镜像 sha256 一致（经 .zst → gk3-unsparse 流式写入）" \
@@ -522,7 +525,10 @@ echo "═══ E. 网络安装：下载一整套发布文件，再走同一条�
 # 迷你 HTTP 服务器：range 模式支持 "Range: bytes=N-"（R2 支持；Python 自带的 http.server 不支持）
 cat > "$W/srv.py" <<'SRVEOF'
 import http.server, os, sys
-root, port, rng, log = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "range", sys.argv[4]
+import time
+# stall：支持 Range；不带 Range 的请求发一半就不动了（连接不断）—— 服务器活着、只是不再发数据（v1.0 计划 GUI-5）
+root, port, mode, log = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+rng = mode in ("range", "stall")
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_HEAD(self):   # gk3__ota_variant 用 HEAD 量安装文件的大小（R2 支持）
@@ -542,6 +548,10 @@ class H(http.server.BaseHTTPRequestHandler):
         else:
             self.send_response(200)
         self.send_header("Content-Length", str(len(data) - start)); self.end_headers()
+        if mode == "stall" and not r and p.endswith((".img", ".zst")):   # 校验清单照常发
+            try: self.wfile.write(data[:len(data) // 2]); self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError): pass
+            time.sleep(30); return
         try: self.wfile.write(data[start:])
         except (BrokenPipeError, ConnectionResetError): pass   # curl 拿到 200 就放弃续传、主动断开
 http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
@@ -553,6 +563,7 @@ echo "0000000000000000000000000000000000000000000000000000000000000000  crDroidA
 cp "$SRV/good/"* "$SRV/bad/"; printf 'X' | dd of="$SRV/bad/boot.img" bs=1 seek=4096 conv=notrunc status=none
 python3 "$W/srv.py" "$SRV" 18081 range "$W/srv-range.log" & SRVPID1=$!
 python3 "$W/srv.py" "$SRV" 18082 norange "$W/srv-norange.log" & SRVPID2=$!
+python3 "$W/srv.py" "$SRV" 18083 stall "$W/srv-stall.log" & SRVPID3=$!
 sleep 1
 RI=$(gk3_release_info "$SRV/good")
 printf '%s' "$RI" | grep -q 'boot=yes super=zst sha256=yes' && printf '%s' "$RI" | grep -q 'version=crDroidAndroid-16.0-20260916-gaokun3-v12.11 ' \
@@ -579,13 +590,33 @@ gk3_net_release http://127.0.0.1:18082/good/ "$DL3" >/dev/null 2>"$W/e3.err"; rc
 #   super 的新内容接在 A 的前缀后面，sha256 永远对不上。现在：不符就删掉，重试从头下
 mkdir -p "$SRV/alt"; cp "$SRV/good/boot.img" "$SRV/alt/"
 { cat "$SRV/good/super.img.zst"; head -c 1048576 /dev/urandom; } > "$SRV/alt/super.img.zst"
-printf 'Z' | dd of="$SRV/alt/super.img.zst" bs=1 seek=100 conv=notrunc status=none    # 开头也不同：续传接上的前缀是错的
+# 开头也不同：续传接上的前缀是错的。⚠️ 改成"原字节 +1"，不写死 'Z'：super.img.zst 是随机数据压出来的，
+#   第 100 字节恰好是 'Z' 时两份开头一样、续传反而对了（约 1/256）。2026-10-04 有过一次 rc1=0 的偶发失败，这是最说得通的解释（未确证）
+B100=$(od -An -tu1 -j100 -N1 "$SRV/alt/super.img.zst" | tr -d ' ')
+printf "\\$(printf %o $(( (B100 + 1) % 256 )))" | dd of="$SRV/alt/super.img.zst" bs=1 seek=100 conv=notrunc status=none
 ( cd "$SRV/alt" && sha256sum boot.img super.img.zst > install-artifacts.sha256 )
 DL6=$W/dl6; gk3_net_release http://127.0.0.1:18081/good/ "$DL6" >/dev/null 2>&1
 gk3_net_release http://127.0.0.1:18081/alt/ "$DL6" >/dev/null 2>&1; rc1=$?
 gk3_net_release http://127.0.0.1:18081/alt/ "$DL6" >/dev/null 2>&1; rc2=$?
 [ "$rc1" != 0 ] && [ "$rc2" = 0 ] && [ "$(sha "$DL6/super.img.zst")" = "$(sha "$SRV/alt/super.img.zst")" ] \
     && ok "同一目录换版本：第一次 sha256 不符并删掉，重试从头下、这次对了" || bad "换版本后卡住了（rc1=$rc1 rc2=${rc2}）"
+# ★ v1.0 计划 GUI-5：服务器发了一半就不动了（连接还在）。原先 curl 只有 --retry 3，这种停滞永远不超时、进度条一直停着。
+#   现在：停滞判死（这里压到 2 秒）→ 按已有长度续传重试 → 下完、sha256 一致
+DL7=$W/dl7; : > "$W/srv-stall.log"; T0=$(date +%s)
+GK3_NET_SPEED_TIME=2 GK3_NET_RETRY_DELAY=0 gk3_net_release http://127.0.0.1:18083/good/ "$DL7" >/dev/null 2>"$W/e7.err"; rc=$?
+[ "$rc" = 0 ] && [ "$(sha "$DL7/super.img.zst")" = "$(sha "$REL/super.img.zst")" ] && grep -q '接着下（第 2/5 次）' "$W/e7.err" \
+  && grep -q '^/good/super.img.zst bytes=[1-9]' "$W/srv-stall.log" \
+    && ok "下载停滞：$(( $(date +%s) - T0 )) 秒内判死、续传重试、下完 sha256 一致" || { bad "停滞的下载没恢复（rc=${rc}）"; tail -3 "$W/e7.err"; }
+# 重试有上限；用完了报失败，但半截文件【留着】（界面上的"重试"要接着它续传，v1.0 计划 GUI-3）
+DL8=$W/dl8
+OUT=$(GK3_NET_TRIES=1 GK3_NET_SPEED_TIME=2 gk3_net_release http://127.0.0.1:18083/good/ "$DL8" 2>&1); rc=$?
+HALF=$(stat -c%s "$DL8/boot.img" 2>/dev/null || echo 0)
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'boot.img 没完成（curl 退出码 28，试了 1 次）' && [ "$HALF" -gt 0 ] \
+    && ok "重试次数用完：报失败（退出码 28），半截的 boot.img（${HALF} 字节）留着" || bad "重试上限不对（rc=${rc}、半截 ${HALF} 字节）：$(printf '%s' "$OUT" | tail -2)"
+: > "$W/srv-stall.log"
+GK3_NET_SPEED_TIME=2 GK3_NET_RETRY_DELAY=0 gk3_net_release http://127.0.0.1:18083/good/ "$DL8" >/dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] && [ "$(sha "$DL8/boot.img")" = "$(sha "$REL/boot.img")" ] && grep -q "^/good/boot.img bytes=$HALF-" "$W/srv-stall.log" \
+    && ok "失败之后再来一次（界面上的重试）：boot.img 从第 $HALF 字节接着下，sha256 一致" || bad "重试没有接着半截续传（rc=${rc}）：$(tr '\n' ' ' < "$W/srv-stall.log")"
 OUT=$(gk3_net_release http://127.0.0.1:18081/bad/ "$W/dl4" 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'boot.img 的 sha256 不符' \
     && ok "服务器上的 boot.img 被改过：拒绝" || bad "被改过的文件居然通过了（rc=${rc}）"
@@ -623,7 +654,7 @@ VM=$(GK3_LOCAL_MANIFEST=$W/local-variants.txt GK3_MANIFEST_URL=http://127.0.0.1:
 VM=$(GK3_LOCAL_MANIFEST=$W/local-variants.txt GK3_MANIFEST_URL=http://127.0.0.1:18081/installer/variants.txt GK3_OTA_JSON_URL=http://127.0.0.1:18081/ota/gaokun3.json gk3_net_manifest 2>/dev/null); rc=$?
 [ "$rc" = 0 ] && [ "$(printf '%s\n' "$VM" | head -1 | cut -d' ' -f2)" = id=lan ] && printf '%s' "$VM" | grep -q '^VARIANT id=latest ' \
     && ok "介质清单与线上的都有：介质的排在前面，线上的最新发布也在" || bad "合并顺序不对（rc=${rc}）：$VM"
-kill $SRVPID1 $SRVPID2 2>/dev/null
+kill $SRVPID1 $SRVPID2 $SRVPID3 2>/dev/null
 # 下载下来的目录交给 gk3_apply —— 网络安装与 U 盘安装是同一条写盘路径
 DN=$(new_disk n 40G); sgdisk -o "$DN" >/dev/null 2>&1
 gk3_apply --disk "$DN" --mode wipe --rescue no --release "$DL" >"$W/n.log" 2>&1; rc=$?

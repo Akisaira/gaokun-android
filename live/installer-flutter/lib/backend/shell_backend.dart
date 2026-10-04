@@ -14,9 +14,37 @@ import 'protocol.dart';
 ///   gk3-installer-session 把它接到介质上的 diag/installer.log）。2026-09-26 M4b 第一次真装：
 ///   装成了，但事后在介质上找不到 gk3_apply 的任何一行输出（只在屏幕上的日志区里出现过）——
 ///   装坏的那一次要是也这样，就只剩"屏幕上好像报了个错"。
+///
+/// ★ 写盘的调用（[writesDisk]）套一层 `systemd-inhibit`（v1.0 计划 B5 / GUI-2）：缩 NTFS、写 super 的
+///   那几分钟里，电源键、合盖、睡眠都不许把机器关掉或挂起。这是第三层 —— 前两层在镜像里
+///   （overlay-common 的 logind.conf.d 关了按键与合盖、build-rootfs.sh mask 了几个睡眠 target）。
+///   拿不到 inhibitor（logind 没在跑）时照样执行、只在日志里记一笔：前两层不靠 logind 活着。
 class ShellBackend extends Gk3Backend {
-  ShellBackend(this.libPath, {IOSink? log}) : _log = log ?? stderr;
+  ShellBackend(this.libPath, {IOSink? log, this.inhibitor = const ['systemd-inhibit']}) : _log = log ?? stderr;
   final IOSink _log;
+
+  /// 拿 inhibitor 的命令（测试换成一个记录参数的假脚本）
+  final List<String> inhibitor;
+
+  /// 会动盘的函数：安装、缩分区、手动调整磁盘
+  static bool writesDisk(String fn) => fn == 'gk3_apply' || fn == 'gk3_shrink' || fn.startsWith('gk3_part_');
+
+  /// 挡住的东西：关机 / 重启、睡眠，以及 logind 对电源键、睡眠键、休眠键、合盖的处理（systemd-inhibit(1) 的 --what）
+  static const inhibitWhat = 'shutdown:sleep:handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch';
+
+  bool _inhibitOk = false;
+
+  /// 试拿一次（立刻放掉）。只记住"能拿"：logind 晚起来的话，下一次写盘再试
+  Future<bool> _canInhibit() async {
+    if (_inhibitOk) return true;
+    try {
+      final r = await Process.run(inhibitor.first, [...inhibitor.skip(1), '--what=$inhibitWhat', '--who=gaokun3 installer', '--why=probe', 'true']);
+      _inhibitOk = r.exitCode == 0;
+    } on ProcessException {
+      _inhibitOk = false;
+    }
+    return _inhibitOk;
+  }
 
   /// 写进日志时要遮住的参数：WiFi 密码（gk3_wifi_connect 的第二个）
   static List<String> redact(String fn, List<String> args) => [
@@ -46,11 +74,20 @@ class ShellBackend extends Gk3Backend {
     _log.writeln('[${ts()}] >> $fn ${redact(fn, args).join(' ')}'.trimRight());
     () async {
       final Process p;
+      var argv = ['bash', '-c', r'. "$0" && "$@"', libPath, fn, ...args];
+      if (writesDisk(fn)) {
+        if (await _canInhibit()) {
+          argv = [...inhibitor, '--what=$inhibitWhat', '--who=gaokun3 installer', '--why=writing the disk ($fn)', '--mode=block', ...argv];
+          _log.writeln('   （systemd-inhibit：$inhibitWhat）');
+        } else {
+          _log.writeln('   ⚠️ 拿不到 systemd-inhibit（logind 没在跑？）—— 照样执行；电源键与合盖仍由 logind.conf.d 屏蔽、睡眠 target 已 mask');
+        }
+      }
       try {
-        p = await Process.start('bash', ['-c', r'. "$0" && "$@"', libPath, fn, ...args]);
+        p = await Process.start(argv.first, argv.sublist(1));
       } on ProcessException catch (e) {
-        _log.writeln('[${ts()}] << $fn 起不来 bash：${e.message}');
-        ctl.add(Gk3Log('!! 起不来 bash：${e.message}'));
+        _log.writeln('[${ts()}] << $fn 起不来 ${argv.first}：${e.message}');
+        ctl.add(Gk3Log('!! 起不来 ${argv.first}：${e.message}'));
         ctl.add(const Gk3Exit(127));
         await ctl.close();
         return;
@@ -74,11 +111,16 @@ class ShellBackend extends Gk3Backend {
   }
 
   @override
-  Future<void> reboot() async {
-    _log.writeln('[${DateTime.now().toIso8601String().substring(11, 19)}] 重启');
+  Future<void> reboot() => _power('reboot', '重启');
+
+  @override
+  Future<void> poweroff() => _power('poweroff', '关机');
+
+  Future<void> _power(String cmd, String what) async {
+    _log.writeln('[${DateTime.now().toIso8601String().substring(11, 19)}] $what');
     await _log.flush();
     await Process.run('sync', const []);
-    await Process.run('reboot', const []);
+    await Process.run(cmd, const []);
   }
 
   /// 命令行逃生口：切到 tty2（那里有 getty）。C 版是 system("chvt 2")（gk3-installer.c:1288；C 版已删，git show 445e978:live/installer/gk3-installer.c）。
