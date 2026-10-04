@@ -130,7 +130,7 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 
 ### 🐞 GitHub issues #11–#16（2026-10-04 逐条核查；报告者均在 v0.7.0-alpha `20260928121116`/`…143105` 上）
 
-> **2026-10-04 完整镜像（候选）**：构建戳 **`1791053208`**、incremental `20261003184648`（`m bacon superimage` 17 分钟，`release.sh --dry-run --no-build` 全过）。
+> **2026-10-04 完整镜像 = v0.7.1-alpha（已发布，15:35，tag `21e24fd`）**：构建戳 **`1791053208`**、incremental `20261003184648`（`m bacon superimage` 17 分钟，`release.sh --dry-run --no-build` 全过）。
 > 含：hostapd / usb.host / SAE overlay（#11 #13）、内核 `6d3f7c67…`（0070 + 看门狗 120 / panic 10）+ dtb `8ed1cd04…`（0071）、音频 0069（#130）。
 > 产物核对：boot.img 的 kernel / dtb 与上机验过的逐字节相同；vendor 里 hostapd + VINTF + rc、usb.host.xml、overlay 的 `config_wifiSaeUpgradeEnabled=false`、HAL `9fcd9eb5…` 都在。
 > 载荷在本机 `out/issues-1791053208/`。✅ **2026-10-04 用户同意后装进 `_a`**（开机 56 s，default 随后同步为 `_a`）：#11 `start-softap` 成功（hostapd 起来、wlan0 type AP、关掉后 STA 重连）；#13 `usb` 服务 + 特性 + host 设备；#16 挂起/恢复 10/10、恢复期间 GFP_DMA 高阶伙伴分配 0；SAE 升级 false；内核日志 avc 0。✅ App 冒烟 8/8（明日方舟 / 三角洲 / 卡拉彼丘 / Phigros / Arcaea / QQ / 网易云 / Brave，0 崩溃）；✅ 出声音游（#130 §7，另一会话：声学回环时间戳准约 30 ms、卡顿后下一声即恢复）。⬜ 热点让真设备连上并上网（只验了 AP 起来）。
