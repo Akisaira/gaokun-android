@@ -54,10 +54,31 @@
       heard of this device — every link in the app would 404. Send them here
       instead. The %1$s the framework passes is the device name; a string
       without a placeholder simply ignores it.
+
+      ★ v1.0 REL-4 (2026-10-05): changelog / downloads / blocked-update now go to
+      the same R2 custom domain as the OTA manifest, not to GitHub — GitHub is
+      unreachable or very slow from mainland China, where most users are (same
+      reason as the server URL above). scripts/release.sh uploads, on every real
+      release, docs/relnotes/v<GK3_VERSION>.md (the zh-CN one when it exists) as
+      relnotes/latest.md and docs/INSTALL.md (or INSTALL.zh-CN.md) as
+      relnotes/INSTALL.md, served as text/plain; charset=utf-8.
+      The release notes' Files table already lists the R2 download links (INST-5),
+      so "downloads" lands on the same page.
+      Where each one is used (crdroidandroid/android_packages_apps_Updater, 16.0):
+        menu_changelog_url      DeviceInfoActionButtons.kt:55 (getString(…, device))
+        menu_downloads_url      UpdateActionHandler.kt:197-203 (VIEW_DOWNLOADS)
+        blocked_update_info_url UpdateActionHandler.kt:141-145, 187-195
+        report_issue_url        DeviceInfoActionButtons.kt:65 and QrCodeReportIssues.kt:29 (shown as a QR code)
+      report_issue_url stays on GitHub issues: that is where issues are tracked,
+      and there is no mirror of the tracker. ⬜ A domestic feedback page (QQ group,
+      how to collect logs) would be the alternative — needs a decision.
+      ⚠️ These are baked into the APK: once 1.0 ships they can only change by OTA
+      (v1.0-plan D8). Until a release with this overlay has been published, the two
+      relnotes/ keys do not exist on R2 yet and the links 404.
     -->
-    <string name="menu_downloads_url" translatable="false">https://github.com/vahiru/gaokun-android/releases</string>
-    <string name="menu_changelog_url" translatable="false">https://github.com/vahiru/gaokun-android/releases</string>
+    <string name="menu_downloads_url" translatable="false">https://ota.072172.xyz/relnotes/latest.md</string>
+    <string name="menu_changelog_url" translatable="false">https://ota.072172.xyz/relnotes/latest.md</string>
     <string name="report_issue_url" translatable="false">https://github.com/vahiru/gaokun-android/issues/new</string>
-    <string name="blocked_update_info_url" translatable="false">https://github.com/vahiru/gaokun-android/blob/main/docs/INSTALL.md</string>
+    <string name="blocked_update_info_url" translatable="false">https://ota.072172.xyz/relnotes/INSTALL.md</string>
 
 </resources>

@@ -542,6 +542,29 @@ zstd -T0 -19 --long -f "$OUT/super.img" -o "$S/super.img.zst"
 gen_kernel_sources "$S"
 ls -la "$S"
 
+# ═══ REL-4：发版说明 / 安装指南放到 R2 同域名下 ═══
+# 系统更新（Updater）里的「更新日志」「下载」两个链接指向 $HOST/relnotes/latest.md，「无法更新（版本不受支持）」
+# 的说明链接指向 $HOST/relnotes/INSTALL.md（device/huawei/gaokun3/overlay/packages/apps/Updater/…/strings.xml）——
+# 原来都指向 GitHub，国内多半打不开（TODO B12 / v1.0-plan REL-4）。这里每版正式发布时把它们传上去。
+#   docs/relnotes/v<GK3_VERSION>.md 必须有（正式发版拦；--dry-run / --stage-only 只警告 —— 候选版构建时说明多半还没写完）；
+#   有 v<GK3_VERSION>.zh-CN.md 就一起传，并且 latest.md 用中文版（主要用户在国内）；INSTALL 同理（有 INSTALL.zh-CN.md 就用它）。
+#   Content-Type 用 text/plain; charset=utf-8：Markdown 原文在手机浏览器里直接可读、中文不乱码；不额外依赖 Markdown 转换器。
+RN_EN=$REPO/docs/relnotes/v${GK3_VERSION:-}.md
+RN_ZH=$REPO/docs/relnotes/v${GK3_VERSION:-}.zh-CN.md
+INSTALL_DOC=$REPO/docs/INSTALL.md
+[ -f "$REPO/docs/INSTALL.zh-CN.md" ] && INSTALL_DOC=$REPO/docs/INSTALL.zh-CN.md
+if [ -z "${GK3_VERSION:-}" ] || [ ! -f "$RN_EN" ]; then
+    if [ "$DRY" = 1 ] || [ "$STAGE_ONLY" = 1 ]; then
+        echo "⚠️ 没有发版说明 ${RN_EN}（--dry-run / --stage-only 不拦；正式发版时这里会停，REL-4）" >&2
+    else
+        die "没有发版说明 $RN_EN —— Updater 的「更新日志」链接（$HOST/relnotes/latest.md）要它（REL-4）"
+    fi
+else
+    ok "发版说明 ${RN_EN#$REPO/}$( [ -f "$RN_ZH" ] && echo "（另有中文版 ${RN_ZH#$REPO/}，latest.md 用它）")"
+fi
+[ -f "$INSTALL_DOC" ] || die "没有 $INSTALL_DOC（Updater 的 blocked_update_info_url 指向它的 R2 副本，REL-4）"
+DOC_CT="text/plain; charset=utf-8"
+
 # GPL 附件的 Content-Type（r2-upload.py 的第 4 个参数）
 gpl_ctype() { case "$1" in *.txt) echo "text/plain; charset=utf-8" ;; *.tar.gz) echo application/gzip ;;
                            *.xml) echo application/xml ;; *) echo application/octet-stream ;; esac; }
@@ -612,6 +635,17 @@ for f in ${GPL_FILES[@]+"${GPL_FILES[@]}"}; do       # 对应源码清单（REL-
 done
 ok "产物已就位"
 
+# REL-4：发版说明与安装指南（Updater 里的链接指向这几个键；比清单先传，用户一看到更新就点得开）
+python3 "$UPLOAD" "$BUCKET" "$RN_EN" "relnotes/v$GK3_VERSION.md" "$DOC_CT"
+RN_LATEST=$RN_EN
+if [ -f "$RN_ZH" ]; then
+    python3 "$UPLOAD" "$BUCKET" "$RN_ZH" "relnotes/v$GK3_VERSION.zh-CN.md" "$DOC_CT"
+    RN_LATEST=$RN_ZH
+fi
+python3 "$UPLOAD" "$BUCKET" "$RN_LATEST" "relnotes/latest.md" "$DOC_CT"
+python3 "$UPLOAD" "$BUCKET" "$INSTALL_DOC" "relnotes/INSTALL.md" "$DOC_CT"
+ok "发版说明已就位：$HOST/relnotes/latest.md（= ${RN_LATEST#$REPO/}）"
+
 # 清单最后传，且 download 指向刚上传的那个 zip
 python3 - "$S/gaokun3.json" "$(basename "$ZIP")" "$HOST" <<'PY'
 import json, sys
@@ -628,6 +662,7 @@ ok "清单已发布 —— 设备端「系统更新」现在能看到 $VER"
 # INST-5：本版全部 R2 链接，贴进发版说明 Files 表的 R2 列（docs/relnotes/TEMPLATE.md）。
 #   与上面的上传路径一一对应：OTA 包在 builds/，其余在 install/$VER/。
 R2_LINKS="  $HOST/builds/$(basename "$ZIP")"
+R2_LINKS+=$'\n'"  $HOST/relnotes/v$GK3_VERSION.md（发版说明本身；Updater 的「更新日志」打开的是 $HOST/relnotes/latest.md）"
 for f in boot.img super.img.zst install-artifacts.sha256 ${GPL_FILES[@]+"${GPL_FILES[@]}"}; do
     R2_LINKS+=$'\n'"  $HOST/install/$VER/$f"
 done
