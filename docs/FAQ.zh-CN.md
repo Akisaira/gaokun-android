@@ -90,11 +90,12 @@
 在 [GitHub issues](https://github.com/vahiru/gaokun-android/issues) 提，或者发到 [Telegram](https://t.me/gaokunAndroid) / QQ 群 **920133252**。
 
 ### 先准备 adb
-<!-- USB adb 只在一个口上（port0，哪个物理孔未记录 —— STOR-3）；息屏时 USB adb 会断（README.zh-CN.md 待机一行，#52）。 -->
+<!-- USB adb 只在 port0 上 = 靠近电源键的口（2026-10-05 用户确认，STOR-3）；息屏时 USB adb 会断（README.zh-CN.md 待机一行，#52）。 -->
 1. 在电脑上装 Google 的 **SDK Platform-Tools**（里面就有 `adb`）。
 2. 在平板上打开**开发者选项**和 **USB 调试**，步骤见[下面](#开发者选项usb-调试与无线调试)。
 3. 用 USB 线连上电脑，**屏幕保持亮着**（息屏时 USB 调试会断开）。电脑上运行 `adb devices`。
-   看不到设备的话，换另一个 USB-C 口试试：只有一个口能用于调试（具体是哪个口待补）。
+   **要插靠近电源键的那个 USB-C 口**：只有它能用于 USB 调试（另一个口只能当主机）。还是看不到设备的话，拔下来重插一次：
+   和某些电脑相连时，两边偶尔会协商反，变成平板给电脑充电、两边都看不到对方（见[已知限制](known-limitations.zh-CN.md#插电脑时平板可能反过来给电脑充电)）。
 4. 不想接线的话，用[无线调试](#无线调试)。
 
 ### 有电脑、机器能开机时

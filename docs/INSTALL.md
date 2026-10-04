@@ -159,7 +159,8 @@ plug it in, and pick it from the firmware's boot menu. Secure Boot must be off.
 
 ⚠️ The USB image of this installer has not been booted on hardware yet; the
 same system has, many times, from the internal disk. Which of the two USB-C
-ports works for booting has not been checked either.
+ports works for booting has not been checked either. (For USB debugging under
+Android it is the port next to the power button; the other port is host-only.)
 
 ## Advanced: the command-line installer
 

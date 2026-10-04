@@ -729,3 +729,14 @@ Stage 0 的采集部分全部完成，只剩 pstore。而 pstore 和 dwc3 都需
 5. 用 `refs/gaokun-buildbot/scripts/ci/` 的流程构建
 
 构建机：用户的 15 核 / 32 GB 机器（内核构建约 30–60 分钟，远轻于 AOSP）。
+
+## USB-C 物理口与控制器对应（2026-10-05 实机 + 用户目视确认）
+
+| 物理位置 | typec 端口 | dwc3 控制器 | 能力 |
+|---|---|---|---|
+| **靠近电源键** | `port0` | `a600000.usb`（父 `a6f8800.usb`，DT 的 `usb_0`） | host / device 都能当；USB adb 只走这个口（usb_role `a600000.usb-role-switch`） |
+| 另一个口 | `port1` | `a800000.usb`（父 `a8f8800.usb`，DT 的 `usb_1`） | 只能当 host（`/sys/class/typec/port1` 的 supplier 是 `platform:a800000.usb`） |
+
+依据：线插在另一个口时 `port1-partner` 出现、`a600000` 的 UDC 为 `not attached`；换到靠近电源键的口后 `port0-partner` 出现、UDC `configured`、USB adb 回来。
+键盘盖走的是第三个控制器 `a400000.usb`（`usb3` 下 `3-3` = `12d1:10b8`），与两个 USB-C 口无关。
+

@@ -98,8 +98,10 @@ what happened, plus the logs below. Report on [GitHub issues](https://github.com
 1. Install Google's **SDK Platform-Tools** on your computer (`adb` is in there).
 2. On the tablet, turn on **Developer options** and **USB debugging**: see [below](#developer-options-usb-debugging-and-wireless-debugging).
 3. Connect a USB cable and **keep the screen on** (USB debugging disconnects while the screen is off). Run
-   `adb devices` on the computer. If the tablet is not listed, try the other USB-C port: only one port works for
-   debugging (which one is still to be added).
+   `adb devices` on the computer. **Use the USB-C port next to the power button**: only that one works for USB
+   debugging (the other port can only act as a host). If the tablet is still not listed, unplug and plug the cable in
+   again: with some computers the two sides occasionally settle the wrong way round, the tablet ends up charging the
+   computer and nothing shows up (see [known limitations](known-limitations.md#plugged-into-a-computer-the-tablet-may-charge-the-computer-instead)).
 4. To go without a cable, use [wireless debugging](#wireless-debugging).
 
 ### With a computer, when the machine boots

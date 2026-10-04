@@ -36,7 +36,7 @@
 > **2026-10-05 实机新发现（USB，记入 v1.0-plan §3 的 USB-1 / USB-2）**：
 > * 插 Mac 时 port0 有时落成**我方供电**（DRP 对 DRP、对端无 PD）：平板给 Mac 充电、内核定成 host、USB adb 不出现，usbfollow 不纠偏 —— 拔插一次即恢复（当场验证：重插后 `pr=[sink]`、UDC `configured`、USB adb 回来）。⬜ follow 增加"我方供电 + 无下游 + 对端无 PD"⇒ 请求转受电方或提示重插。
 > * port0 停在 host 时 init 每秒重跑 configfs 的 adb 动作、写 UDC 报 busy，刷屏耗电。⬜ 查谁在反复触发 ffs.ready。
-> * 用户 10-05 凌晨那次"USB 枚举又爆炸"：先是线插在 port1（只能当 host 的口），换到 port0 后又落成上面第一条 —— 两件事都不是 A6。⬜ 两个口的物理位置待用户告知后写进 README / INSTALL（STOR-3）。
+> * 用户 10-05 凌晨那次"USB 枚举又爆炸"：先是线插在 port1（只能当 host 的口），换到 port0 后又落成上面第一条 —— 两件事都不是 A6。✅ STOR-3：用户确认 **port0 = 靠近电源键的口**（USB adb 只走它），已写进 FAQ / INSTALL / 已知限制 / hw-inventory。
 
 > [`v1.0-plan.md`](v1.0-plan.md) 批 0 / 批 1 的 12 组改动 2026-10-05 凌晨合进 main（`12e37ce..2bf59e1`，下表 1–12）。
 > ★ 安装器那组原定"审查完再合"，记账时发现它 **00:55 已 cherry-pick 进 main**（`3608a52` + `203265a`，下表第 13 行）⇒ 下面"等安装器"一段**已经可以做了**，

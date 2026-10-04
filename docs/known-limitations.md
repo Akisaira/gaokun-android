@@ -149,7 +149,7 @@ yourself, you should know that they contain these components.
 ### USB sticks are not recognised
 <!-- STOR-1 / BKUP-6: the voldmanaged lines are in fstab (8da5974), ⬜ not built, not tested on hardware.
      Once tested, rewrite this entry as "port1 works; port0 only once usbrole has switched it to host", and say which
-     physical port is port1 (STOR-3: needs the user to look). Body text unchanged until then. -->
+     physical port is port1 (STOR-3: user confirmed 2026-10-05 that port0 is the one next to the power button, so port1 is the other). Body text unchanged until then. -->
 * **What you see**: a USB stick or external drive does not appear in the file manager.
 * **Why**: the kernel does see it, but the system's partition table doesn't declare any removable storage, so Android
   never mounts it.
@@ -259,6 +259,19 @@ These are bugs, not trade-offs, and they will be removed from this list once fix
   `/data/vendor/gaokun3/hangdump-*`, and keeps it across reboots. Please attach it to your report (it needs root; the
   command is in the [FAQ](FAQ.md#with-a-computer-when-the-machine-boots)). If there is no such folder, say so: that is
   a clue too.
+
+### Plugged into a computer, the tablet may charge the computer instead
+<!-- USB-1 (2026-10-05 on the dev machine with a Mac): port0 settled as power source, partner without USB PD,
+     kernel picked host ⇒ nothing enumerates; usbfollow only corrects the case where we are the sink. -->
+* **What you see**: you plug the tablet into a computer (port next to the power button) and USB debugging / the
+  computer does not see it. The tablet's battery goes *down* instead of charging.
+* **Why**: both the tablet's port and many computers' USB-C ports can be either the power source or the power sink.
+  Without USB Power Delivery on the computer's side, which side becomes which is decided at plug-in and can come out
+  the wrong way round. Then the tablet acts as the host, the computer does not act as a USB device, and neither sees
+  the other.
+* **What to do**: unplug and plug the cable in again (once is usually enough), or use another port on the computer.
+  A fix that asks to renegotiate automatically is planned.
+* Only the USB-C port **next to the power button** can do USB debugging at all; the other port is host-only.
 
 ### The USB-C port can stop working after replugging, until a reboot
 <!-- A6 / PWR-4 / HW-14. The "no standby" half is inferred from the code (role switch keeps failing and holds the
