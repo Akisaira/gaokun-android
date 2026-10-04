@@ -51,6 +51,9 @@ extern const EFI_GUID gk3_guid_global_var;
 extern const EFI_GUID gk3_guid_loader;         /* systemd-boot 的厂商 GUID */
 extern const EFI_GUID gk3_guid_smbios;
 extern const EFI_GUID gk3_guid_smbios3;
+extern const EFI_GUID gk3_guid_dtb_table;      /* DEVICE_TREE_GUID 配置表 */
+extern const EFI_GUID gk3_guid_initrd_media;   /* LINUX_EFI_INITRD_MEDIA_GUID（设备路径的 Vendor 节点） */
+extern const EFI_GUID gk3_guid_load_file2;
 
 bool gk3_guid_eq(const EFI_GUID *a, const EFI_GUID *b);
 /* 已知配置表 / 协议 GUID 的名字；不认识返回 NULL */
@@ -109,6 +112,24 @@ void gk3_logd(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void gk3_screenf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* 把还没写进文件的部分写进去并 Flush；没有文件 sink 时什么也不做 */
 void gk3_log_sync(void);
+
+/* 日志文件：在 dev（自己所在 ESP 的句柄）上的 dir（如 u"\\EFI\\gk3boot\\log"，逐级按需创建）里
+ * 找第一个不存在的 <prefix><n>.txt（n 从 0 递增、不覆盖，n < max）建出来，挂成 gk3_lg 的文件 sink。
+ * 从 gk3probe.c 的 step_open_log 抽出来的同一套规则（探针本身保持原样，它是 E3 上机验过的那份）。
+ * 失败只记一行 "!! …" 并返回 false —— 写日志失败绝不能让调用方停下。 */
+typedef struct {
+    EFI_HANDLE dev;
+    CHAR16 path[96];             /* 打开后的完整路径（重开用） */
+    unsigned n;
+    bool open;
+} gk3_logfile;
+
+#define GK3_LOG_MIN_FREE (1024u * 1024u)   /* ESP 剩余不到 1 MiB 就不写日志（原因见 gk3efi.c） */
+bool gk3_log_open_seq(gk3_logfile *lf, EFI_HANDLE dev, const CHAR16 *dir, const char *prefix, unsigned max);
+/* sync 后 Close 文件（交接内核前调用：别把打开的 FAT 句柄带进 ExitBootServices） */
+void gk3_log_close(gk3_logfile *lf);
+/* 交接失败回来以后：按 path 重开、移到文件尾，继续追加 */
+bool gk3_log_reopen(gk3_logfile *lf);
 
 /* ------------------------------------------------------------------ 字符串转换 */
 

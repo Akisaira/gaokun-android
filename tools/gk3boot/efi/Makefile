@@ -1,7 +1,9 @@
 # gk3boot 的 UEFI 程序（aarch64 PE），在 scripts/gk3boot/gk3boot-build.Dockerfile 的容器里构建：
 #
-#   make -C tools/gk3boot/efi                 → tools/gk3boot/build/efi/{gk3probe,gk3probe-child,gk3-fake-android}.efi
+#   make -C tools/gk3boot/efi                 → tools/gk3boot/build/efi/{gk3boot,gk3probe,gk3probe-child,gk3-fake-android}.efi
 #   make -C tools/gk3boot/efi VERSION=<串>     探针里打印的版本（scripts/gk3boot/test-probe.sh 传 git 描述）
+#   make -C tools/gk3boot/efi BOOT_VERSION=<串> gk3boot 的版本（进 androidboot.bootloader=gk3boot-<串>，
+#                                              只准 [A-Za-z0-9._+-]；scripts/gk3boot/test-boot.sh 传 0.1.0-e4.g<提交>）
 #
 # 工具链选 gnu-efi（Debian 包 gnu-efi 3.0.18）而不是 EDK2，理由见 tools/gk3boot/README.md §9.1：
 # 一个包、一条 gcc 命令就能把 freestanding 的 libgk3core 原样链进来；EDK2 要 BaseTools + .inf/.dsc
@@ -11,6 +13,7 @@
 GK3      := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 B        := $(GK3)/build/efi
 VERSION  ?= dev
+BOOT_VERSION ?= dev
 EFIINC   ?= /usr/include/efi
 EFILIB   ?= /usr/lib
 CC       := gcc
@@ -32,13 +35,16 @@ CORE_SRC := $(wildcard $(GK3)/core/src/*.c)
 CORE_OBJ := $(patsubst $(GK3)/core/src/%.c,$(B)/core/%.o,$(CORE_SRC))
 LIB_OBJ  := $(B)/lib/gk3efi.o
 
-# 夹具用的假内核总是有；探针（S4）的源码在才编
+# 夹具用的假内核总是有；探针（S4）、入口（S5）的源码在才编
 PROGS    := $(B)/gk3-fake-android.efi
 ifneq ($(wildcard $(GK3)/efi/probe/gk3probe.c),)
 PROGS    += $(B)/gk3probe.efi $(B)/gk3probe-child.efi
 endif
+ifneq ($(wildcard $(GK3)/efi/boot/gk3boot.c),)
+PROGS    += $(B)/gk3boot.efi
+endif
 
-.PHONY: all clean check
+.PHONY: all clean check FORCE_BOOT_VERSION
 all: $(PROGS) check
 
 $(B)/core/%.o: $(GK3)/core/src/%.c $(GK3)/core/include/gk3core.h
@@ -52,6 +58,20 @@ $(B)/lib/%.o: $(GK3)/efi/lib/%.c $(GK3)/efi/lib/gk3efi.h $(GK3)/core/include/gk3
 $(B)/probe/%.o: $(GK3)/efi/probe/%.c $(GK3)/efi/lib/gk3efi.h $(GK3)/efi/probe/child_abi.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -DGK3PROBE_VERSION='"$(VERSION)"' -c $< -o $@
+
+$(B)/boot/%.o: $(GK3)/efi/boot/%.c $(GK3)/efi/lib/gk3efi.h $(GK3)/efi/boot/handoff.h $(GK3)/core/include/gk3core.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(GK3)/efi/boot -DGK3BOOT_VERSION='"$(BOOT_VERSION)"' -c $< -o $@
+
+# 版本串变了就重编 gk3boot.c（版本进二进制，也进 cmdline）：.version 只在内容变时才换 mtime
+$(B)/boot/.version: FORCE_BOOT_VERSION
+	@mkdir -p $(dir $@)
+	@echo '$(BOOT_VERSION)' | cmp -s - $@ || echo '$(BOOT_VERSION)' > $@
+FORCE_BOOT_VERSION:
+$(B)/boot/gk3boot.o: $(B)/boot/.version
+
+$(B)/gk3boot.so: $(B)/boot/gk3boot.o $(B)/boot/handoff.o $(LIB_OBJ) $(CORE_OBJ)
+	$(LD) $(LDFLAGS) $^ -o $@ $(LIBS)
 
 $(B)/qemu/%.o: $(GK3)/qemu/%.c $(GK3)/efi/lib/gk3efi.h
 	@mkdir -p $(dir $@)

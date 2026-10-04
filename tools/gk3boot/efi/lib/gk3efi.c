@@ -68,6 +68,13 @@ const EFI_GUID gk3_guid_loader = {0x4a67b082, 0x0a4c, 0x41cf, {0xb6, 0xc7, 0x44,
 const EFI_GUID gk3_guid_smbios = {0xeb9d2d31, 0x2d88, 0x11d3, {0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d}};
 const EFI_GUID gk3_guid_smbios3 = {0xf2fd1544, 0x9794, 0x4a2c, {0x99, 0x2e, 0xe5, 0xbb, 0xcf, 0x20, 0xe3, 0x94}};
 
+/* refs/edk2 MdePkg/Include/Guid/Fdt.h:12；systemd-v257 src/boot/proto/dt-fixup.h:6-7 */
+const EFI_GUID gk3_guid_dtb_table = {0xb1b621d5, 0xf19c, 0x41a5, {0x83, 0x0b, 0xd9, 0x15, 0x2c, 0x69, 0xaa, 0xe0}};
+/* refs/edk2 MdePkg/Include/Guid/LinuxEfiInitrdMedia.h:25；systemd-v257 src/boot/initrd.c:9-10 */
+const EFI_GUID gk3_guid_initrd_media = {0x5568e427, 0x68fc, 0x4f3d, {0xac, 0x74, 0xca, 0x55, 0x52, 0x31, 0xcc, 0x68}};
+/* refs/edk2 MdePkg/Include/Protocol/LoadFile2.h:17-19 */
+const EFI_GUID gk3_guid_load_file2 = {0x4006c0c1, 0xfcb3, 0x403e, {0x99, 0x6d, 0x4a, 0x6c, 0x87, 0x24, 0xe0, 0x6d}};
+
 static const struct {
     EFI_GUID g;
     const char *name;
@@ -489,6 +496,183 @@ void gk3_log_sync(void)
         gk3_lg.file_failed = true;
         gk3_lg.file_err = st;
     }
+}
+
+/* ------------------------------------------------------------------ 日志文件 */
+
+static EFI_FILE_PROTOCOL *open_volume(EFI_HANDLE dev)
+{
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
+    EFI_FILE_PROTOCOL *root = NULL;
+    EFI_STATUS st = gk3_bs->HandleProtocol(dev, (EFI_GUID *)&gk3_guid_simple_fs, (void **)&fs);
+    if (EFI_ERROR(st) || !fs) {
+        gk3_logf("!! log: SimpleFileSystem on own device: %s\n", gk3_efi_strerror(st));
+        return NULL;
+    }
+    st = fs->OpenVolume(fs, &root);
+    if (EFI_ERROR(st) || !root) {
+        gk3_logf("!! log: OpenVolume: %s\n", gk3_efi_strerror(st));
+        return NULL;
+    }
+    return root;
+}
+
+/* 逐级打开 dir（"\\A\\B\\C"），没有就建（建目录只发生在第一次跑） */
+static EFI_FILE_PROTOCOL *open_dirs(EFI_FILE_PROTOCOL *root, const CHAR16 *dir)
+{
+    EFI_FILE_PROTOCOL *cur = root, *next;
+    CHAR16 comp[64];
+    const CHAR16 *p = dir;
+    while (*p) {
+        size_t n = 0;
+        while (*p == u'\\')
+            p++;
+        while (*p && *p != u'\\' && n + 1 < sizeof(comp) / sizeof(comp[0]))
+            comp[n++] = *p++;
+        comp[n] = 0;
+        if (!n)
+            break;
+        next = NULL;
+        EFI_STATUS st = cur->Open(cur, &next, comp, EFI_FILE_MODE_READ, 0);
+        if (st == EFI_NOT_FOUND)
+            st = cur->Open(cur, &next, comp, EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
+                           EFI_FILE_DIRECTORY);
+        if (cur != root)
+            cur->Close(cur);
+        if (EFI_ERROR(st) || !next) {
+            char a[64];
+            gk3_ucs2_to_ascii(comp, 64, a, sizeof(a));
+            gk3_logf("!! log: open dir %s: %s\n", a, gk3_efi_strerror(st));
+            return NULL;
+        }
+        cur = next;
+    }
+    return cur;
+}
+
+static void ascii_to_16(const char *a, CHAR16 *out, size_t cap)
+{
+    size_t i = 0;
+    for (; a[i] && i + 1 < cap; i++)
+        out[i] = (CHAR16)(unsigned char)a[i];
+    out[i] = 0;
+}
+
+/* refs/edk2 MdePkg/Include/Guid/FileSystemInfo.h:15 */
+static const EFI_GUID guid_fs_info = {0x09576e93, 0x6d3f, 0x11d2, {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}};
+
+bool gk3_log_open_seq(gk3_logfile *lf, EFI_HANDLE dev, const CHAR16 *dir, const char *prefix, unsigned max)
+{
+    EFI_FILE_PROTOCOL *root, *d, *f = NULL;
+    char name[48];
+    CHAR16 name16[48];
+    EFI_STATUS st;
+
+    gk3_memset(lf, 0, sizeof(*lf));
+    lf->dev = dev;
+    if (!dev || !(root = open_volume(dev)))
+        return false;
+    /* ESP 快满时干脆不写：QEMU 夹具（AAVMF 2025.02 的 FAT 驱动）实测，在满盘上建目录会返回 VOLUME_FULL，
+     * 却留下一个起始簇为 0（= 指向根目录）的目录项 —— FAT 坏了、目录成环（README §10 espfull 场景）。
+     * 日志永远不值得冒这个险。拿不到 FileSystemInfo 也按"别写"处理。 */
+    {
+        union {
+            EFI_FILE_SYSTEM_INFO fi;
+            uint8_t raw[sizeof(EFI_FILE_SYSTEM_INFO) + 128];
+        } u;
+        UINTN sz = sizeof(u);
+        st = root->GetInfo(root, (EFI_GUID *)&guid_fs_info, &sz, &u);
+        if (EFI_ERROR(st) || u.fi.FreeSpace < GK3_LOG_MIN_FREE) {
+            if (EFI_ERROR(st))
+                gk3_logf("!! log: GetInfo(FileSystemInfo): %s, not writing\n", gk3_efi_strerror(st));
+            else
+                gk3_logf("!! log: ESP free space %llu bytes < %u, not writing\n", (unsigned long long)u.fi.FreeSpace,
+                         GK3_LOG_MIN_FREE);
+            root->Close(root);
+            return false;
+        }
+    }
+    d = open_dirs(root, dir);
+    if (!d) {
+        root->Close(root);
+        return false;
+    }
+    for (lf->n = 0; lf->n < max; lf->n++) {
+        EFI_FILE_PROTOCOL *t = NULL;
+        gk3_snprintf(name, sizeof(name), "%s%u.txt", prefix, lf->n);
+        ascii_to_16(name, name16, 48);
+        st = d->Open(d, &t, name16, EFI_FILE_MODE_READ, 0);
+        if (st == EFI_NOT_FOUND)
+            break;
+        if (EFI_ERROR(st)) {
+            gk3_logf("!! log: probe %s: %s\n", name, gk3_efi_strerror(st));
+            goto out;
+        }
+        t->Close(t);
+    }
+    if (lf->n >= max) {
+        gk3_logf("!! log: %u logs already exist, not writing (clean up the log directory)\n", max);
+        goto out;
+    }
+    st = d->Open(d, &f, name16, EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
+    if (EFI_ERROR(st) || !f) {
+        gk3_logf("!! log: create %s: %s\n", name, gk3_efi_strerror(st));
+        goto out;
+    }
+    {   /* 完整路径 = dir + "\\" + name，重开时一次 Open */
+        size_t k = 0, dl = gk3_strlen16(dir);
+        for (size_t i = 0; i < dl && k + 1 < 96; i++)
+            lf->path[k++] = dir[i];
+        if (k + 1 < 96)
+            lf->path[k++] = u'\\';
+        for (size_t i = 0; name16[i] && k + 1 < 96; i++)
+            lf->path[k++] = name16[i];
+        lf->path[k] = 0;
+    }
+    gk3_lg.file = f;
+    gk3_lg.file_failed = false;
+    lf->open = true;
+out:
+    d->Close(d);
+    root->Close(root);
+    return lf->open;
+}
+
+void gk3_log_close(gk3_logfile *lf)
+{
+    if (!lf->open || !gk3_lg.file)
+        return;
+    gk3_log_sync();
+    EFI_STATUS st = gk3_lg.file->Close(gk3_lg.file);
+    if (EFI_ERROR(st) && !gk3_lg.file_failed) {
+        gk3_lg.file_failed = true;
+        gk3_lg.file_err = st;
+    }
+    gk3_lg.file = NULL;
+    lf->open = false;
+}
+
+bool gk3_log_reopen(gk3_logfile *lf)
+{
+    EFI_FILE_PROTOCOL *root, *f = NULL;
+    if (lf->open || !lf->path[0] || gk3_lg.file_failed || !(root = open_volume(lf->dev)))
+        return false;
+    EFI_STATUS st = root->Open(root, &f, lf->path, EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
+    root->Close(root);
+    if (EFI_ERROR(st) || !f) {
+        gk3_logf("!! log: reopen: %s\n", gk3_efi_strerror(st));
+        return false;
+    }
+    /* 0xFFFFFFFFFFFFFFFF = 移到文件尾（UEFI 规范 EFI_FILE_PROTOCOL.SetPosition） */
+    st = f->SetPosition(f, ~(UINT64)0);
+    if (EFI_ERROR(st)) {
+        f->Close(f);
+        gk3_logf("!! log: seek end: %s\n", gk3_efi_strerror(st));
+        return false;
+    }
+    gk3_lg.file = f;
+    lf->open = true;
+    return true;
 }
 
 /* ------------------------------------------------------------------ 设备路径 */
