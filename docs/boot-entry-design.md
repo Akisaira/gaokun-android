@@ -1,7 +1,8 @@
 # MateBook E Go（gaokun3）统一启动入口设计
 
-> **状态**：设计稿，还没有实现，也还没有上机。日期 2026-10-05。
+> **状态**：设计稿，还没有实现，也还没有上机（双系统 D1 已在开发机只读做过）。日期 2026-10-05；同日补全双系统（§4.9，两轮）。
 > **2026-10-05 修订**：用户已采纳 U1–U11 的全部建议，并要求补全双系统（Windows + Android）。§4.9 整节重写；§1、§2.1、§4.2、§4.3.6、§4.6.1、§4.7、§4.8、§4.12、§4.14、§5、§6、§7 随之修改；新增决定点 U12–U21，U3 区分纯 Android 与双系统；自审纠正记在 §8.2 第 21 条起。**双系统没有真机样本**，§4.9 每条结论都标了证据等级。
+> **2026-10-05 补全双系统（第二轮）**：按两份评审（风险 / 体验）合入修正——开发机实验只说明纯 Android 盘、不外推到双系统盘；"关掉安全启动后是否每次都要恢复密钥"改为【未知】；U 盘路径的 BitLocker 提醒提前到关安全启动之前；Modern Standby 会自动休眠；Windows 条目排第 2 位、标题一律 ASCII；`LoaderEntryDefault` 只允许两种值；Windows 侧能力集中到常驻的"Windows 伴随工具"；补卸载、反向迁移、文件交换、指纹、日常使用说明。新增 §4.9.15–§4.9.17、决定点 U22–U25，记录在 §8.2 第 45 条起（含不同意评审的几条及理由）。
 > **起因**：用户 2026-10-05 澄清，说要"做一个 fastboot"，指的是**一个统一的、承载启动 Android 的入口**，作用和手机上的 ABL / bootloader 一样：选 A/B 槽，做启动失败计数和回落，读 misc 的 BCB，执行 bootonce-bootloader / recovery / wipe 这些意图；需要时进 fastboot 模式（刷机、`-w`、`set_active`）；恢复出厂和 `adb reboot bootloader` 也由它分派。
 > **地位**：本文取代 [`fastboot-design.md`](fastboot-design.md) §3.3"推荐"一节。该文 §4 中 `gk3-fastbootd` 的协议、白名单、清除语义、USB 与界面设计，在本文里作为 **"fastboot 执行端"** 引用（记作 C′ §x.y）。
 > **依据**：4 份摸底（固件、启动契约、开源基础、与现有链路共存），另有双系统 3 路摸底（现有双系统流程、固件与 Windows 启动机制、日常共存，§4.9）、3 套方案（X：ABL 骨架 + UEFI 内 USB；Y：入口做 efi 条目，fastboot 交给 Linux；Z：systemd-boot 驱动做决策层），3 份评审（风险、体验、成本）。正文引用的 `文件:行号` 沿用摸底和评审里核对过的那些。
@@ -25,7 +26,8 @@ UEFI 内 USB fastboot（X 的核心）推到 1.x，届时只替换执行端的�
 **双系统**（§4.9）：
 - 静态分析显示，华为固件每次开机都会删掉 Windows 自己写的启动项，两个系统都从回落路径上的 systemd-boot 进。所以入口方案不改变 Windows 的启动链，gk3boot 也不进 BitLocker 的度量。
 - 新增的是：可选的"Windows 为默认"（gk3boot 预置 OneShot，Android 里的重启仍回 Android）、双向"重启到另一系统"、双系统固定显示菜单、ESP 给 Windows 留余量、`-RepairBoot` 和 `-RemoveAndroid`。
-- 没有真机样本：固件行为可以在开发机上先验（D1–D3），Windows 侧靠 Parallels 和群友（D4–D7）。在那之前，双系统标"预览"。
+- 没有真机样本：固件**在纯 Android 盘上的**策略可以在开发机上先验（D1–D3，D1 已做，结果符合静态分析）；但实测里盘上有没有 Windows 分区改变过固件的启动选择（§4.9.2 末尾），所以**双系统盘上谁先运行只能由群友真机定**（D5 的 U 盘只读部分、D6）。Windows 侧靠 Parallels 和群友（D4–D7）。在那之前，双系统标"预览"。
+- Windows 侧的修复、互相重启、默认系统、关快速启动 / 休眠集中到一个常驻的 **Windows 伴随工具**（U23，§4.9.15）。
 
 分阶段：
 1. 先离线做完决策核心和 QEMU 夹具；
@@ -33,7 +35,7 @@ UEFI 内 USB fastboot（X 的核心）推到 1.x，届时只替换执行端的�
 3. 入口先以观察模式上开发机，再转正；执行端与之并行开发；
 4. 随 1.0 发布。
 
-预计总工作量约 **8–10 人周**，需要用户在场 6–8 次。补全双系统（S12 扩大、S15）再加约 1–1.5 人周；开发机上的 D2 并进 E3 那一次，不增加在场次数；Windows 侧要靠 Parallels 和群友。
+预计总工作量约 **8–10 人周**，需要用户在场 6–8 次。补全双系统（S12 扩大为 Windows 伴随工具、S15）再加约 2–3 人周（第一轮估 1–1.5，第二轮加了伴随工具的安装 / 开机自检 / 计划任务、U22 的 Windows 条目和 U25 的 Windows 侧预置）；开发机上的 D2 并进 E3 那一次，不增加在场次数；Windows 侧要靠 Parallels 和群友。
 
 ---
 
@@ -73,7 +75,7 @@ UEFI 内 USB fastboot（X 的核心）推到 1.x，届时只替换执行端的�
 - 中文 / 横屏的 UEFI 图形界面（1.0 的交互界面在 Linux 执行端，英文）。
 - 开机"按住音量下"直接进 fastboot（理由见 §4.3.5）。
 - 安全擦除（NVMe Sanitize / Deallocate）。
-- 双系统方面：XBOOTLDR（解决 100 MiB ESP）；从 live 卸载 Android；Windows 侧"开机预置 OneShot"的计划任务（Windows 里的重启回 Windows，靠"Windows 为默认"解决）；在 NVRAM 建 bootmgfw 的备用启动项（F9 的计数语义不明，§4.9.2）；Android 自动修复 `BOOTAA64`（会让 BitLocker 要密钥，§4.9.6）。
+- 双系统方面：XBOOTLDR（解决 100 MiB ESP）；从 live 卸载 Android；Windows 侧"开机预置 OneShot"的计划任务**默认不做**（Windows 里的重启回 Windows，靠"Windows 为默认"解决；U25 建议 D4/D6 证实 Windows 能写变量后作为伴随工具的选项提前到 1.0.x）；在 NVRAM 建 bootmgfw 的备用启动项（F9 的计数语义不明，§4.9.2）；Android 自动修复 `BOOTAA64`（会让 BitLocker 要密钥，§4.9.6）。
 
 ### 1.4 术语
 
@@ -497,7 +499,10 @@ gk3boot 用和 Android 同一套交接代码引导：
 - **test-apply 新用例**：0.7.x 布局升 1.0；停用逻辑不碰 gk3 条目；ESP 上已有更新的入口（不降级）；空间不足；misc 字节核对。
 - **双系统专项**（§4.9）：
   - 确认页：增加"默认启动哪个系统"（U12，预选 Android），选 Windows 时经 uefisecapp 写 `LoaderEntryDefault=auto-windows`；
-  - Windows 卷是 BitLocker 且 `BOOTAA64` 要变时，强制确认"已拿到恢复密钥"（U16）；Windows 卷处于休眠时拒绝写 ESP（U18）；
+  - Windows 卷是 BitLocker 且 `BOOTAA64` 要变时，强制确认"已拿到恢复密钥"（U16），文案按"走过脚本 / 从 U 盘来"分开（§4.9.7 规则 6）；Windows 卷处于休眠时拒绝写 ESP（U18，复用 `gk3__ntfs_hibernated`，`installer-lib.sh:1170`）；
+  - 双系统时写 `gk3-windows.conf` 并在 loader.conf 写 `auto-entries no`（U22）；所有条目标题改成 ASCII；
+  - live 开机时检查 `LoaderEntryDefault`：指向 live / 救援就提示一键清除；整盘清空式重新安装时删掉残留的 Loader 变量（§4.9.3）；
+  - 完成页提示"回到 Windows 后安装伴随工具"并给下载地址（U23）；
   - **改文案**：`app_zh.arb:84`（modeAlongOk）、`:326`（confirmAlongHead）、`:365`（doneBody），以及 en 版和 `INSTALL.md:98`。原文"不会对你现有的分区进行任何更改""重新启动后，你将进入 Android"与事实不符，改成"只在空闲空间建分区；会在 EFI 分区里放入启动器（原文件已备份），开机会出现选择菜单"，完成页按所选的默认系统说明"开机默认进 X，切换方法……"；
   - 写 `BOOTAA64` 只在字节不同时写（U16）；
   - ESP 余量断言加上 Windows 和固件的 32 MiB（U17）；100 MiB 的 ESP 明确拒绝；
@@ -510,7 +515,8 @@ gk3boot 用和 Android 同一套交接代码引导：
 **Windows 脚本**（`scripts/windows/`）：
 - 入口放在 `EFI\gk3boot\`，**绝不放进** `EFI\gaokun3\`（`-Uninstall` 会递归删除它，`:267`）。
 - `Format-LoaderConf` 只在 loader.conf 不存在时写，保持不动。
-- **默认路径改为 `-UseFallbackPath`**：按 F3/F6，`bcdedit /copy {bootmgr}` 建的短格式项会在 BootNext 生效之前就被固件删掉，"只下一次"多半会落空、回到 Windows。D2（开发机）或 D6（群友）确认之后再改；在那之前，脚本的提示保持现状（`gaokun3-setup.ps1:527`）。
+- **默认路径改为 `-UseFallbackPath`**：按 F3/F6，`bcdedit /copy {bootmgr}` 建的短格式项会在 BootNext 生效之前就被固件删掉，"只下一次"多半会落空、回到 Windows。**D5 的 U 盘只读部分或 D6（群友双系统盘）确认之后再改**；D2 只说明纯 Android 盘，不作依据。改成默认意味着所有"只想试一下安装器"的用户回落路径都被永久换成 systemd-boot（影响 PCR4 和 HwBcdOneKey 的路径匹配），所以要等真机证据。在那之前，脚本的提示保持现状（`gaokun3-setup.ps1:527`）。
+- 整个 Windows 侧升级为常驻的 **Windows 伴随工具**（U23，§4.9.15）：安装位置、开始菜单项、默认开的开机自检、"仅暂停 BitLocker"、U 盘介质上放一份。
 - **快速启动在所有双系统路径上都关**（U18），不只在缩 D: 那条路上（`:407-411`）。
 - **`-RepairBoot [-Check]`**（1.0 做，§4.9.6）：体检，然后在 `BOOTAA64` 被换回 bootmgfw 时，先暂停 BitLocker 1 次重启，再拷回 systemd-boot；U15 采纳时重建自有启动项。入口和条目不用碰。
 - **"重启到 Android"**（§4.9.4）与 **`-SetDefault Windows|Android`**（§4.9.3）：都通过 `SetFirmwareEnvironmentVariableEx` 实现，需要管理员和 SeSystemEnvironmentPrivilege，D4/D6 待核。
@@ -557,14 +563,15 @@ gk3boot 用和 Android 同一套交接代码引导：
 
 #### 4.9.1 结论先行
 
-1. **固件层面，两个系统走的是同一个门。** 华为的启动策略每次开机都会删掉"文件路径对不上完整设备路径"的启动项。Windows 写的短格式项 `HD(…)/File(…)` 属于这一类，所以活不过下一次开机。随后固件给 ESP 补建一个只指到分区、描述为 `Windows Boot Manager (<设备名>)` 的启动项；启动这一项时，实际加载的是回落路径 `\EFI\BOOT\BOOTAA64.EFI`【二进制，复核】。⇒ 装完双系统后，冷开机、F12 菜单里的 "Windows Boot Manager"、Windows 的"使用设备重启"，**进的都是 systemd-boot**；"Windows 更新把 WBM 挪到 BootOrder 第一位、从此直进 Windows"在本机**不会**发生【推断。与唯一一次实机记录（2026-08-20）一致；D1/D2 可以在开发机上直接核实，不需要 Windows】。第一路摸底的 blocker"双系统用户很可能默认直进 Windows"据此撤销（§8.2 #21）。
-2. **Windows 只有一条启动链**：固件 → systemd-boot → bootmgfw。BitLocker 在安全启动关闭时用 PCR 0/2/4/11【微软文档】，所以只在第一次装上、以及 systemd-boot（`BOOTAA64`）的字节变化时要恢复密钥。"F12 和菜单交替进 Windows 会反复要密钥"在本机不成立【推断】。gk3boot 从不出现在 Windows 那次启动的镜像链里。
+1. **固件层面，两个系统走的是同一个门。** 华为的启动策略每次开机都会删掉"文件路径对不上完整设备路径"的启动项。Windows 写的短格式项 `HD(…)/File(…)` 属于这一类，所以活不过下一次开机。随后固件给 ESP 补建一个只指到分区、描述为 `Windows Boot Manager (<设备名>)` 的启动项；启动这一项时，实际加载的是回落路径 `\EFI\BOOT\BOOTAA64.EFI`【二进制，复核】。⇒ 装完双系统后，冷开机、F12 菜单里的 "Windows Boot Manager"、Windows 的"使用设备重启"，**进的都是 systemd-boot**；"Windows 更新把 WBM 挪到 BootOrder 第一位、从此直进 Windows"在本机**不会**发生【推断。与 2026-08-20 那次实机记录、以及 D1 的实机结果（开发机上只有固件自建的 `Boot0000`，§4.9.14）一致。但 **D1/D2 只能说明纯 Android 盘上的策略**：仓库里另有一条模型解释不了的实测——Windows 分区还在时 U 盘被优先启动、删掉 Windows 分区后翻转（§4.9.2 末尾），说明盘上的 Windows 分区会改变启动选择。所以双系统盘上谁先运行，要由群友出厂双系统盘的 D5（U 盘 live 只读部分）和 D6 定】。第一路摸底的 blocker"双系统用户很可能默认直进 Windows"据此**降为待核**，D5/D6 之前不当作已撤销（§8.2 #21、#45）。
+2. **Windows 只有一条启动链**：固件 → systemd-boot → bootmgfw。BitLocker 在安全启动关闭时用 PCR 0/2/4/11【微软文档】，所以至少在第一次装上、以及 systemd-boot（`BOOTAA64`）的字节变化时会要恢复密钥；"F12 和菜单交替进 Windows 会反复要密钥"在本机不成立【推断】。**但关掉安全启动之后会不会每次开机都要密钥，是【未知】**：同款 SoC 的社区报告说每次都要、没说原因（§4.9.7），在 T11d 有结论之前，INSTALL 只能写"可能每次都要；建议装双系统前先在 Windows 里暂停或解密 BitLocker"。gk3boot 从不出现在 Windows 那次启动的镜像链里。
 3. **真正的威胁是 `BOOTAA64` 被换掉，以及安全启动被重新打开。** 前者让 Android 消失，后者让**两个系统一起进不去**（固件里只有那一个门）。对策：Windows 脚本 `-RepairBoot`、FAQ、U 盘；D2 通过后再加自有启动项作为第二道门（U15）。
 4. **默认系统可以选（U12）。** Windows 为默认时写 `LoaderEntryDefault=auto-windows`；gk3boot 每次启动 Android 时预置一次 `LoaderEntryOneShot`，保证"在 Android 里发生的任何重启都回到 Android"，包括 OTA、`adb reboot bootloader`、恢复出厂、崩溃后的 tries 回滚。冷开机才进 Windows。
 5. **菜单策略按机器分（U13）**：双系统固定显示菜单 5 秒，不用 `menu-hidden`；纯 Android 仍按 U3。
 6. **互相重启（U14）**：Android 侧"重启到 Windows"经 GK3 一次性意图实现，Android 不重新引入 efivarfs，代价是多一次 POST；Windows 侧由脚本装一个"重启到 Android"，它写 `LoaderEntryOneShot`（Windows 能否写这个变量待核）。
 7. **ESP**：出厂 300 MiB 的 ESP 装完 1.0 后，约剩 97–120 MiB；安装器、postinstall、`gk3-esp-sync` 统一保证给 Windows 和固件至少留 32 MiB（U17）。用户自己重装 Windows 得到的 100 MiB ESP 在 1.0 里明确装不了。
 8. **其余**：时钟不会差 8 小时（两边各存各的 RTC 偏移）【推断】，不要推荐 RealTimeIsUniversal；快速启动一律关（U18）；卸载必须先还原引导、后删分区（U20）；在 D5/D6 有一台真机通过之前，双系统在发版说明里标"预览"（U21）。
+9. **Windows 侧集中到一个常驻的伴随工具**（U23，§4.9.15）：Windows 换掉 `BOOTAA64` 之后 Android 已不可达，只有它的开机自检能及时发现；它还负责互相重启、默认系统、关快速启动 / 休眠、卸载。Modern Standby 会在待机中**自动**转入休眠（§4.9.10），所以是否关掉整个休眠单列为 U24。
 
 #### 4.9.2 固件怎么选启动项（BIOS 2.16 静态分析）
 
@@ -583,7 +590,15 @@ gk3boot 用和 Android 同一套交接代码引导：
 | F11 | F12（CheckPostHotkey → BootManagerMenuApp）列出的是 Boot####。双系统机器上多半只有 F4 那一项和 USB 设备，Android 和 Windows **不会**作为两项分别出现 | QcomBds 0x22984、0x22b94 | 推断 |
 | F12 | 2026-08-20，Windows 还在盘上：把内置 ESP 的回落文件换成 systemd-boot、拔掉 U 盘开机，直接进了 Android。原 `bootaa64.efi` 与 `bootmgfw.efi` 同为 3,120,168 字节（出厂的回落文件就是 WBM 的拷贝，这也解释了为什么 F10 认这两条路径） | `docs/hw-inventory.md` §8quater | 实测（当时没读 BootOrder） |
 
-**修正**：§2.1 的"本机没有 Boot####"应改为"有一项固件自建的分区项，效果等同于走回落路径"。设计结论"`BOOTAA64` 决定一切"不变，只是理由换了。还有一点没解释：hw-inventory §8quinquies 记录过"删掉 Windows 分区后，固件优先的 ESP 从 U 盘翻到了内置盘"，F1–F7 不能完整解释这次翻转（USB 项走的是另一套逻辑），留作 D1 的观察项。
+**修正**：§2.1 的"本机没有 Boot####"应改为"有一项固件自建的分区项，效果等同于走回落路径"。设计结论"`BOOTAA64` 决定一切"不变，只是理由换了。**模型解释不了的实测**（因此 F1–F7 **不完整**）：hw-inventory §8quater 记录过 Windows 分区还在时插着 U 盘开机，`LoaderDevicePartUUID` 是 U 盘；§8quinquies 记录过删掉 Windows 的 p2–p7 之后，优先的 ESP 从 U 盘翻到了内置盘。按 F1/F7，USB 项每次被删、EnumerateOptions 又排除 USB、默认 BootTypeOrder 是 HD 优先 ⇒ U 盘本不该被默认启动。⇒ **存在一条未建模的选择路径：U 盘优先，且随 Windows 分区（WINPE / Onekey / WinRE / MSR 之一或几个）的存在而变**。开发机早已没有这些分区，D1/D2 观察不到它；双系统用户的盘正处在"删之前"那个状态。挂到 T11k，由 D5 的 U 盘只读部分（插着 / 拔掉 U 盘各冷开一次，记 BootCurrent）回答。
+
+**三种假设**（D5/D6 定论之前，按 H-A 设计、为 H-B/H-C 留退路）：
+
+| 假设 | 开机先进 | 应对 |
+|---|---|---|
+| H-A：F1–F7 成立，Windows 写短格式 | 回落路径上的 systemd-boot | 1.0 基线：照旧占回落路径 |
+| H-B：Windows 在本机写的是完整路径并排第一（能通过 F2，同 HD 节点又让 F4 不再建分区项） | Windows | U15 的自有项，或接受"Android 只能经菜单 / U 盘进"，写进 INSTALL |
+| H-C：未建模的选择路径、用户改过 BootTypeOrder、BIOS 重置等 | 不定 | 同 H-B，加伴随工具的开机自检（§4.9.15） |
 
 #### 4.9.3 开机先进谁、默认系统怎么选（U12）
 
@@ -600,16 +615,21 @@ gk3boot 用和 Android 同一套交接代码引导：
 
 **两条禁令**（双系统才有的坑）：
 - **禁止把 Android 条目的精确 id 写进 `LoaderEntryDefault`**（包括在菜单里对着 Android 按 `d`），**也禁止 `@saved`**。原因：`config_find_entry` 只做 fnmatch、不看剩余次数（`boot.c:1771-1784`），精确 id 会让计数用完的入口条目照样被选中，§4.3.3 的"入口 → gk3prev → 直连"回落就失效了。
-- 处理办法：
-  - gk3boot 每次运行都检查 `LoaderEntryDefault`，它匹配 `*-android-*` 就删掉（语义等于"默认 Android"），并记一条 event；
-  - 用户对着**直连条目**按了 `d` 时，gk3boot 根本不运行，靠 HAL 的 bypassed 通知（§4.6.1 动作 5）告诉用户怎么改回来。
+- **合法值只有两种**：不存在（= Android），或 Windows 条目的 id（`auto-windows`；采纳 U22 后新装机器是 `gk3-windows`，下文凡写 `auto-windows` 都指"本机实际存在的那个 Windows 条目 id"）。在 installer、救援、直连条目、上一版入口上按 `d` 同样会把开机钉住（`boot.c:967-981` 对任何高亮条目都写精确 id，菜单退出时写回 `:1127`）。systemd-boot 读入时转小写（`:1645`）；值匹配不到任何条目（Windows 被删了）时落回 loader.conf（`:1797-1810`），无害。
+- 处理办法（"不是合法值就删"，四处都执行同一条规则）：
+  - gk3boot 每次运行都检查 `LoaderEntryDefault`，不是合法值就删掉（语义等于"默认 Android"），并记 event `default_reset`；
+  - 用户钉在**直连条目**、live 或救援上时，gk3boot 根本不运行：HAL 的 bypassed 通知（§4.6.1 动作 5）写明"在开机菜单里高亮当前默认项（标了默认的那一条）再按一次 `d` 即清除"（对已是默认的条目按 `d` = 清除，`boot.c:968-977`）。Android 不碰 efivarfs（U14 选 a），所以 HAL 只通知、不自己删；
+  - live 安装器开机时检查：变量指向 live 或救援就在界面上提示，一键清除；整盘清空式重新安装时直接删掉残留的 `LoaderEntryDefault` / `LoaderEntryOneShot`；
+  - Windows 伴随工具的开机任务（§4.9.15）同样规范化。
+  - **兜不住的情况**：变量精确钉在计数已用完、且坏到检查之前就崩溃的 gk3boot 上。gk3boot 修不了自己，U7 的菜单也在它里面；兜底是菜单里手选别的条目并对默认项按一次 `d`，或插 U 盘。写进 FAQ。`d` 键在 boot.c 里无条件生效（`:967`），没找到关闭它的配置项。
 
 **预置 OneShot（只在 Windows 为默认时）**：
 - gk3boot 在交接前写 `LoaderEntryOneShot = *-android-<hint>.conf`（NV|BS|RT，写法同 `scripts/boot-oneshot.sh`）。
 - 效果：只要进了 Android，之后的任何重启都回 Android，包括 OTA 后重启、BCB 意图、RescueParty、panic、看门狗复位、新槽起不来时的 tries 回滚。否则一次 panic 就会落进 Windows，回滚链断掉（第三路摸底指出）。
 - 用通配而不用精确 id，是为了让计数用完的入口条目照常排到最后（`boot.c:1710-1714`）。
 - fail-open 写 OneShot 的时间晚于预置，所以失败时会覆盖它（§4.12）。
-- 走直连回落条目进 Android 时，gk3boot 不运行，也就没有预置。这是降级状态，可以接受。
+- 走直连回落条目进 Android 时，gk3boot 不运行，也就没有预置。这是降级状态，可以接受：直连路径本来就不扣 tries、没有回滚链，这次重启落进 Windows 也不会让回滚"更断"；HAL 已发 bypassed 通知。评审建议此时由 HAL 补写预置，**不采纳**（要给 Android 加回 efivarfs，见 §8.2 #46）。
+- 预置里的槽字母是开机那一刻的。OTA 之后 setActive 改了 loader.conf，预置的 OneShot 仍会先命中 `gk3boot-android-<旧字母>`，但 gk3boot 按 BCAB 选槽，照样启动新槽；字母只在入口计数全用完、落到直连条目时起作用，那时落到旧槽（已知可用）正是想要的（§8.2 #46）。
 
 **冷开机进 Windows**：
 - Android 里关机时，vendor rc 的 `on shutdown` 执行 `gk3-misc mark-poweroff`。它只在 `sys.powerctl` 以 `shutdown` 开头、且默认是 Windows 时（看 GK3 里 gk3boot 写下的默认系统缓存，§4.5；Android 不挂 efivarfs），在 GK3 记录里置 `clean_poweroff`。
@@ -622,7 +642,7 @@ gk3boot 用和 Android 同一套交接代码引导：
 |---|---|---|
 | 关机后按电源键 | Android | Windows（从 Android 关的机：多一次 POST） |
 | Android 里重启 / OTA / `adb reboot bootloader` / 恢复出厂 / 崩溃 | Android | Android（预置 OneShot） |
-| Windows 里重启、Windows 更新的多次重启 | **菜单倒计时后进 Android**：Windows 更新推迟到下次进 Windows，不会损坏【推断】 | Windows |
+| Windows 里重启、Windows 更新的多次重启 | **菜单倒计时后进 Android**：Windows 更新推迟到下次进 Windows，不会损坏【推断】。U25 落地（伴随工具的 Windows 侧预置）后回 Windows | Windows |
 | Android 里"重启到 Windows" | Windows（一次） | Windows |
 | Windows 里"重启到 Android" | Android | Android（一次） |
 | 菜单里手选 | 任选 | 任选 |
@@ -630,7 +650,7 @@ gk3boot 用和 Android 同一套交接代码引导：
 ⇒ INSTALL 和确认页要写明：**以 Windows 为主的用户选"Windows 为默认"**。
 
 **gk3boot 的判定顺序**（并入 §4.2 的第 0、4、9 步）：
-- a. 读 `LoaderEntryDefault`：匹配 `*-android-*` 就删掉；值是 `auto-windows`、**并且** ESP 上确实有 `\EFI\Microsoft\Boot\bootmgfw.efi`，才算"默认是 Windows"。结果只在变化时写进 GK3 的默认系统缓存。
+- a. 读 `LoaderEntryDefault`：不是合法值（不存在，或 Windows 条目 id）就删掉；值是 `auto-windows`、**并且** ESP 上确实有 `\EFI\Microsoft\Boot\bootmgfw.efi`，才算"默认是 Windows"。结果只在变化时写进 GK3 的默认系统缓存。
 - b. 处理 `set_default=windows|android`：写或删 `LoaderEntryDefault`，更新缓存，**不复位**，接着往下走。
 - c. 判断 **Android 待办**：BCB 非空，或者选中的槽未成功（tries 计数中），或者连续未完成计数 > 0，或者 GK3 里有 `next=slot:x` / `next=sdboot-menu`。有待办时，把 `next=windows` 和 `clean_poweroff` 作废并记 event，按原流程启动 Android。HAL 据此通知，例如"已先完成系统更新，请再选一次重启到 Windows"。
 - d. 没有待办，且满足 `next=windows`，或者（`clean_poweroff` 且默认是 Windows），且 bootmgfw 存在：**先清掉标记**，再写 `OneShot=auto-windows`，然后 `ResetSystem(Warm)`。这一路不加连续未完成计数、不扣 tries、不预置 OneShot。因为标记先清，最坏情况也只多一次复位，不会循环。
@@ -652,13 +672,15 @@ gk3boot 用和 Android 同一套交接代码引导：
 
 执行端菜单的"Other systems"保留作后备：没装 Parts 或没开机完成时，用 `adb reboot bootloader` 也能到。
 
+**入口位置**：1.0 保证的是 Parts 里的"重启到 Windows"（Parts 是自己的代码）。普通用户切系统时找的是**电源菜单**（长按电源键弹出的那个），目标是在那里也加一项；crDroid 的扩展点要在构建机的 crDroid 树里 grep 出文件和行号（E1），**不凭记忆写**，工作量计入 S9；找不到可用扩展点就只保留 Parts。
+
 **Windows → Android**：Windows 脚本安装一个"重启到 Android"（管理员 PowerShell）：
 1. `mountvol` 临时挂 ESP，读 loader.conf 的 `default` 值；
 2. 先用 AdjustTokenPrivileges 打开 SeSystemEnvironmentPrivilege；
 3. 用 `SetFirmwareEnvironmentVariableEx` 把这个值写进 `LoaderEntryOneShot`：GUID `{4a67b082-0a4c-41cf-b6c7-440b29bb8c4f}`，属性 7，UTF-16LE 加 NUL。权限要求见【微软文档 https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setfirmwareenvironmentvariableexw 】；
 4. 读回核对，然后 `shutdown /r /t 0`。
 
-为了不必每次都弹 UAC，脚本把上面这些注册成一个以 SYSTEM 运行的计划任务（SYSTEM 天然带这个特权），桌面和开始菜单的快捷方式只做 `schtasks /run`。`-SetDefault` 走同一个任务。
+为了不必每次都弹 UAC，脚本把上面这些注册成一个以 SYSTEM 运行的计划任务（SYSTEM 天然带这个特权），桌面和开始菜单的快捷方式只做 `schtasks /run`。`-SetDefault` 走同一个任务。这些都属于常驻的 Windows 伴随工具（U23，§4.9.15）：脚本本身只是下载包里的 .ps1，没有安装位置，从 U 盘装双系统的用户也从没运行过它。
 
 说明：
 - 用 loader.conf 的 default 值，而不用 `*-android-*` 这种宽通配：宽通配在入口条目全部计数用完时会排到另一个槽的直连条目。
@@ -673,7 +695,12 @@ gk3boot 用和 Android 同一套交接代码引导：
 
 - **systemd-boot 菜单是双系统唯一的选择点。**
   - Windows 条目是自动生成的 `auto-windows`：ESP 上有 `bootmgfw.efi`、`auto-entries` 默认开，标题从 BCD 读（`boot.c:2130-2151`）。Parallels 里实测出现过"Windows 11（自动认出）"，但那是另一套固件（`scripts/windows/README.md`）。
-  - 安装器**不写** `auto-entries no`，也不另写 Windows 条目（第一路摸底提的 gk3boot-windows.conf 不需要了）。
+  - ~~安装器不写 `auto-entries no`，也不另写 Windows 条目~~ **改为 U22**：systemd-boot 把 `auto-windows` 追加在所有 type1 条目**排序之后**（`boot.c:2814-2819`），排在它前面的有 Android、引导菜单、上一版入口、直连 a、直连 b、installer、救援 ⇒ 平板上每次要按 7 次左右音量下才到 Windows，而这是双系统用户每天最常用的操作。所以双系统时安装器写一个自有的 type1 条目 `gk3-windows.conf`（`title Windows`、`efi /EFI/Microsoft/Boot/bootmgfw.efi`，sort-key 介于入口条目 `0gk3` 与引导菜单条目之间，主机单测断言"Windows 排第 2"），并在 loader.conf 写 `auto-entries no` 避免出现两个 Windows。
+    - `auto-entries no` 同时隐藏 auto-osx、EFI Shell、EFI Default Loader（`boot.c:1961`、`:2007`、`:2138`），不影响 `auto-firmware`（独立选项，`:1258`、`:2825`）。注意：文件名以 `auto-` 开头的 type1 条目会被跳过（`:1691`），所以不能把自有条目命名成 `auto-windows.conf`，id 必须换（`gk3-windows`）。
+    - 代价：标题不再从 BCD 读（`:2140-2142`）；`w` 热键只属于 `auto-windows`（`:2147`），自有条目没有。`bootmgfw.efi` 不在时条目被跳过（`:1531-1535`），无害。
+    - 两种条目都是 systemd-boot 对同一个文件做 LoadImage，PCR4 应当相同【推断】，D4 核对一次。旧布局（没有 `gk3-windows.conf`）继续用 `auto-windows`。
+  - **条目标题一律 ASCII**：`Android`、`Windows`、`Android boot menu / Fastboot`、`Android (previous loader)`、`Android direct a/b (rescue)`。UEFI ConOut 能不能显示 CJK 字形从没验证过；现有直连条目的标题里已经有一个 `—`（`installer-lib.sh:920`），渲染情况同样未核。E3 顺带拍一张含 CJK 与 `—` 的测试标题，中文对照写进 INSTALL。
+  - FAQ：菜单里按 `d` 会改默认系统，对同一条目再按一次撤销（`boot.c:967-981`）。
 - **Windows 自己的启动菜单**（bootmgr displayorder）只管 Windows 内部（WinRE 等），不受影响；`bcdedit /enum firmware` 能看到 F4 那一项。
 - **F12 里那个 "Windows Boot Manager (…)"，打开的是我们的菜单**，并不能"绕过 systemd-boot 直进 Windows"（F11 + F5）。INSTALL / FAQ 要这样写，不要教用户"进不去就 F12 选 Windows Boot Manager"。要绕过只能插 U 盘。
 - **菜单策略（U13）**：
@@ -688,9 +715,11 @@ gk3boot 用和 Android 同一套交接代码引导：
 |---|---|---|---|
 | Windows 升级 / 修复跑 bcdboot | 在 NVRAM 建 WBM 项并放到第一位 | 下次开机就被固件删掉（F3），**无影响**【推断】 | 【微软文档】https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcdboot-command-line-options-techref-di （"By default, during an upgrade BCDBoot moves the Windows Boot Manager to be the first entry in the UEFI boot order"）＋ F3 推断 |
 | 同上 | **会不会改写 `\EFI\Boot\bootaa64.efi`** | 改写了 ⇒ Android 消失，开机直进 Windows | 微软文档只说 BCDBoot 把文件拷到 `\Efi\Microsoft\Boot`、用 `/s` 时"依赖固件默认打开 `\efi\boot\bootx64.efi`"，**没说会写回落路径**；社区有覆盖的报告。**待核（D4）** |
-| 启动管理器吊销（CVE-2023-24932） | 换 ESP 上的启动管理器 | 微软称对高通设备的缓解曾因固件问题被屏蔽，固件修好后才放开；本机 BIOS 2.16 算不算"修好"未知 | 【微软 KB】https://support.microsoft.com/en-us/topic/how-to-manage-the-windows-boot-manager-revocations-for-secure-boot-changes-associated-with-cve-2023-24932-41a975df-beb2-40c1-99a3-b3ff139f832d |
+| 启动管理器吊销（CVE-2023-24932） | 换 ESP 上的启动管理器 | 原文 "The mitigations are blocked due to known UEFI firmware issues with Qualcomm-based devices"，接着是 "Qualcomm has provided the fix to device manufacturers" ⇒ **屏蔽是暂时的**，华为发带修复的 BIOS 后可能解除；解除后 Windows 可能改写 ESP 上的启动文件（D7 观察） | 【微软 KB】https://support.microsoft.com/en-us/topic/how-to-manage-the-windows-boot-manager-revocations-for-secure-boot-changes-associated-with-cve-2023-24932-41a975df-beb2-40c1-99a3-b3ff139f832d |
+| 2026 年 Secure Boot 证书轮换 | 2011 年的 KEK / UEFI CA 于 2026-06、Windows Production PCA 2011 于 2026-10 到期，启动管理器会换成 Windows UEFI CA 2023 签名的版本；固件过旧时可能出现 "BitLocker recovery prompts (including repeated prompts/loops)" | 两页都没说**安全启动关闭**的机器会不会被换、会不会写回落路径 ⇒ 未知 | 【微软】https://techcommunity.microsoft.com/blog/windows-itpro-blog/act-now-secure-boot-certificates-expire-in-june-2026/4426856 ；https://learn.microsoft.com/en-us/troubleshoot/windows-client/windows-security/update-secure-boot-certificates 。D4、D7 观察 |
+| 用官方 ISO 在双系统盘上全新重装 Windows | 安装程序的分区界面会列出 Android 分区（可能被删）；bcdboot 写 ESP | 可能同"改写回落路径"那一行，或 Android 分区被删【推断】 | FAQ：重装时别动不认识的分区；装完运行伴随工具的修复，或用 U 盘 |
 | "从驱动器恢复"、华为 F10 一键恢复 | 重建整盘分区 | Android 被抹掉 | 【微软文档】https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/push-button-reset-overview （"Restores the default or preconfigured partition layout"）；F10 是推断，不实测 |
-| Windows 某次启动失败（BOOTSTAT 记了失败） | HwBcdOneKey 的状态机（F10） | 用户选 Android 时，systemd-boot（回落路径）也可能被带进一键恢复 | 二进制；触发条件待核（D3/D5） |
+| Windows 某次启动失败（BOOTSTAT 记了失败） | HwBcdOneKey 的状态机（F10） | 用户选 Android 时，systemd-boot（回落路径）也可能被带进一键恢复；状态是持久化的，下一次经回落路径开机还会被同样改道，F12 里也只有同一个门 ⇒ 可能陷入"一键恢复 → 重启 → 一键恢复"的循环【推断】 | 二进制；触发条件待核（D3/D5）。确定能走的逃生路径是 **U 盘 live**（U 盘不在钩子的"硬盘上的 ESP"范围内【推断】），再从 live 进 Android 或修好 Windows；清掉 BOOTSTAT 失败状态的具体做法待核 |
 
 **`-RepairBoot`（Windows 脚本，1.0 做）**：
 1. 只读体检：`BOOTAA64` 与 `EFI\systemd\systemd-bootaa64.efi` 是否同字节；loader.conf、条目、`EFI\gk3boot` 在不在；可选 `-Check` 只出报告。
@@ -702,6 +731,7 @@ gk3boot 用和 Android 同一套交接代码引导：
 - 能进 Android，说明走的是别的门（U 盘或 U15 的自有项）；
 - 改 `BOOTAA64` 会改变 Windows 的 PCR4，而 Android 暂停不了 BitLocker。
 - ⇒ HAL 开机完成线程只做比对（动作 6，§4.6.1），不同就通知"Windows 替换了启动器，请在 Windows 里运行 `gaokun3-setup.ps1 -RepairBoot`"。
+- 但在 H-A 下，`BOOTAA64` 被换回 bootmgfw 之后 F12 里也只有同一个门，**Android 通常根本进不来**，HAL 这条只在用户经 U 盘 / live 进 Android 时才有用。**主检测在 Windows 侧**：伴随工具的开机自检默认开、不可关（U23，§4.9.15），发现不同就通知并给一键修复。没有伴随工具的用户靠 FAQ 的手工三步或 U 盘 live 的"修复启动"。
 
 U 盘 live 的"修复启动"做同样的第 2 步，但 Linux 侧暂停不了 BitLocker，写之前必须让用户确认手上有恢复密钥（U16）。
 
@@ -713,7 +743,8 @@ U 盘 live 的"修复启动"做同样的第 2 步，但 Linux 侧暂停不了 Bi
 - **会触发恢复的事件**：Changes to the boot manager；修改验证配置里的 PCR；BIOS/UEFI 升级。暂停后再恢复，会按当时那次启动重新封存，不用输恢复密钥【微软文档 https://learn.microsoft.com/en-us/windows/security/operating-system-security/data-protection/bitlocker/recovery-overview 】。
 
 **推论**：
-- 出厂的设备加密多半绑在 PCR 7/11 上。关安全启动改变 PCR7，于是下一次开机要密钥；Windows 脚本已经先暂停 2 次重启（`gaokun3-setup.ps1:322-342`）。之后重新封存时 PCR7 不可用，落到 0/2/4/11。
+- 出厂的设备加密多半绑在 PCR 7/11 上。关安全启动改变 PCR7，于是下一次开机要密钥；Windows 脚本已经先暂停 2 次重启（`gaokun3-setup.ps1:322-342`）。
+- **【未知】之后会不会落到 0/2/4/11 并稳定下来。** 微软文档只说 PCR7 可用时默认用 7+11（上面的 configure 链接），**没说**已按 PCR7 封存的保护器在安全启动关掉后会不会自动改用 0/2/4/11 重新封存。同款 SoC 的社区说法是 "With the BitLocker still enabled, you would have to type in a 48 digit password each time you boot into Windows."（https://aarch64-laptops.github.io/laptops/thinkpad_x13s/debian_guide.html ）——原文没有说原因，本文不作解读。如果真实机制是"旧的 PCR7 保护器重封不了"，那"只留一条启动链"挡不住，用户每次开机都要输 48 位密钥。⇒ T11d 新增子项（D5 先读 `manage-bde -protectors -get C:`；D4 / D6 记录关安全启动后连续 3 次以上开机）。在有结论之前，INSTALL **只能写"可能每次进 Windows 都要恢复密钥；建议装双系统前先在 Windows 里暂停或解密 BitLocker"**；删除并重建 TPM 保护器之类的补救步骤，D4 验证后才写进 FAQ。
 - 暂停次数是按 **Windows 自己的启动**递减的【推断】，所以中途进 live 安装不消耗次数；最后一次递减发生在"经 systemd-boot 进 Windows"的那次启动，并按那条链重新封存。如果次数其实按所有重启计，在进 Windows 之前就用完了，那么第一次经菜单进 Windows 仍会要密钥。D4（vTPM）核实；在那之前，文案一律写"可能要一次恢复密钥"。从 U 盘直接装、没跑过 Windows 脚本的用户没有暂停：BitLocker 开着时，第一次进 Windows 几乎一定要密钥。
 - 封存后 PCR4 里是 systemd-boot 加 bootmgfw 的镜像度量，前提是固件真的开着镜像度量（§2.1 还待核）。
 
@@ -737,6 +768,9 @@ Windows 自己更新 bootmgfw 时会自己处理暂停和重封【推断】。
 3. Linux 侧（live 安装器）检测到 Windows 卷是 BitLocker（安装器已能认 `TYPE=BitLocker`）时，改 `BOOTAA64` 前强制确认"已拿到恢复密钥"；Android 从不改它；
 4. 双系统确认页和 INSTALL 写清：关闭安全启动后，Windows 的自动设备加密不会再自动开启，已加密的卷保持加密【微软文档 https://learn.microsoft.com/en-us/windows/security/operating-system-security/data-protection/bitlocker/ 】；
 5. 已知限制里写：Windows 侧要求安全启动的反作弊（例如 Riot Vanguard，https://support.riotgames.com/en-us/riot/client/enable-tpm-20 ）与本方案硬冲突。
+6. **时序：BitLocker 的提醒必须在"关安全启动"之前**。关安全启动这一步本身就会让绑定 PCR7 的 BitLocker 在下次进 Windows 时要密钥（Windows 脚本已为此调整过顺序，`gaokun3-setup.ps1:322-326`）；U 盘路径上用户先进固件关安全启动、可能先回一趟 Windows，**那时我们任何界面都还没出现过**，安装器确认页的勾选框已经晚了。所以：
+   - INSTALL 与 U 盘下载 / 制作说明的**第 0 步**（在"关安全启动"之前）：在 Windows 里确认拿得到恢复密钥（https://aka.ms/myrecoverykey ；微软的找回说明 https://support.microsoft.com/en-us/windows/security/encryption/find-your-bitlocker-recovery-key ），并暂停或解密 BitLocker；也可以只运行伴随工具的"仅暂停 BitLocker"（§4.9.15）。Home 版"设备加密"的用户多半不知道密钥存在微软账户里，这一步要写给他们看。
+   - 确认页按路径分文案：走过脚本路径（已暂停）写"接下来 2 次重启不会要密钥"；U 盘路径写"第一次进 Windows 可能要密钥，屏幕上会显示密钥 ID，到 aka.ms/myrecoverykey 按 ID 找"。blkid 能不能取到 BitLocker 的密钥 ID **待核**，取到就显示。规则 3 的强制确认保留为第二道。
 
 #### 4.9.8 共用 ESP 的空间账
 
@@ -751,27 +785,28 @@ Windows 自己更新 bootmgfw 时会自己处理暂停和重封【推断】。
 | `BOOTAA64` 原件备份 | 2.9 | 安装器 `:695` |
 | `slot_a` + `slot_b`（每槽 Image 14.9 + ramdisk 12.5 + dtb 0.17） | 55 | §2.2【实测文件】 |
 | 救援 initramfs（选了才有） | 4 | 安装器 |
-| 入口：1 版 / 分阶段激活时 2 版（gk3boot + fastboot.img） | ≤5 / ≤10 | §4.1 的估计，待 S5/S7 实测 |
+| 入口（gk3boot + fastboot.img）：新装 1 版 / 有过轮换后 2 版（当前 + gk3prev）/ 分阶段激活期间 3 版（再加 staged，§4.11 第 1–3 步） | ≤5 / ≤10 / ≤15 | §4.1 的估计，待 S5/S7 实测 |
 | live（只有 Windows 脚本那条路有，`EFI\gaokun3`） | 19.2 | 第三路摸底，实测文件大小 |
-| 0.7.x 机器 OTA 后铺的 recovery-ramdisk | 每槽约 15 | 1.0 停铺并删除（§4.6.2） |
+| recovery-ramdisk：0.7.x 的 OTA 铺的；**自编版本**的发布目录里有它时，安装器也会往两槽各铺一份（`installer-lib.sh:661`、`:933-935`；发版不带，`:490`） | 每槽约 13–15 | 1.0 停铺并删除（§4.6.2） |
 
 - **1.0 新装后的空闲**：最多 ≈188 − 68 = 120（不装救援、不走 Windows 脚本）；最少 ≈188 − 91 = 97。
 - **OTA 期间**：postinstall 覆盖目标槽，需要暂时空间，现行门槛是"空闲 + 一个槽 > 56 MiB"（`installer-lib.sh:52`）。
-- **Windows / 固件要的**：功能更新要求系统分区空闲 15 MB、质量更新 13 MB，并点名有的 OEM 把 BIOS 映像放在 ESP【微软 KB https://support.microsoft.com/en-gb/help/3086249/we-couldn-t-update-system-reserved-partition-error-installing-windows 】。固件胶囊暂存在 `EFI\UpdateCapsule`，空间不够时 CapsuleRuntimeDxe 会跳过并删除（字串 0xc974）。`Persisted_Capsules.bin` 是 RecoveryDxe 的恢复材料【二进制】。
+- **Windows / 固件要的**：功能更新要求系统分区空闲 15 MB、质量更新 13 MB，并点名有的 OEM 把 BIOS 映像放在 ESP【微软 KB https://support.microsoft.com/en-gb/help/3086249/we-couldn-t-update-system-reserved-partition-error-installing-windows 】。固件胶囊暂存在 `EFI\UpdateCapsule`，空间不够时 CapsuleRuntimeDxe 会跳过并删除（字串 0xc974）。`Persisted_Capsules.bin` 由 **CapsuleRuntimeDxe** 引用（字串 0xe306；0xcb80 "GetMaxCapsuleSizeInCapsuleRawFile"、0xd872 "Capsule storage header update during capsule delete failed"）【二进制】，推断是**预分配**的胶囊原始文件存储：胶囊多半写进这份文件、不额外占空间；但它一旦被删，固件要重新腾出约 70 MB【推断】。（第一轮写成"RecoveryDxe 的恢复材料"，出处不对，§8.2 #50。）
 - **原 §4.9 那句"停铺 recovery-ramdisk 腾出约 30 MB，净值为正"只对 OTA 过的机器成立**：新装机器上本来就没有 recovery-ramdisk，加入口是净 −5 到 −10（§8.2 #28）。
 - **规则（U17）**：
   - 双系统时，安装器、postinstall、`gk3-esp-sync` 统一断言：**写完、并扣掉下一次 OTA 的暂时空间后，ESP 仍空闲 ≥ 32 MiB**，留给 Windows 和固件。常量写进 `installer-lib.sh` 和 postinstall，并写 test-apply 用例。
-  - 出厂 ESP 最坏情况还剩 97 − 28.5 ≈ 68，满足。
+  - 出厂 ESP 最坏情况还剩 97 − 28.5 − 5（分阶段激活期间的第三版入口）≈ 63，满足。自编版本带 recovery-ramdisk 时再少 26–30。32 MiB **不包含**胶囊暂存（按上面的推断，胶囊写进预分配文件），D7 核实；D6 观察一次 Windows 功能更新前后的空闲变化。
   - 用户自己重装 Windows 得到的 100 MiB ESP，装完会是负数，**明确拒绝**，提示 1.x 的 XBOOTLDR 方案。
   - 所有提示文案写明：**绝不删** `Persisted_Capsules.bin`、`EFI/Microsoft`、`EFI/UpdateCapsule`。
   - 空间紧时，Windows 脚本或 Parts 可以提示删掉 `EFI\gaokun3`（live，19 MiB），但默认保留：它是"重新安装"的安全网。
-- **1.x**：XBOOTLDR 分区（systemd-boot 257 会扫，`boot.c:2418-2434`）放槽副本、live、入口载荷，前提是固件的 FAT 驱动能挂非 ESP 类型的分区（待核）；H2 稳定后退役 ESP 上的槽副本（§1.3）。
+- **1.x**：XBOOTLDR 分区（systemd-boot 257 会扫，`boot.c:2418-2434`）放槽副本、live、入口载荷。前提有二：①固件的 FAT 驱动能挂非 ESP 类型的分区（待核）；②按 F4，固件会给这个内置 FAT 分区也建一个分区项，它**不能排到 ESP 那一项前面**（否则每次开机先失败一次，按 F9 可能累加到 3 次关机），或者在它上面放一个无害的回落文件。两条在开发机上先看（新建分区后重复 D1），双系统盘上 D6 复核。H2 稳定后退役 ESP 上的槽副本（§1.3）。
 
 #### 4.9.9 时钟
 
 - **Android**：RTC 偏移存在 PMK8280 SDAM6 的 0xbc（`refs/linux-v7.2-rc2/arch/arm64/boot/dts/qcom/sc8280xp-huawei-gaokun3.dts:875-888`，`nvmem-cells = <&rtc_offset>`），不走 UEFI 变量。Android 按 UTC 写 RTC；自动对时默认开，开发机上 `ntp.aliyun.com` 对时成功（TODO B22）。
 - **Windows / 固件**：偏移存在 UEFI 变量 `RTCInfo` 里（`pe/RealTimeClock.efi` 字串；同款 SoC 的 X13s 补丁说明"Windows stores the RTC time in local time"、固件和 Windows 用 UEFI 变量存偏移：https://lkml.iu.edu/hypermail/linux/kernel/2502.2/05188.html ）。
-- ⇒ 两边各存各的偏移，互不覆盖，**不应出现经典的"差 8 小时"**【推断】。待核：D6 在两个系统间切换后比对时间，并看 Windows 会不会碰 SDAM。
+- ⇒ 两边各存各的偏移，互不覆盖，**不应出现经典的"差 8 小时"**【推断】。前提是 Windows 和固件的 SetTime 只改 `RTCInfo`、不改 PMIC 的原始计数——**没验证**。D6 做交叉实验：Windows 里手动改一次时间（时区不变），进 live 或 Android 且不联网，比对 `date -u` 与 SDAM；反方向同理。偏差整 8 小时 = Windows 在写原始计数。
+- FAQ 先写："Android 离线时时间不对 → 联网后自动校正"（自动对时默认开）。
 - **不推荐 RealTimeIsUniversal**：微软不正式支持，WoA 上有设了也退回的报告（https://learn.microsoft.com/en-us/answers/questions/2302708/windows-on-arm-time-incorrect-after-reboot-or-hibe ）。
 - 相关但不属于本设计：从没跑过 Linux 的 Windows 机器上 SDAM 偏移没设过，live 又没有对时，网络安装走 HTTPS，证书时间校验可能失败。转交安装器批次：live 加对时，或给 `/usr/lib/clock-epoch` 设一个下限。
 
@@ -781,8 +816,10 @@ Windows 自己更新 bootmgfw 时会自己处理暂停和重封【推断】。
 - 而 Android 那边，OTA postinstall、HAL 改 loader.conf、systemd-boot 计数改名、bless 都会写 ESP。Windows 恢复后再写 ESP，就可能把 FAT 写坏【推断，D4 做破坏性实验定级】。
 - **规则**：
   - 双系统时，Windows 脚本**在所有路径上**关快速启动，不再只在"要缩 D:"那条路上关（现状 `gaokun3-setup.ps1:407-411`）；`-Uninstall` / `-RemoveAndroid` 还原。
-  - live 安装器在双系统 apply 之前检测 Windows 卷是否处于休眠，是就拒绝写 ESP。检测方法待定：ntfs-3g 只读挂载时会报 hibernated；CLAUDE.md 记过 ntfsresize 看不出休眠。
+  - live 安装器在双系统 apply 之前检测 Windows 卷是否处于休眠，是就拒绝写 ESP。直接复用 `gk3__ntfs_hibernated`（`installer-lib.sh:1170`，只读看 hiberfil.sys 头；今天只用在缩分区那条路上，`:1203-1206`）；C: 是 BitLocker 时读不到，只警告。
   - INSTALL / FAQ：别在 Windows 休眠时切到 Android。Android 侧检测不到，只能靠文档。
+- **Modern Standby 会自己转入休眠**：这是 ARM 平板，合盖待机后 Windows 会因为电量下降或空闲超时**自动**进入休眠，用户并不知道（Adaptive hibernate：https://learn.microsoft.com/en-us/windows-hardware/customize/power-settings/adaptive-hibernate ；Hibernate idle timeout：https://learn.microsoft.com/en-us/windows-hardware/customize/power-settings/sleep-settings-hibernate-idle-timeout ）【微软文档】。之后冷开机（默认 Android）就会在 Windows 休眠时改写共用 ESP；从 U 盘装双系统的用户连快速启动都没人替他关。⇒ **是否关掉整个休眠**（`powercfg /hibernate off`，代价是待机时电量耗尽就直接掉电、丢未保存的会话）单列为 **U24**，由伴随工具执行、征得同意、写进 INSTALL；U25 的 Windows 侧预置落地后，休眠后的下一次开机默认回 Windows 去恢复，能降低误进 Android 的概率。D4 的破坏性实验加一项"手动休眠后外部改 ESP"。
+- **待机中想切到 Android**：Modern Standby 下按电源键是直接恢复 Windows，不经过固件和菜单【推断】，只能先"重启到 Android"。写进日常使用说明（§4.9.17）。
 
 #### 4.9.11 防误操作与隔离白名单
 
@@ -793,8 +830,8 @@ Windows 自己更新 bootmgfw 时会自己处理暂停和重封【推断】。
 
 **U19**：
 - 候选：Android 分区设 bit 0（`GPT_ATTRIBUTE_PLATFORM_REQUIRED`）。微软的说法是设了之后 diskpart 仍能删分区，但不能做卷操作；磁盘管理里实际怎么显示，D4 截图后再定设不设。
-- **绝不设 bit 1**（UEFI 规范的"不建 BlockIo"）：gk3boot 读 misc、`boot_x` 全靠固件给分区建 BlockIo。
-- GK3LIVE 在 Android 装好后去掉盘符（bit 63，或 `Remove-PartitionAccessPath`）。
+- **不设 bit 1**（UEFI 规范的"不建 BlockIo"）：固件和 Windows 对这一位的处理没验证过，也没有收益。（第一轮写的理由"gk3boot 读 misc、`boot_x` 全靠固件给分区建 BlockIo"与 §4.2 第 1 步矛盾：gk3boot 拿整盘 BlockIo、自己解析 GPT，§8.2 #51。）
+- GK3LIVE 在 Android 装好后**只用 `Remove-PartitionAccessPath`** 去掉盘符；脚本以后需要时会自己重新分配（`gaokun3-setup.ps1:446`）。不设属性位：NO_DRIVE_LETTER（bit 63）只在"磁盘第一次被看到或移到另一台机器"时生效，去不掉已分配的盘符；HIDDEN 会让 Mount Manager 完全看不到这个卷，而脚本靠 `Get-Volume -FileSystemLabel` 找 GK3LIVE（`:252`、`:295`、`:397`）【微软文档，同上 URL】。
 
 **隔离白名单**（在 C′ §4.4 的基础上补双系统的部分）：
 - **gk3boot**：
@@ -804,10 +841,12 @@ Windows 自己更新 bootmgfw 时会自己处理暂停和重封【推断】。
 - **执行端**：
   - 协议只暴露 `boot_a/b`、`super`、`userdata`、`metadata`；`-w` / 恢复出厂只碰 userdata、metadata 和 misc 的 BCB（C′ §4.4、§4.6）；
   - ESP、MSR、"Basic data partition"、WinRE、WINPE、Onekey、gk3rescue、整盘，在协议里都不存在；
+  - **新增（内容检查）**：目标分区偏移 3 处是 `NTFS    ` 或 `-FVE-FS-`（BitLocker）的，不管叫什么名字一律拒绝。签名实施时对照 ntfs-3g 与 blkid 源码，不凭记忆抄。
   - **新增**：目标分区的类型如果是 Windows 系的（basic data `EBD0A0A2`、MSR `E3C9E316`、WinRE `DE94BBA4`、ESP `C12A7328`），一律拒绝，防止名字碰巧重复时写到 Windows 分区上。用黑名单而不是"必须是 `0FC63DAF`"：开发机这类手工分区的机器上，Android 分区的类型码没核对过（M6 是在删掉 Windows 分区的位置上重建的），E2 要用 `sgdisk -i` 核一遍；如果有 basic data 类型的 Android 分区，先改类型码，再启用这条检查。
 - **写 ESP 的组件**（postinstall、`gk3-esp-sync`、HAL、执行端）只写我们自己的路径：`<mid>/android/`、`loader/entries/{gk3*,<mid>-android-*}`、loader.conf 的 `default` / `timeout` 行、`EFI/gk3boot/`。不碰 `EFI/Microsoft`、`EFI/Boot`、`EFI/UpdateCapsule`、`Persisted_Capsules.bin`、`OneKeyLog.txt`。
 - **machine-id 目录**：postinstall 和安装器现在都取"第一个 32 位十六进制目录"（`gaokun3-ota-postinstall.sh:98`、`installer-lib.sh:513-516`）。共用 ESP 上还有别的 Linux 时可能选错，OTA 就会静默写到别人的目录里。改为读 `*-android-<槽>.conf` 的 `linux` 行取目录，安装器与 postinstall 共用同一个函数。
-- **蓝牙**：两个系统各存各的配对密钥，同一个蓝牙设备在两边来回用时，可能要重新配对【推断，D5 比对两边的蓝牙地址】，写进 FAQ。
+- **蓝牙**：问题不在"两边各存各的"，而在外设一侧通常只记得一份链路密钥：如果两个系统用同一个蓝牙地址，在一个系统里配对会让另一个系统的配对失效，来回切就得重新配对【推断，D5 比对两边的蓝牙地址】，写进 FAQ；1.x 再考虑从 Windows 导出链路密钥。
+- **整盘清空式的"重新安装"**一并删掉残留的 `LoaderEntryDefault` / `LoaderEntryOneShot`（无害，但会留下孤儿变量）。
 
 #### 4.9.12 BIOS 更新
 
@@ -818,7 +857,8 @@ Windows 自己更新 bootmgfw 时会自己处理暂停和重封【推断】。
   3. NVRAM 被重置：Loader* 变量和 U15 的自有项丢失，固件会重建 F4 那一项，回到回落路径，仍然能用【推断】。
   4. ESP 太满时胶囊被跳过。
 - **对策**：
-  - FAQ"更新 BIOS 之后开不了机"：进固件设置关掉安全启动；准备好 BitLocker 恢复密钥。
+  - FAQ"更新 BIOS 之后开不了机"：进固件设置关掉安全启动；准备好 BitLocker 恢复密钥。**但平板姿态下进固件设置 / F12 的物理按键组合至今没解出**（ButtonsDxe 的映射没解出，CheckPostHotkey 读电源 / 音量键，§2.1）⇒ 列为 **E3 的必答项**（用户在场拍照确认，T17），写进 INSTALL 双系统一章和 FAQ；伴随工具检测到 BIOS 版本变化时，提示里带上这个按键组合。用户看到的只是黑屏关机，所以 FAQ 的标题要写症状。
+  - BIOS 更新也可能解除 CVE-2023-24932 的屏蔽（§4.9.6），之后 Windows 可能改写 ESP 上的启动文件——由伴随工具的开机自检兜住。
   - 升级前先在 Windows 里跑一次 `-RepairBoot -Check` 留底。
   - D7 请准备升级的群友在升级前后各采集一次状态。
 
@@ -828,34 +868,74 @@ Windows 脚本新增 `-RemoveAndroid`。**顺序是硬约束**：
 
 0. **预检**：
    - 要求管理员；BitLocker 开着时确认有恢复密钥，并 `Suspend-BitLocker -RebootCount 1`；
-   - 列出将要删的分区：PARTLABEL ∈ {misc, metadata, boot_a, boot_b, super, gk3rescue, userdata}、类型为 `0FC63DAF`、并且和 Windows 在同一块盘上；
+   - 列出将要删的分区：PARTLABEL ∈ {misc, metadata, boot_a, boot_b, super, gk3rescue, userdata}、类型为 `0FC63DAF`、并且和 Windows 在同一块盘上；有内容魔数的再核一遍（`ANDROID!`、LP 元数据、ext4 超级块）。misc 没有可用魔数（新装机器可能全零），按"名字唯一、大小 ≤ `GK3_MISC_MIB`（重新安装可能复用更小的 misc，`installer-lib.sh:844`）、与其他已认出的分区同盘"认，BCAB 落地后加 BCAB 魔数作辅助；
+   - **GK3LIVE 也要删**（按卷标加内容 `gaokun3/live.squashfs` 认）：它建在缩出空间的**开头**、紧贴 D:（`gaokun3-setup.ps1:247-250`），不删就扩不回 D:；
    - 输入 `YES` 才继续。
-1. **先还原引导**：`BOOTAA64` ← `.before-gaokun3`；没有备份就拷 `EFI\Microsoft\Boot\bootmgfw.efi`（F12 证明两者原本字节数相同）。
+1. **先还原引导**：`BOOTAA64` ← **当前的** `EFI\Microsoft\Boot\bootmgfw.efi`。`.before-gaokun3` 只作最后的退路，并先比对版本：它是装机那天的拷贝，之后 Windows 更新过的启动管理器只在 `EFI\Microsoft\Boot` 里；若用户随后重新打开安全启动、而 DBX 已吊销旧版（CVE-2023-24932 的屏蔽是暂时的，§4.9.6），用旧拷贝的 Windows 会起不来。也可以跑 `bcdboot C:\Windows`，但它对 NVRAM 和回落路径的副作用先在 D4 弄清。（"两者同字节"只在 2026-08-20 出厂状态下实测过，F12。）`-RepairBoot` 的反向操作同理。
    - **这一步必须在删分区之前做**。反过来的话，systemd-boot 默认仍会进 Android：入口找不到分区就 fail-open 到直连条目，内核找不到 super，init 重启，如此循环，直到撞上 F9 的"3 次关机"。
 2. **删 ESP 上我们的东西**：`<mid>/`（只删含 `android/` 或 `rescue/` 的那一个）、`loader/`、`EFI/systemd/`、`EFI/gk3boot/`、`EFI/gaokun3/`，以及 `.before-gaokun3` 备份。如果 `loader/entries/` 里还有不是我们的条目（共用 ESP 的另一个 Linux），只删我们的条目，保留 `loader/` 和 `EFI/systemd/`，第 1 步也不做，改为提示用户自己决定回落路径放谁。
-3. **删变量**：Loader GUID 下的 `LoaderEntryDefault`、`LoaderEntryOneShot`；U15 采纳时，按描述加路径认出自有 Boot#### 并删除。
-4. **删分区 → 把 D: 扩回去**（可选），还原快速启动的设置。
+3. **删变量**：Loader GUID 下的 `LoaderEntryDefault`、`LoaderEntryOneShot`，用 `SetFirmwareEnvironmentVariableEx` 以零长度删除——这是文档写明的语义（"setting this value to zero will result in the deletion of this variable"，https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setfirmwareenvironmentvariableexw ）【微软文档】，本机固件是否照做待 D4 / D6；U15 采纳时，按描述加路径认出自有 Boot#### 并删除。
+4. **删分区 → 把 D: 扩回去**（可选），还原快速启动 / 休眠的设置。扩 D: 之前断言空闲区与 D: 相邻；不相邻就说明原因并停下，**不去动** WINPE / Onekey（出厂布局 p4 Data 后面紧接 p5 WINPE，`hw-inventory.md:482-483`）。
 5. **重启**，核对直接进了 Windows。
 
-发布前要在 Parallels 克隆机上完整跑一次往返：装上 → 卸掉 → Windows 正常、BitLocker 不要密钥（D4）。从 live 里卸载放到 1.x。
+发布前要在 Parallels 克隆机上用**脚本路径装出来的布局**（GK3LIVE 在前、Android 在后）完整跑一次往返：装上 → 卸掉 → Windows 正常、BitLocker 不要密钥（D4）。从 live 里卸载放到 1.x。
+
+**反向迁移（删 Windows、把空间并给 Android）**：先试双系统、后来全转 Android 的用户。1.0 不支持保留数据的扩容，只能用安装器的"清除整个磁盘"整盘重装（数据另行备份）。写进 FAQ。
 
 #### 4.9.14 双系统专属验证实验
 
-关键一点：**固件行为（F2–F9）可以在纯 Android 的开发机上验证**，不需要 Windows。只有 Windows 那一侧的行为才需要 Parallels 或群友真机。
+**固件对纯 Android 盘的策略（F2–F9）可以在开发机上验证**，不需要 Windows。但**结论不外推到双系统盘**：盘上有没有 Windows 分区在实测中改变过启动选择（§4.9.2 末尾），双系统盘上谁先运行（H-A / H-B / H-C）只由 D5 的 U 盘只读部分和 D6 定。Windows 那一侧的行为靠 Parallels 或群友真机。
 
 | 编号 | 在哪 | 写什么 | 重启 / 在场 | 验证什么 | 预期 / 判据 |
 |---|---|---|---|---|---|
 | D1 | 开发机（并入 E2） | 只读：私有挂载点 ro 挂 efivarfs | — / — | 列出全部 Boot####、BootOrder、BootTypeOrder、BootCurrent，hexdump `OemConfig` | 有一项 `Windows Boot Manager (…)`，FilePath 只到 ESP 分区，BootCurrent 指向它；如果一项 Boot#### 都没有，F4 要重审。同时看其他内置 FAT 分区（双系统机器上就是 Windows 脚本建的 GK3LIVE）有没有也被建了项：按 F4/F5，这类项会去找一个不存在的 `BOOTAA64`，失败一次就计一次 F9。只有 ESP 那一项失败时才会轮到它们，但要知道它们在不在 |
 | D1 结果（2026-10-05 02:5x，只读） | 开发机 | efivarfs ro 挂在私有目录，读完卸载 | — | 只有一项 `Boot0000` = `Windows Boot Manager (PCIe-8 SSD 512GB)`；`BootOrder` = `0000`、`BootCurrent` = `0000`（本次开机走的就是它）；另有 `OemConfig-42927b59-…`（未解码）。开发机的 Windows 早在 08-20 抹掉，这一项只能是固件自己建的 ⇒ **支持 F4**；只有一块 FAT 分区（ESP），所以 F4/F5 的"其他 FAT 分区也建项"在开发机上看不到。`FilePath` 只到分区这一点没解码完（只看了描述串），留待 E2 用 efibootmgr 式完整解码 | ✅ 符合预期 |
-| D2 | 开发机 | 写 NV：建 (a) 短格式 `HD()/File(\EFI\gk3test\sd.efi)`（efibootmgr 默认就写这种），以及 (b) 完整路径的同一文件，描述 `Windows Boot Manager (gk3test)`。(b) 的完整路径用 D1 读到的 F4 那一项的 FilePath 加文件节点拼出，用小脚本直接写 Boot#### 变量（efibootmgr 有没有现成的完整路径选项没核实）。`sd.efi` 是 systemd-boot 的拷贝；BootNext=(a) | 重启 2–3 次 / 用户在场 | F3（a 被删）、F6（BootNext 落空）、(b) 能否保留、保留时固件是否不再建 F4 项；再删 `sd.efi` 重启，看 (b) 被删、F4 项在同一轮里重建；前后读 `OemConfig` 看 F9 的计数 | 所有路径最后都落到 systemd-boot，风险低；实验后删掉 (b) 和 `EFI\gk3test` |
-| D3 | 开发机 | 只读 | — | `/sys/firmware/dmi/entries/11-0/raw`（F10 的 `$HUA`/`CN` 门槛）；ESP 上有没有 `OneKeyLog.txt` | 解释为什么开发机从没被带进 WinPE |
+| D2 | 开发机 | 写 NV：建 (a) 短格式 `HD()/File(\EFI\gk3test\sd.efi)`（efibootmgr 默认就写这种），以及 (b) 完整路径的同一文件，描述 `Windows Boot Manager (gk3test)`。(b) 的完整路径用 D1 读到的 F4 那一项的 FilePath **原始字节**加文件节点和 End 节点拼出 EFI_LOAD_OPTION，用小脚本直接写 Boot#### 变量；**不用 efibootmgr / libefivar 生成**：即使它有完整路径模式，也是从 Linux sysfs 推出路径，本机内核走 DT，推出来的几乎不可能与固件 `DevicePathFromHandle(ESP)` 逐字节相同，F2 按长度 CompareMem，会得出"完整路径项活不下来"的假阴性（U15 也会被错误否掉）。Android 镜像里本来也没有 efibootmgr（只在 live 的包清单，`scripts/live/pkgs-common.txt:59`）。另一个等价做法是让 `gk3probe.efi` 在 UEFI 里用 `DevicePathFromHandle` + 文件节点生成，与固件比较用的构造方式相同。`sd.efi` 是 systemd-boot 的拷贝；BootNext=(a) | 重启 2–3 次 / 用户在场 | F3（a 被删）、F6（BootNext 落空）、(b) 能否保留、保留时固件是否不再建 F4 项；再删 `sd.efi` 重启，看 (b) 被删、F4 项在同一轮里重建；前后读 `OemConfig` 看 F9 的计数 | 所有路径最后都落到 systemd-boot，风险低；实验后删掉 (b) 和 `EFI\gk3test` |
+| D3 | 开发机 | 只读 | — | ESP 上有没有 `OneKeyLog.txt`。SMBIOS Type 11（F10 的 `$HUA`/`CN` 门槛）**读不了**：本机内核没开 `CONFIG_DMI_SYSFS`（`docs/relnotes/v0.7.1-alpha-config.txt:1814`），`/sys/firmware/dmi/entries/` 不存在，live 同样；**不用 `/dev/mem`** 读 SMBIOS（CLAUDE.md 操作禁忌 2）。改在 Windows 侧读（D5），或给测试内核打开 DMI_SYSFS | 解释为什么开发机从没被带进 WinPE |
 | D4 | Parallels 克隆机（Windows 11 ARM；固件不同，只验证 Windows 这一侧） | 克隆机随便写 | 多次 / — | ① `bcdboot C:\Windows`、累积更新、功能更新、"重置此电脑（保留文件）"前后，比对 `\EFI\Boot\bootaa64.efi` 的 sha256 和 `bcdedit /enum firmware`；② PowerShell P/Invoke 写 `LoaderEntryOneShot`，重启看是否进了对应条目；③ 开着快速启动关机，在外部改 ESP，再进 Windows 触发 ESP 写入，然后 `fsck.vfat -n`；④ `0FC63DAF` 加 bit 0 的分区在磁盘管理里怎么显示；⑤ `-RepairBoot`、`-RemoveAndroid` 往返；⑥ vTPM + 关安全启动 + BitLocker：`manage-bde -protectors -get C:` 的 PCR 列表，换掉 systemd-boot 前后要不要密钥 | 定 T11c / T11e / T11h 和 U18 / U19 / U20 |
-| D5 | 群友双系统真机，**只读** | 不改任何东西 | — | `bcdedit /enum firmware`、`/enum {fwbootmgr}`；`manage-bde -protectors -get C:`；msinfo32 的 PCR7 配置；`mountvol S: /S` 后 `dir /s S:\`（ESP 占用、`Persisted_Capsules.bin`、`OneKeyLog.txt`）；SMBIOS 11；两边的蓝牙地址 | 固件项的描述应是带括号的 `Windows Boot Manager (…)`；不应有 Windows 自己的短格式项 |
-| D6 | 群友真机，装双系统（**恢复密钥在手、数据已备份**） | 安装 | 多次 / 群友在场 | 冷开机进谁；F12 列表拍照；经菜单进 Windows 后触摸是否正常；BitLocker 是否只要一次密钥、之后稳定；Windows 写 OneShot（"重启到 Android"）；Android"重启到 Windows"；§4.9.3 表里两种默认的六个场景；两系统切换后时间是否一致；Windows 脚本默认路径（bootsequence）是否落空 | 通过后双系统去掉"预览"（U21） |
+| D5 | 群友双系统真机，**只读** | 不改任何东西 | 进一次 U 盘 live / 群友 | **Windows 里**：`bcdedit /enum firmware`、`/enum {fwbootmgr}`；`manage-bde -protectors -get C:`；msinfo32 的 PCR7 配置；`mountvol S: /S` 后 `dir /s S:\`（ESP 占用、`Persisted_Capsules.bin`、`OneKeyLog.txt`）；SMBIOS Type 11 用 `Win32_ComputerSystem.OEMStringArray` 读（https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-computersystem ）；电源设置（休眠是否开着）；两边的蓝牙地址；PowerShell P/Invoke **只读** `GetFirmwareEnvironmentVariableEx`。**U 盘 live 里**：`efibootmgr -v`（Windows 项的 FilePath 是短格式还是完整路径）、BootOrder、BootCurrent；**插着与拔掉 U 盘各冷开一次，记默认进了谁**（T11k）；只读读 SDAM 0xbc 与 `date -u`；BcdOneKey 变量 | 固件项的描述应是带括号的 `Windows Boot Manager (…)`；不应有 Windows 自己的短格式项。**这是 H-A / H-B / H-C 的第一份定论**（§4.9.2） |
+| D6 | 群友真机，装双系统（**恢复密钥在手、数据已备份**） | 安装 | 多次 / 群友在场 | 冷开机进谁；F12 列表拍照；经菜单进 Windows 后触摸是否正常；BitLocker 在关安全启动后**连续 3 次以上**开机各要不要密钥（T11d）；时钟交叉实验（§4.9.9）；Windows 功能更新前后 ESP 空闲变化；Windows 写 OneShot（"重启到 Android"）；Android"重启到 Windows"；§4.9.3 表里两种默认的六个场景；两系统切换后时间是否一致；Windows 脚本默认路径（bootsequence）是否落空 | 通过后双系统去掉"预览"（U21） |
 | D7 | 群友，有机会时 | 只读 | — | Windows 功能更新、BIOS 更新前后，各跑一遍 D5 那组命令，加上安全启动状态 | 定 R8 / R10 的发生率 |
 | D8 | 主机侧单测（并入 E0） | — | — | GK3 状态机：`clean_poweroff` / `next=windows` / `set_default` 与 Android 待办的优先级、`LoaderEntryDefault` 清理、预置 OneShot 与 fail-open 的先后、U7 计数与"开机途中强关改进 Windows" | 全分支覆盖 |
 
-纪律与 §6 相同：开发机上的 D2 要征得同意并有人在场；群友实验只请对方做只读命令，或者在对方明确接受风险、恢复密钥在手的前提下做 D6。
+补到 D4 的几项（Parallels，只代表 Windows 一侧）：⑦建一个描述为 `Windows Boot Manager (Android)` 的固件项，跑 bcdboot 和功能更新，看会不会被当成 Windows 自己的项改写、去重或删除（U15）；⑧手动休眠一次再外部改 ESP（U24）；⑨关机 / 重启的区分判据（候选是系统日志 Event 1074 记录的关机类型，https://learn.microsoft.com/en-us/troubleshoot/windows-server/performance/troubleshoot-unexpected-reboots-system-event-logs ）以及更新自动重启时计划任务能否在复位前写完变量（U25、T15）；⑩`auto-windows` 与 `gk3-windows` 两种条目启动的 Windows，PCR4 是否相同（U22）；⑪`Suspend-BitLocker -RebootCount` 在中途进别的系统时怎么数。
+
+纪律与 §6 相同：开发机上的 D2 要征得同意并有人在场，**结论只说明纯 Android 盘**；群友实验只请对方做只读命令，或者在对方明确接受风险、恢复密钥在手的前提下做 D6；不请任何人做 F10 一键恢复，不故意让 Windows 启动失败；外接盘和 Parallels 的结论不外推到华为固件。
+
+#### 4.9.15 Windows 伴随工具（U23）
+
+今天 Windows 侧的一切能力都默认"用户手里有那个 .ps1"：它只是下载包里双击运行的脚本（`scripts/windows/README.md`），只把文件拷到 GK3LIVE 和 ESP，没有安装位置，也没有开始菜单项；装完 Android、U19 又去掉了 GK3LIVE 的盘符；从 U 盘装双系统的用户从没运行过它。而 `BOOTAA64` 被 Windows 换掉之后，Android 已不可达，检测只能在 Windows 侧做（§4.9.6）。所以 1.0 把它升级为**常驻组件**：
+
+- **安装**：setup 时把自己装到 `%ProgramFiles%\gaokun3`（与 ESP 上的 `EFI\gaokun3` 无关），建开始菜单项：重启到 Android、默认启动的系统、修复 Android 启动、仅暂停 BitLocker、卸载 Android。
+- **执行方式**：以 SYSTEM 运行的计划任务（§4.9.4 已有），开始菜单项只触发固定动作，**不接受用户传入的参数**，避免成为提权通道。
+- **开机任务，默认开、不可关**：①`BOOTAA64` 自检（与 `EFI\systemd\systemd-bootaa64.efi` 比 sha256，不同就通知并给一键修复）；②`LoaderEntryDefault` 规范化（§4.9.3）；③BIOS 版本变化时提醒，提示里带进固件设置的按键组合（E3 得出，§4.9.12）。
+- **开机任务，可选**：Windows 侧预置 OneShot（U25）——Windows 每次开机写 `LoaderEntryOneShot = auto-windows`，Windows **关机**（不是重启）时比较后删除；于是 Windows 的任何重启（含更新的多次自动重启、驱动安装后的重启）都回 Windows，**不用另外判断"更新挂起"**，休眠后的开机也回 Windows 去恢复。前提：D4/D6 证实 Windows 能写这个变量，且 D4 的⑨找到可靠的关机 / 重启判据。删除失败的后果只是下一次冷开机进 Windows，菜单仍可手选。
+- **一次性设置**：双系统一律关快速启动（U18）；按 U24 关休眠；`-Uninstall` / `-RemoveAndroid` 时恢复。装上 Android 之后删掉 setup 建的 bcdedit 对象（"gaokun3 installer"，`$state.bcd`；在 H-A 下对应的固件项早被删了，但 Windows 的 BCD 里还留着 `{bootmgr}` 的副本），保留 `EFI\gaokun3`（live，安全网）。
+- **U 盘路径的用户怎么拿到它**：U 盘介质的 FAT 分区上放一份 `gaokun3-windows/`（Windows 能直接读）；安装完成页和 Android 首次开机后的 Parts 都提示"回到 Windows 后安装伴随工具"，并给出下载地址。
+- **没有工具时的手工修复**（写进 FAQ）：①`Suspend-BitLocker -MountPoint C: -RebootCount 1`（与脚本同一个 cmdlet，`gaokun3-setup.ps1:338`）；②挂 ESP；③把 `\EFI\systemd\systemd-bootaa64.efi` 拷到 `\EFI\Boot\bootaa64.efi`。挂 ESP 的命令（`mountvol` 的 `/S`）实施时引用微软文档再写。另一条路是 U 盘 live 的"修复启动"。
+- **仅暂停 BitLocker**（`-SuspendBitLocker`）：只执行 `Suspend-BitLocker -RebootCount 2`，不碰别的。给 U 盘路径的第 0 步用（§4.9.7 规则 6）。
+
+#### 4.9.16 其他共存问题
+
+- **两个系统之间交换文件**：内核开了 `CONFIG_EXFAT_FS=y` 与 `CONFIG_NTFS3_FS=y`（`docs/relnotes/v0.7.1-alpha-config.txt:6991`、`:6994`），但 Android 用户空间会不会挂载它们**未核**，而 BitLocker 加密的 D: 本来就读不了；Windows 也看不到 Android 分区。1.0 不承诺，FAQ 明说；1.x 可选一个 exFAT 共享分区。
+- **指纹（T6 落地之后）**：两个系统用同一颗 FTE7001 和同一个华为签名的 TA。Android 侧录入、或安全存储 listener 写入，会不会覆盖或破坏 Windows Hello 的指纹模板，**完全没评估**（T16）。T6 的 enroll 设计要先回答这一条，再在双系统机器上开放指纹录入。
+- **待机切换**：见 §4.9.10 末尾。
+- **另一个 Linux 共用 ESP**、**gk3boot 找分区的范围**：见 §4.9.11。
+
+#### 4.9.17 面向用户的双系统日常使用说明（INSTALL / FAQ 双系统一章的骨架）
+
+S13 按这份清单写，每条落笔前按 §4.9.14 的结果把【推断】改成实测或"未验证"：
+
+1. **开机看到什么**：systemd-boot 菜单 5 秒，第一项 Android、第二项 Windows（U22）；默认进安装时选的系统；从 Android 关机后再开 Windows，会看到两次 Logo。
+2. **怎么切**：Android → Parts（目标：电源菜单）里"重启到 Windows"；Windows → 开始菜单"重启到 Android"（要装伴随工具）；或开机时在菜单里选（音量键 / 电源键能否操作以 E3 为准）。
+3. **怎么改默认**：Parts 或伴随工具的"默认启动的系统"；菜单里按 `d`（再按一次撤销）。
+4. **重启会回到哪**：Android 里的任何重启回 Android；Windows 里的重启回默认系统（U25 落地后回 Windows）；以 Windows 为主就把默认设成 Windows。
+5. **BitLocker**：装之前（关安全启动之前）先拿到恢复密钥并暂停或解密；之后可能还会要（§4.9.7 的未知）。
+6. **别做的事**：别在磁盘管理里删 Android 分区；别删 ESP 上的文件（尤其 `Persisted_Capsules.bin`）；别用"从驱动器恢复"和华为 F10 一键恢复；Windows 里用"关机"不用"休眠"；更新 BIOS 前先暂停 BitLocker、记好进固件设置的按键。
+7. **Windows 更新后 Android 不见了**：伴随工具会提示，点"修复 Android 启动"；没有工具就按 FAQ 手工三步或用 U 盘。
+8. **看到华为一键恢复界面**：别点恢复，插 U 盘从 live 进（§4.9.6）。
+9. **待机**：Windows 待机中按电源键回到的是 Windows；要进 Android 先"重启到 Android"。
+10. **卸载**：伴随工具"卸载 Android"；反过来"删 Windows 把空间给 Android"只能整盘重装。
 
 ### 4.10 存量 BCB 迁移
 
@@ -921,7 +1001,7 @@ Windows 脚本新增 `-RemoveAndroid`。**顺序是硬约束**：
 | 观察模式 | ConOut 一行 trace |
 | gk3boot 出错 | ConOut 英文错误页（方向待 E3 拍照） |
 | 执行端 | tty1 英文文本，fbcon=rotate:1，evdev 按键（C′ §4.8），INSTALL 给中文对照 |
-| systemd-boot 菜单 | 条目 title 改清楚："Android"、"Android 引导菜单 / Fastboot"、"Android（上一版入口）"、"Android 直连 a/b（救急）"、Windows、安装器、救援 |
+| systemd-boot 菜单 | 条目 title 改清楚，**一律 ASCII**（UEFI ConOut 的 CJK 字形没验证过，E3 拍照核对）：`Android`、`Windows`（双系统时排第 2，U22）、`Android boot menu / Fastboot`、`Android (previous loader)`、`Android direct a/b (rescue)`、安装器、救援；中文对照写进 INSTALL |
 
 UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起做。
 
@@ -967,7 +1047,7 @@ UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起
 | S9 | **Android 侧**：HAL 开机完成线程、vendor rc、属性与 sepolicy、Parts 通知；postinstall 部署 / staged / 停铺 recovery-ramdisk；vendor 里加 `/vendor/boot/gk3boot/`；prebuilt 目录 + `sync-device-tree.sh` 断言 | M | 一次 ROM 构建（rom 档，并入已排的批次） | — |
 | S10 | **安装器**：清单、条目、misc 初始化、收紧停用匹配、`gk3_esp_info`、test-apply 用例；release.sh 附件和断言 | M | 安装器重建 | — |
 | S11 | **开发脚本**：install-ota-local 第 4 步、boot-oneshot 认识计数、misc-dump | S | 本机 | — |
-| S12 | **Windows 脚本**：入口路径约束回归、`-RepairBoot [-Check]`、"重启到 Android"、`-SetDefault`、`-RemoveAndroid`、快速启动一律关、GK3LIVE 去盘符；D2 之后决定默认路径是否改为 `-UseFallbackPath` | M | Parallels 克隆机（D4） | — |
+| S12 | **Windows 伴随工具**（U23）：入口路径约束回归、安装到 `%ProgramFiles%\gaokun3` 与开始菜单、SYSTEM 计划任务、开机自检 / 规范化 / BIOS 提醒、`-RepairBoot [-Check]`、"重启到 Android"、`-SetDefault`、`-SuspendBitLocker`、`-RemoveAndroid`（含 GK3LIVE 与相邻断言）、快速启动一律关、U24 关休眠、GK3LIVE 去盘符、U 盘介质带一份；U25 的 Windows 侧预置（D4 之后）；D5/D6 之后决定默认路径是否改为 `-UseFallbackPath` | M（1–1.5 周） | Parallels 克隆机（D4） | — |
 | S15 | **双系统其余部件**（§4.9）：gk3boot 的默认系统检测、预置 OneShot、`next=windows` / `set_default` / `clean_poweroff`（并入 S6）；HAL 动作 6/7、`gk3-misc mark-poweroff` 与 `on shutdown`、Parts 的两个入口（并入 S9）；安装器双系统专项与文案（并入 S10）；INSTALL / FAQ 的双系统一章（并入 S13） | M | 同上各步；D1–D3 在第 1–2 周随 E2/E3 做 | — |
 | S13 | **文档与发布物**：INSTALL（中英）"启动入口与 fastboot"一章（进入方式、port0 是哪个物理口、计数回落、准备 U 盘、不认证、不是安全擦除、英文界面对照）、FAQ、flash-all.sh/.bat、发版说明 | S | E3、E6 结果；用户目视确认 port0 | — |
 | S14 | **上机验收** E2–E11 | L | 用户在场 6–8 次 | 案卷 |
@@ -990,7 +1070,7 @@ UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起
 | E0 | 离线：`libgk3core` 主机测试 + QEMU 全分支与断电注入；执行端在容器里走 loop 盘 + TCP 与真 fastboot 对拍 | ✔（不碰设备） | — | — | — | — | — |
 | E1 | 构建机 light 档只读 grep（S1 的清单） | ✔ | — | — | — | — | — |
 | E2 | 设备只读：`cat /proc/cmdline`、`getprop \| grep ro.boot.`、`bootctl get-current-slot / is-slot-bootable / is-slot-marked-successful`、`ls -l /dev/block/by-name`、`dd` 只读读 misc 0–64 KiB 并用 `gk3-misc` 解码、对 `boot_a/b` 复算 SHA1(id)、`dmesg \| grep -i efi`。**征得同意后**：私有挂载点 ro 挂 efivarfs 读 Loader* / UsbConfig 变量；ro 挂 ESP 列出条目、slot、余量、有没有 recovery-ramdisk | ✔ | — | — | — | — | — |
-| E3 | `gk3probe.efi`，非默认条目经 OneShot 进入，拍照记录：设备路径 → 整盘、GPT 名单、读 misc / boot 与 SHA1 的耗时；ConIn 对音量上下、电源键、键盘盖的扫描码；GOP 模式与 ConOut 方向；内存图；`LoaderBootCountPath`；**缓冲区 LoadImage 一个测试 PE 并 StartImage**；可选：停留 6 分钟测 EC 看门狗 | 不写 misc | ✔ | ✔ | ✔（一个探针 + 一个条目） | — | — |
+| E3 | `gk3probe.efi`，非默认条目经 OneShot 进入，拍照记录：设备路径 → 整盘、GPT 名单、读 misc / boot 与 SHA1 的耗时；ConIn 对音量上下、电源键、键盘盖的扫描码；**进固件设置 / F12 的物理按键组合（必答，T17）**；含 CJK 与 `—` 的测试条目标题能否显示；GOP 模式与 ConOut 方向；内存图；`LoaderBootCountPath`；**缓冲区 LoadImage 一个测试 PE 并 StartImage**；可选：停留 6 分钟测 EC 看门狗 | 不写 misc | ✔ | ✔ | ✔（一个探针 + 一个条目） | — | — |
 | E4 | **门槛**：gk3boot 观察模式，非默认条目经 OneShot 进入，第一次真正启动 Android（H2：缓冲区 LoadImage 真内核 + DTB + LoadFile2）。核对 `/proc/cmdline`、`ro.boot.slot_suffix`、`ro.bootloader`、HAL 无崩溃、avc、efi_pstore / efivars 是否可用、RNG / KASLR、开机耗时与直连对比。不过就换 H1 再测 | 不写 misc | ✔ | ✔ | ✔ | — | — |
 | E4u | （仅为 1.x，可选）UEFI USB 门槛：fastboot 桩只做 getvar / download（进内存）/ reboot；SignalEvent(1c0cffce) → StartEx → 主机能否枚举、速率、吞吐 | 不写盘 | ✔ | ✔（port0 接 Mac） | ✔ | — | — |
 | E5 | 观察模式设为开发机默认（带 `+3`），连续开机 ≥10 次：每次用 `gk3-misc` 对照"入口会怎么选"和实际槽；检查条目文件名递减，以及开机完成后被 bless | — | ✔ | 第一次在场 | ✔ | — | — |
@@ -1001,10 +1081,10 @@ UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起
 | E10 | **用户另行明确同意 + 先把 adb_keys、Wi-Fi、ksu 等备份到外接盘**：设置 → 清除所有数据 → 入口分派 → 执行端免确认清除 → fs_mgr 重建 → 开机向导；`--prompt_and_wipe_data` 应出现确认页；`fastboot -w`。"合并中拒绝"只在 QEMU 和容器里测 | — | ✔ | ✔ | — | ✔ | ✔ |
 | E11 | 0.7.1 → 1.0 迁移：开发机走一遍 OTA，核对 postinstall 部署、首跑迁移、扣 tries、bless、ESP 余量；安装器 loop 夹具和 Parallels 克隆机回归安装器与 Windows 脚本；双系统机器上的同类检查见 D5–D7 | — | ✔ | ✔ | ✔ | ✔ | — |
 | D1 | 开发机只读导出 Boot#### / BootOrder / BootTypeOrder / BootCurrent / `OemConfig`（并入 E2，§4.9.14） | ✔ | — | — | — | — | — |
-| D2 | 开发机：efibootmgr 造短格式与完整路径两个测试项，验证 F3 / F6 / F9 与自有启动项能否保留（与 E3 同一次上机） | 写 NV | ✔ | ✔ | ✔（`EFI\gk3test`） | — | — |
-| D3 | 开发机只读 SMBIOS Type 11、`OneKeyLog.txt` | ✔ | — | — | — | — | — |
+| D2 | 开发机：造短格式与完整路径两个测试项（完整路径项用 D1 读到的原始 FilePath 加文件节点拼，**不用 efibootmgr 生成**），验证 F3 / F6 / F9 与自有启动项能否保留（与 E3 同一次上机）；结论只说明纯 Android 盘 | 写 NV | ✔ | ✔ | ✔（`EFI\gk3test`） | — | — |
+| D3 | 开发机只读 `OneKeyLog.txt`（SMBIOS Type 11 读不了：没开 DMI_SYSFS，改到 D5 的 Windows 侧） | ✔ | — | — | — | — | — |
 | D4 | Parallels 克隆机：Windows 更新是否改写回落文件、Windows 写 Loader 变量、快速启动 + ESP、磁盘管理与 bit 0、`-RepairBoot` / `-RemoveAndroid` 往返、BitLocker 的 PCR | 不碰设备 | — | — | — | — | — |
-| D5–D7 | 群友真机：只读采集（D5）、装双系统全流程（D6，恢复密钥在手）、更新前后对比（D7） | D5 / D7 只读 | D6 ✔ | 群友 | D6 ✔ | D6 ✔ | — |
+| D5–D7 | 群友真机：只读采集（D5，含一次 U 盘 live：`efibootmgr -v`、插拔 U 盘各冷开一次）、装双系统全流程（D6，恢复密钥在手）、更新前后对比（D7） | D5 / D7 只读 | D6 ✔ | 群友 | D6 ✔ | D6 ✔ | — |
 | D8 | 主机侧 GK3 双系统状态机单测（并入 E0） | ✔ | — | — | — | — | — |
 
 纪律：每一次需要重启的实验都要先征得用户同意，并确认有人能长按电源键；实验条目一律非默认、经 OneShot 进入；ESP 用私有挂载点（不叫 `/mnt/esp`）。
@@ -1015,7 +1095,7 @@ UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起
 
 ### 7.1 需要用户决定
 
-> **2026-10-05 用户已采纳 U1–U11 的全部建议，并要求补全双系统。** U3 因此按"纯 Android / 双系统"细化（见 U3 与 U13）；U12–U21 是补全双系统新增的决定点，等用户拍板。
+> **2026-10-05 用户已采纳 U1–U11 的全部建议，并要求补全双系统。** U3 因此按"纯 Android / 双系统"细化（见 U3 与 U13）；U12–U21 是补全双系统新增的决定点，U22–U25 是同日第二轮合入评审后新增的，都按惯例"用户只说有意见的，其余按建议执行"。
 
 | # | 问题 | 建议 |
 |---|---|---|
@@ -1030,16 +1110,20 @@ UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起
 | U9 | `androidboot.bootloader=gk3boot-<ver>` 会改变 `ro.bootloader` 的值 | 采用（Settings 的"关于"会显示入口版本），E4 时检查有没有应用依赖旧值 |
 | U10 | 入口的许可证 | 与仓库其他自研代码一致；不拷贝 systemd（LGPL）代码，只照写法重写；1.x 移植 ABL 件时保留 BSD-3-Clause-Clear 声明 |
 | U11 | C′ 遗留的 U3（update zip）、U5（serialno）、U6（空闲关机）照旧 | 按 C′ 的建议 |
-| U12 | 双系统的默认系统：要不要让用户选"Windows 为默认"；实现是否用 `LoaderEntryDefault=auto-windows` + gk3boot 预置 OneShot + `clean_poweroff` 关机标记（§4.9.3） | **做**。安装器确认页**预选 Android**（今天的行为，依赖最少），并写明"以 Windows 为主选 Windows"；Parts 和 Windows 脚本都能改。禁止 Android 精确 id 和 `@saved`。`on shutdown` 钩子在 E7 证明不可靠时退化为"从 Android 关机后，下次开机进一次 Android" |
+| U12 | 双系统的默认系统：要不要让用户选"Windows 为默认"；实现是否用 `LoaderEntryDefault=auto-windows` + gk3boot 预置 OneShot + `clean_poweroff` 关机标记（§4.9.3） | **做**。安装器确认页**预选 Android**（今天的行为，依赖最少），并用大字写明"冷开机按这里选的进入、之后在哪里改；以 Windows 为主选 Windows"（第二轮，§8.2 #60）；Parts 和 Windows 脚本都能改。禁止 Android 精确 id 和 `@saved`。`on shutdown` 钩子在 E7 证明不可靠时退化为"从 Android 关机后，下次开机进一次 Android" |
 | U13 | 双系统的菜单策略（U3 的双系统分支） | **固定显示菜单 `timeout 5`，不用 `menu-hidden`**；安装器看 ESP 上有没有 `bootmgfw.efi` 来决定；已装机器由 postinstall 把原值 15 改成 5，用户改过的不动 |
 | U14 | 互相重启：Android 侧"重启到 Windows"走 (a) GK3 意图（多一次 POST，Android 不碰 efivarfs）还是 (b) 直接写 efivarfs；Windows 侧装"重启到 Android" | **(a)**；Windows 侧做，前提是 D4/D6 证明 Windows 能写 Loader 变量，写不进就只给"重启后在菜单里选"的提示 |
 | U15 | 是否在 NVRAM 建自有的完整路径启动项（描述 `Windows Boot Manager (Android)`，指向 `\EFI\systemd\systemd-bootaa64.efi`），让 `BOOTAA64` 被换掉时 Android 仍可达，并避开 HwBcdOneKey 的路径匹配 | **1.0 不默认建**。先做 D2：通过（完整路径项能保留、固件不再重复建分区项、删文件后能自愈）就在 1.0.x 里随安装器和 `-RepairBoot` 加上；bootmgfw 的备用项不做（F9 的计数语义不明）。描述必须以 "Windows Boot Manager" 开头，保住 TouchDeviceInit（F8）。Windows 升级时会不会把这个同名前缀的项当成自己的去改写，D4/D6 一并看 |
-| U16 | BitLocker 机器上改写 `BOOTAA64` 的规则 | **采纳 §4.9.7 的规则**：systemd-boot 版本冻结、只在字节不同时写；Windows 脚本写前先暂停 1 次重启；live 写前强制确认恢复密钥；Android 永不自动修 |
+| U16 | BitLocker 机器上改写 `BOOTAA64` 的规则 | **采纳 §4.9.7 的规则**：systemd-boot 版本冻结、只在字节不同时写；Windows 脚本写前先暂停 1 次重启；live 写前强制确认恢复密钥；Android 永不自动修。**第二轮补**：BitLocker 的提醒移到 INSTALL / U 盘制作说明的第 0 步（关安全启动**之前**），确认页文案按路径分开；"关安全启动后是否每次都要密钥"是未知，INSTALL 建议装前暂停或解密 |
 | U17 | 共用 ESP 给 Windows / 固件留多少 | **扣掉下一次 OTA 的暂时空间后，仍空闲 ≥ 32 MiB**，安装器、postinstall、`gk3-esp-sync` 一致；100 MiB 的 ESP 明确拒绝；XBOOTLDR 放到 1.x |
 | U18 | 快速启动 / 休眠 | **双系统一律关快速启动**（Windows 脚本所有路径）；live 检测到 Windows 卷处于休眠就拒绝写 ESP；D4 的破坏性实验决定严重程度 |
 | U19 | 防误删：Android 分区设 GPT bit 0（PLATFORM_REQUIRED）、GK3LIVE 去盘符 | GK3LIVE 去盘符：**做**。bit 0：**等 D4 截图**，磁盘管理里确实不能随手删就设，否则不设。bit 1 永远不设 |
 | U20 | 卸载：1.0 是否提供 Windows 脚本 `-RemoveAndroid` | **做**，按 §4.9.13 的顺序，在 Parallels 上往返测试之后才发；从 live 卸载放 1.x |
-| U21 | 没有真机样本时双系统怎么发 | **标"预览"**：开发机先做 D1–D3（固件行为），D4 走 Parallels；D5/D6 至少一台群友真机通过才去掉"预览"。不挡 1.0 发版 |
+| U21 | 没有真机样本时双系统怎么发 | **标"预览"**：开发机先做 D1–D3（只说明纯 Android 盘上的固件策略），D4 走 Parallels；D5/D6 至少一台群友真机通过才去掉"预览"。"预览"期间安装器确认页**列出未验证的行为**：开机默认进谁、BitLocker 要几次密钥、Windows 更新后是否失联、Windows 能否写启动变量。不挡 1.0 发版 |
+| U22 | 双系统菜单里 Windows 排在哪：保持 `auto-windows`（追加在所有条目之后，平板上要按约 7 次音量下），还是自写 `gk3-windows.conf` + `auto-entries no` 排第 2 | **自写，排第 2**（§4.9.5）。代价：标题不读 BCD、没有 `w` 热键；条目标题同时改成 ASCII。D4 核对两种条目的 PCR4 一致 |
+| U23 | Windows 侧做成常驻的"伴随工具"吗：装到 `%ProgramFiles%\gaokun3`、开始菜单项、SYSTEM 计划任务、`BOOTAA64` 开机自检默认开且不可关、U 盘介质上带一份 | **做**（§4.9.15）。没有它，Windows 换掉 `BOOTAA64` 之后用户只看到"Android 没了"、手边既没工具也没提示 |
+| U24 | 双系统时是否关掉 Windows 的**整个休眠**（Modern Standby 会在待机中自动转休眠，§4.9.10） | **关**，伴随工具执行前征得同意，INSTALL 写明代价（待机电量耗尽直接掉电、丢未保存的会话）；不同意就只关快速启动，并靠 U25 和文档降低风险 |
+| U25 | Windows 侧预置 OneShot（Windows 里的任何重启回 Windows，包括更新的多次自动重启） | **做成伴随工具的选项，D4/D6 证实能写变量、D4 找到可靠的关机 / 重启判据之后默认开**，可提前到 1.0.x；在那之前按 §4.9.3 的表，INSTALL 建议以 Windows 为主的用户把默认设成 Windows |
 
 ### 7.2 技术未知
 
@@ -1059,13 +1143,17 @@ UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起
 | T11a | 华为策略是否真的删短格式项、建只指到分区的 `Windows Boot Manager (…)` 项（F2–F5）；自有完整路径项能否保留（U15） | D1、D2（开发机，不需要 Windows） |
 | T11b | BootNext 是否在策略之后才处理、指向被删的项时是否落空（F6）；Windows 脚本默认路径是否因此失效 | D2；D6 |
 | T11c | Windows 更新 / bcdboot / 重置此电脑会不会改写 `\EFI\Boot\bootaa64.efi` | D4；D7 |
-| T11d | BitLocker 实际的 PCR 档案；装上之后是否只要一次密钥；固件是否真开着镜像度量；gk3boot 是否确实不影响 Windows 那次启动 | D4（vTPM）；D5、D6 |
+| T11d | BitLocker 实际的 PCR 档案；**安全启动开→关之后，按 PCR7 封存的保护器会不会自动改按 0/2/4/11 重封，还是每次开机都要密钥**（社区报告是后者，原因不明）；固件是否真开着镜像度量；gk3boot 是否确实不影响 Windows 那次启动；`Suspend-BitLocker -RebootCount` 怎么数 | D4（vTPM）；D5 先读保护器；D6 记录连续 3 次以上开机 |
 | T11e | 本机 Windows 能否经 `SetFirmwareEnvironmentVariableEx` 写 systemd 厂商 GUID 的变量 | D4 原型；D6 |
 | T11f | HwBcdOneKey 的门槛（SMBIOS 11、功能位）与状态机触发条件（F10） | D3；D5（`OneKeyLog.txt`） |
 | T11g | `OemConfig` 的 BootFail 计数在成功启动后是否清零（F9） | D1、D2 前后读 `OemConfig` |
 | T11h | 快速启动下改共用 ESP 会不会把 FAT 写坏 | D4 |
 | T11i | 两个系统切换后 RTC 是否一致；Windows 是否碰 SDAM | D6 |
 | T11j | `on shutdown` 里 `gk3-misc mark-poweroff` 的时序与可靠性 | E7 |
+| T11k | 未建模的选择路径：Windows 分区还在时 U 盘被优先启动、删掉后翻转（hw-inventory §8quater / §8quinquies）；双系统盘上到底是 H-A、H-B 还是 H-C | D5（U 盘 live 只读，插拔各冷开一次）；D6。开发机观察不到 |
+| T15 | Windows 侧区分关机与重启的可靠判据（候选 Event 1074 的关机类型），以及更新自动重启时计划任务能否在复位前写完变量（U25） | D4 |
+| T16 | 指纹：Android 侧录入 / 安全存储写入会不会破坏 Windows Hello 的模板（同一颗 FTE7001、同一个 TA） | T6 的 enroll 设计先回答；双系统机器上开放录入之前 |
+| T17 | 平板姿态下进固件设置 / F12 的物理按键组合（安全启动被 BIOS 更新打开时唯一的自救路） | E3 必答 |
 | T12 | 执行端的 C′ 未知照旧：initramfs 下 fbcon 能否出字、dwc3 何时就绪、UCSI 插拔会不会把 role 改成 host | E6 |
 | T13 | （1.x）core0 在 UEFI 下的运行时状态、能否枚举、SuperSpeed、512 MiB 连续内存 | E4u、E3 |
 | T14 | EFI_RESETREASON（A022155A-…）在本机由谁提供（决定 1.x 能否补 bootreason） | 离线反汇编 ResetRuntimeDxe |
@@ -1081,11 +1169,14 @@ UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起
 | R5 | 用户在菜单里按 `d` 或手选直连条目，绕过了入口 | HAL 检测到没有 `ro.boot.gk3boot` 就通知；直连条目 title 写明"救急" |
 | R6 | 迁移误取消用户刚点的恢复出厂 | GK3 留原文 + 通知，不静默 |
 | R7 | 工作量超出 | 可提前交付"入口 + tries 回滚"；BCB 分派随执行端一起发 |
-| R8 | 双系统下 Windows 更新或修复覆盖了回落路径，Android 完全不可达（T11c） | `-RepairBoot` / FAQ / U 盘；D2 通过后加 U15 的自有启动项作第二道门；HAL 动作 6 只通知 |
+| R8 | 双系统下 Windows 更新或修复覆盖了回落路径，Android 完全不可达（T11c） | 伴随工具的开机自检 + 一键 `-RepairBoot`（U23）/ FAQ / U 盘；D2 **且** D5/D6 之后再定是否加 U15 的自有启动项作第二道门；HAL 动作 6 只在经 U 盘 / live 进 Android 时有用 |
 | R10 | BIOS 更新把安全启动恢复成开启：固件里只有一个门，两个系统都进不去（§4.9.12） | FAQ"进固件关安全启动"；准备恢复密钥；D7 观察发生率 |
 | R11 | BitLocker 恢复密钥：用户手上没有密钥时，首次安装或任何改动 `BOOTAA64` 的操作会把他锁在 Windows 外 | U16 的确认与暂停；systemd-boot 版本冻结；文案写清 |
 | R12 | 共用 ESP 太满，Windows 更新（0x800f0922）或固件胶囊失败，用户会怪到 Android 头上 | U17 的 32 MiB 下限；停铺 recovery-ramdisk；绝不删 `Persisted_Capsules.bin` |
-| R13 | HwBcdOneKey 在 Windows 启动失败后把开机带进华为一键恢复；F10 恢复或"从驱动器恢复"抹掉 Android | D3/D5 收集日志；INSTALL / FAQ 警告"开机看到华为一键恢复界面时，不要点恢复，直接长按电源键重启"；U15 的自有项能避开路径匹配 |
+| R13 | HwBcdOneKey 在 Windows 启动失败后把开机带进华为一键恢复；F10 恢复或"从驱动器恢复"抹掉 Android | D3/D5 收集日志；INSTALL / FAQ 警告"开机看到华为一键恢复界面时，不要点恢复"；**状态是持久化的，长按电源键重启可能再次被改道**，所以 FAQ 给的逃生路径是 U 盘 live【推断】，清 BOOTSTAT 的做法待核；U15 的自有项能避开路径匹配 |
+| R16 | 关掉安全启动后 BitLocker 每次开机都要密钥（T11d 未知） | INSTALL 第 0 步：装前暂停或解密；D4/D6 有结论前不承诺"只要一次" |
+| R17 | Modern Standby 自动转休眠后用户进了 Android，Android 改写共用 ESP | U24 关休眠；U25 让休眠后默认回 Windows；live 检测休眠；文档 |
+| R18 | Windows 换掉 `BOOTAA64` 后 Android "消失"，用户手边没有工具（从 U 盘装的、或没装伴随工具的） | U23 的开机自检默认开；U 盘介质带一份伴随工具；FAQ 手工三步；U 盘 live 的"修复启动" |
 | R14 | Windows 休眠或快速启动时，Android 写了共用 ESP，导致 FAT 损坏 | U18；D4 定级 |
 | R15 | 卸载顺序错误（先删分区、后还原引导）导致重启循环，撞上 BootFail 的"3 次关机" | U20 的固定顺序；FAQ 只给脚本，不给手工步骤 |
 | R9 | bootloop 计数误触发（用户在开机中强制关机） | 阈值 5；菜单默认项是"Boot Android"；FAQ 说明 |
@@ -1166,3 +1257,24 @@ UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起
 | 42 | "重启到 Android"每次都弹 UAC；转去 Windows 时出现两次 Logo 没有说明；纯平板（只有音量键）用户怎么切系统没交代；`next=windows` 被 OTA 待办作废后用户不知道发生了什么 | 体验 | 改为 SYSTEM 计划任务 + 快捷方式；INSTALL 说明两次 Logo；写明 E3 之前平板只能靠两边的"重启到另一系统"和"默认系统"，并建议以 Windows 为主的平板用户选"Windows 为默认"；作废时 HAL 通知"已先完成系统更新，请再选一次" | §4.9.3、§4.9.4 |
 | 43 | 第一路摸底建议 FAQ 写"经菜单进 Windows 触摸不灵时改用 F12 进"，把 F12 当成后路 | 体验 | F12 里的 `Windows Boot Manager (…)` 打开的就是我们的菜单，不能当后路；文档改为"要绕过只能插 U 盘" | F5、F11；§4.9.5 |
 | 44 | 一键恢复的风险只写了"可能被带进去"，没告诉用户看到之后怎么办 | 体验 | R13 加上"不要点恢复，直接长按电源键重启" | §7.3 R13 |
+
+**双系统第二轮修正**（2026-10-05，合入两份评审：风险评审、用户体验评审。第一轮的结构、U12–U21、D1–D8 与 D1 实机结果保持不变，只做修正和补充）：
+
+| # | 第一轮的问题 | 评审 | 纠正 | 依据 |
+|---|---|---|---|---|
+| 45 | "固件行为可以在纯 Android 的开发机上验证，不需要 Windows"；#21 据此撤销第一路摸底的 blocker | 风险（必改） | 实测里盘上有没有 Windows 分区改变过启动选择（§8quater 插着 U 盘时 U 盘优先、§8quinquies 删分区后翻转），F1–F7 解释不了 ⇒ 开发机结论只说明纯 Android 盘；H-A / H-B / H-C 由 D5 的 U 盘只读部分和 D6 定；#21 的"撤销"降为待核；U15、`-UseFallbackPath` 改默认都等 D5/D6 | `docs/hw-inventory.md` §8quater、§8quinquies；§4.9.2 末尾、T11k |
+| 46 | — （**不同意**的两条）| 风险（应改） | 评审建议：入口被绕过时由 HAL 补写预置 OneShot；setActive 时同步改预置里的槽字母。**不采纳**：①第一轮已选 U14 (a)，Android 不碰 efivarfs，补写要加回 efivarfs 类型、genfscon 和写权限；直连路径本来就不扣 tries、没有回滚链，这次重启落进 Windows 不会让回滚更断，且 HAL 已发 bypassed 通知。②预置先命中的是 `gk3boot-android-<旧字母>`，gk3boot 按 BCAB 选槽，照样启动新槽；字母只在入口计数全用完时起作用，落到旧槽（已知可用）正是想要的。评审的第三条"关机时无条件删 OneShot 会误删别人的"在第一轮的设计里不适用（关机只写 misc 的 `clean_poweroff`，不删变量） | §4.9.3；`boot.c:1637-1640`、`:1710-1714` |
+| 47 | "只在第一次装上、以及 systemd-boot 字节变化时要恢复密钥"；"之后重新封存时 PCR7 不可用，落到 0/2/4/11" | 风险（必改） | 没有出处；唯一的同 SoC 社区证据说"每次"都要，原因不明 ⇒ 改为【未知】，T11d 加子项；INSTALL 只写"可能每次都要，建议装前暂停或解密" | https://aarch64-laptops.github.io/laptops/thinkpad_x13s/debian_guide.html ；https://learn.microsoft.com/en-us/windows/security/operating-system-security/data-protection/bitlocker/configure |
+| 48 | U 盘路径的 BitLocker 确认放在安装器确认页 | 风险、体验（必改） | 关安全启动本身就会触发，用户可能先回一趟 Windows ⇒ 提醒移到 INSTALL / U 盘制作说明的第 0 步（关安全启动之前），确认页文案按路径分开，保留强制确认作第二道 | `gaokun3-setup.ps1:322-326`；§4.9.7 规则 6 |
+| 49 | D2 / U15 的完整路径项"用 efibootmgr 造"（§6 表）；D3 读 `/sys/firmware/dmi/entries/11-0/raw` | 风险（必改 / 应改） | efibootmgr 与 libefivar 从 sysfs 推路径，本机走 DT，推不出与固件 `DevicePathFromHandle` 逐字节相同的路径 ⇒ 用 D1 的原始 FilePath 拼，或由 UEFI 侧生成；本机没开 `CONFIG_DMI_SYSFS` ⇒ SMBIOS 11 改到 Windows 侧读 | HwUniformPolicy 0x2e24、0xcd84；`scripts/live/pkgs-common.txt:59`；`v0.7.1-alpha-config.txt:1814` |
+| 50 | 入口按"1 版 / 2 版"算空间；`Persisted_Capsules.bin` 归给 RecoveryDxe；recovery-ramdisk"只有 0.7 的 OTA 才铺" | 风险（应改） | 分阶段激活期间是 3 版（≤15 MiB）；引用它的是 CapsuleRuntimeDxe（推断为预分配的胶囊存储，删了要重新腾出约 70 MB）；自编版本安装器也会铺 | §4.11；CapsuleRuntimeDxe 0xe306、0xcb80、0xd872；`installer-lib.sh:490`、`:661`、`:933-935` |
+| 51 | 不设 GPT bit 1 的理由是"gk3boot 全靠固件给分区建 BlockIo"；GK3LIVE 去盘符用"bit 63 或 `Remove-PartitionAccessPath`" | 风险（小） | 与 §4.2 第 1 步矛盾（gk3boot 用整盘 BlockIo），理由改为"没验证、没收益"；NO_DRIVE_LETTER 去不掉已分配的盘符、HIDDEN 会让脚本找不到卷 ⇒ 只用 `Remove-PartitionAccessPath` | https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-partition_information_gpt ；`gaokun3-setup.ps1:252`、`:446` |
+| 52 | `-RemoveAndroid` 先还原 `.before-gaokun3`；"扩回 D:" | 风险、体验（应改） | 装机那天的拷贝可能是旧版，安全启动重开且 DBX 吊销后起不来 ⇒ 从当前的 `bootmgfw.efi` 拷；GK3LIVE 紧贴 D:，不删就扩不回 ⇒ 一并删、扩之前断言相邻；零长度删除变量是文档写明的语义 | CVE-2023-24932 KB；`gaokun3-setup.ps1:247-250`；SetFirmwareEnvironmentVariableEx 文档 |
+| 53 | `LoaderEntryDefault` 只在匹配 `*-android-*` 时删 | 风险、体验（应改） | 在 installer、救援、直连、上一版入口上按 `d` 一样会钉住开机，而那时 gk3boot 不运行 ⇒ 合法值只留"不存在"和 Windows 条目 id；HAL 通知里写清"再按一次 `d`"，live 和伴随工具也规范化；写明兜不住的情况 | `boot.c:967-981`、`:1127`、`:1771-1784` |
+| 54 | 安装器不写 `auto-entries no`、不另写 Windows 条目（#29） | 体验（应改） | `auto-windows` 追加在所有条目之后，平板上要按约 7 次音量下 ⇒ U22：自写 `gk3-windows.conf` 排第 2，条目标题一律 ASCII。#29 关于"自有 Boot#### 的描述必须以 Windows Boot Manager 开头"那半条不变 | `boot.c:2814-2819`、`:1691`、`:2147` |
+| 55 | Windows 侧能力全挂在一个没有安装位置的 .ps1 上；HAL 动作 6 被当成修复路径之一 | 体验（必改） | `BOOTAA64` 被换掉时 Android 多半进不来，HAL 运行不到 ⇒ U23 常驻伴随工具、开机自检默认开；HAL 那条只在经 U 盘 / live 进 Android 时有用 | `scripts/windows/README.md`；§4.9.6 |
+| 56 | 只关快速启动，提醒"别用休眠" | 体验（必改） | Modern Standby 会在待机中自动转入休眠 ⇒ U24 是否关整个休眠；live 复用 `gk3__ntfs_hibernated` | Adaptive hibernate / Hibernate idle timeout 文档；`installer-lib.sh:1170`、`:1203-1206` |
+| 57 | 第一轮建议"Windows 里的重启回 Windows"靠"Windows 为默认"，Windows 侧预置推到 1.x | 体验（必改，二选一） | 第一轮已选"收窄语义"那一支（G-E7 只承诺 Android 发起的重启回 Android），保留；另加 U25：Windows 侧预置做成伴随工具的选项，验证后默认开，可提前到 1.0.x。它同时覆盖更新的多次重启，不必另判"更新挂起" | §4.9.3 的表；§4.9.15 |
+| 58 | 一键恢复时"直接长按电源键重启" | 体验（应改） | 状态持久化，重启可能再次被改道 ⇒ 逃生路径写 U 盘 live（推断），清 BOOTSTAT 的做法待核 | HwBcdOneKey 0x1968、0x2394 |
+| 59 | 进固件设置的按键没交代；电源菜单入口没设计；时钟只比对一次；蓝牙"各存各的"；没有反向迁移、官方 ISO 重装、文件交换、指纹、待机切换、面向用户的整合说明；2026 证书轮换没提 | 体验（应改 / 遗漏） | E3 必答 T17；电源菜单的扩展点 E1 grep；D6 加时钟交叉实验；蓝牙按"外设只记一份密钥"重写；§4.9.13、§4.9.16、§4.9.17 补齐；§4.9.6 加证书轮换一行（文档没说安全启动关闭的机器会怎样 ⇒ 未知） | §4.9.6、§4.9.12、§4.9.13、§4.9.16、§4.9.17 |
+| 60 | — （**不同意**的一条）| 体验（小） | 评审指出 U12"预选 Android"会让以 Windows 为主的用户顺手点下一步，建议改成不预选。**保留预选**，但确认页用大字写明"重启时按这里选的进入哪个系统、之后在哪里改"：预选 Android 是"依赖最少"的那一项（不写任何变量），而且第一次开机本来就要进 Android 走开机向导 | §4.9.3；U12 |
