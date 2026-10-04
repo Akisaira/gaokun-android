@@ -354,6 +354,101 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
     --set-val DPM_WATCHDOG_WARNING_TIMEOUT 60 \
     --set-val PANIC_TIMEOUT 10
 
+# ─── 1.0 批 2：网络 / 诊断 / 兼容（docs/v1.0-plan.md 批 2 的内核配置项）───
+# 发布内核 #15（v0.7.1 / 1.0.0-dev.2）的 `zcat /proc/config.gz` 里下面这些全是 =m 或未设。
+# 每个符号都在 v7.2-rc2 的 Kconfig 里核实过（文件:行号写在各段）。
+#
+# ★ NET-3：USB 有线网卡与手机 USB 共享网络。buildbot defconfig 全是 =m（又一次「=m 坑」），
+#   框架的 EthernetTracker 早就在等 (usb|eth)\d+，只差驱动。
+#   drivers/net/usb/Kconfig：USB_NET_DRIVERS:8 RTL8152:99 USBNET:132 AX8817X:166 AX88179_178A:198
+#     CDCETHER:216 CDC_EEM:244 CDC_NCM:258 HUAWEI_CDC_NCM:278 RNDIS_HOST:399；MII 在 drivers/net/Kconfig:29。
+#   CDC_NCM / HUAWEI_CDC_NCM：较新的手机（含华为）做 USB 共享走 NCM，只开 RNDIS_HOST 不够（复核意见）。
+#   ⚠️ RTL8153 的部分版本要 rtl_nic/ 固件，不带也能工作（驱动只是少打补丁），先不带。
+./scripts/config --file "$OUT/.config" \
+    --enable USB_NET_DRIVERS --enable USB_USBNET --enable MII \
+    --enable USB_RTL8152 --enable USB_NET_AX8817X --enable USB_NET_AX88179_178A \
+    --enable USB_NET_CDCETHER --enable USB_NET_CDC_EEM --enable USB_NET_CDC_NCM \
+    --enable USB_NET_HUAWEI_CDC_NCM --enable USB_NET_RNDIS_HOST
+
+# ★ NET-8：Android 内核网络基线。来源是 AOSP kernel/configs 的 b/android-6.12/android-base.config
+#   （2026-10-05 从 tuna 镜像取的 bd79f386，与发布内核逐项比出的【网络部分】缺项；非网络的
+#   缺项不在这里 —— 那些多是 ACK 专有符号或要单独评估的取舍）。最直接的用户影响：
+#   INET_ESP=m / INET6_ESP 未设 ⇒ 系统自带 IKEv2/IPsec VPN 用不了；INET_DIAG_DESTROY 未设 ⇒
+#   netd 断网时销毁不了旧 socket（SOCK_DESTROY）；NET_CLS_BPF / NET_ACT_BPF / NET_SCH_INGRESS
+#   未设 ⇒ tethering offload 与 clat 的 tc-BPF 快路径回落。
+#   net/ipv4/Kconfig：NET_IPGRE_DEMUX:180 NET_IPVTI:304 INET_ESP:354 INET_UDP_DIAG:439 INET_DIAG_DESTROY:455
+#   net/ipv6/Kconfig：IPV6_ROUTER_PREF:21 IPV6_ROUTE_INFO:31 IPV6_OPTIMISTIC_DAD:39 INET6_ESP:62
+#     INET6_IPCOMP:102 IPV6_MIP6:112 IPV6_VTI:150
+#   net/sched/Kconfig：NET_SCH_HTB:48 NET_SCH_TBF:134 NET_SCH_INGRESS:347 NET_CLS_U32:516 NET_CLS_BPF:562
+#     NET_CLS_MATCHALL:582 NET_EMATCH:592 NET_EMATCH_U32:635 NET_CLS_ACT:702 NET_ACT_POLICE:715 NET_ACT_BPF:841
+#   drivers/net/Kconfig：IFB:149 —— ⚠️ 它 `depends on NET_ACT_MIRRED || NFT_FWD_NETDEV`，基线片段里
+#     没写 NET_ACT_MIRRED（net/sched/Kconfig:742，GKI 是在别处开的），只 --enable IFB 会被
+#     olddefconfig 静默丢掉（2026-10-05 本地试跑，断言当场抓到）⇒ 一并开 NET_ACT_MIRRED。
+#   net/ipv4/netfilter/Kconfig：IP_NF_MATCH_ECN:154 IP_NF_MATCH_TTL:174 IP_NF_TARGET_NETMAP:244
+#     IP_NF_SECURITY:313 IP_NF_ARPTABLES:327 IP_NF_ARPFILTER:343 IP_NF_ARP_MANGLE:357
+#     （ARPTABLES/ARPFILTER 依赖 NETFILTER_XTABLES_LEGACY，发布内核里已是 y）
+#   net/netfilter/Kconfig：NF_CONNTRACK_SECMARK:123 AMANDA:212 H323:239 IRC:258 NETBIOS_NS:277 PPTP:311
+#     SANE:330；XT_TARGET_CLASSIFY:827 CONNSECMARK:849 CT:861 NFQUEUE:1002 TPROXY:1068 TRACE:1089
+#     SECMARK:1101；XT_MATCH_CONNLIMIT:1228 HELPER:1338 IPRANGE:1365 LENGTH:1395 MAC:1414
+#     STATISTIC:1597 STRING:1606 TIME:1629
+#   crypto/Kconfig：CHACHA20POLY1305:752 MD5:885 XCBC:983（IpSec 的 AEAD / 认证算法）
+#   ⚠️ 基线里另有 NETFILTER_XT_MATCH_QUOTA2_LOG、NF_CT_PROTO_DCCP、NF_CT_PROTO_UDPLITE，
+#      这棵树的 Kconfig 里没有这三个符号，不写：QUOTA2_LOG 是 ACK 的 quota2 子选项，0017 只移植了
+#      NETFILTER_XT_MATCH_QUOTA2 本身（源码里的 #ifdef 还在，但 Kconfig 没有这一项）；后两个在 v7.2-rc2 里不存在。
+./scripts/config --file "$OUT/.config" \
+    --enable INET_ESP --enable INET6_ESP --enable INET6_IPCOMP \
+    --enable INET_DIAG_DESTROY --enable INET_UDP_DIAG \
+    --enable IPV6_ROUTER_PREF --enable IPV6_ROUTE_INFO --enable IPV6_OPTIMISTIC_DAD \
+    --enable IPV6_MIP6 --enable IPV6_VTI --enable NET_IPVTI --enable NET_IPGRE_DEMUX \
+    --enable NET_SCH_HTB --enable NET_SCH_TBF --enable NET_SCH_INGRESS \
+    --enable NET_CLS_U32 --enable NET_CLS_BPF --enable NET_CLS_MATCHALL \
+    --enable NET_EMATCH --enable NET_EMATCH_U32 \
+    --enable NET_CLS_ACT --enable NET_ACT_POLICE --enable NET_ACT_BPF \
+    --enable NET_ACT_MIRRED --enable IFB \
+    --enable IP_NF_MATCH_ECN --enable IP_NF_MATCH_TTL --enable IP_NF_TARGET_NETMAP \
+    --enable IP_NF_SECURITY --enable IP_NF_ARPTABLES --enable IP_NF_ARPFILTER \
+    --enable IP_NF_ARP_MANGLE \
+    --enable NF_CONNTRACK_SECMARK --enable NF_CONNTRACK_AMANDA --enable NF_CONNTRACK_H323 \
+    --enable NF_CONNTRACK_IRC --enable NF_CONNTRACK_NETBIOS_NS --enable NF_CONNTRACK_PPTP \
+    --enable NF_CONNTRACK_SANE \
+    --enable NETFILTER_XT_TARGET_CLASSIFY --enable NETFILTER_XT_TARGET_CONNSECMARK \
+    --enable NETFILTER_XT_TARGET_CT --enable NETFILTER_XT_TARGET_NFQUEUE \
+    --enable NETFILTER_XT_TARGET_TPROXY --enable NETFILTER_XT_TARGET_TRACE \
+    --enable NETFILTER_XT_TARGET_SECMARK \
+    --enable NETFILTER_XT_MATCH_CONNLIMIT --enable NETFILTER_XT_MATCH_HELPER \
+    --enable NETFILTER_XT_MATCH_IPRANGE --enable NETFILTER_XT_MATCH_LENGTH \
+    --enable NETFILTER_XT_MATCH_MAC --enable NETFILTER_XT_MATCH_STATISTIC \
+    --enable NETFILTER_XT_MATCH_STRING --enable NETFILTER_XT_MATCH_TIME \
+    --enable CRYPTO_CHACHA20POLY1305 --enable CRYPTO_MD5 --enable CRYPTO_XCBC
+
+# ★ LIVE-8：卡死检测【只告警、不 panic】。驱动死锁（A1 那类）时机器冻住、硬件看门狗照样被喂，
+#   以前 dmesg 里连一行栈都没有。lib/Kconfig.debug：SOFTLOCKUP_DETECTOR:1123
+#   BOOTPARAM_SOFTLOCKUP_PANIC:1150 DETECT_HUNG_TASK:1269 DEFAULT_HUNG_TASK_TIMEOUT:1284
+#   BOOTPARAM_HUNG_TASK_PANIC:1300（7.2 起是 int "几个 hung task 触发 panic"，0 = 不 panic）。
+#   ⚠️ 不开 panic：固件加载、NVMe 之类长时间 D 状态会误报（复核意见）；要 pstore 就交给
+#      hangdump / 看门狗链在超时后自己 panic。HARDLOCKUP_DETECTOR 在 arm64 上要 pseudo-NMI，不开。
+#   两个 PANIC 值写死并断言：值以后若被"调试时顺手改一下"留在构建树 .config 里（#16 的教训）会被抓到。
+./scripts/config --file "$OUT/.config" \
+    --enable DETECT_HUNG_TASK --set-val DEFAULT_HUNG_TASK_TIMEOUT 120 \
+    --set-val BOOTPARAM_HUNG_TASK_PANIC 0 \
+    --enable SOFTLOCKUP_DETECTOR --set-val BOOTPARAM_SOFTLOCKUP_PANIC 0
+
+# ★ LIVE-12：ANON_VMA_NAME（mm/Kconfig:1365）—— scudo / ART 靠它给匿名映射起名，
+#   没有它 dumpsys meminfo 的 Java / Native 堆全是 0、全算进 Unknown。LRU_GEN 改回收行为，不在这里顺手开。
+# ★ LIVE-13：LOG_BUF_SHIFT（init/Kconfig:804，范围 12–25）17 → 19，内核环形缓冲 128 KiB → 512 KiB。
+# ★ PERF-11 / PWR-13：THERMAL_STATISTICS（drivers/thermal/Kconfig:29）—— cooling_device*/stats，
+#   降频历史可查。
+# ★ APP-17：ARMv8 废弃指令模拟（arch/arm64/Kconfig：ARMV8_DEPRECATED:1826 SWP_EMULATION:1840
+#   CP15_BARRIER_EMULATION:1863 SETEND_EMULATION:1879）。AOSP kernel/configs
+#   b/android-6.12/android-base-conditional.xml:43-72 对 arm64 要求这四项 =y。
+#   都只是编进去，运行时由 abi.* sysctl 控制（SWP 默认关）；本机 32 位 zygote 在跑（app_process32）。
+./scripts/config --file "$OUT/.config" \
+    --enable ANON_VMA_NAME \
+    --set-val LOG_BUF_SHIFT 19 \
+    --enable THERMAL_STATISTICS \
+    --enable ARMV8_DEPRECATED --enable SWP_EMULATION \
+    --enable CP15_BARRIER_EMULATION --enable SETEND_EMULATION
+
 # ─── olddefconfig + 断言（止损"=m 坑"）───
 # 这个坑已经踩了 13 次：`scripts/config --enable X` 写进去了，olddefconfig
 # 却可能因为依赖把它降回 =m（或压根没有该符号），而 Android **不加载任何模块**
@@ -411,6 +506,22 @@ VIDEO_QCOM_CAMSS VIDEO_HI846 VIDEO_OV13B10 VIDEO_DW9714 I2C_QCOM_CCI SC_CAMCC_82
 VIDEOBUF2_DMA_SG MEDIA_CAMERA_SUPPORT V4L_PLATFORM_DRIVERS VIDEO_CAMERA_SENSOR
 EXPERT PM_DEBUG PM_SLEEP_DEBUG PM_ADVANCED_DEBUG DPM_WATCHDOG
 SQUASHFS NTFS3_FS NLS_UTF8
+USB_NET_DRIVERS USB_USBNET MII USB_RTL8152 USB_NET_AX8817X USB_NET_AX88179_178A
+USB_NET_CDCETHER USB_NET_CDC_EEM USB_NET_CDC_NCM USB_NET_HUAWEI_CDC_NCM USB_NET_RNDIS_HOST
+INET_ESP INET6_ESP INET6_IPCOMP INET_DIAG_DESTROY INET_UDP_DIAG
+IPV6_ROUTER_PREF IPV6_ROUTE_INFO IPV6_OPTIMISTIC_DAD IPV6_MIP6 IPV6_VTI NET_IPVTI NET_IPGRE_DEMUX
+NET_SCH_HTB NET_SCH_TBF NET_SCH_INGRESS NET_CLS_U32 NET_CLS_BPF NET_CLS_MATCHALL
+NET_EMATCH NET_EMATCH_U32 NET_CLS_ACT NET_ACT_POLICE NET_ACT_BPF NET_ACT_MIRRED IFB
+IP_NF_MATCH_ECN IP_NF_MATCH_TTL IP_NF_TARGET_NETMAP IP_NF_SECURITY IP_NF_ARPTABLES IP_NF_ARPFILTER IP_NF_ARP_MANGLE
+NF_CONNTRACK_SECMARK NF_CONNTRACK_AMANDA NF_CONNTRACK_H323 NF_CONNTRACK_IRC NF_CONNTRACK_NETBIOS_NS
+NF_CONNTRACK_PPTP NF_CONNTRACK_SANE
+NETFILTER_XT_TARGET_CLASSIFY NETFILTER_XT_TARGET_CONNSECMARK NETFILTER_XT_TARGET_CT
+NETFILTER_XT_TARGET_NFQUEUE NETFILTER_XT_TARGET_TPROXY NETFILTER_XT_TARGET_TRACE NETFILTER_XT_TARGET_SECMARK
+NETFILTER_XT_MATCH_CONNLIMIT NETFILTER_XT_MATCH_HELPER NETFILTER_XT_MATCH_IPRANGE NETFILTER_XT_MATCH_LENGTH
+NETFILTER_XT_MATCH_MAC NETFILTER_XT_MATCH_STATISTIC NETFILTER_XT_MATCH_STRING NETFILTER_XT_MATCH_TIME
+CRYPTO_CHACHA20POLY1305 CRYPTO_MD5 CRYPTO_XCBC
+DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR ANON_VMA_NAME THERMAL_STATISTICS
+ARMV8_DEPRECATED SWP_EMULATION CP15_BARRIER_EMULATION SETEND_EMULATION
 "
 # 接了 ReSukiSU 才断言 KSU —— 没接的树上断言它只会误报。
 if [ "$RESUKISU" = 1 ]; then
@@ -436,7 +547,9 @@ for s in $MUST_N; do
     fi
 done
 # 取值断言：这几个曾经"以为是默认、其实是残留的调试值"（issue #16）
-for kv in DPM_WATCHDOG_TIMEOUT=120 DPM_WATCHDOG_WARNING_TIMEOUT=60 PANIC_TIMEOUT=10; do
+for kv in DPM_WATCHDOG_TIMEOUT=120 DPM_WATCHDOG_WARNING_TIMEOUT=60 PANIC_TIMEOUT=10 \
+          LOG_BUF_SHIFT=19 DEFAULT_HUNG_TASK_TIMEOUT=120 \
+          BOOTPARAM_HUNG_TASK_PANIC=0 BOOTPARAM_SOFTLOCKUP_PANIC=0; do
     if ! grep -qx "CONFIG_$kv" "$OUT/.config"; then
         echo "  ✗ 期望 CONFIG_$kv，实际 '$(grep -E "^CONFIG_${kv%%=*}=" "$OUT/.config")'"; bad=1
     fi
