@@ -2,8 +2,8 @@
 
 设计稿：[`docs/boot-entry-design.md`](../../docs/boot-entry-design.md)（方案 Y，U1–U11 按建议采纳，U2 = C）。
 这个目录现在有实施步骤 **S2** 的产物：决策核心 `libgk3core` 和它的主机测试，外加只读 CLI `gk3-misc`；
-以及 **S3 / S4**：aarch64 UEFI 工具链（gnu-efi）、QEMU + AAVMF + systemd-boot 257.13 夹具、只读探针 `gk3probe.efi`（§9）。
-`gk3boot.efi`（S5）、执行端（S7）还没开始。
+以及 **S3 / S4**：aarch64 UEFI 工具链（gnu-efi）、QEMU + AAVMF + systemd-boot 257.13 夹具、只读探针 `gk3probe.efi`（§9）；
+**S5 的最小可上机版本** `gk3boot.efi`：观察模式 + H2 交接 + fail-open，给 E4 门槛用（§10）。执行端（S7）还没开始。
 
 ## 1. 结构
 
@@ -27,9 +27,11 @@ tools/gk3boot/
 │  ├─ Makefile              gnu-efi 构建 → build/efi/*.efi，并自检 PE 头
 │  ├─ lib/gk3efi.[ch]       UEFI 侧共用件：GUID、vsnprintf 子集、日志（屏幕 + ESP 文件）、设备路径转文字、
 │  │                        BlockIo → gk3_blk 包装（只读）、计时（CNTVCT）—— 以后 gk3boot.efi 直接复用
-│  └─ probe/                gk3probe.efi（S4 / E3 只读探针）+ 内嵌的测试 PE child.c
-├─ qemu/                    QEMU 夹具（§9.2）：fixture.py 造盘 / 快照 / 比对 / 写变量，qemu_run.py 无头跑，
-│                           check_probe.py 判 PASS/FAIL，run-tests.sh 串起来；fake-android.c 冒充直连条目的内核
+│  ├─ probe/                gk3probe.efi（S4 / E3 只读探针）+ 内嵌的测试 PE child.c
+│  └─ boot/                 gk3boot.efi（S5 最小版，§10）：gk3boot.c 定位 / 决策 / fail-open，handoff.c H2 交接
+├─ qemu/                    QEMU 夹具（§9.2、§10.4）：fixture.py 造盘 / 快照 / 比对 / 写变量 / 打 boot.img，qemu_run.py 无头跑，
+│                           check_probe.py / check_boot.py 判 PASS/FAIL，run-tests.sh / run-boot-tests.sh 串起来；
+│                           fake-android.c 冒充直连条目的内核；init.c 是测试 initramfs 的 /init
 └─ test/
    ├─ *.c                   主机单测（ASan + UBSan）
    ├─ upstream/             把真正的 libboot_control.cpp 编进来逐字节对拍（shim/ 是 android-base 等的最小垫片）
@@ -199,7 +201,8 @@ boot_b 没有 —— 谁写的不知道（不是我们的安装器会做的事�
 - 决策编排（§4.2 第 3–7 步串起来的 `gk3_decide`：迁移 → 一次性意图 → BCB 分派 → bootloop 计数 → 选槽）属于 S5/S6，
   这里只提供了它要用的全部原语；
 - `gk3-misc init`（安装器初始化 misc）属于 S10；
-- `gk3boot.efi` 本体（S5）、执行端（S7）；QEMU 夹具（S3）已就位（§9），S5 往里加场景即可；
+- `gk3boot.efi` 的动作模式（扣 tries、BCB 分派、迁移、GK3 记录、fail-open 阶梯第 1 步、换槽 / H1）——
+  最小的观察模式版本已有（§10）；执行端（S7）；
 - 在 misc 写入之间断电注入的测试：夹具有了，要等 S5 真的写 misc；
 - Linux 静态链接版（执行端）只证明了能 freestanding 编译，还没有真正链接成 aarch64 静态二进制（本机没有交叉链接器）。
 
@@ -392,3 +395,293 @@ E3 里有几项探针**答不了**，要人来看：进固件设置 / F12 的物
 - 60 秒看门狗在本机会不会真的复位，还不知道（E6）。
 - ESP 写满时会留下一个 0 字节的 `log-<n>.txt`：建文件只占一个目录项，失败发生在第一次 Write。
 - 探针二进制没有签名（Secure Boot 必须关着，设备上本来就是关的），PE 也没标 NX_COMPAT。
+
+## 10. S5 最小版：gk3boot.efi（观察模式），E4 门槛用
+
+设计稿 §5 S5、§6 E4、§4.12 "观察模式"。目标只有一个：**作为 systemd-boot 的非默认 efi 条目经 OneShot 进入，第一次用 H2
+（缓冲区 LoadImage 真内核 + DTB 配置表 + LoadFile2 initrd + LoadOptions）真正启动 Android**，期间什么都不写。
+
+### 10.1 做什么、不做什么
+
+```
+systemd-boot（OneShot = gk3boot-e4.conf）→ gk3boot.efi
+  0 SetWatchdogTimer(120 s)；解析 options；开日志 \EFI\gk3boot\log\boot-<n>.txt
+  1 自己 ESP 的设备路径去掉 HD 节点 = 整盘（恰好一个）→ 主 GPT → misc/boot_a/boot_b/super/userdata 各唯一、ESP 对得上
+  2 读 misc 0–64 KiB：BCB / GK3 / BCAB / VAB 解码；gk3_select_slot 在【副本】上算；"动作模式会怎么做"只记一行（NOT written）
+  3 目标槽 = gk3.slot 强制 > 决策（BOOT → 它；BCAB 无效 → gk3.hint；NOSLOT / MERGING → fail-open，执行端还没有）
+  4 读 boot_<x> 整份 → header v2 → SHA1(id) → kernel 是 PE（MZ）、dtb 是 FDT、ramdisk 非空
+  5 cmdline = 头 cmdline + extra_cmdline，去掉同名键后追加
+        androidboot.slot_suffix=_x androidboot.bootloader=gk3boot-<ver>
+        androidboot.gk3boot.event=<none|fallback|forced|bcab_invalid> androidboot.gk3boot.entry=<条目文件名>
+        androidboot.gk3boot.mode=observe
+  6 H2 交接（efi/boot/handoff.c）；成功不返回
+  ✗ 任何一步失败 → fail-open（10.3）
+```
+
+| | 这一版 | 设计稿的完整版（S5 后续 / S6） |
+|---|---|---|
+| misc | 只读；块设备包装连 write 回调都没有 | 扣 tries、清 BCB、写 GK3 记录（写前算 CRC、写后读回） |
+| EFI 变量 | 一个都不写（只读 `LoaderBootCountPath` / `LoaderEntrySelected`） | fail-open 写 OneShot、双系统的 Default / OneShot |
+| ESP | 只写自己的日志（每次开机一份） | 正常路径零写入，只在失败时记 |
+| BCB | 只分类、记"会怎么做"，照常启动（与今天的直连条目一样不消费） | 分派到执行端 |
+| boot_x 坏 | fail-open | 换另一个可启动的槽（不写 misc）→ H1 → 执行端 |
+| 找盘 | 只认自己 ESP 所在的盘 | 找不到时扫全部整盘，要求全局唯一 |
+| `gk3.observe=1` 缺省 | 照样观察模式（这一版没有动作模式），日志里记一行 | 缺省 = 动作模式 |
+
+**LoadOptions**：`gk3.observe=1`、`gk3.slot=a|b`（强制；决策照算照记）、`gk3.hint=a|b`（BCAB 无效时用，缺省 a）、
+`gk3.hold=<秒>`（fail-open 复位前在屏幕上停留，缺省 5，最大 30）。
+
+### 10.2 H2 交接对照（`efi/boot/handoff.c`）
+
+照 systemd-boot 257.13（`refs/systemd-v257/src/boot/`）的**写法**重写，不拷代码（U10）；顺序与 `boot.c` 的
+`image_start`（:2543-2656）一致：
+
+| 步骤 | gk3boot | systemd-boot 257.13 |
+|---|---|---|
+| 内核 | 缓冲区 `LoadImage`，Vendor 媒体设备路径（自己的 GUID）；`SECURITY_VIOLATION` 时 `UnloadImage` | `linux.c:44-91`（STUB_PAYLOAD_GUID），type1 条目是 `boot.c:2574` 按文件路径 |
+| DTB | 拷进 `EfiACPIReclaimMemory` 页，`InstallConfigurationTable(b1b621d5-…)`；记下原来的表，失败 / 返回时装回去（原来没有 = 删表）；有 `EFI_DT_FIXUP_PROTOCOL` 只记录不调用（本机没有，§2.1） | `devicetree.c:9-21`、`:65-107`；`boot.c:2582` |
+| initrd | 先 `LocateDevicePath(LoadFile2, LINUX_EFI_INITRD_MEDIA)`，已有人装过就不装；再在新句柄上装 DevicePath + LoadFile2（BootPolicy 为真回 UNSUPPORTED，缓冲区不够回 BUFFER_TOO_SMALL） | `initrd.c:12-110`；`boot.c:2588` |
+| cmdline | `LoadOptions` = UCS-2，`LoadOptionsSize` 含结尾 NUL | `linux.c:133-136`；`boot.c:2622-2624` |
+| 启动 | `StartImage`；**不调 ExitBootServices**（stub 自己调，UEFI 看门狗随之关闭）；返回即失败：撤 LoadFile2、装回 DTB 表、释放页 → fail-open | `boot.c:2631`；x86 compat 入口回退（`linux.c:146-151`）arm64 用不到，没做 |
+
+内核那一侧（Linux v7.2-rc2，**本地 refs/ 里没有 libstub，下面两处取自 git.kernel.org 原文**）：`zboot.c:35-100` 只从
+LoadedImage 取 LoadOptions（不看 FilePath / DeviceHandle，所以缓冲区加载的 zboot 镜像不缺东西），解压后进
+`efi_stub_common`；`efi-stub.c:172` 的 `efi_load_initrd` 先找 LINUX_EFI_INITRD_MEDIA 设备路径上的 LoadFile2。
+内核 LoadedImage 的 DeviceHandle 是 NULL，所以 stub 的 `initrd=` / `dtb=` 文件加载在这条路上用不了 —— 我们也不传。
+
+**cmdline 与今天的直连条目**：直连条目开出来的 `/proc/cmdline`（2026-10-05 实机只读读出，`test/vectors/proc-cmdline-20261005.txt`）=
+`initrd=\<mid>\android\slot_a\ramdisk.img` + 头里的 cmdline + ` androidboot.slot_suffix=_a`。gk3boot 的 =
+头里的 cmdline + ` androidboot.slot_suffix=_a` + 新增的四项。**去掉 systemd-boot 加的 `initrd=` 和新增四项，两者逐字节相同**
+（主机单测 `test_cmdline` 与 QEMU real 场景各核一遍）。`initrd=` 是 systemd-boot 为老内核加的（`boot.c` 的 `initrd_prepare`），
+内核走 LoadFile2 时用不着，设计稿 §4.3.1 也说入口不加。
+
+### 10.3 fail-open：为什么最小版只"记日志 + 冷复位"
+
+设计稿 §4.12 的阶梯第 1 步是"写 `LoaderEntryOneShot = <mid>-android-<槽>.conf` 再复位"。最小版**不写**，只复位，理由：
+
+- E4 的条目本来就不是默认项：经 OneShot 进来，systemd-boot 读到 OneShot 就删掉它（`boot.c:1637-1640`），复位后自然走
+  loader.conf 的 `default *-android-a.conf`，也就是今天的直连条目 —— 不写变量也能回到老路；
+- 不写变量，观察模式"什么都不写"的承诺不打折扣，也不会第二次改动固件状态（NV 变量写入走的是 uefisecapp，越少越好）；
+- 另一个选项"LoadImage ESP 上 `\<mid>\android\slot_<x>\Image` 走 H1"要在同一次开机里第二次装 DTB / initrd，前一次失败留下的
+  状态（半装的表、已加载的镜像）都要撤干净，出错面比复位大，而它换来的只是少一次重启。
+
+⚠️ **代价**：这一版**不能**当默认条目用。fail-open 后复位又会回到它自己，形成循环（还可能撞上华为的
+`BootFail count = 3, System ShutDown!`，§2.1）。E5（观察模式设为默认）之前必须补上阶梯第 1 步。
+
+其他兜底：看门狗 120 秒（本机会不会真的复位还没验证，E6）；`ResetSystem` 万一返回就原地等看门狗；**从不** return 给
+systemd-boot（`boot.c:2971-2973` 会把错误码原样交给固件）。内核交接之后的故障不归 gk3boot 管：内核 panic 10 秒后重启
+（`CONFIG_PANIC_TIMEOUT=10`），OneShot 已被消费，下一次就是直连条目；硬挂要长按电源键（与今天一样）。
+
+**日志**：`\EFI\gk3boot\log\boot-<n>.txt`，n 从 0 递增、不覆盖（上限 1000）。纯 ASCII，屏幕上是同样的内容（细节行只进文件）。
+交接前写完并**关闭**文件（不把打开的 FAT 句柄带进 ExitBootServices），交接失败回来再按路径重开、追加。
+**ESP 剩余不到 1 MiB 就不写**：QEMU 夹具（AAVMF 2025.02 的 FAT 驱动）实测，在满盘上建目录返回 `VOLUME_FULL`，
+却留下一个起始簇为 0（= 指回根目录）的目录项，FAT 坏掉、目录成环（夹具的 `mcopy -s` 因此递归到把容器盘写满）。
+本机固件的 FAT 驱动多半是同一份 edk2 代码，所以上机步骤里**预先建好 `log` 目录**，gk3boot 在设备上从不需要建目录。
+（探针 `gk3probe.efi` 也有"按需建目录"这条路，E3 上机时 ESP 有 46 MB 空余，没碰上。）
+
+### 10.4 QEMU 夹具
+
+```sh
+colima start
+bash scripts/gk3boot/test-boot.sh                    # 全部场景（约 3 分钟；real 要等 45 秒）
+bash scripts/gk3boot/test-boot.sh linux-a badsha     # 只跑列出的场景
+```
+
+同一套夹具（§9.2：实机 GPT / misc 向量、systemd-boot 257.13、直连条目里的假内核），另加：
+
+- **测试内核**：`qemu/fetch-test-kernel.sh` 第一次从 Debian 取当前的 `linux-image-*-arm64-unsigned`（带 PE 头的 EFI stub Image，
+  PL011 内建），缓存在 `build/cache/linux/`；`GK3_TEST_KERNEL=` 可换。
+- **测试 initramfs**：`qemu/init.c`，静态、无 libc 的 `/init`：挂 proc / sysfs，打出 `/proc/cmdline`、
+  `/sys/firmware/devicetree/base/gk3,fixture-marker`、initramfs 里的标记文件、`/sys/firmware/efi` 在不在，然后关机。
+- **dtb**：`qemu_run.py --dumpdtb` 导出与运行时同一套机器配置的 QEMU dtb，`fixture.py fdt-mark` 给根节点加一个每次运行都不同的
+  标记属性。跑的时候 `-M virt,acpi=off`：AAVMF 这时会**自己先装一张 DTB 配置表**，内核读到我们的标记就证明 gk3boot 的表盖掉了它。
+- **boot.img**：`fixture.py mkbootimg` 打 header v2（page 2048，与本机相同）；boot_b 的 cmdline 667 字节（切进 extra_cmdline），
+  还带一个旧的 `androidboot.slot_suffix=_z`。
+- 每个场景都做盘的前后比对（只准多出 `EFI/gk3boot/log/boot-*.txt`；misc / boot_x / super / userdata / metadata / 主备 GPT 逐区哈希），
+  快照前先 `fsck.fat -n` 查 ESP。cmdline 的期望值由 `check_boot.py` 用 Python 独立再算一遍（分词、去重、追加），与 gk3boot 对拍。
+
+| 场景 | 做什么 | 判据（摘要） |
+|---|---|---|
+| real | boot_a = 真 gaokun3 boot.img（`out/issues-1791053208/boot.img`）、实机 misc、options 与上机相同（`gk3.slot=a`） | 决策 `boot slot=_a`、SHA1(id) OK、cmdline 去掉新增项后与实机 `/proc/cmdline`（去掉 `initrd=`）逐字节一致、LoadImage / DTB / LoadFile2 / LoadOptions 全过；交接后它在 virt 上一行不打（没开 PL011，zboot stub 也不出声 —— **走 systemd-boot 直连条目时一模一样**，单独核过），所以用 `-d int` 看 CPU 跑进了内核虚拟地址，45 秒后停 |
+| linux-a | Debian 内核 + 测试 initramfs，实机 misc（_a 已成功） | stub 打出 "Loaded initrd from LINUX_EFI_INITRD_MEDIA_GUID device path" / "Using DTB from configuration table" / "Exiting boot services"；`/init` 读到的 `/proc/cmdline` == gk3boot 的 LoadOptions、dtb 标记对、initrd 标记对、`/sys/firmware/efi` 在 |
+| linux-b | misc 改成 _b 15/6 未成功 | 决策 `boot slot=_b`、记"会扣 _b tries 6 -> 5 (NOT written)"，**盘比对 misc 逐字节未变**；extra_cmdline 拼接、旧 slot_suffix 被换掉 |
+| force-a | 同 linux-b 的 misc + `gk3.slot=a` | 决策照记 `_b`，实际启动 `_a`，`event=forced` |
+| strictnx | linux-a 换 `AAVMF_CODE.secboot.strictnx.fd` | 同 linux-a |
+| espfull | linux-a + ESP 一个字节都不剩 | 屏幕上 `!! log: ESP free space … not writing`，照样交接、起到 initramfs；ESP 逐文件不变、FAT 一致 |
+| badsha | boot_a 的 kernel 坏一个字节（头里的 id 不变） | `!! FAIL-OPEN at boot: boot_a: SHA1(id) MISMATCH`，冷复位，下一次 systemd-boot 进默认的 `<mid>-android-a.conf`，gk3boot 只跑了一次 |
+| miscerr | QEMU blkdebug 让 misc 那段盘读出 EIO（LBA 154） | `!! FAIL-OPEN at misc: read misc (p4, 64 KiB): DEVICE_ERROR`，同上 |
+
+**2026-10-05 的结果**（macOS 27 + colima，QEMU 10.0.13 TCG，`-cpu cortex-a76`；测试内核 Debian `linux-image-6.12.111+deb13-arm64-unsigned`；
+gk3boot `0.1.0-e4.g435f5b58cecb`（在提交 `435f5b5` 上构建），81655 字节，sha256 `2ee681decbda4fb1a54429332827d889722f6697b976b47f30ec70bc4a6d5843`）：
+
+```
+══ 汇总：real=PASS linux-a=PASS linux-b=PASS force-a=PASS strictnx=PASS espfull=PASS badsha=PASS miscerr=PASS
+```
+
+real 场景 gk3boot 自己的日志（`build/qemu-boot/real/boot-0.txt`，节选）：
+
+```
+gk3boot 0.1.0-e4.g435f5b58cecb  (S5 minimal, observe-only build; docs/boot-entry-design.md E4)
+load_options: "gk3.observe=1 gk3.hold=1 gk3.slot=a"
+disk: gpt e6c13d1a-e678-468a-b6b6-b79f19efb0e5, 8 partitions, misc/boot_a/boot_b/super/userdata unique, esp=p1  [1.9 ms]
+bcb: kind=none command="" args=0
+gk3rec: bad magic
+would (action): first-run migration: BCB empty, set marker (NOT done)
+bcab: valid  _a=15/1/ok  _b=14/0/unbootable
+vab: valid merge_status=0 source=_a
+decision: boot slot=_a active=_a fallback=0
+would (action): no misc write (slot already successful)
+slot: _a (forced by gk3.slot; decision above is boot _a)
+boot_a: p5 v2 page=2048 kernel=15589888 ramdisk=13080354 dtb=173345 total=28848128 id=9274d5f8f00cd60c399721927b702eba47e885e0
+boot_a: read 14.3 ms, sha1(id) 377.5 ms: OK
+boot_a: kernel EFI zboot PE
+cmdline(684): androidboot.flash.locked=0 … himax_hx83121a_spi.disable_pressure=0 androidboot.slot_suffix=_a
+  androidboot.bootloader=gk3boot-0.1.0-e4.g435f5b58cecb androidboot.gk3boot.event=forced androidboot.gk3boot.entry=gk3boot-e4.conf androidboot.gk3boot.mode=observe
+handoff: LoadImage(15589888 bytes) SUCCESS in 11 ms
+handoff: dtb 173345 bytes installed as config table @0xbbaa6000 (replaced 0x0)
+handoff: initrd 13080354 bytes on LINUX_EFI_INITRD_MEDIA LoadFile2 (handle 0xbef1b618)
+handoff: LoadOptions 1370 bytes
+gk3boot.result=handoff t=444 ms (log closed before StartImage)
+```
+之后 QEMU `-d int` 里第一次出现内核虚拟地址的异常：`ELR 0xffff8000800eae94`（直连条目开同一个内核，停在同一类地址）。
+
+linux-b 场景（串口）：
+
+```
+decision: boot slot=_b active=_b fallback=0
+would (action): write misc+0x800: _b tries 6 -> 5 (NOT written; new bcab 5f6200004243414201020000 9e005f00 … de4b3b87)
+handoff: dtb 7804 bytes installed as config table @0xbeef3000 (replaced 0x47ef8000)
+EFI stub: Loaded initrd from LINUX_EFI_INITRD_MEDIA_GUID device path
+EFI stub: Using DTB from configuration table
+EFI stub: Exiting boot services...
+GK3-INIT cmdline=console=ttyAMA0 panic=-1 androidboot.hardware=gaokun3 gk3pad=xxx…(560 个 x) gk3fixture=linux-b androidboot.slot_suffix=_b
+  androidboot.bootloader=gk3boot-0.1.0-e4.g435f5b58cecb androidboot.gk3boot.event=none androidboot.gk3boot.entry=gk3boot-e4.conf androidboot.gk3boot.mode=observe
+GK3-INIT dt_marker=gk3boot-dtb-b-8a5e71b27d5d
+GK3-INIT initrd_marker=gk3-initrd-8a5e71b27d5d
+GK3-INIT efi=present
+```
+（boot.img 里那个旧的 `androidboot.slot_suffix=_z` 不见了；盘比对 misc 逐字节未变。）
+
+badsha / miscerr（串口）：
+
+```
+!! FAIL-OPEN at boot: boot_a: SHA1(id) MISMATCH: header 725b2303…, computed b7da5f0c…
+GK3-FAKE-ANDROID booted entry="8a29534fa802480d9fbb71aa18c01d7b-android-a.conf" load_options="initrd=\8a29…\android\slot_a\ramdisk.img …"
+!! FAIL-OPEN at misc: read misc (p4, 64 KiB): DEVICE_ERROR
+GK3-FAKE-ANDROID booted entry="8a29534fa802480d9fbb71aa18c01d7b-android-a.conf" …
+```
+
+（耗时都是 TCG 下的，不代表真机；E3 在真机上量过 boot.img 读 23.5 ms、SHA1 139 ms。）
+
+### 10.5 上机步骤（E4；这一轮没有上机，由用户执行）
+
+前提：**征得同意、用户在场、能长按电源键**（E-K11）；设备在 Android 里，`adb root` 可用（`boot-oneshot.sh` 要 root）；
+ESP 用私有挂载点（不叫 `/mnt/esp`）。二进制就是 `tools/gk3boot/build/efi/gk3boot.efi`（`test-boot.sh` 末尾打印 sha256；
+版本串里不该有 `.dirty`）。以下 `D=out/gk3boot-e4-$(date +%Y%m%d)`。
+
+1. **留基线**（只读，直连条目开的这一次）：
+
+   ```sh
+   mkdir -p $D
+   adb shell cat /proc/cmdline > $D/cmdline-direct.txt
+   adb shell 'getprop | grep -E "ro\.boot\.|ro\.bootloader"' > $D/props-direct.txt
+   adb shell 'dmesg | grep -iE "efi|pstore|kaslr|random"' > $D/dmesg-efi-direct.txt
+   adb shell 'dmesg | grep -c "avc:"' > $D/avc-direct.txt
+   adb shell 'dd if=/dev/block/by-name/misc bs=65536 count=1 2>/dev/null | sha1sum' > $D/misc-before.sha1
+   ```
+   开机耗时基线：`t0=$(date +%s); adb reboot; adb wait-for-device; until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; do sleep 1; done; echo $(( $(date +%s) - t0 ))`
+   （这次重启本身也要征得同意；两边都含 systemd-boot 菜单的 15 秒，可以直接相减。）
+
+2. **条目文件**。文件名**不能**匹配 `*-android-*.conf`（否则会被 loader.conf 的 default 选中，也会被安装器的停用逻辑误伤，E-K8），
+   efi **不放进** `EFI\gaokun3\`；不带启动计数（`boot-oneshot.sh` 按确切文件名检查）；title 只用 ASCII（§4.13）：
+
+   ```sh
+   cat > /tmp/gk3boot-e4.conf <<'CONF'
+   title      gk3boot E4 (observe)
+   sort-key   zzgk3boot
+   efi        /EFI/gk3boot/e4/gk3boot.efi
+   options    gk3.observe=1 gk3.slot=a gk3.hold=10
+   CONF
+   ```
+   `gk3.slot=a`：设备上 misc 本来就选 `_a`（_a 15/1/已成功，_b 不可启动），强制只是保险 —— 决策逻辑万一有错也只会记在日志里，
+   不会把机器带到 `_b`（`_b` 在 VAB 合并后已经起不来，CLAUDE.md "现在设备上跑的是什么"）。`gk3.hold=10`：fail-open 时屏幕停 10 秒好拍照。
+
+3. **拷到 ESP**，并**预先建好日志目录**（10.3：不让固件的 FAT 驱动在设备上建目录）：
+
+   ```sh
+   adb push tools/gk3boot/build/efi/gk3boot.efi /tmp/gk3boot-e4.conf /data/local/tmp/
+   adb shell 'set -e; M=/mnt/gk3boot_esp; mkdir -p $M; mount -t vfat /dev/block/by-name/esp $M
+     mkdir -p $M/EFI/gk3boot/e4 $M/EFI/gk3boot/log
+     cp /data/local/tmp/gk3boot.efi $M/EFI/gk3boot/e4/gk3boot.efi
+     cp /data/local/tmp/gk3boot-e4.conf $M/loader/entries/gk3boot-e4.conf
+     sync; sha256sum $M/EFI/gk3boot/e4/gk3boot.efi; ls $M/loader/entries/; df -h $M
+     umount $M; rmdir $M; rm /data/local/tmp/gk3boot.efi /data/local/tmp/gk3boot-e4.conf'
+   ```
+   核对 sha256 与宿主上的一致；ESP 剩余要远大于 1 MiB（现在约 46 MB）。
+
+4. **写 OneShot**：`bash scripts/boot-oneshot.sh --list`，再 `bash scripts/boot-oneshot.sh gk3boot-e4.conf`（要看到"回读一致"）。
+
+5. **征得同意、确认有人在场后** `adb reboot`，同时按第 1 步的办法计时。预期：systemd-boot 菜单 15 秒（高亮 "gk3boot E4 (observe)"）→
+   gk3boot 打二十来行（不到 1 秒）→ 内核 → Android 正常开机。
+   - 屏幕上出现 `!! FAIL-OPEN at …`：停 10 秒后自己冷复位，进直连条目，**不用动手**；拍下那一行。
+   - 停在 UEFI 超过 120 秒不动：看门狗没起作用（这本身是 E6 的答案），长按电源键；OneShot 已被消费，下次就是直连条目。
+   - 交接后内核 panic：10 秒后自己重启，进直连条目。
+   - ⚠️ 一次只跑一轮：华为固件的 `BootFail count = 3`（§2.1）是否把"没进系统就复位"算进去还不清楚；fail-open 过一次，就先让直连条目完整开一次机。
+
+6. **在 Android 里核对**（E4 的判据）：
+
+   ```sh
+   adb shell cat /proc/cmdline > $D/cmdline-gk3boot.txt
+   diff <(tr ' ' '\n' < $D/cmdline-direct.txt) <(tr ' ' '\n' < $D/cmdline-gk3boot.txt)
+   ```
+   **只应**多出 `androidboot.bootloader=gk3boot-0.1.0-e4.g…`、`androidboot.gk3boot.event=forced`、`androidboot.gk3boot.entry=gk3boot-e4.conf`、
+   `androidboot.gk3boot.mode=observe`，少掉 `initrd=\…\ramdisk.img`；其余（含 `androidboot.slot_suffix=_a`）一行不差。
+
+   | 看什么 | 怎么看 | 应该是 |
+   |---|---|---|
+   | 槽位 | `adb shell getprop ro.boot.slot_suffix`；`adb shell bootctl get-current-slot` | `_a`；`0`（HAL 的 `CHECK(impl_.Init())` 没崩，§2.2） |
+   | bootloader | `adb shell getprop ro.bootloader`；`getprop \| grep ro.boot.gk3boot` | `gk3boot-0.1.0-e4.g…`；`mode=observe`、`event=forced`、`entry=gk3boot-e4.conf` |
+   | 走的是哪个条目 | `bash scripts/boot-oneshot.sh --list` | `LoaderEntrySelected = gk3boot-e4.conf`（顺带证明 efivarfs 照常可用） |
+   | HAL / avc | `adb logcat -b all -d \| grep -iE "bootcontrol\|boot_control"`；`dmesg \| grep -c "avc:"` | 没有 CHECK 失败 / tombstone；avc 数与基线同量级 |
+   | EFI / pstore / RNG | `adb shell 'dmesg \| grep -iE "efi\|pstore\|kaslr\|random"'` 与 `$D/dmesg-efi-direct.txt` 对比；`ls /sys/firmware/efi /sys/fs/pstore` | 与直连条目开的那次一致（随机种子表由 systemd-boot 在启动 gk3boot 之前装好，§2.5） |
+   | misc 没被写 | 再算一次 misc 0–64 KiB 的 sha1，与 `$D/misc-before.sha1` 比 | 相同（`_a` 已标成功，HAL 这次也不会写；不同就用 `gk3-misc dump` 看是谁改了哪里） |
+   | 开机耗时 | 第 5 步的计时减第 1 步的基线；gk3boot 日志末行 `gk3boot.result=handoff t=… ms` | 差值在 1 秒以内（E3 实测：boot.img 读 23.5 ms + SHA1 139 ms） |
+
+7. **取日志**（只读挂载）：
+
+   ```sh
+   adb shell 'M=/mnt/gk3boot_esp; mkdir -p $M; mount -t vfat -o ro /dev/block/by-name/esp $M; ls -l $M/EFI/gk3boot/log/'
+   adb pull /mnt/gk3boot_esp/EFI/gk3boot/log/ $D/
+   adb shell 'umount /mnt/gk3boot_esp; rmdir /mnt/gk3boot_esp'
+   ```
+   先看 `decision:`（应为 `boot slot=_a active=_a fallback=0`）、`would (action):` 几行、`boot_a: read … sha1(id) …: OK`、
+   `handoff:` 几行和末行 `gk3boot.result=handoff`；有 `!!` 行就是失败点。
+
+8. **撤掉**：
+
+   ```sh
+   adb shell 'set -e; M=/mnt/gk3boot_esp; mkdir -p $M; mount -t vfat /dev/block/by-name/esp $M
+     rm -f $M/loader/entries/gk3boot-e4.conf; rm -rf $M/EFI/gk3boot/e4 $M/EFI/gk3boot/log
+     rmdir $M/EFI/gk3boot 2>/dev/null || true
+     sync; ls $M/loader/entries/; umount $M; rmdir $M'
+   bash scripts/boot-oneshot.sh --clear    # 万一 OneShot 还没被消费
+   ```
+   撤之前先把日志取回来（第 7 步）。
+
+E4 通过后的下一步是 E5（观察模式当开发机默认、带 `+3` 计数连开 ≥10 次）—— **之前必须先补 fail-open 阶梯第 1 步**（10.3）。
+
+### 10.6 已知限制与风险
+
+- **只有观察模式**：不扣 tries、不消费 BCB、不写 GK3 记录 —— 自动回滚（G6）这一版还没有。动作模式的写盘路径要另做断电注入测试（§8）。
+- **fail-open 只复位**（10.3），所以**不能当默认条目**；boot_x 的 SHA1 不对时也不换槽、不走 H1，直接 fail-open。
+- **真 zboot 内核在 QEMU 里只能证明"进了内核虚拟地址"**：它在 virt 上没有串口驱动，EFI stub 在这里也不打字（直连条目同样如此）；
+  stub 用的是不是我们的 DTB / initrd，只在 Debian 内核上看到了。本机上的完整验证就是 E4 本身。
+  E3 证明了 `HwStartImage` 钩子不拦 5 KiB 的缓冲区 PE；15 MB 的 zboot 内核走同一个钩子，没有理由不同，但没有实测。
+- 观察模式每次开机都写一份日志（与设计稿"正常路径对 ESP 零写入"不同，动作模式要改成只在失败时写）；n 到 1000 就不再写。
+- `event` 多了两个设计稿没列的值：`forced`（gk3.slot 强制）、`bcab_invalid`（按 hint 启动）。
+- 内核 LoadedImage 的 DeviceHandle 是 NULL：stub 的 `initrd=` / `dtb=` 文件加载在这条路上不可用（我们也不用）。
+- 不调 `EFI_DT_FIXUP_PROTOCOL`（本机没有；systemd-boot 有就调）。
+- QEMU 里的耗时（SHA-1 在 TCG 上 0.4–0.5 秒）不代表真机。
+- 设备上 `boot_a` 的 id（`c56a7f84…`，E3 日志）与 `out/issues-1791053208/boot.img`（`9274d5f8…`）不同（ramdisk 差几百字节），
+  头里的 cmdline 相同；real 场景用的是后者，所以 SHA1 一项在设备上要以 E4 日志为准（E3 已在设备上复算 OK）。
+- gk3boot 没签名、PE 没标 NX_COMPAT，Secure Boot 必须关着（设备上本来就关着）。
