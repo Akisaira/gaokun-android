@@ -33,6 +33,17 @@
 
 ### ▶ 1.0 批 0/1 已合并、待构建与验证（2026-10-05）
 
+> **★ 2026-10-05 03:10 第一个 1.0 发布构建上机：`1.0.0-dev.1`，构建戳 `1791138567`**（incremental 见 OTA zip，`out/v1dev-1791138567/` 有 payload 与 sha256；内核与 v0.7.1 相同 `6d3f7c67`）。
+> * 构建：V1 全绿后 `m installclean` + `release.sh --dry-run`（构建机 `~/v1-work/build.sh`，D32 约 29 分钟）。第 2 步断言**全过**（B1 四条、OTA-11 日期一致、REL-5 版本属性、allow_suspend 默认 1）；第 3 步打包时 `release.sh` 自己退 128 —— `GK3_REPO` 是 git archive 副本时 `RDIRTY=$(git status … | wc -l)` 经 pipefail + set -e 静默退出，已修（`bed602c`），`--no-build` 重跑全过、源码清单生成（`repo manifest -r` 没跑成，⬜ 查原因）。
+> * V1 结论：`ProductNotDebuggableInUserdebug` 只被 `gen_build_prop.py` 用（只影响属性），Soong 的 Debuggable 不受影响 ⇒ init 仍 `ALLOW_PERMISSIVE_SELINUX=1`；`get_build_var` 对照证明 `GAOKUN3_DEV_BUILD` / `GK3_VERSION` 都能进 Kati。
+> * V7a（装之前）：开发机 `/data/misc/adb/adb_keys` 预置 Mac + Windows 两把公钥、`persist.sys.usb.config=adb` 与 `persist.adb.tcp.port=5555` 显式持久化 ⇒ 装上后 USB adb 直接已授权。
+> * 装机：`install-ota-local.sh --go` 进 `_b` + oneshot，**40 秒起来**；`_b` 已 marked successful，ESP default 已自动同步成 `_b`（`_a` = v0.7.1，VAB 合并后不可回落）。
+> * 验收（`out/accept/1791138567-*`）：PASS 41–43；FAIL 只有 A3 两项 = 开发机上故意持久化的 5555（全新装机不会有）。`ro.adb.secure=1`、`ro.debuggable=0`、`ro.vendor.gaokun3.version=1.0.0-dev.1`。
+>   ★ `ro.debuggable=0` 下 **KSU 的 adb root 照样生效**（adbd 在 `u:r:ksu:s0`，`adb shell` 即 root，`su -c` 可用）⇒ 发布构建上任何**已授权**的 adb 客户端都直接是 root —— D6 的效果，⬜ 写进 known-limitations 的 root 一条。
+> * V9 通过：PWR-3 息屏后 HAL 停掉 accel（SLPI 中断 40 秒 +4、之后 20 秒 +0；原来每秒 5–80），亮灭屏 20 次"使能/停用"各 21 次、无看门狗误报，亮屏后读数即时、Z≈9.88；STOR-5 保留块 32768 / gid 1065 / `vold.has_reserved=1`；NTP aliyun 第一、`mTryAgainTimesMax=-1`、已对时成功；fstab 两行 voldmanaged 在；usbrole 开机 exec 0.098 秒、UDC configured；avc 只有已知两类（HID `country`、`com.android.se`）；dropbox 无新的 system_server 崩溃（那条是 10-02 的旧记录）。
+> * ⬜ 仍要人：V10 交互项（全新装机判据、USB 调试开关 / 授权框 / 无线调试配对）、V11 U 盘与 usbrole、V12 陀螺仪与亮度、V13 NET；NET-1 软件 PNO 在 `dumpsys wifi` 里看不到 ⇒ V3 的 DeviceConfig 门还没补。
+> * USB-1 修复方向（`refs/linux-v7.2-rc2/drivers/usb/typec/ucsi/ucsi.c:1607-1650`）：`ucsi_pr_swap` 要对端支持 PD，非 PD 时交换后复位连接器并返回 `-EPROTO` ⇒ "请求转受电方"走不通；改为检测到"我方供电 + host + 无下游 + 对端无 PD"时弹通知请重插（批 1/2），主动触发连接器复位留到 1.0 之后。
+
 > **2026-10-05 实机新发现（USB，记入 v1.0-plan §3 的 USB-1 / USB-2）**：
 > * 插 Mac 时 port0 有时落成**我方供电**（DRP 对 DRP、对端无 PD）：平板给 Mac 充电、内核定成 host、USB adb 不出现，usbfollow 不纠偏 —— 拔插一次即恢复（当场验证：重插后 `pr=[sink]`、UDC `configured`、USB adb 回来）。⬜ follow 增加"我方供电 + 无下游 + 对端无 PD"⇒ 请求转受电方或提示重插。
 > * port0 停在 host 时 init 每秒重跑 configfs 的 adb 动作、写 UDC 报 busy，刷屏耗电。⬜ 查谁在反复触发 ffs.ready。
