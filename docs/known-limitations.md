@@ -82,6 +82,10 @@ Problems specific to one release are in that release's [release notes](relnotes/
   installed, no app can get root.
 * **What to do**:
   * If you don't need root, don't grant it to any app in the manager.
+  * **adb is root too**: any computer you have authorized for USB or wireless debugging gets a root shell
+    (`adb shell` runs as root through KernelSU, even though `ro.debuggable=0`). Only authorize computers you trust,
+    and turn USB / wireless debugging off when you don't need them.
+    <!-- 2026-10-05 measured on the 1.0.0-dev.1/dev.2 release builds: adbd in u:r:ksu:s0, `adb shell id` = uid 0. -->
   * There is no build without root yet, and the kernel's root capability cannot be switched off.
   * In our smoke tests, *Delta Force* and *Strinova* (both protected by ACE anti-cheat) ran normally. Banking and payment
     apps have not been tested systematically. Reports are welcome.
