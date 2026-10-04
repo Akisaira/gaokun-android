@@ -136,6 +136,11 @@ get_prop(gaokun3_usbrole, vendor_gaokun3_prop)
 #      试跑后重启服务、它切回 device 的那一下才露出来。拿不到锁 ⇒ device 模式下可能挂起 ⇒ 整板复位。
 r_dir_file(gaokun3_usbrole, sysfs_udc)
 allow gaokun3_usbrole self:global_capability2_class_set block_suspend;
+# ★ v1.0（PWR-4 止损）：切 host 失败时 setprop vendor.gaokun3.usbrole.broken 1、成功时清 0。
+#   属性落在 vendor_gaokun3_prop（property_contexts 的 `vendor.gaokun3.` 前缀，不用新增上下文）；
+#   gaokun3_usbrole 是 vendor 域，不撞 private/property.te:492-502（lineage-sepolicy）"coredomain 不许设 vendor 属性"那条 neverallow。
+#   set_prop 已含上面的 get_prop（public/te_macros:393-397），那行留着不动。⬜ 未上机、未编译。
+set_prop(gaokun3_usbrole, vendor_gaokun3_prop)
 
 # ── audio-route.sh：2026-09-18 实机重跑一次这个服务抓到的完整清单 ────────────
 #

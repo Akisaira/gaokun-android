@@ -19,6 +19,8 @@ service gaokun3_role_host /vendor/bin/gaokun3-usbrole.sh host
     oneshot
     disabled
 
+# 亮屏（下面的触发器）和开机（init.gaokun3.usb.rc 的两处 exec_start）都用它。
+# port0 已是 host 且 xhci 下枚举着设备（U 盘 / 鼠标 / 扩展坞）时保持 host、不切 device（v1.0 PWR-5 / STOR-2）。
 service gaokun3_role_device /vendor/bin/gaokun3-usbrole.sh device
     user root
     group root wakelock
@@ -36,6 +38,8 @@ service gaokun3_usbfollow /vendor/bin/gaokun3-usbrole.sh follow
 on init
     write /sys/power/wake_lock gaokun3_usbrole
 
+# 切 host 失败（A6：待机后回插 port0 坏口）时脚本置 vendor.gaokun3.usbrole.broken=1、成功时清 0 ——
+# 失败就一直持有 wakelock，这次开机余下的时间整机不再睡（v1.0 PWR-4）。这个属性留给 Parts 提示用户重启。
 on property:persist.vendor.gaokun3.allow_suspend=1 && property:debug.tracing.screen_state=1
     start gaokun3_role_host
 
