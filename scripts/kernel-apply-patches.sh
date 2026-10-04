@@ -188,6 +188,10 @@ KPATCHES=(
     # 0071：【本地】DT 给默认 CMA 加 alloc-ranges（2–4 GiB）。原先 CMA 被放在 0x878000000，32 位 coherent 的设备
     #   （ath11k / MHI）用不上，每次恢复都去 ZONE_DMA 赌 order-7/9 连续块。#131。⚠️ ROM 的 prebuilt-boot dtb 要随之更换。
     0071-arm64-dts-gaokun3-keep-default-cma-below-4g.patch
+    # 0072：【本地】电池驱动 0x82 按位解码（0x00 / 组合值不再沿用旧 status）、加 CAPACITY_LEVEL
+    #   （0% 且没在净充电、或 EC 危急位且 <= critical_max_capacity ⇒ Critical —— Android 有了它就只看它关机）、
+    #   只读 ec_raw 给实测用。1.0 计划 BATT-1/2/3。⬜ 带负载放电实测（current_now 正负号、危急位阈值）。
+    0072-power-supply-gaokun-battery-decode-status-bits-and-capacity-level.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
