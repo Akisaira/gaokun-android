@@ -4,17 +4,22 @@
 在 scripts/gk3boot/gk3boot-build.Dockerfile 的容器里跑（要 mkfs.vfat / mtools / virt-fw-vars）。
 
   fixture.py mkdisk   --out DIR [--bootimg 完整 boot.img] [--variant normal|broken|espfull]
-                      [--gk3boot-options '...'] [--boot-a IMG] [--boot-b IMG] [--misc FILE] [--corrupt-a]
+                      [--gk3boot-options '...'] [--gk3boot-entry NAME] [--loader-default PATTERN]
+                      [--boot-a IMG] [--boot-b IMG] [--misc FILE] [--corrupt-a] [--corrupt-b]
   fixture.py snapshot DISK MANIFEST OUT.json
-  fixture.py diff     BEFORE.json AFTER.json      只允许 ESP 上多出 \\EFI\\gk3boot\\{probe\\log-*,log\\boot-*}.txt 与条目计数改名
+  fixture.py diff     BEFORE.json AFTER.json [--allow-misc] [--new-logs-out FILE]
+                      只允许 ESP 上多出 \\EFI\\gk3boot\\{probe\\log-*,log\\boot-*}.txt 与条目计数改名；
+                      --allow-misc：misc 区域的变化交给 check_misc.py 逐字节判（gk3boot 动作模式会写它）
   fixture.py vars     IN.fd OUT.fd --oneshot NAME 往 AAVMF 变量库里写 LoaderEntryOneShot（与 boot-oneshot.sh 同一格式）
+  fixture.py vars-get IN.fd NAME                  打印 systemd-boot 厂商 GUID 下变量 NAME 的值（UTF-16 解码）或 "(absent)"
   fixture.py esp-get  DISK MANIFEST PATH OUT      从盘上的 ESP 取一个文件
+  fixture.py misc-get DISK MANIFEST OUT           取 misc 分区的前 64 KiB（gk3boot 读的那一段）
 
 gk3boot（S5）的 QEMU 测试另用这几样（qemu/run-boot-tests.sh）：
   fixture.py initramfs  --init ELF --marker STR --out FILE      最小 initramfs（newc cpio + gzip，同 Android ramdisk 的压缩）
   fixture.py fdt-mark   IN.dtb OUT.dtb NAME VALUE                给根节点加一个字符串属性（证明内核用的是我们装的 dtb）
   fixture.py mkbootimg  --kernel K --ramdisk R --dtb D --cmdline S --out F   header v2（与本机 BoardConfig 同版本、page 2048）
-  fixture.py misc       --variant b-active --out FILE           从实机 misc 向量改出一份（_b 15/6 未成功，_a 14/1 已成功）
+  fixture.py misc       --variant V --out FILE                  从实机 misc 向量改出一份（变体见 cmd_misc）
 
 盘的样子照实机抄（tools/gk3boot/test/vectors/gpt-primary-20261005.bin）：分区号、名字、类型 GUID、
 PARTUUID、磁盘 GUID、boot_a 的属性位 bit 54 都与实机一致；misc 也照实机坐在 LBA 34–2047，
@@ -163,9 +168,15 @@ def minimal_fdt():
 GK3BOOT_ENTRY = "gk3boot-e4.conf"
 
 
-def esp_tree(stage, variant, gk3boot_options=None):
+COUNTER = re.compile(r"\+\d+(-\d+)?(?=\.conf$)")
+
+
+def esp_tree(stage, variant, gk3boot_options=None, gk3boot_entry=GK3BOOT_ENTRY, loader_default="*-android-a.conf"):
     """在 stage 目录下摆出 ESP 的内容。返回条目文件名等信息。
-    gk3boot_options 不为 None 时摆 gk3boot（S5）的 E4 条目，否则摆探针（S4）的条目。"""
+    gk3boot_options 不为 None 时摆 gk3boot（S5）的条目，否则摆探针（S4）的条目。
+    gk3boot_entry：条目文件名。gk3boot-e4.conf（E4 的样子：非默认、经 OneShot 进入）；
+    gk3boot-android-<x>[+N].conf（E5 的样子：sort-key 0gk3 排在直连条目 zandroid<x> 前面，loader.conf 的
+    default "*-android-<x>.conf" 先命中它 —— 设计稿 §4.2；systemd-boot 去掉计数后比 id，boot.c:1340-1376）。"""
     def put(rel, data):
         p = os.path.join(stage, rel)
         os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -176,7 +187,7 @@ def esp_tree(stage, variant, gk3boot_options=None):
     put("EFI/BOOT/BOOTAA64.EFI", sd)
     put("EFI/systemd/systemd-bootaa64.efi", sd)
     # 实机是 timeout 15（installer-lib.sh:955-960）；夹具缩到 2 秒，别的照抄
-    put("loader/loader.conf", b"timeout 2\nconsole-mode keep\neditor no\ndefault *-android-a.conf\n")
+    put("loader/loader.conf", ("timeout 2\nconsole-mode keep\neditor no\ndefault %s\n" % loader_default).encode())
     cmd = open(CMDLINE_VEC).read().split()
     base = " ".join(t for t in cmd if not t.startswith("initrd=") and not t.startswith("androidboot.slot_suffix="))
     fake = open(os.path.join(EFI_BUILD, "gk3-fake-android.efi"), "rb").read()
@@ -197,12 +208,17 @@ def esp_tree(stage, variant, gk3boot_options=None):
     if gk3boot_options is not None:
         # 与 README §10 的上机步骤同一份条目：文件名不匹配 *-android-*.conf、不带计数、title 只用 ASCII（§4.13）
         put("EFI/gk3boot/e4/gk3boot.efi", open(os.path.join(EFI_BUILD, "gk3boot.efi"), "rb").read())
-        put("loader/entries/" + GK3BOOT_ENTRY, (
-            "title      gk3boot E4 (observe)\n"
-            "sort-key   zzgk3boot\n"
+        as_default = gk3boot_entry.startswith("gk3boot-android-")
+        put("loader/entries/" + gk3boot_entry, (
+            "title      %s\n"
+            "sort-key   %s\n"
             "efi        /EFI/gk3boot/e4/gk3boot.efi\n"
-            "options    %s\n" % gk3boot_options).encode())
-        return dict(oneshot=GK3BOOT_ENTRY, default_entry="%s-android-a.conf" % MID, gk3boot_options=gk3boot_options)
+            "options    %s\n" % ("gk3boot (default entry)" if as_default else "gk3boot E4 (observe)",
+                                  "0gk3" if as_default else "zzgk3boot", gk3boot_options)).encode())
+        dslot = loader_default[-6]
+        return dict(oneshot=None if as_default else COUNTER.sub("", gk3boot_entry), gk3boot_entry=gk3boot_entry,
+                    default_entry="%s-android-%s.conf" % (MID, dslot), loader_default=loader_default,
+                    gk3boot_options=gk3boot_options)
     probe = os.path.join(EFI_BUILD, "gk3probe.efi")
     if not os.path.exists(probe):
         return dict(oneshot=None, default_entry="%s-android-a.conf" % MID)
@@ -311,6 +327,10 @@ def cmd_mkdisk(a):
             ba = bytes(ba)
             src_a += " [kernel byte 4096 flipped]"
         bb = open(a.boot_b, "rb").read() if a.boot_b else synth_bootimg("fixture-b")[0]
+        if a.corrupt_b:
+            bb = bytearray(bb)
+            bb[2048 + 4096] ^= 0xff
+            bb = bytes(bb)
         for name, img in (("boot_a", ba), ("boot_b", bb)):
             p = at(name)
             if len(img) > (p["last"] - p["first"] + 1) * SECTOR:
@@ -325,7 +345,7 @@ def cmd_mkdisk(a):
 
         # ESP
         stage = tempfile.mkdtemp()
-        info = esp_tree(stage, a.variant, a.gk3boot_options)
+        info = esp_tree(stage, a.variant, a.gk3boot_options, a.gk3boot_entry, a.loader_default)
         esp = at("esp")
         fat = os.path.join(a.out, "esp.tmp")
         make_fat(stage, esp["last"] - esp["first"] + 1, fat, fill=a.variant == "espfull")
@@ -407,6 +427,9 @@ def cmd_diff(a):
     bad = []
     for k, v in b["regions"].items():
         if c["regions"].get(k) != v:
+            if k == "misc" and a.allow_misc:
+                print("  misc 变了（交给 check_misc.py 逐字节判）")
+                continue
             bad.append("块区域 %s 变了" % k)
     added = sorted(set(c["esp"]) - set(b["esp"]))
     removed = sorted(set(b["esp"]) - set(c["esp"]))
@@ -414,7 +437,7 @@ def cmd_diff(a):
     logs = [x for x in added if (x.startswith("EFI/gk3boot/probe/log-") or x.startswith("EFI/gk3boot/log/boot-"))
             and x.endswith(".txt")]
     # systemd-boot 自己做的计数改名：loader/entries/gk3probe+N[-M].conf → 另一个计数（内容不变）
-    counted = ("loader/entries/gk3probe+", "loader/entries/gk3boot-e4+")
+    counted = ("loader/entries/gk3probe+", "loader/entries/gk3boot-e4+", "loader/entries/gk3boot-android-")
     ren_from = [x for x in removed if x.startswith(counted)]
     ren_to = [x for x in added if x.startswith(counted)]
     for x in added:
@@ -427,6 +450,9 @@ def cmd_diff(a):
         bad.append("ESP 上 %s 的内容变了" % x)
     if len(ren_from) != len(ren_to) or any(b["esp"][f] != c["esp"][t] for f, t in zip(ren_from, ren_to)):
         bad.append("条目改名前后内容不同或数量不对：%s → %s" % (ren_from, ren_to))
+    if a.new_logs_out:
+        with open(a.new_logs_out, "w") as g:
+            g.write("".join(x + "\n" for x in logs))
     for x in bad:
         print("✗ " + x)
     print("  新日志：%s" % (", ".join(logs) or "（无）"))
@@ -434,7 +460,8 @@ def cmd_diff(a):
         print("  systemd-boot 计数改名：%s → %s" % (", ".join(ren_from), ", ".join(ren_to)))
     if bad:
         sys.exit(1)
-    print("✓ 盘上只多了自己的日志（misc / boot_a / boot_b / super / userdata / metadata / GPT 逐字节未变）")
+    print("✓ 盘上只多了自己的日志（%sboot_a / boot_b / super / userdata / metadata / GPT 逐字节未变）"
+          % ("" if a.allow_misc else "misc / "))
 
 
 # ---------------------------------------------------------------- AAVMF 变量
@@ -449,6 +476,27 @@ def cmd_vars(a):
     run(["virt-fw-vars", "-i", a.input, "-o", a.out, "--set-json", jf])
     os.unlink(jf)
     print("✓ %s：LoaderEntryOneShot=%s" % (os.path.basename(a.out), a.oneshot))
+
+
+def cmd_vars_get(a):
+    """systemd-boot 厂商 GUID 下的变量（virt-fw-vars --output-json 导出后找）"""
+    with tempfile.TemporaryDirectory() as t:
+        jf = os.path.join(t, "v.json")
+        run(["virt-fw-vars", "-i", a.input, "--output-json", jf])
+        j = json.load(open(jf))
+    for v in j.get("variables", []):
+        if v.get("name") == a.name and v.get("guid", "").lower() == "4a67b082-0a4c-41cf-b6c7-440b29bb8c4f":
+            print(bytes.fromhex(v["data"]).decode("utf-16-le", "replace").rstrip("\0"))
+            return
+    print("(absent)")
+
+
+def cmd_misc_get(a):
+    m = json.load(open(a.manifest))
+    p = next(x for x in m["parts"] if x["name"] == "misc")
+    with open(a.disk, "rb") as f:
+        f.seek(p["first"] * SECTOR)
+        open(a.out, "wb").write(f.read(65536))
 
 
 def cmd_esp_get(a):
@@ -538,15 +586,53 @@ def bcab_slot(prio, tries, ok):
     return prio | (tries << 4) | (int(ok) << 7)
 
 
+def gk3_record(migrated=False):
+    """GK3 记录 v1（README §5 的布局）：magic / version / size / flags，CRC32 在 2044。"""
+    r = bytearray(2048)
+    struct.pack_into("<IHHII", r, 0, 0x52334B47, 1, 2048, 1 if migrated else 0, 1 if migrated else 0)
+    struct.pack_into("<I", r, 2044, zlib.crc32(bytes(r[:2044])) & 0xffffffff)
+    return bytes(r)
+
+
+def bcb_recovery(*args):
+    """bootloader_message 的 boot-recovery 写法（bootloader_message.cpp:214-232）"""
+    b = bytearray(2048)
+    b[0:13] = b"boot-recovery"
+    r = ("recovery\n" + "".join(x + "\n" for x in args)).encode()
+    b[64:64 + len(r)] = r
+    return bytes(b)
+
+
 def cmd_misc(a):
+    """实机 misc 向量（_a 15/1/已成功、_b 14/0、VAB 无合并、BCB 空、8 KiB 全零）改出来的变体：
+      b-active   像 setActive(b) 之后、新槽还没开过机：_b 15/6 未成功，_a 降到 14、仍是已成功
+      b-try3     同上但 _b 只剩 3 次（tries 扣到 0 → 第 4 次开机回落到 _a）
+      b-ok       _b 15/1/已成功、_a 14/0（= 2026-10-05 开发机的样子，E4 日志）
+      bcb-wipe   原样 + BCB = 设置里的"清除所有数据"（boot-recovery / --wipe_data --reason=…）
+      bcb-wipe-migrated  bcb-wipe + 一份已迁移的 GK3 记录（分派打开时会走到"进执行端 why=wipe"那一支）
+      merging    VAB merge_status=MERGING（源槽 _a）+ _b 15/0 未成功（不可启动）、_a 14/1 已成功 → 守卫：不许回落到 _a"""
     m = bytearray(open(MISC_VEC, "rb").read())
     bc = m[2048:2080]
-    if a.variant == "b-active":
-        # 像 setActive(b) 之后、新槽还没开过机：_b 15/6 未成功，_a 降到 14、仍是已成功
+    v = a.variant
+    if v in ("b-active", "b-try3", "merging"):
         bc[0:3] = b"_b\0"
-        struct.pack_into("<HH", bc, 12, bcab_slot(14, 1, True), bcab_slot(15, 6, False))
+        tries = {"b-active": 6, "b-try3": 3, "merging": 0}[v]
+        struct.pack_into("<HH", bc, 12, bcab_slot(14, 1, True), bcab_slot(15, tries, False))
+    elif v == "b-ok":
+        bc[0:3] = b"_b\0"
+        struct.pack_into("<HH", bc, 12, bcab_slot(14, 0, False), bcab_slot(15, 1, True))
+    elif v in ("bcb-wipe", "bcb-wipe-migrated"):
+        m[0:2048] = bcb_recovery("--wipe_data", "--reason=MasterClearConfirm", "--locale=zh-CN")
+        if v == "bcb-wipe-migrated":
+            m[8192:10240] = gk3_record(migrated=True)
     else:
         die("不认识的 misc 变体 %s" % a.variant)
+    if v == "merging":
+        vab = m[32768:32832]
+        if vab[0] != 2 or struct.unpack_from("<I", vab, 1)[0] != 0x56740AB0:
+            die("实机向量里的 virtual_ab 消息不是 v2")
+        m[32768 + 5] = 3           # merge_status = MERGING（bootloader_message.h:88-94）
+        m[32768 + 6] = 0           # source_slot = _a
     struct.pack_into("<I", bc, 28, zlib.crc32(bytes(bc[:28])) & 0xffffffff)
     m[2048:2080] = bc
     open(a.out, "wb").write(m)
@@ -565,6 +651,9 @@ def main():
     p.add_argument("--boot-b")
     p.add_argument("--misc")
     p.add_argument("--corrupt-a", action="store_true")
+    p.add_argument("--corrupt-b", action="store_true")
+    p.add_argument("--gk3boot-entry", default=GK3BOOT_ENTRY)
+    p.add_argument("--loader-default", default="*-android-a.conf")
     p = sp.add_parser("snapshot")
     p.add_argument("disk")
     p.add_argument("manifest")
@@ -572,6 +661,15 @@ def main():
     p = sp.add_parser("diff")
     p.add_argument("before")
     p.add_argument("after")
+    p.add_argument("--allow-misc", action="store_true")
+    p.add_argument("--new-logs-out")
+    p = sp.add_parser("vars-get")
+    p.add_argument("input")
+    p.add_argument("name")
+    p = sp.add_parser("misc-get")
+    p.add_argument("disk")
+    p.add_argument("manifest")
+    p.add_argument("out")
     p = sp.add_parser("vars")
     p.add_argument("input")
     p.add_argument("out")
@@ -602,6 +700,7 @@ def main():
     p.add_argument("--out", required=True)
     a = ap.parse_args()
     dict(mkdisk=cmd_mkdisk, snapshot=cmd_snapshot, diff=cmd_diff, vars=cmd_vars, esp_get=cmd_esp_get,
+         vars_get=cmd_vars_get, misc_get=cmd_misc_get,
          initramfs=cmd_initramfs, fdt_mark=cmd_fdt_mark, mkbootimg=cmd_mkbootimg, misc=cmd_misc)[
         a.cmd.replace("-", "_")](a)
 
