@@ -352,13 +352,12 @@ static void step_header(void)
     gk3_logf("load_options: \"%s\"\n", opts);
     g_entry = entry_name();
 
-    /* hint 先定（选项解析失败的 fail-open 也要知道往哪个槽回落） */
-    if (opt_get(opts, "gk3.hint=", v, sizeof(v)) && (opt.hint = slot_letter(v)) < 0) {
-        g_target = (unsigned)(slot_from_entry(g_entry) & 1);
-        fail_open("options", "gk3.hint=%s is not a|b", v);
-    }
+    /* hint 先定（选项解析失败的 fail-open 也要知道往哪个槽回落）：gk3.hint > 条目名里的 -android-<x> > a */
     eb = slot_from_entry(g_entry);
-    g_hint = opt.hint >= 0 ? (unsigned)opt.hint : eb >= 0 ? (unsigned)eb : 0;
+    g_target = eb >= 0 ? (unsigned)eb : 0;
+    if (opt_get(opts, "gk3.hint=", v, sizeof(v)) && (opt.hint = slot_letter(v)) < 0)
+        fail_open("options", "gk3.hint=%s is not a|b", v);
+    g_hint = opt.hint >= 0 ? (unsigned)opt.hint : g_target;
     g_target = g_hint;
 
     if (opt_get(opts, "gk3.observe=", v, sizeof(v))) {
