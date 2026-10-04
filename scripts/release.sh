@@ -40,8 +40,15 @@
 #     （见 device/huawei/gaokun3/lineage_gaokun3.mk），它只能 --stage-only：
 #         GAOKUN3_DEV_BUILD=1 scripts/release.sh --dry-run --stage-only
 #     第 2 步对产物逐条断言（--stage-only 只报不拦，与 allow_suspend 那条同一个规矩）。
+#   每版还附一份内核的"对应源码清单"（GPL-2.0 §3，见 gen_kernel_sources）。它要读构建内核的那棵树：
+#     GK3_KTREE  内核树，默认 ~/gk3-kernel-iris（编发布内核的那棵；旧树 ~/gk3-kernel 还打着 upstream-venus）
+#     GK3_REPO   本仓 checkout，默认本脚本所在的仓库（要它的 patches/ 与 kernel-*.sh）
 
 set -euo pipefail
+
+# 要在 cd 到 ANDROID_BUILD_TOP 之前算：BASH_SOURCE 可能是相对路径
+REPO=${GK3_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+KTREE=${GK3_KTREE:-$HOME/gk3-kernel-iris}
 
 BUCKET=${BUCKET:-gaokun-android}
 HOST=${HOST:-https://ota.072172.xyz}
@@ -63,6 +70,203 @@ ok()  { echo "✓ $*"; }
 if [ "$NO_BUILD" = 0 ] && [ "${GAOKUN3_DEV_BUILD:-}" = 1 ] && [ "$STAGE_ONLY" = 0 ]; then
     die "GAOKUN3_DEV_BUILD=1 是开发构建（adb 免授权 / TCP 5555 / 开发者公钥），只能 --stage-only"
 fi
+# ═══ REL-7 / SEC-11：内核的"对应源码清单"（GPL-2.0 §3），每版一份 ═══
+# boot.img 里是 GPL-2.0 的内核二进制，而内核在 AOSP 树外编（prebuilt-boot/），配方分在四处：
+#   上游 tag · 构建树上 git am 进来的 gaokun-buildbot 补丁（提交）· 本仓 patches/（只活在构建树
+#   【工作区】里，CLAUDE.md 运维坑 4）· ReSukiSU（钉住的提交 + 本仓补丁）。
+# 以前一样都没随发版留下，外人照仓库重建不出同一个内核；v0.7.1 是事后从实机与 boot.img 补录的
+# （docs/relnotes/v0.7.1-alpha-sources.md）。产出放在 $S，随 install/$VER/ 与 GitHub release 一起发：
+#   kernel-source.txt           清单本体：二进制 sha256、基底、补丁序列与 sha256、ReSukiSU、配置、重建步骤
+#   kernel-config.txt           从【发布的 boot.img】里抽的 .config（scripts/extract-kconfig.py）——
+#                               不取构建树 O= 目录里那份，那份可能已经被下一轮实验改过
+#   kernel-base-patches.tar.gz  构建树上 v7.2-rc2..HEAD 的提交（git format-patch），即 buildbot 那一层。
+#                               直接带补丁本身，就不依赖"当时用的是 buildbot 哪个提交"这个从没记过的信息
+#   crdroid-manifest.xml        repo manifest -r（ROM 侧各仓库的确切提交）；拿不到就在清单里写命令
+# ⚠️ 不写进 install-artifacts.sha256：那份文件安装器在读（scripts/live/m0-internal.sh:221-225），
+#    只认三个载荷；这几份的 sha256 记在 kernel-source.txt 里。
+# 缺了任何一样就是这一版给不出对应源码 ⇒ 发版（含 --dry-run）拦，--stage-only 只警告。
+LINUX_BASE_TAG=v7.2-rc2
+# tag 对象 4c45e14df2f4e77982ad70d6d8e3fe750edd4c37 解引用后的提交
+# （2026-10-04 `git ls-remote github.com/torvalds/linux refs/tags/v7.2-rc2*`，与本机 refs/linux-v7.2-rc2-git 的 HEAD 相同）
+LINUX_BASE=8cdeaa50eae8dad34885515f62559ee83e7e8dda
+GPL_FILES=()
+gpl_bad() {
+    [ "$STAGE_ONLY" = 1 ] || die "源码清单：$*"
+    echo "⚠️ 源码清单：$*（--stage-only 不拦）" >&2
+}
+gen_kernel_sources() {
+    local s=$1 txt=$1/kernel-source.txt cfg=$1/kernel-config.txt
+    local AP=$REPO/scripts/kernel-apply-patches.sh RS=$REPO/scripts/kernel-setup-resukisu.sh
+    [ -f "$AP" ] && [ -f "$RS" ] && [ -d "$REPO/patches" ] \
+        || die "源码清单：$REPO 不像本仓 checkout（缺 patches/ 或 kernel-*.sh）—— 设 GK3_REPO"
+    [ -f "$OUT/boot.img" ] || { gpl_bad "没有 boot.img，无从对应"; return 0; }
+
+    # 补丁顺序只有一个出处：kernel-apply-patches.sh 的 KPATCHES 数组。不在这里另抄一份 —— 抄的那份一定会漂。
+    local KP PIN KURL p
+    KP=$(sed -n '/^KPATCHES=(/,/^)/p' "$AP" | sed -n 's/^[[:space:]]\{1,\}\([0-9]\{4\}-[^[:space:]]*\).*/\1/p')
+    [ -n "$KP" ] || die "源码清单：从 $AP 解析不出 KPATCHES"
+    PIN=$(sed -n 's/^RESUKISU_PIN=\([0-9a-f]\{40\}\).*/\1/p' "$RS")
+    KURL=$(sed -n 's/^RESUKISU_URL=\([^[:space:]]*\).*/\1/p' "$RS")
+    [ -n "$PIN" ] || die "源码清单：从 $RS 解析不出 RESUKISU_PIN"
+
+    # ---- 发布的二进制本身：配置、内核与 dtb 的 sha256、版本横幅 ----
+    python3 "$REPO/scripts/extract-kconfig.py" "$OUT/boot.img" > "$cfg" \
+        || die "源码清单：从 boot.img 抽不出 .config（CONFIG_IKCONFIG 关了？）"
+    GPL_FILES=(kernel-source.txt kernel-config.txt)
+    local BIN
+    BIN=$(python3 - "$OUT/boot.img" <<'PY'
+import gzip, hashlib, struct, sys
+d = open(sys.argv[1], "rb").read()
+ks, rs, ss, page, hv = (struct.unpack_from("<I", d, o)[0] for o in (8, 16, 24, 36, 40))
+k = d[page:page + ks]
+print("vmlinuz.efi sha256  %s  (%d bytes)" % (hashlib.sha256(k).hexdigest(), ks))
+if hv >= 2:                                   # 偏移算法与第 2 步数 FDT 的那段相同
+    pad = lambda n: (n + page - 1) // page * page
+    off = pad(1) + pad(ks) + pad(rs) + pad(ss) + pad(struct.unpack_from("<I", d, 1632)[0])
+    n = struct.unpack_from("<I", d, 1648)[0]
+    print("dtb         sha256  %s  (%d bytes)" % (hashlib.sha256(d[off:off + n]).hexdigest(), n))
+if k[:2] == b"MZ" and k[4:8] == b"zimg":     # EFI zboot，载荷 gzip（同 extract-kconfig.py）
+    o, n = struct.unpack_from("<II", k, 8)
+    img = gzip.decompress(k[o:o + n])
+    i = img.find(b"Linux version ")
+    if i >= 0:
+        print("banner              %s" % img[i:img.find(b"\n", i)].decode(errors="replace").replace("\0", " ").strip())
+PY
+) || die "源码清单：解析 boot.img 失败"
+
+    # ---- 构建树：基底、buildbot 层、本仓补丁的落地状态、ReSukiSU ----
+    local HEAD="" DESC="" NB=0 KV="" VERIFY="" EXTRA="" KH="" KCNT="" KFIX=""
+    if git -C "$KTREE" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+        HEAD=$(git -C "$KTREE" rev-parse HEAD)
+        DESC=$(git -C "$KTREE" describe --tags --always HEAD 2>/dev/null || echo "$HEAD")
+        KV=$(make -s -C "$KTREE" kernelversion 2>/dev/null || true)
+        grep -qF "Linux version ${KV:-<无>}" <<<"$BIN" \
+            || gpl_bad "构建树 kernelversion=${KV:-<无>} 与 boot.img 横幅对不上 —— GK3_KTREE 指错了树？"
+        if git -C "$KTREE" merge-base --is-ancestor "$LINUX_BASE" HEAD 2>/dev/null; then
+            NB=$(git -C "$KTREE" rev-list --count "$LINUX_BASE..HEAD")
+            local fp; fp=$(mktemp -d)
+            if git -C "$KTREE" format-patch -q -o "$fp/kernel-base-patches" "$LINUX_BASE..HEAD" \
+               && tar -C "$fp" --sort=name --mtime="@$UTC" --owner=0 --group=0 --numeric-owner \
+                      -cf - kernel-base-patches | gzip -n -9 > "$s/kernel-base-patches.tar.gz"; then
+                GPL_FILES+=(kernel-base-patches.tar.gz)
+            else
+                gpl_bad "git format-patch $LINUX_BASE..HEAD 失败"
+            fi
+            rm -rf "$fp"
+        else
+            gpl_bad "$KTREE 的 HEAD 不在 ${LINUX_BASE_TAG}（${LINUX_BASE:0:12}）之上 —— 基底换了就先改本脚本的 LINUX_BASE"
+        fi
+        # 本仓补丁：--verify 在干净 worktree 上重放整条链、逐文件比对真实树（B0 唯一可靠的探测器）
+        local vlog; vlog=$(mktemp)
+        if bash "$AP" "$KTREE" --verify >"$vlog" 2>&1; then
+            VERIFY="OK, identical to a clean replay — $(grep '^重放' "$vlog" | tail -1)"
+        else
+            VERIFY="MISMATCH — $(grep -E '^(✗|重放：)' "$vlog" | head -8 | tr '\n' ' ')"
+            gpl_bad "构建树与本仓配方不一致（kernel-apply-patches.sh --verify）：$VERIFY"
+        fi
+        rm -f "$vlog"
+        # 配方之外的工作区改动：--verify 只看补丁碰过的文件，看不见别处的手改。
+        # ReSukiSU 的接线（KernelSU/、drivers/kernelsu、drivers/Makefile、drivers/Kconfig）是配方内的。
+        EXTRA=$(git -C "$KTREE" status --porcelain --untracked-files=all \
+                | awk 'FNR == NR { keep[$0] = 1; next }
+                       { f = substr($0, 4); sub(/.* -> /, "", f) }
+                       f ~ /^KernelSU\// || f ~ /^drivers\/(kernelsu|Makefile|Kconfig)$/ || f ~ /\.(orig|rej)$/ { next }
+                       !(f in keep)' \
+                      <(for p in $KP; do sed -n 's|^+++ b/||p' "$REPO/patches/$p" 2>/dev/null; done) - \
+                || true)
+        if grep -q '^[^?]' <<<"$EXTRA"; then
+            gpl_bad "构建树有配方之外的已跟踪改动：$(grep '^[^?]' <<<"$EXTRA" | head -5 | tr '\n' ' ')"
+        fi
+        # ReSukiSU：只在内核真的开了 KSU 时才算数
+        if grep -q '^CONFIG_KSU=y' "$cfg"; then
+            KH=$(git -C "$KTREE/KernelSU" rev-parse HEAD 2>/dev/null || true)
+            [ "$KH" = "$PIN" ] || gpl_bad "构建树的 KernelSU 在 ${KH:-<无>}，kernel-setup-resukisu.sh 钉的是 $PIN"
+            KCNT=$(git -C "$KTREE/KernelSU" rev-list --count HEAD 2>/dev/null || true)
+            for p in "$REPO"/patches/resukisu/*.patch; do
+                [ -f "$p" ] || continue
+                if git -C "$KTREE/KernelSU" apply --reverse --check "$p" >/dev/null 2>&1; then
+                    KFIX+="$(sha256sum "$p" | cut -c1-64)  patches/resukisu/$(basename "$p")  (applied)"$'\n'
+                else
+                    KFIX+="$(sha256sum "$p" | cut -c1-64)  patches/resukisu/$(basename "$p")  (NOT applied in the build tree)"$'\n'
+                    gpl_bad "ReSukiSU 补丁 $(basename "$p") 不在构建树里"
+                fi
+            done
+        fi
+    else
+        gpl_bad "$KTREE 不是 git 内核树（设 GK3_KTREE 指向编发布内核的那棵）"
+    fi
+
+    # ---- ROM 侧：repo manifest -r（当前目录就是 ANDROID_BUILD_TOP）----
+    local MAN="crdroid-manifest.xml was not generated; in the crDroid tree run: repo manifest -r -o crdroid-manifest.xml"
+    if command -v repo >/dev/null 2>&1 && repo manifest -r -o "$s/crdroid-manifest.xml" >/dev/null 2>&1; then
+        GPL_FILES+=(crdroid-manifest.xml)
+        MAN="crdroid-manifest.xml  sha256 $(sha256sum "$s/crdroid-manifest.xml" | cut -c1-64)"
+    else
+        echo "⚠️ repo manifest -r 没跑成，清单里只写命令" >&2
+    fi
+
+    local RC RDIRTY
+    RC=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo "<not a git checkout>")
+    RDIRTY=$(git -C "$REPO" status --porcelain -- patches scripts/kernel-apply-patches.sh \
+             scripts/kernel-setup-resukisu.sh scripts/kernel-config-android.sh 2>/dev/null | wc -l | tr -d " ")
+
+    # 清单本体用英文写：它是 GitHub release（英文发版说明）的附件，读者是外人
+    {
+        echo "# gaokun3 kernel: corresponding source (GPL-2.0 section 3) for $VER"
+        echo "# Build stamp $UTC (ro.build.date.utc). Generated by scripts/release.sh; the sha256 values are authoritative."
+        echo
+        echo "## 1. The shipped binary (kernel and DTB inside boot.img)"
+        echo "boot.img    sha256  $(sha256sum "$OUT/boot.img" | cut -c1-64)"
+        echo "$BIN"
+        echo "kernel-config.txt sha256 $(sha256sum "$cfg" | cut -c1-64) (the embedded .config, = /proc/config.gz, extracted from boot.img)"
+        echo
+        echo "## 2. Kernel base"
+        echo "upstream    https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git  $LINUX_BASE_TAG = $LINUX_BASE"
+        echo "build tree  HEAD ${HEAD:-<unknown>} (git describe: ${DESC:-?})"
+        echo "$NB commits on top of $LINUX_BASE_TAG = the linux-gaokun-buildbot patches, applied with git am"
+        echo "            (https://github.com/KawaiiHachimi/linux-gaokun-buildbot)"
+        if [ -f "$s/kernel-base-patches.tar.gz" ]; then
+            echo "  full text: kernel-base-patches.tar.gz  sha256 $(sha256sum "$s/kernel-base-patches.tar.gz" | cut -c1-64)"
+            git -C "$KTREE" log --reverse --format='  %h %s' "$LINUX_BASE..HEAD"
+        fi
+        echo
+        echo "## 3. This project's kernel patches (scripts/kernel-apply-patches.sh KPATCHES order, applied on top of section 2)"
+        echo "repository  https://github.com/vahiru/gaokun-android  commit $RC"
+        echo "            (uncommitted changes to the patch files at release time: $RDIRTY; the sha256 below are of the files actually used)"
+        local i=0
+        for p in $KP; do
+            i=$((i + 1))
+            if [ -f "$REPO/patches/$p" ]; then
+                printf '%2d  %s  patches/%s\n' "$i" "$(sha256sum "$REPO/patches/$p" | cut -c1-64)" "$p"
+            else
+                printf '%2d  %-64s  patches/%s\n' "$i" "<missing>" "$p"
+            fi
+        done
+        echo "build tree vs. this list (kernel-apply-patches.sh --verify): ${VERIFY:-<not run>}"
+        [ -z "$EXTRA" ] || { echo "build tree entries outside the recipe (?? = untracked):"; sed 's/^/  /' <<<"$EXTRA"; }
+        echo
+        echo "## 4. ReSukiSU (KernelSU fork; its in-kernel part, kernel/, is GPL-2.0)"
+        echo "upstream    $KURL @ $PIN (pinned in scripts/kernel-setup-resukisu.sh)"
+        echo "build tree  KernelSU/ HEAD ${KH:-<unknown, or kernel built without KSU>}, rev-list --count ${KCNT:-?} (Kbuild derives the version from it)"
+        [ -z "$KFIX" ] || printf '%s' "$KFIX"
+        echo
+        echo "## 5. ROM sources (crDroid 16.0)"
+        echo "$MAN"
+        echo "This project's changes to the AOSP / crDroid tree (device/huawei/gaokun3/, scripts/crdroid-tree-fixes.py,"
+        echo "the non-kernel files in patches/) are all in the repository commit above."
+        echo
+        echo "## 6. Rebuilding the kernel"
+        echo "  git clone --branch $LINUX_BASE_TAG https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git && cd linux"
+        echo "  tar xzf kernel-base-patches.tar.gz && git am kernel-base-patches/*.patch"
+        echo "  git -C <gaokun-android> checkout $RC"
+        echo "  bash <gaokun-android>/scripts/kernel-apply-patches.sh .     # section 3, in order"
+        echo "  bash <gaokun-android>/scripts/kernel-setup-resukisu.sh .    # ReSukiSU @ ${PIN:0:12} + patches/resukisu/"
+        echo "  mkdir -p ../kout && cp kernel-config.txt ../kout/.config"
+        echo "  make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=../kout olddefconfig vmlinuz.efi dtbs"
+        echo "  (compiler: see the banner in section 1; where the outputs go: device/huawei/gaokun3/prebuilt-boot/README.md)"
+    } > "$txt"
+    ok "源码清单：${GPL_FILES[*]}"
+}
 
 [ -n "${ANDROID_BUILD_TOP:-}" ] || die "先 source build/envsetup.sh && lunch"
 cd "$ANDROID_BUILD_TOP"
@@ -80,6 +284,12 @@ else
     #   见 docs/stage4-findings.md #113。
     export BUILD_NUMBER=${BUILD_NUMBER:-$(date -u +%Y%m%d%H%M%S)}
     echo "  BUILD_NUMBER=${BUILD_NUMBER}（进指纹的 incremental）"
+    # ★ OTA-11：vendor/build.prop 是 Make 生成的（build/make/core/sysprop.mk:208），规则只依赖
+    #   属性文件（同文件 :119），日期是命令运行时才 `cat` 的（config.mk:870 BUILD_DATETIME_FROM_FILE）
+    #   ⇒ 增量构建里 vendor 属性没变就不重生成，日期 / 指纹 / incremental 停在老构建
+    #   （v0.7.0–v0.7.1 的 vendor 一直是 09-28 的 1790597477）。删掉输出逼它重跑。
+    #   （行号取自 refs/aosp-build，crDroid 16 的 build/make 待构建机核实；第 2 步有断言兜底。）
+    rm -f "$OUT/vendor/build.prop"
     m -j"$(nproc)" bacon superimage
 fi
 
@@ -204,6 +414,28 @@ else
     echo "$ADB_BAD" | sed 's/^/    /' >&2
     die "产物带着开发期的 adb 便利（见上）—— 发版必须是发布构建（不设 GAOKUN3_DEV_BUILD，B1）"
 fi
+# ★ OTA-11（2026-10-04）：每个分区 build.prop 的构建日期都必须等于 system 的。
+#   v0.7.0–v0.7.1 的 vendor 停在 09-28（成因见第 1 步的 rm），指纹与 incremental 也随之对不上 ——
+#   缺陷报告里同一台机器报出两个版本。用 --no-build 发的是别处构建的 out/，第 1 步那条 rm
+#   未必跑过，所以这里兜底。odm 在没有独立分区时落在 vendor/odm 下，两处都认。
+PD_BAD=0
+while read -r part c1 c2; do
+    f=""
+    for c in $c1 $c2; do [ -f "$OUT/$c" ] && { f=$OUT/$c; break; }; done
+    [ -n "$f" ] || continue
+    PU=$(sed -n "s/^ro\.${part}\.build\.date\.utc=//p" "$f" | head -1)
+    if [ "$PU" = "$UTC" ]; then continue; fi
+    MSG="$part 的 ro.${part}.build.date.utc=${PU:-<无>} ≠ system 的 $UTC —— 增量构建没重生成它；删掉 ${f#"$OUT"/} 再构建"
+    [ "$STAGE_ONLY" = 1 ] || die "$MSG"
+    echo "⚠️ ${MSG}（--stage-only 不拦）" >&2; PD_BAD=1
+done <<'EOF'
+vendor      vendor/build.prop
+odm         odm/etc/build.prop          vendor/odm/etc/build.prop
+product     product/etc/build.prop
+system_ext  system_ext/etc/build.prop
+vendor_dlkm vendor_dlkm/etc/build.prop
+EOF
+[ "$PD_BAD" = 1 ] || ok "各分区的构建日期与 system 一致（${UTC}）"
 
 VER=$(basename "$ZIP" .zip)
 echo "═══ 3. 打包安装产物 ═══"
@@ -212,9 +444,16 @@ cp "$ZIP" "$OUT/gaokun3.json" "$S/"
 [ -f "$OUT/boot.img" ] && cp "$OUT/boot.img" "$S/"
 zstd -T0 -19 --long -f "$OUT/super.img" -o "$S/super.img.zst"
 ( cd "$S" && sha256sum boot.img super.img.zst "$(basename "$ZIP")" > install-artifacts.sha256 )
+gen_kernel_sources "$S"
 ls -la "$S"
 
-[ "$DRY" = 1 ] && { ok "--dry-run：到此为止，未上传"; exit 0; }
+# GPL 附件的 Content-Type（r2-upload.py 的第 4 个参数）
+gpl_ctype() { case "$1" in *.txt) echo "text/plain; charset=utf-8" ;; *.tar.gz) echo application/gzip ;;
+                           *.xml) echo application/xml ;; *) echo application/octet-stream ;; esac; }
+
+# dry-run 结束时 $S 会被删，清单打出来给人过目（发版说明要链它）
+[ "$DRY" = 1 ] && { echo "── kernel-source.txt ──"; cat "$S/kernel-source.txt" 2>/dev/null || true
+                    ok "--dry-run：到此为止，未上传"; exit 0; }
 
 for v in R2_ENDPOINT R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
     [ -n "${!v:-}" ] || die "环境变量 $v 未设置（凭据只从环境变量读）"
@@ -225,6 +464,9 @@ if [ "$STAGE_ONLY" = 1 ]; then
     for f in boot.img super.img.zst install-artifacts.sha256 gaokun3.json "$(basename "$ZIP")"; do
         python3 "$UPLOAD" "$BUCKET" "$S/$f" "staging/$VER/$f" application/octet-stream
     done
+    for f in ${GPL_FILES[@]+"${GPL_FILES[@]}"}; do
+        python3 "$UPLOAD" "$BUCKET" "$S/$f" "staging/$VER/$f" "$(gpl_ctype "$f")"
+    done
     ok "已 staging。要发布，重跑本脚本不带 --stage-only"
     exit 0
 fi
@@ -234,6 +476,9 @@ python3 "$UPLOAD" "$BUCKET" "$S/$(basename "$ZIP")" "builds/$(basename "$ZIP")" 
 python3 "$UPLOAD" "$BUCKET" "$S/install-artifacts.sha256" "install/$VER/install-artifacts.sha256" text/plain
 for f in boot.img super.img.zst; do
     python3 "$UPLOAD" "$BUCKET" "$S/$f" "install/$VER/$f" application/octet-stream
+done
+for f in ${GPL_FILES[@]+"${GPL_FILES[@]}"}; do       # 对应源码清单（REL-7）—— 也是 GitHub release 的附件
+    python3 "$UPLOAD" "$BUCKET" "$S/$f" "install/$VER/$f" "$(gpl_ctype "$f")"
 done
 ok "产物已就位"
 
@@ -255,7 +500,8 @@ cat <<EOF
 发布完成。剩下要人做的：
   * 用【设备】而不是构建机去验一次抓取（沙箱会挡出站 HTTP，那边的结论不可信）：
       curl -sI $HOST/ota/gaokun3.json | head -3      # 必须 200，不能是 3xx
-  * GitHub Release 另发（gh release create），把 install/$VER/ 那几个文件带上。
+  * GitHub Release 另发（gh release create），把 install/$VER/ 那几个文件带上 ——
+    ★ 包括内核的对应源码清单：${GPL_FILES[*]:-<没生成>}（GPL-2.0 §3，REL-7），发版说明的 Files 一节要链到 kernel-source.txt。
     ⚠️ 两个 2026-09-14 踩过的坑：① gh 要在仓库目录里跑、或加 -R vahiru/gaokun-android，
        在别的目录里它报 "not a git repository" 就什么都没传；② 别写 gh ... | tail -1 ——
        管道的退出码是 tail 的，上传失败照样印"uploaded"（与 az/make 那两次是同一个坑）。
