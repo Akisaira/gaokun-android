@@ -293,8 +293,16 @@ endif
 
 # 硬件 feature 声明 —— 没有它 AppWidgetService 等一票系统服务不启动，
 # Launcher 直接 NPE（"AppWidgetManager...on a null object" 实测）。
+# ★ v1.0 HW-7（2026-10-05）：改用自带的一份（permissions/tablet_core_hardware.xml = 上游那份删掉 compass），
+#   落点文件名不变（OTA 直接覆盖旧文件，不会留下一份还声明着指南针的）。本机没有磁力计，却声明了
+#   android.hardware.sensor.compass；有陀螺仪（SH3001 6 轴）却没声明 android.hardware.sensor.gyroscope ——
+#   Play 会把标了 required 陀螺仪的游戏判成不兼容（实机 pm list features 只有 accelerometer + compass）。
+#   陀螺仪那份文件名取自上游 tablet_core_hardware.xml:83-84 的注释与 frameworks/native/data/etc/
+#   （LineageOS frameworks_native lineage-23.2 里实有 android.hardware.sensor.gyroscope.xml）；⚠️ 构建机上 ls 再核一次。
+#   上机判据：`pm list features` 有 sensor.gyroscope、没有 sensor.compass，其余 feature 一条不少。
 PRODUCT_COPY_FILES += \
-    frameworks/native/data/etc/tablet_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/tablet_core_hardware.xml
+    $(LOCAL_PATH)/permissions/tablet_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/tablet_core_hardware.xml \
+    frameworks/native/data/etc/android.hardware.sensor.gyroscope.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.sensor.gyroscope.xml
 
 PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.hardware.opengles.aep.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.opengles.aep.xml \
