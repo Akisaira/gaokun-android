@@ -33,6 +33,11 @@
 
 ### ▶ 1.0 批 0/1 已合并、待构建与验证（2026-10-05）
 
+> **★ 2026-10-05 06:32 第三个 1.0 发布构建上机：`1.0.0-dev.3`，构建戳 `1791151679`，槽 `_b`**（`out/v1dev3-1791151679/`）。= dev.2 + **批 2 内核**（`patches/0072` 电池 / `0073` 初始 LID / `0074` 后摄隐私灯 + 配置项 `2942da8`，内核 #16 `505c1be7…`、dtb `877878de…`，构建机 `~/gk3-kernel-iris` 上 `--verify` 绿、配置断言 161/2 过；旧内核备份 `out/prebuilt-boot-backup-v071/`）+ smmustall 墙钟心跳 `c1d11dc`。
+> * 实测：`initial lid state: open (0x03)`（0073）；电池多出 `capacity_level=Normal`、`ec_raw`（`status=0x02 w98=0x00c0 w9c=0x0baf wa0=0x20d0`，0072）；ncam-smoke 后摄出流时 `white:indicator` 亮约 3 秒、停流即灭（0074），141 帧 0 失败；smmustall 息屏时每 60 秒一行心跳 ⇒ A15 过。验收 PASS 44，FAIL 只剩 A3（开发机持久化 5555）。
+> * ★ 新查出：`CONFIG_DEFAULT_HUNG_TASK_TIMEOUT=120` 进了内核，但 **AOSP `init.rc:322`（on init）无条件写 0** ⇒ LIVE-8 实际没开。已改 `init.gaokun3.rc` on boot 写回 120 + vendor_init 规则（`0030c79`），⬜ 下个构建验；不走 `ro.khungtask.enable`（llkd.rc 会顺带写 `hung_task_panic 1`）。本次开机已手动写成 120 / panic 0。
+> * ⬜ 0072 的 Critical 判据要人：插电脑 USB 口带负载放电采 `ec_raw` / current_now 正负号 / capacity_level；0073 合盖开机一次看 `initial lid state: closed`。
+
 > **★ 2026-10-05 04:43 第二个 1.0 发布构建上机：`1.0.0-dev.2`，构建戳 `1791144960`**（`out/v1dev2-1791144960/`；= dev.1 + 批 1 剩余 14 项 `27b50f8`…`bb8abf2` 的 cherry-pick + 审查修复 `e16beb0` + tree-fix [18]）。构建机上 tree-fixes [1]–[18] 全过（[18] 锚点命中、Wi-Fi 从源码编）；`release.sh --dry-run` 第 2 步全过（缺发版说明 / 验收报告两条只在正式发版拦）。
 > * 装机：在**发布构建上**跑 `install-ota-local.sh` 照常（KSU root 够用）。新 postinstall 当场生效：删掉没有启动项引用的 `slot_b/recovery-ramdisk.img`，ESP 可用 87 → 104 MB（OTA-8/9）；oneshot 进 `_a` 50 秒起来。
 > * 属性：`ro.opengles.version=196610`（APP-8）、`ro.hw_timeout_multiplier=2`（APP-9）、`/dev/dri/card1` 0660（SEC-14，出画正常）、有 `sensor.gyroscope` 无 `sensor.compass`（HW-7）、accel/gyro maxRate 50 Hz（HW-12）、hangdump 启动并记下 remoteproc 基线（AV-6）。
