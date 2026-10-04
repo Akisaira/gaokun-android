@@ -1,28 +1,37 @@
 /*
- * gk3boot.efi —— 统一启动入口（docs/boot-entry-design.md 方案 Y）的 S5 最小可上机版本，目标是 E4 门槛：
+ * gk3boot.efi —— 统一启动入口（docs/boot-entry-design.md 方案 Y）。S5 后续版本：观察模式 + 动作模式，目标是
+ * "可以当开发机默认条目"（E5 / E6 / E7 / E8 的前提）。README §10（E4 最小版）、§11（这一版）。
  *
- *   作为 systemd-boot 的非默认 efi 条目经 LoaderEntryOneShot 进入 → 定位本盘 → 读 misc 算出"动作模式会怎么做"
- *   （只记录，观察模式）→ 读 boot_<x> 整份、校验 SHA1(id) → 拼 cmdline → H2 交接（handoff.c）真正启动 Android。
+ *   systemd-boot（默认条目 gk3boot-android-<x>[+N].conf，或经 OneShot）→ gk3boot → 定位本盘 → 读 misc → 选槽
+ *   →（动作模式：扣 tries、写 GK3 记录，写后读回）→ 读 boot_<x> 整份、校验 SHA1(id) → 拼 cmdline → H2 交接（handoff.c）。
  *
- * 这一版是【观察模式专用】（§4.12 "观察模式"）：
- *   - 不写 misc、不扣 tries、不消费 BCB、不写任何块设备 —— 块设备包装连 write 回调都不给（gk3_blk_from_bio）；
- *   - 不写任何 EFI 变量；
- *   - ESP 上只写自己的日志 \EFI\gk3boot\log\boot-<n>.txt（n 递增、不覆盖）。
- *   动作模式（扣 tries、BCB 分派、迁移、GK3 记录）留给 S5 后续 / S6；LoadOptions 里没有 gk3.observe=1 也按观察模式跑，
- *   并在日志里记一行。
+ * 两种模式（§4.12）：
+ *   观察模式 gk3.observe=1：决策照算，"会怎么做"只记日志；不写 misc、不扣 tries、不消费 BCB（块设备包装连 write 回调都不给）；
+ *     每次开机写一份 ESP 日志；唯一允许的写 = fail-open 时的 LoaderEntryOneShot（见下）。
+ *   动作模式（gk3.observe=0 或不带 observe）：
+ *     - 选中的槽未成功 → tries−1、重算 CRC、写回 misc+0x800、读回核对（gk3_blk_write_bytes_verify）；写不进去 → fail-open；
+ *       tries 用完（tries 0 且未成功 = SetSlotAsUnbootable 的状态）下次自然落到另一槽 = 自动回滚（event=fallback）；
+ *     - 两槽都不可启动 / VAB 合并中且 active 槽不可启动（不许换槽，§4.3.2-4）→ 本该进执行端，执行端（S7）还没有 → fail-open；
+ *     - GK3 记录（misc+8 KiB）：boot_streak +1（开机完成由 Android 侧清零 —— S9 还没做），回落 / 看到 BCB 记事件；
+ *       写后读回，写不进去只记日志、照常启动（记录是参考信息）。阈值动作（bootloop 进菜单）不启用：执行端没就绪；
+ *     - BCB：分派开关默认关（E-K7：必须与执行端、迁移同版发布）—— 有命令只记录、不消费、不清除、照常启动 Android；
+ *       gk3.dispatch=1 打开后按 gk3_dispatch_plan 决定去向，但去向目前只有"记录 + 继续启动"（执行端 S7 还没有）；
+ *     - ESP 日志只在异常时写（正常路径对 ESP 零写入，§4.12），屏幕上也不打字（§4.3.1）。
  *
- * fail-open（§4.12）：任何一步失败 → 记日志 → ResetSystem(EfiResetCold)，下一次由 systemd-boot 的默认条目
- * （今天的直连条目 <mid>-android-<x>.conf）接手。最小版本【不写】LoaderEntryOneShot（阶梯第 1 步），理由：
- *   E4 的条目本来就不是默认项（经 OneShot 进入，systemd-boot 读后即删，boot.c:1637-1640），复位后自然回到默认的直连条目；
- *   不写变量 = 观察模式"什么都不写"的承诺不打折，也不会两次改动固件状态。
- *   ⚠️ 代价：本版本不能当默认条目用（E5 之前必须补上阶梯第 1 步，否则 fail-open 会复位回自己、循环）。
+ * fail-open（§4.12 阶梯第 1 步）：任何一步失败 → 记日志 → 写 LoaderEntryOneShot = 本 ESP 上的直连条目
+ * <machine-id>-android-<x>.conf（x = 目标槽；没有就用另一槽的）→ ResetSystem(EfiResetCold)。写变量失败也照样复位。
+ * 这样 gk3boot 即使是默认条目，失败一次后下一次也直接走直连条目（OneShot 读后即删，boot.c:1637-1640），不会原地循环；
+ * 连续失败由 systemd-boot 的条目计数（+3）兜底。阶梯第 2 步（写变量失败时把自己的条目改名 +0）没做（README §11 限制）。
  * 绝不 return 错误码给 systemd-boot（boot.c:2971-2973 会原样交给固件，华为 BootFail 计数，§2.1），也不 return SUCCESS
  * （会停在不倒计时的菜单上）。
  *
  * LoadOptions（条目的 options 行，空格分隔）：
- *   gk3.observe=1     观察模式（本版本只有这一种；缺省也按观察模式跑并记一行）
- *   gk3.slot=a|b      强制启动这一槽（测试用；决策照算照记）
- *   gk3.hint=a|b      BCAB 无效时按它启动（§4.3.2-1），缺省 a
+ *   gk3.observe=0|1   1 = 观察模式；0 或不带 = 动作模式
+ *   gk3.dispatch=0|1  BCB 分派开关（缺省 = 编译期 GK3BOOT_DISPATCH_DEFAULT，出厂 0）
+ *   gk3.slot=a|b      强制启动这一槽（测试用；决策照算照记；动作模式下不扣 tries）
+ *   gk3.hint=a|b      BCAB 无效时按它启动（§4.3.2-1）、fail-open 在选槽之前发生时的目标槽；
+ *                     缺省取自己条目名里的 -android-<x>，再没有就是 a
+ *   gk3.mid=<32 位十六进制>  fail-open 时只认这个 machine-id 的直连条目（缺省：在 \loader\entries 里自己找）
  *   gk3.hold=<秒>     fail-open 复位前在屏幕上停多久，缺省 5，最大 30
  */
 #include "gk3efi.h"
@@ -31,6 +40,9 @@
 
 #ifndef GK3BOOT_VERSION
 #define GK3BOOT_VERSION "dev"
+#endif
+#ifndef GK3BOOT_DISPATCH_DEFAULT
+#define GK3BOOT_DISPATCH_DEFAULT 0     /* E-K7：只有与执行端（S7）、迁移同版发布时才改成 1 */
 #endif
 
 #define WATCHDOG_SEC 120               /* 设计稿 §4.2 第 0 步 */
@@ -42,13 +54,20 @@
 static uint64_t T0;
 static EFI_LOADED_IMAGE_PROTOCOL *self_li;
 static gk3_logfile g_log;
+static bool g_log_tried;               /* 已经试过建日志文件（成功与否） */
+static const char *g_entry;            /* 自己条目的文件名（LoaderBootCountPath / LoaderEntrySelected），可为 NULL */
 
 static struct {
-    bool observe_opt;          /* LoadOptions 里有 gk3.observe=1 */
+    bool observe;              /* 观察模式 */
+    bool dispatch;             /* BCB 分派开关 */
     int force_slot;            /* -1 = 不强制 */
-    unsigned hint;
+    int hint;                  /* -1 = 没给 gk3.hint */
     unsigned hold;
-} opt = {false, -1, 0, 5};
+    char mid[33];              /* gk3.mid，空 = 自己找 */
+} opt = {false, GK3BOOT_DISPATCH_DEFAULT, -1, -1, 5, ""};
+
+static unsigned g_hint;                /* 生效的 hint */
+static unsigned g_target;              /* fail-open 写 OneShot 用的目标槽：先是 hint，选完槽后是要启动的槽 */
 
 #define MS() ((unsigned long long)(gk3_us_since(T0) / 1000u))
 #define MSF(us) (unsigned long long)((us) / 1000u), (unsigned long long)((us) / 100u % 10u)
@@ -62,12 +81,147 @@ static void hex_str(const uint8_t *p, size_t n, char *out, size_t cap)
         out[o < cap ? o : cap - 1] = 0;
 }
 
+static int str_cmp(const char *a, const char *b)
+{
+    while (*a && *a == *b)
+        a++, b++;
+    return (unsigned char)*a - (unsigned char)*b;
+}
+
+/* ------------------------------------------------------------------ 日志 */
+
+/* 日志文件按需建：观察模式一开始就建；动作模式只在第一次出异常（notable / anomaly / fail-open）时建 ——
+ * 内存里的缓冲从头记着，建文件时整段写进去（gk3_lg.synced 从 0 开始），所以异常之前的经过也在文件里。 */
+static void log_ensure(void)
+{
+    if (g_log.open)
+        return;
+    if (g_log_tried) {
+        gk3_log_reopen(&g_log);        /* 交接失败回来时文件已关；从没建成过（path 空）就什么也不做 */
+        return;
+    }
+    g_log_tried = true;
+    if (!self_li)
+        return;
+    if (gk3_log_open_seq(&g_log, self_li->DeviceHandle, u"\\EFI\\gk3boot\\log", "boot-", LOG_MAX)) {
+        gk3_logf("log_file: \\EFI\\gk3boot\\log\\boot-%u.txt\n", g_log.n);
+        gk3_log_sync();
+    } else {
+        gk3_logf("!! no log file (screen only); continuing\n");
+    }
+}
+
+/* 动作模式里"值得留一份 ESP 日志"的事：prefix "!!" = 出错（写失败等），"note:" = 不正常但按设计处理了
+ * （回落、BCAB 无效、BCB 没消费、强制槽…）。观察模式下日志本来就开着，这里只是多记一行。 */
+static void __attribute__((format(printf, 2, 3))) flag_log(const char *prefix, const char *fmt, ...)
+{
+    static char line[600];
+    va_list ap;
+    va_start(ap, fmt);
+    gk3_vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    gk3_logf("%s %s\n", prefix, line);
+    log_ensure();
+    gk3_log_sync();
+}
+#define notable(...) flag_log("note:", __VA_ARGS__)
+#define anomaly(...) flag_log("!!", __VA_ARGS__)
+
 /* ------------------------------------------------------------------ fail-open */
 
 static void pre_start(void)
 {
     gk3_logd("gk3boot.result=handoff t=%llu ms (log closed before StartImage)\n", MS());
     gk3_log_close(&g_log);
+}
+
+/* 直连条目：\loader\entries\<32 位十六进制>-android-<x>.conf（安装器的写法，scripts/live/installer-lib.sh:921）。
+ * gk3boot 自己的条目 gk3boot-android-<x>[+N].conf 前缀不是 machine-id，不会被当成直连条目。
+ * 有多个（多份安装共用 ESP）时取 id 最大的那个 —— 两份直连条目 sort-key / version 相同时，systemd-boot 的
+ * default 通配命中的也是它（boot.c:1707-1745 按 -strverscmp(id) 排，:1771-1782 取第一个匹配）。 */
+typedef struct {
+    unsigned slot;
+    unsigned n;
+    char best[48];
+} direct_ctx;
+
+static bool is_hex(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }
+
+static bool direct_cb(const char *name, bool is_dir, void *vctx)
+{
+    direct_ctx *c = vctx;
+    char low[48];
+    size_t n = gk3_strlen(name);
+    if (is_dir || n != 32 + 9 + 1 + 5)
+        return true;
+    for (size_t i = 0; i <= n; i++)
+        low[i] = (name[i] >= 'A' && name[i] <= 'Z') ? (char)(name[i] + 32) : name[i];   /* systemd-boot 的 id 是小写 */
+    for (size_t i = 0; i < 32; i++)
+        if (!is_hex(low[i]))
+            return true;
+    if (gk3_memcmp(low + 32, "-android-", 9) || low[41] != (char)('a' + c->slot) || gk3_memcmp(low + 42, ".conf", 6))
+        return true;
+    if (opt.mid[0] && gk3_memcmp(low, opt.mid, 32))
+        return true;
+    c->n++;
+    if (!c->best[0] || str_cmp(low, c->best) > 0)
+        gk3_memcpy(c->best, low, n + 1);
+    return true;
+}
+
+/* 阶梯第 1 步。观察模式下这也是唯一允许的写（一个 NV 变量，systemd-boot 下次读到就删）。 */
+static void oneshot_direct(void)
+{
+    direct_ctx c;
+    unsigned want = g_target & 1;
+    EFI_STATUS st = EFI_SUCCESS;
+
+    if (!self_li) {
+        gk3_logf("!! fail-open: no LoadedImage, cannot look for the direct entry; LoaderEntryOneShot NOT written\n");
+        return;
+    }
+    for (unsigned k = 0; k < 2; k++) {
+        gk3_memset(&c, 0, sizeof(c));
+        c.slot = want ^ k;
+        st = gk3_dir_each(self_li->DeviceHandle, u"\\loader\\entries", direct_cb, &c);
+        if (EFI_ERROR(st) || c.n)
+            break;
+    }
+    if (EFI_ERROR(st) && !c.n) {
+        gk3_logf("!! fail-open: list \\loader\\entries: %s; LoaderEntryOneShot NOT written\n", gk3_efi_strerror(st));
+        return;
+    }
+    if (!c.n) {
+        gk3_logf("!! fail-open: no <machine-id>-android-{a,b}.conf on this ESP%s; LoaderEntryOneShot NOT written\n",
+                 opt.mid[0] ? " for gk3.mid" : "");
+        return;
+    }
+    if (c.slot != want)
+        gk3_logf("fail-open: no direct entry for _%c, using _%c's\n", 'a' + want, 'a' + c.slot);
+    if (c.n > 1)
+        gk3_logf("fail-open: %u direct entries for _%c, taking %s (same one systemd-boot's default glob picks)\n", c.n,
+                 'a' + c.slot, c.best);
+
+    CHAR16 v[48];
+    size_t n = gk3_strlen(c.best);
+    for (size_t i = 0; i <= n; i++)
+        v[i] = (CHAR16)(unsigned char)c.best[i];
+    UINTN size = (n + 1) * sizeof(CHAR16);
+    /* 与 scripts/boot-oneshot.sh 同一格式：属性 NV|BS|RT = 0x07，UTF-16LE + 结尾 NUL */
+    const UINT32 attr = EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS;
+    st = gk3_setvar(u"LoaderEntryOneShot", &gk3_guid_loader, attr, v, size);
+    if (EFI_ERROR(st)) {
+        gk3_logf("!! fail-open: SetVariable(LoaderEntryOneShot=%s): %s -- resetting anyway\n", c.best,
+                 gk3_efi_strerror(st));
+        return;
+    }
+    static uint8_t back[160];
+    UINTN bsz = sizeof(back);
+    UINT32 battr = 0;
+    st = gk3_getvar(u"LoaderEntryOneShot", &gk3_guid_loader, &battr, back, &bsz);
+    bool same = !EFI_ERROR(st) && bsz == size && !gk3_memcmp(back, v, size) && battr == attr;
+    gk3_logf("fail-open: LoaderEntryOneShot=%s written (attr 0x%x, %llu bytes), read back %s\n", c.best, attr,
+             (unsigned long long)size, same ? "OK" : EFI_ERROR(st) ? gk3_efi_strerror(st) : "MISMATCH");
 }
 
 static void __attribute__((noreturn, format(printf, 2, 3))) fail_open(const char *stage, const char *fmt, ...)
@@ -78,12 +232,13 @@ static void __attribute__((noreturn, format(printf, 2, 3))) fail_open(const char
     gk3_vsnprintf(why, sizeof(why), fmt, ap);
     va_end(ap);
 
-    if (!g_log.open)
-        gk3_log_reopen(&g_log);       /* 交接失败回来时文件已关 */
+    gk3_lg.screen = true;              /* 动作模式平时不上屏幕；失败要让人看得见 */
+    log_ensure();
     gk3_logf("\n!! FAIL-OPEN at %s: %s\n", stage, why);
-    gk3_logf("gk3boot.result=fail-open stage=%s t=%llu ms\n", stage, MS());
-    gk3_logf("fail-open: nothing was written (observe build: no misc, no EFI variable).\n"
-             "fail-open: ResetSystem(EfiResetCold) -> systemd-boot boots its default entry (the direct Android entry).\n");
+    gk3_logf("gk3boot.result=fail-open stage=%s target=_%c t=%llu ms\n", stage, 'a' + (g_target & 1), MS());
+    oneshot_direct();
+    gk3_logf("fail-open: nothing else is written on this path (misc untouched from here on); "
+             "ResetSystem(EfiResetCold) -> the direct entry (or, if no OneShot was written, systemd-boot's default).\n");
     gk3_log_close(&g_log);
     if (gk3_lg.file_failed)
         gk3_screenf("!! log file write failed: %s (log is incomplete)\n", gk3_efi_strerror(gk3_lg.file_err));
@@ -125,13 +280,64 @@ static int slot_letter(const char *v)
     return -1;
 }
 
+/* 0/1 开关；不是 0/1 → -1 */
+static int opt_bool(const char *v)
+{
+    return (v[0] == '0' || v[0] == '1') && !v[1] ? v[0] - '0' : -1;
+}
+
+/* systemd-boot 设的 LoaderBootCountPath（带计数的条目才有，"\loader\entries\x+2-1.conf"）取文件名；
+ * 没有就用 LoaderEntrySelected（条目 id，小写，boot.c:1540-1541、:2697）。值不合规就是 NULL。 */
+static const char *entry_name(void)
+{
+    static char out[128];
+    static uint8_t buf[512];
+    UINTN sz = sizeof(buf) - 2;
+    char a[256];
+    const char *base;
+    gk3_memset(buf, 0, sizeof(buf));
+    if (EFI_ERROR(gk3_getvar(u"LoaderBootCountPath", &gk3_guid_loader, NULL, buf, &sz))) {
+        sz = sizeof(buf) - 2;
+        gk3_memset(buf, 0, sizeof(buf));
+        if (EFI_ERROR(gk3_getvar(u"LoaderEntrySelected", &gk3_guid_loader, NULL, buf, &sz)))
+            return NULL;
+    }
+    gk3_ucs2_to_ascii((const CHAR16 *)buf, sz / 2, a, sizeof(a));
+    base = a;
+    for (const char *q = a; *q; q++)
+        if (*q == '\\' || *q == '/')
+            base = q + 1;
+    size_t n = 0;
+    for (; base[n] && n + 1 < sizeof(out); n++) {
+        char c = base[n];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' ||
+              c == '+' || c == '-'))
+            return NULL;
+        out[n] = c;
+    }
+    out[n] = 0;
+    return n ? out : NULL;
+}
+
+/* 条目名里的 "-android-a." / "-android-a+" → 0（gk3boot-android-a+3.conf、<mid>-android-a.conf 都认）；没有 → -1 */
+static int slot_from_entry(const char *e)
+{
+    if (!e)
+        return -1;
+    for (const char *p = e; *p; p++)
+        if (!gk3_memcmp(p, "-android-", 9) && (p[9] == 'a' || p[9] == 'b') && (p[10] == '.' || p[10] == '+'))
+            return p[9] - 'a';
+    return -1;
+}
+
 static void step_header(void)
 {
     static char opts[1024];
-    char v[32];
+    char v[40];
     EFI_STATUS st;
+    int b, eb;
 
-    gk3_logf("gk3boot %s  (S5 minimal, observe-only build; docs/boot-entry-design.md E4)\n", GK3BOOT_VERSION);
+    gk3_logf("gk3boot %s  (S5: observe + action modes; docs/boot-entry-design.md E5)\n", GK3BOOT_VERSION);
     st = gk3_bs->SetWatchdogTimer(WATCHDOG_SEC, WATCHDOG_CODE, 0, NULL);
     gk3_logf("watchdog: %u s %s\n", WATCHDOG_SEC, EFI_ERROR(st) ? gk3_efi_strerror(st) : "armed");
 
@@ -144,15 +350,36 @@ static void step_header(void)
     if (self_li->LoadOptions && self_li->LoadOptionsSize >= 2)
         gk3_ucs2_to_ascii(self_li->LoadOptions, self_li->LoadOptionsSize / 2, opts, sizeof(opts));
     gk3_logf("load_options: \"%s\"\n", opts);
+    g_entry = entry_name();
 
-    opt.observe_opt = opt_get(opts, "gk3.observe=", v, sizeof(v)) && v[0] == '1' && !v[1];
+    /* hint 先定（选项解析失败的 fail-open 也要知道往哪个槽回落） */
+    if (opt_get(opts, "gk3.hint=", v, sizeof(v)) && (opt.hint = slot_letter(v)) < 0) {
+        g_target = (unsigned)(slot_from_entry(g_entry) & 1);
+        fail_open("options", "gk3.hint=%s is not a|b", v);
+    }
+    eb = slot_from_entry(g_entry);
+    g_hint = opt.hint >= 0 ? (unsigned)opt.hint : eb >= 0 ? (unsigned)eb : 0;
+    g_target = g_hint;
+
+    if (opt_get(opts, "gk3.observe=", v, sizeof(v))) {
+        if ((b = opt_bool(v)) < 0)
+            fail_open("options", "gk3.observe=%s is not 0|1", v);
+        opt.observe = b;
+    }
+    if (opt_get(opts, "gk3.dispatch=", v, sizeof(v))) {
+        if ((b = opt_bool(v)) < 0)
+            fail_open("options", "gk3.dispatch=%s is not 0|1", v);
+        opt.dispatch = b;
+    }
     if (opt_get(opts, "gk3.slot=", v, sizeof(v)) && (opt.force_slot = slot_letter(v)) < 0)
         fail_open("options", "gk3.slot=%s is not a|b", v);
-    if (opt_get(opts, "gk3.hint=", v, sizeof(v))) {
-        int h = slot_letter(v);
-        if (h < 0)
-            fail_open("options", "gk3.hint=%s is not a|b", v);
-        opt.hint = (unsigned)h;
+    if (opt_get(opts, "gk3.mid=", v, sizeof(v))) {
+        bool okm = gk3_strlen(v) == 32;
+        for (size_t i = 0; okm && i < 32; i++)
+            okm = is_hex(v[i]);
+        if (!okm)
+            fail_open("options", "gk3.mid=%s is not 32 lowercase hex digits", v);
+        gk3_memcpy(opt.mid, v, 33);
     }
     if (opt_get(opts, "gk3.hold=", v, sizeof(v))) {
         unsigned h = 0;
@@ -160,18 +387,18 @@ static void step_header(void)
             h = h * 10 + (unsigned)(*q - '0');
         opt.hold = h > 30 ? 30 : h;
     }
-    gk3_logf("mode: observe%s force_slot=%c hint=_%c hold=%u s\n",
-             opt.observe_opt ? "" : " (gk3.observe=1 missing: this build has no action mode, observing anyway)",
-             opt.force_slot < 0 ? '-' : 'a' + opt.force_slot, 'a' + opt.hint, opt.hold);
-}
-
-static void step_open_log(void)
-{
-    if (gk3_log_open_seq(&g_log, self_li->DeviceHandle, u"\\EFI\\gk3boot\\log", "boot-", LOG_MAX)) {
-        gk3_logf("log_file: \\EFI\\gk3boot\\log\\boot-%u.txt\n", g_log.n);
-        gk3_log_sync();
+    gk3_logf("mode: %s dispatch=%s force_slot=%c hint=_%c%s hold=%u s entry=%s\n", opt.observe ? "observe" : "action",
+             opt.dispatch ? "on" : "off", opt.force_slot < 0 ? '-' : 'a' + opt.force_slot, 'a' + g_hint,
+             opt.hint >= 0 ? "" : eb >= 0 ? " (from entry name)" : " (default)", opt.hold, g_entry ? g_entry : "-");
+    if (opt.observe) {
+        /* 观察模式：上屏幕（把到这里为止的几行补打出来）、每次都留日志 */
+        gk3_lg.screen = true;
+        gk3_screenf("\n%s", gk3_lg.buf ? gk3_lg.buf : "");   /* 开头的换行：systemd-boot 可能把光标留在行中间 */
+        log_ensure();
     } else {
-        gk3_logf("!! no log file (screen only); continuing\n");
+        /* 动作模式：正常路径不上屏幕、不写 ESP（§4.3.1、§4.12）；日志先只在内存里，出异常时才落盘 */
+        if (opt.force_slot >= 0)
+            notable("gk3.slot=%c forces the slot in action mode: no tries are written for it", 'a' + opt.force_slot);
     }
 }
 
@@ -214,19 +441,23 @@ static void step_disk(void)
             if (!disk.bio) {
                 disk.bio = b;
                 gk3_dp_text(d, dp, sizeof(dp));
-                gk3_logd("whole_disk: %s bs=%u last=%llu\n", dp, b->Media->BlockSize,
-                         (unsigned long long)b->Media->LastBlock);
+                gk3_logd("whole_disk: %s bs=%u last=%llu ro=%u\n", dp, b->Media->BlockSize,
+                         (unsigned long long)b->Media->LastBlock, b->Media->ReadOnly);
             }
         }
     }
     gk3_free(hs);
-    /* §4.2 第 1 步：本盘找不到（或不唯一）时设计稿要扫所有整盘；最小版本直接 fail-open */
+    /* §4.2 第 1 步：本盘找不到（或不唯一）时设计稿要扫所有整盘；这一版直接 fail-open */
     if (matches != 1)
         fail_open("disk", "whole-disk candidates for own ESP: %llu (expected 1)", (unsigned long long)matches);
     if (disk.bio->Media->BlockSize < 512 || disk.bio->Media->BlockSize > 4096 || disk.bio->Media->IoAlign > 4096)
         fail_open("disk", "unsupported block size %u / io_align %u", disk.bio->Media->BlockSize,
                   disk.bio->Media->IoAlign);
-    gk3_blk_from_bio(&disk.dev, &disk.ctx, disk.bio);   /* 只读：write / flush 都是 NULL */
+    /* 观察模式只读（write / flush 都是 NULL）；动作模式才给写回调，且只写 misc 的两处（step_misc） */
+    if (opt.observe)
+        gk3_blk_from_bio(&disk.dev, &disk.ctx, disk.bio);
+    else
+        gk3_blk_from_bio_rw(&disk.dev, &disk.ctx, disk.bio);
 
     uint32_t bs = disk.dev.block_size;
     uint8_t *hdr = gk3_alloc_pages(bs);
@@ -272,11 +503,11 @@ static void part(const char *name, gk3_gpt_part *p)
         fail_open("disk", "%s: %s", name, gk3_strerror(e));
 }
 
-/* ------------------------------------------------------------------ 2. misc 与决策（只算、只记，不写） */
+/* ------------------------------------------------------------------ 2. misc：解码、选槽；动作模式下扣 tries、写 GK3 记录 */
 
 static const char *const selk[] = {"boot", "bcab_invalid", "noslot", "merging"};
 
-/* §4.3.4：动作模式会怎么处理这份 BCB（这一版只记录 —— 与今天的直连条目一样不消费 BCB） */
+/* §4.3.4：分派打开、执行端也在时会怎么处理这份 BCB（观察模式与分派关时只记录） */
 static const char *bcb_would(gk3_bcb_kind k)
 {
     switch (k) {
@@ -293,23 +524,116 @@ static const char *bcb_would(gk3_bcb_kind k)
 
 static unsigned g_slot;
 static const char *g_event = "none";
+static char g_streak[4];               /* 动作模式写进 GK3 的 boot_streak（cmdline 用）；空 = 不报 */
+
+static struct {
+    gk3_gpt_part p;                    /* misc 分区 */
+    uint64_t blocks;
+    uint8_t *scratch;                  /* 两块，gk3_blk_write_bytes_verify 用 */
+} misc;
+
+/* 写 misc 分区内 [off, off+len)，写后逐块读回（gk3_blk_write_bytes_verify），再按字节读一遍与 data 比对 */
+static gk3_err misc_write(uint32_t off, const uint8_t *data, size_t len, uint8_t *back)
+{
+    uint32_t bs = disk.dev.block_size;
+    gk3_err e = gk3_blk_write_bytes_verify(&disk.dev, misc.p.first_lba, misc.blocks, off, data, len, misc.scratch,
+                                           2 * bs);
+    if (e)
+        return e;
+    e = gk3_blk_read_bytes(&disk.dev, misc.p.first_lba, misc.blocks, off, back, len, misc.scratch, 2 * bs);
+    if (e)
+        return e;
+    return gk3_memcmp(back, data, len) ? GK3_EVERIFY : GK3_OK;
+}
+
+/* 动作模式：GK3 记录（§4.5）。写不进去只记日志、照常启动 —— 记录是参考信息，CRC 无效时视为"无记录"。 */
+static void action_rec(const uint8_t *m, const gk3_bcb_info *bi, const gk3_sel *s)
+{
+    static uint8_t rec[GK3_REC_SIZE], back[GK3_REC_SIZE];
+    const uint8_t *old = m + GK3_MISC_GK3_OFF;
+    gk3_err re = gk3_rec_validate(old);
+
+    if (re) {
+        /* 不是迁移（迁移随分派开关打开的那一版做，§4.10）：只建一份空记录，不置迁移标记 */
+        gk3_rec_init(rec);
+        gk3_logf("gk3rec: new v1 record (was: %s%s); migration marker NOT set (dispatch build does that, §4.10)\n",
+                 gk3_strerror(re), gk3_is_zero(old, GK3_REC_SIZE) ? ", all zero" : ", NOT all zero");
+        if (!gk3_is_zero(old, GK3_REC_SIZE))
+            notable("gk3rec: 8 KiB area held non-zero data that is not a valid GK3 record (%s); overwriting",
+                    gk3_strerror(re));
+    } else {
+        gk3_memcpy(rec, old, GK3_REC_SIZE);
+    }
+    uint8_t streak = gk3_rec_inc_boot_streak(rec);
+    gk3_snprintf(g_streak, sizeof(g_streak), "%u", streak);
+
+    /* 回落：只在"进入回落"的那一次记事件、写 ESP 日志（之后 active 槽一直是那个 tries 0 的槽，每次都会算成回落） */
+    bool fb = opt.force_slot < 0 && s->kind == GK3_SEL_BOOT && s->fallback;
+    if (fb && !(gk3_rec_flags(rec) & GK3_REC_F_IN_FALLBACK)) {
+        gk3_rec_event_add(rec, GK3_EV_FALLBACK, (uint8_t)g_slot, s->active);
+        gk3_rec_set_flag(rec, GK3_REC_F_IN_FALLBACK, true);
+        notable("fallback: active slot _%c is not bootable (tries exhausted, not marked successful) -> booting _%c; "
+                "GK3 event fallback recorded", 'a' + s->active, 'a' + g_slot);
+    } else if (fb) {
+        gk3_logf("fallback: still on _%c (active _%c unbootable); already recorded\n", 'a' + g_slot, 'a' + s->active);
+    } else {
+        gk3_rec_set_flag(rec, GK3_REC_F_IN_FALLBACK, false);
+    }
+
+    /* BCB */
+    if (bi->kind == GK3_BCB_NONE) {
+        gk3_rec_set_bcb_seen(rec, 0);
+    } else if (!opt.dispatch) {
+        uint32_t crc = gk3_crc32(0, m, GK3_MISC_BCB_SIZE);
+        if (!crc)
+            crc = 1;                   /* 0 留给"没有" */
+        if (gk3_rec_bcb_seen(rec) != crc) {
+            gk3_rec_event_add(rec, GK3_EV_BCB_IGNORED, 0xff, (uint32_t)bi->kind);
+            gk3_rec_set_bcb_seen(rec, crc);
+            notable("bcb: kind=%s command=\"%s\" present; dispatch is off (E-K7): NOT consumed, NOT cleared, "
+                    "booting Android (dispatch would: %s)", gk3_bcb_kind_name(bi->kind), bi->command,
+                    bcb_would(bi->kind));
+        } else {
+            gk3_logf("bcb: same BCB as before (crc %08x), still not consumed; already recorded\n", crc);
+        }
+    }
+    if (opt.dispatch) {
+        gk3_disp_plan dp;
+        gk3_dispatch_plan(bi, rec, (uint8_t)g_slot, &dp);
+        if (dp.action != GK3_DISP_NONE)
+            notable("dispatch: action=%s why=%s count=%u%s -> this build has no executor (S7): recorded only, BCB left "
+                    "as is, booting Android", gk3_disp_name(dp.action), gk3_bcb_kind_name(dp.why), dp.count,
+                    dp.clear_command_first ? " clear_command_first" : "");
+        else
+            gk3_logf("dispatch: none\n");
+    }
+
+    gk3_rec_seal(rec);
+    gk3_err e = misc_write(GK3_MISC_GK3_OFF, rec, GK3_REC_SIZE, back);
+    if (e)
+        anomaly("gk3rec: write misc+0x2000 failed: %s (efi %s); continuing (the record is advisory)", gk3_strerror(e),
+                gk3_efi_strerror(disk.ctx.last_err));
+    else
+        gk3_logf("gk3rec: written, boot_streak=%u flags=0x%x (read back OK; bootloop threshold not enforced: "
+                 "no executor yet)\n", streak, gk3_rec_flags(rec));
+}
 
 static void step_misc(void)
 {
-    gk3_gpt_part p;
     char hx[80];
-    part("misc", &p);
+    part("misc", &misc.p);
     uint32_t bs = disk.dev.block_size;
-    uint64_t pbytes = (p.last_lba - p.first_lba + 1) * bs;
+    misc.blocks = misc.p.last_lba - misc.p.first_lba + 1;
+    uint64_t pbytes = misc.blocks * bs;
     if (pbytes < GK3_MISC_READ_SIZE)
         fail_open("misc", "misc is only %llu bytes (< 64 KiB)", (unsigned long long)pbytes);
     uint8_t *m = gk3_alloc_pages(GK3_MISC_READ_SIZE);
-    if (!m)
+    if (!m || !(misc.scratch = gk3_alloc_pages(2 * bs)))
         fail_open("misc", "alloc");
     uint64_t t = gk3_ticks();
-    if (disk.dev.read(disk.dev.ctx, p.first_lba, GK3_MISC_READ_SIZE / bs, m))
-        fail_open("misc", "read misc (p%u, 64 KiB): %s", p.index, gk3_efi_strerror(disk.ctx.last_err));
-    gk3_logf("misc: p%u read 64 KiB [%llu.%llu ms]\n", p.index, MSF(gk3_us_since(t)));
+    if (disk.dev.read(disk.dev.ctx, misc.p.first_lba, GK3_MISC_READ_SIZE / bs, m))
+        fail_open("misc", "read misc (p%u, 64 KiB): %s", misc.p.index, gk3_efi_strerror(disk.ctx.last_err));
+    gk3_logf("misc: p%u read 64 KiB [%llu.%llu ms]\n", misc.p.index, MSF(gk3_us_since(t)));
 
     /* BCB */
     gk3_bcb_info bi;
@@ -319,14 +643,20 @@ static void step_misc(void)
     const uint8_t *rec = m + GK3_MISC_GK3_OFF;
     gk3_err re = gk3_rec_validate(rec);
     bool migrated = !re && gk3_rec_migrated(rec);
-    gk3_logf("gk3rec: %s%s\n", re ? gk3_strerror(re) : "valid", re ? "" : migrated ? " migrated" : " not-migrated");
-    if (!migrated)
-        gk3_logf("would (action): first-run migration: %sset marker (NOT done)\n",
-                 bi.kind == GK3_BCB_NONE ? "BCB empty, " : "clear BCB without executing it, ");
+    if (re)
+        gk3_logf("gk3rec: %s\n", gk3_strerror(re));
     else
-        gk3_logf("would (action): BCB -> %s (NOT done)\n", bcb_would(bi.kind));
+        gk3_logf("gk3rec: valid%s boot_streak=%u flags=0x%x\n", migrated ? " migrated" : " not-migrated",
+                 gk3_rec_boot_streak(rec), gk3_rec_flags(rec));
+    if (opt.observe) {
+        if (!migrated)
+            gk3_logf("would (action): first-run migration: %sset marker (NOT done)\n",
+                     bi.kind == GK3_BCB_NONE ? "BCB empty, " : "clear BCB without executing it, ");
+        else
+            gk3_logf("would (action): BCB -> %s (NOT done)\n", bcb_would(bi.kind));
+    }
 
-    /* BCAB + virtual_ab → 选槽（§4.3.2）；在副本上算 */
+    /* BCAB + virtual_ab → 选槽（§4.3.2）；在副本上算，动作模式下写回的就是这份副本 */
     const uint8_t *bc = m + GK3_MISC_BCAB_OFF;
     gk3_err be = gk3_bcab_validate(bc);
     hex_str(bc, 32, hx, sizeof(hx));
@@ -334,10 +664,10 @@ static void step_misc(void)
     gk3_logf("bcab: %s", be ? gk3_strerror(be) : "valid");
     if (!be)
         for (unsigned i = 0; i < 2; i++) {
-            gk3_slot_info s;
-            gk3_bcab_get_slot(bc, i, &s);
-            gk3_logf("  _%c=%u/%u%s%s", 'a' + i, s.priority, s.tries, s.successful ? "/ok" : "",
-                     gk3_slot_bootable(&s) ? "" : "/unbootable");
+            gk3_slot_info si;
+            gk3_bcab_get_slot(bc, i, &si);
+            gk3_logf("  _%c=%u/%u%s%s", 'a' + i, si.priority, si.tries, si.successful ? "/ok" : "",
+                     gk3_slot_bootable(&si) ? "" : "/unbootable");
         }
     gk3_logf("\n");
     gk3_vab v;
@@ -346,19 +676,21 @@ static void step_misc(void)
     gk3_logf("vab: %s merge_status=%u source=_%c\n", v.valid ? "valid" : "invalid", v.merge_status,
              v.source_slot < 2 ? 'a' + v.source_slot : '?');
 
-    uint8_t copy[32];
+    static uint8_t copy[32], back[32];
     gk3_sel s;
     gk3_memcpy(copy, bc, 32);
-    gk3_select_slot(copy, opt.hint, merge, &s);
+    gk3_select_slot(copy, g_hint, merge, &s);
     gk3_logf("decision: %s slot=_%c active=_%c fallback=%u\n", selk[s.kind], 'a' + s.slot, 'a' + s.active, s.fallback);
-    if (s.decremented) {
-        hex_str(copy, 32, hx, sizeof(hx));
-        gk3_logf("would (action): write misc+0x800: _%c tries %u -> %u (NOT written; new bcab %s)\n", 'a' + s.slot,
-                 s.tries_before, s.tries_after, hx);
-    } else if (s.kind == GK3_SEL_BOOT) {
-        gk3_logf("would (action): no misc write (slot already successful)\n");
+    if (opt.observe) {
+        if (s.decremented) {
+            hex_str(copy, 32, hx, sizeof(hx));
+            gk3_logf("would (action): write misc+0x800: _%c tries %u -> %u (NOT written; new bcab %s)\n", 'a' + s.slot,
+                     s.tries_before, s.tries_after, hx);
+        } else if (s.kind == GK3_SEL_BOOT) {
+            gk3_logf("would (action): no misc write (slot already successful)\n");
+        }
+        gk3_logf("would (action): GK3 boot_streak +1 (NOT written)\n");
     }
-    gk3_logf("would (action): GK3 boot_streak +1 (NOT written)\n");
 
     if (opt.force_slot >= 0) {
         g_slot = (unsigned)opt.force_slot;
@@ -372,16 +704,50 @@ static void step_misc(void)
             g_event = s.fallback ? "fallback" : "none";
             break;
         case GK3_SEL_BCAB_INVALID:
-            g_slot = opt.hint;
+            g_slot = g_hint;
             g_event = "bcab_invalid";
+            if (!opt.observe)
+                notable("bcab invalid (%s): booting hint _%c without writing misc (the HAL re-initialises it)",
+                        gk3_strerror(s.bcab_err), 'a' + g_hint);
             break;
         case GK3_SEL_NOSLOT:
+            /* 本该进执行端（why=noslot）；执行端还没有 → 直连条目（今天的路，不猜槽：用 active 槽） */
+            g_target = s.slot;
+            fail_open("decision", "noslot: neither slot is bootable; the executor (why=noslot) is not in this build");
         case GK3_SEL_MERGING:
-            /* 动作模式会进执行端（why=noslot / merging）；执行端还不存在 → 回到今天的路 */
-            fail_open("decision", "%s: action mode would enter the executor (why=%s), which this build does not have",
-                      selk[s.kind], selk[s.kind]);
+            /* §4.3.2-4：合并中不换槽 —— 不回落到另一槽；执行端（why=merging）还没有 → active 槽的直连条目 */
+            g_target = s.slot;
+            fail_open("decision", "merging: active slot _%c is not bootable while a snapshot merge is in progress; "
+                      "refusing to fall back to _%c (§4.3.2-4); the executor (why=merging) is not in this build",
+                      'a' + s.slot, 'a' + (s.slot ^ 1));
         }
         gk3_logf("slot: _%c (event=%s)\n", 'a' + g_slot, g_event);
+    }
+    g_target = g_slot;
+
+    if (!opt.observe) {
+        /* 1) 扣 tries（§4.3.2-3）：写 → Flush → 读回比对；写不进去就不启动这一槽（没扣到 tries 的未确认槽可能一直起不来） */
+        if (s.decremented && opt.force_slot < 0) {
+            gk3_err e = misc_write(GK3_MISC_BCAB_OFF, copy, 32, back);
+            if (!e && gk3_bcab_validate(back))
+                e = GK3_ECRC;
+            if (e)
+                fail_open("misc-write", "BCAB _%c tries %u -> %u: %s (efi %s)", 'a' + s.slot, s.tries_before,
+                          s.tries_after, gk3_strerror(e), gk3_efi_strerror(disk.ctx.last_err));
+            hex_str(back, 32, hx, sizeof(hx));
+            gk3_logf("misc: wrote +0x800: _%c tries %u -> %u (read back OK, crc OK; bcab %s)\n", 'a' + s.slot,
+                     s.tries_before, s.tries_after, hx);
+            if (!s.tries_after)
+                gk3_logf("misc: _%c now tries 0 and not successful = unbootable (the SetSlotAsUnbootable state); "
+                         "unless Android marks it successful, the next boot falls back to _%c\n",
+                         'a' + s.slot, 'a' + (s.slot ^ 1));
+        } else {
+            gk3_logf("misc: BCAB not written (%s)\n", opt.force_slot >= 0 ? "forced slot"
+                                                      : s.kind == GK3_SEL_BOOT ? "slot already successful"
+                                                                               : "BCAB invalid");
+        }
+        /* 2) GK3 记录 */
+        action_rec(m, &bi, &s);
     }
     gk3_free_pages(m, GK3_MISC_READ_SIZE);
 }
@@ -437,7 +803,8 @@ static void step_boot(void)
     e = gk3_bootimg_verify_id(b, boot.img, boot.img_len, got);
     uint64_t us_s = gk3_us_since(t);
     hex_str(got, 20, hx, sizeof(hx));
-    /* §4.3.3：SHA1 不对时动作模式会换另一个可启动的槽（不写 misc）、两个都坏走 H1；最小版本直接 fail-open */
+    /* §4.3.3：SHA1 不对时完整版会换另一个可启动的槽（不写 misc）、两个都坏走 H1；这一版直接 fail-open
+     * —— 直连条目启动的是 ESP 上那份内核，效果上就是 H1 */
     if (e)
         fail_open("boot", "%s: SHA1(id) MISMATCH: header %s, computed %s", name, want, hx);
     gk3_logf("%s: read %llu.%llu ms, sha1(id) %llu.%llu ms: OK\n", name, MSF(us_r), MSF(us_s));
@@ -460,43 +827,11 @@ static void step_boot(void)
 
 static CHAR16 *g_cmdline16;
 
-/* systemd-boot 设的 LoaderBootCountPath（带计数的条目才有，"\loader\entries\x+2-1.conf"）取文件名；
- * 没有就用 LoaderEntrySelected（条目 id，小写，boot.c:1540-1541、:2697）。值不合规就不加。 */
-static const char *entry_name(void)
-{
-    static char out[128];
-    static uint8_t buf[512];
-    UINTN sz = sizeof(buf) - 2;
-    char a[256];
-    const char *base;
-    gk3_memset(buf, 0, sizeof(buf));
-    if (EFI_ERROR(gk3_getvar(u"LoaderBootCountPath", &gk3_guid_loader, NULL, buf, &sz))) {
-        sz = sizeof(buf) - 2;
-        gk3_memset(buf, 0, sizeof(buf));
-        if (EFI_ERROR(gk3_getvar(u"LoaderEntrySelected", &gk3_guid_loader, NULL, buf, &sz)))
-            return NULL;
-    }
-    gk3_ucs2_to_ascii((const CHAR16 *)buf, sz / 2, a, sizeof(a));
-    base = a;
-    for (const char *q = a; *q; q++)
-        if (*q == '\\' || *q == '/')
-            base = q + 1;
-    size_t n = 0;
-    for (; base[n] && n + 1 < sizeof(out); n++) {
-        char c = base[n];
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' ||
-              c == '+' || c == '-'))
-            return NULL;
-        out[n] = c;
-    }
-    out[n] = 0;
-    return n ? out : NULL;
-}
-
 static void step_cmdline(void)
 {
     static char base[GK3_BOOT_ARGS_SIZE + GK3_BOOT_EXTRA_ARGS_SIZE + 8], out[4096];
-    gk3_android_args a = {g_slot, "gk3boot-" GK3BOOT_VERSION, g_event, entry_name(), "observe"};
+    gk3_android_args a = {g_slot, "gk3boot-" GK3BOOT_VERSION, g_event, g_entry, opt.observe ? "observe" : "action",
+                          !opt.observe && g_streak[0] ? g_streak : NULL};
     long bn = gk3_bootimg_cmdline(&boot.b, base, sizeof(base));
     if (bn < 0)
         fail_open("cmdline", "boot.img cmdline does not fit");
@@ -520,9 +855,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     gk3efi_init(image, st);
     T0 = gk3_ticks();
     gk3_log_init(LOG_CAP);
-    gk3_screenf("\n");          /* systemd-boot 可能把光标留在行中间；只上屏幕 */
+    gk3_lg.screen = false;      /* 模式定下来之前先不上屏幕（动作模式整个正常路径都不上） */
     step_header();
-    step_open_log();
     step_disk();
     step_misc();
     step_boot();

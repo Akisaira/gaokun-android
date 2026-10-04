@@ -939,6 +939,37 @@ static int bio_read(void *vctx, uint64_t lba, uint32_t count, void *buf)
     return 0;
 }
 
+static int bio_write(void *vctx, uint64_t lba, uint32_t count, const void *buf)
+{
+    gk3_bio_ctx *c = vctx;
+    uint32_t bs = c->bio->Media->BlockSize;
+    uint32_t per = BIO_CHUNK / bs ? BIO_CHUNK / bs : 1;
+    const uint8_t *b = buf;
+    while (count) {
+        uint32_t n = count < per ? count : per;
+        EFI_STATUS st = c->bio->WriteBlocks(c->bio, c->media_id, lba, (UINTN)n * bs, (void *)b);
+        if (EFI_ERROR(st)) {
+            c->last_err = st;
+            return -1;
+        }
+        lba += n;
+        b += (size_t)n * bs;
+        count -= n;
+    }
+    return 0;
+}
+
+static int bio_flush(void *vctx)
+{
+    gk3_bio_ctx *c = vctx;
+    EFI_STATUS st = c->bio->FlushBlocks(c->bio);
+    if (EFI_ERROR(st)) {
+        c->last_err = st;
+        return -1;
+    }
+    return 0;
+}
+
 void gk3_blk_from_bio(gk3_blk *dev, gk3_bio_ctx *ctx, EFI_BLOCK_IO_PROTOCOL *bio)
 {
     ctx->bio = bio;
@@ -952,6 +983,13 @@ void gk3_blk_from_bio(gk3_blk *dev, gk3_bio_ctx *ctx, EFI_BLOCK_IO_PROTOCOL *bio
     dev->flush = NULL;
 }
 
+void gk3_blk_from_bio_rw(gk3_blk *dev, gk3_bio_ctx *ctx, EFI_BLOCK_IO_PROTOCOL *bio)
+{
+    gk3_blk_from_bio(dev, ctx, bio);
+    dev->write = bio_write;
+    dev->flush = bio_flush;
+}
+
 /* ------------------------------------------------------------------ 变量与句柄 */
 
 EFI_STATUS gk3_getvar(const CHAR16 *name, const EFI_GUID *g, UINT32 *attr, void *buf, UINTN *size)
@@ -963,9 +1001,59 @@ EFI_STATUS gk3_getvar(const CHAR16 *name, const EFI_GUID *g, UINT32 *attr, void 
     return st;
 }
 
+EFI_STATUS gk3_setvar(const CHAR16 *name, const EFI_GUID *g, UINT32 attr, const void *buf, UINTN size)
+{
+    return gk3_rt->SetVariable((CHAR16 *)name, (EFI_GUID *)g, attr, size, (void *)buf);
+}
+
 EFI_STATUS gk3_handles(const EFI_GUID *g, UINTN *n, EFI_HANDLE **out)
 {
     *n = 0;
     *out = NULL;
     return gk3_bs->LocateHandleBuffer(ByProtocol, (EFI_GUID *)g, NULL, n, out);
+}
+
+/* ------------------------------------------------------------------ 目录 */
+
+EFI_STATUS gk3_dir_each(EFI_HANDLE dev, const CHAR16 *path, gk3_dir_cb cb, void *ctx)
+{
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
+    EFI_FILE_PROTOCOL *root = NULL, *d = NULL;
+    /* FAT 长文件名最多 255 个 UCS-2 字符：EFI_FILE_INFO 头 + 512 字节足够；8 字节对齐（里面有 UINT64） */
+    static union {
+        EFI_FILE_INFO fi;
+        uint64_t align;
+        uint8_t raw[1024];
+    } u;
+    char name[260];
+    EFI_STATUS st;
+
+    if (!dev)
+        return EFI_INVALID_PARAMETER;
+    st = gk3_bs->HandleProtocol(dev, (EFI_GUID *)&gk3_guid_simple_fs, (void **)&fs);
+    if (EFI_ERROR(st) || !fs)
+        return EFI_ERROR(st) ? st : EFI_NOT_FOUND;
+    st = fs->OpenVolume(fs, &root);
+    if (EFI_ERROR(st) || !root)
+        return EFI_ERROR(st) ? st : EFI_NOT_FOUND;
+    st = root->Open(root, &d, (CHAR16 *)path, EFI_FILE_MODE_READ, 0);
+    root->Close(root);
+    if (EFI_ERROR(st) || !d)
+        return EFI_ERROR(st) ? st : EFI_NOT_FOUND;
+    for (;;) {
+        UINTN sz = sizeof(u.raw);
+        st = d->Read(d, &sz, u.raw);
+        if (EFI_ERROR(st))
+            break;                  /* BUFFER_TOO_SMALL 时读位置不前进，没法跳过这一项：停 */
+        if (sz == 0)
+            break;                  /* 读完 */
+        size_t hdr = (size_t)((const uint8_t *)u.fi.FileName - u.raw);
+        if (sz <= hdr)
+            continue;
+        gk3_ucs2_to_ascii(u.fi.FileName, (sz - hdr) / sizeof(CHAR16), name, sizeof(name));
+        if (!cb(name, (u.fi.Attribute & EFI_FILE_DIRECTORY) != 0, ctx))
+            break;
+    }
+    d->Close(d);
+    return st;
 }

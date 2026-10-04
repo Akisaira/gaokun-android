@@ -166,12 +166,24 @@ typedef struct {
 } gk3_bio_ctx;
 
 void gk3_blk_from_bio(gk3_blk *dev, gk3_bio_ctx *ctx, EFI_BLOCK_IO_PROTOCOL *bio);
+/* 同上，但给 write / flush 回调（WriteBlocks 按 chunk 拆、FlushBlocks）。只给 gk3boot 的动作模式用：
+ * 写哪里由调用方负责（只写 misc 的 BCAB 与 GK3 记录，经 gk3_blk_write_bytes_verify 写后读回）。 */
+void gk3_blk_from_bio_rw(gk3_blk *dev, gk3_bio_ctx *ctx, EFI_BLOCK_IO_PROTOCOL *bio);
 
 /* ------------------------------------------------------------------ 变量与句柄 */
 
 /* GetVariable 进调用方缓冲区；*size 进出 */
 EFI_STATUS gk3_getvar(const CHAR16 *name, const EFI_GUID *g, UINT32 *attr, void *buf, UINTN *size);
+/* SetVariable（attr 原样传，删变量 = size 0） */
+EFI_STATUS gk3_setvar(const CHAR16 *name, const EFI_GUID *g, UINT32 attr, const void *buf, UINTN size);
 /* LocateHandleBuffer(ByProtocol)；*n 出；返回的数组要 gk3_free */
 EFI_STATUS gk3_handles(const EFI_GUID *g, UINTN *n, EFI_HANDLE **out);
+
+/* ------------------------------------------------------------------ 目录 */
+
+/* 列 dev（某个 ESP 的句柄）上 path 目录里的每一项（含 "." ".."），名字转成 ASCII（非 ASCII 记成 '?'）。
+ * cb 返回 false 就停。目录打不开 / 读出错返回对应的 EFI 状态，读完返回 SUCCESS。只读，不建任何东西。 */
+typedef bool (*gk3_dir_cb)(const char *name, bool is_dir, void *ctx);
+EFI_STATUS gk3_dir_each(EFI_HANDLE dev, const CHAR16 *path, gk3_dir_cb cb, void *ctx);
 
 #endif /* GK3EFI_H */

@@ -3,7 +3,7 @@
 #   make -C tools/gk3boot/efi                 → tools/gk3boot/build/efi/{gk3boot,gk3probe,gk3probe-child,gk3-fake-android}.efi
 #   make -C tools/gk3boot/efi VERSION=<串>     探针里打印的版本（scripts/gk3boot/test-probe.sh 传 git 描述）
 #   make -C tools/gk3boot/efi BOOT_VERSION=<串> gk3boot 的版本（进 androidboot.bootloader=gk3boot-<串>，
-#                                              只准 [A-Za-z0-9._+-]；scripts/gk3boot/test-boot.sh 传 0.1.0-e4.g<提交>）
+#                                              只准 [A-Za-z0-9._+-]；scripts/gk3boot/test-boot.sh 传 0.2.0-e5.g<提交>）
 #
 # 工具链选 gnu-efi（Debian 包 gnu-efi 3.0.18）而不是 EDK2，理由见 tools/gk3boot/README.md §9.1：
 # 一个包、一条 gcc 命令就能把 freestanding 的 libgk3core 原样链进来；EDK2 要 BaseTools + .inf/.dsc
@@ -14,6 +14,9 @@ GK3      := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 B        := $(GK3)/build/efi
 VERSION  ?= dev
 BOOT_VERSION ?= dev
+# gk3boot 的 BCB 分派开关缺省值（条目 options 里的 gk3.dispatch=0|1 优先）。E-K7：只有与执行端（S7）、迁移
+# 同版发布时才改成 1；改了要连同版本串一起变（.version 只跟 BOOT_VERSION，这里改了请先 make clean）
+DISPATCH_DEFAULT ?= 0
 EFIINC   ?= /usr/include/efi
 EFILIB   ?= /usr/lib
 CC       := gcc
@@ -61,7 +64,8 @@ $(B)/probe/%.o: $(GK3)/efi/probe/%.c $(GK3)/efi/lib/gk3efi.h $(GK3)/efi/probe/ch
 
 $(B)/boot/%.o: $(GK3)/efi/boot/%.c $(GK3)/efi/lib/gk3efi.h $(GK3)/efi/boot/handoff.h $(GK3)/core/include/gk3core.h
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -I$(GK3)/efi/boot -DGK3BOOT_VERSION='"$(BOOT_VERSION)"' -c $< -o $@
+	$(CC) $(CFLAGS) -I$(GK3)/efi/boot -DGK3BOOT_VERSION='"$(BOOT_VERSION)"' \
+	    -DGK3BOOT_DISPATCH_DEFAULT=$(DISPATCH_DEFAULT) -c $< -o $@
 
 # 版本串变了就重编 gk3boot.c（版本进二进制，也进 cmdline）：.version 只在内容变时才换 mtime
 $(B)/boot/.version: FORCE_BOOT_VERSION

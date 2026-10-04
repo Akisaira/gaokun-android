@@ -47,7 +47,7 @@ fi
 # 版本串进 androidboot.bootloader=gk3boot-<串>（→ ro.bootloader）：只准 [A-Za-z0-9._+-]
 rev=$(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 dirty=$(git -C "$ROOT" status --porcelain -- tools/gk3boot scripts/gk3boot 2>/dev/null | grep -q . && echo .dirty || true)
-BOOT_VERSION="0.1.0-e4.g$rev$dirty"
+BOOT_VERSION="0.2.0-e5.g$rev$dirty"
 echo "▶ gk3boot 版本串 $BOOT_VERSION"
 
 docker run --rm -v "$ROOT:/src" "${MNT[@]}" -e BOOT_VERSION="$BOOT_VERSION" \
