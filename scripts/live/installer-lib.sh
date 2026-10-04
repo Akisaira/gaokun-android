@@ -503,9 +503,11 @@ gk3__emit_part() {
 #   检查排在写完 super 之后 —— 缺一个就是分区表已改、super 已写、然后死在
 #   引导链那一步，留下一块半装的盘（本函数下面 ESP 那段的注释警告过同一件事）。
 # ESP 上 <machine-id>/ 用哪个目录。$1=挂载点 $2=没有现成目录时用的名字
-# ★ 必须与 OTA postinstall 找目录的规则【一致】：第一个 32 位十六进制的目录
-#   （device/huawei/gaokun3/bin/gaokun3-ota-postinstall.sh:79，`ls | grep | head -1`）——
+# ★ 必须与 OTA postinstall 找目录的规则【一致】：第一个 32 位十六进制的目录 ——
 #   不一致的话 OTA 写进一个目录、启动项指着另一个。
+#   ⓘ 2026-10-05（v1.0 OTA-9）：postinstall 改成从 *-android-<槽>.conf 的 linux 行反推目录、条目不是恰好一个就让
+#     OTA 失败（gaokun3-ota-postinstall.sh 里 OTA-9 那段）。本安装器写的条目就是 linux /$mid/android/slot_$slot/Image，
+#     所以装完两边仍选同一个目录；⬜ 重新安装时若 ESP 上已有我们的条目，更稳的是也按它的目录选（本轮没改这里）。
 # ⚠️★ 2026-09-26 M4b 实测：这里原先直接用【正在跑的系统】的 /etc/machine-id。live 的 machine-id
 #   是 systemd 每次开机现生成的，于是重新安装在 ESP 上另开了一个目录、又写了一整套内核
 #   （46 MB），ESP 写满，slot_b 的 ramdisk 截断在 2.8 MB、它的启动项是空文件 —— 而安装报告成功；

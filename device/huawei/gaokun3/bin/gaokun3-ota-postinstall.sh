@@ -95,25 +95,77 @@ mkdir -p "$MNT" || fail "mkdir $MNT"
 mount -t vfat "$ESP_DEV" "$MNT" || fail "挂载 ESP"
 MOUNTED=1
 
-# systemd-boot 的布局是 <ESP>/<machine-id>/…，machine-id 不固定，按模式找
-MID=$(ls "$MNT" | grep -E '^[0-9a-f]{32}$' | head -1)
-[ -n "$MID" ] || fail "ESP 上找不到 machine-id 目录"
+# systemd-boot 的布局是 <ESP>/<machine-id>/…，machine-id 不固定。
+# ★ v1.0 OTA-9（2026-10-05）：目录【从该槽的启动项反推】，不再按名字猜。
+#   原来是 `ls | grep -E '^[0-9a-f]{32}$' | head -1`（第一个 32 位十六进制目录）。ESP 与另一个用
+#   systemd-boot / kernel-install 的 Linux 共用、而它的 machine-id 排在我们前面时，内核写进了别人的目录，
+#   我们的启动项照旧指着旧内核，cmdline 同步也只打一行警告 —— OTA 报成功，重启后是"新 system + 旧内核"，
+#   正是文件开头说绝不能出现的组合（新 vendor_dlkm 配旧内核，模块版本对不上）。
+#   现在：启动项 loader/entries/*-android-<槽>.conf（.conf.disabled 不算，glob 本来就匹配不到）必须【恰好一个】，
+#   它的 linux 行必须是 /<目录>/android/slot_<槽>/Image —— 内核写进那个目录、改的也是那个条目。
+#   找不到 / 多于一个 / linux 行对不上 ⇒ 让 OTA 失败：没有启动项的槽本来就起不来（boot_control 切 default 时
+#   按同一个通配找条目），失败了用户留在当前能用的槽上，比"报成功、重启进一个起不来的槽"好。
+#   安装器写的条目正是这个形状（scripts/live/installer-lib.sh:919-926：$mid-android-$slot.conf，
+#   linux /$mid/android/slot_$slot/Image），所以装好的机器两边选出的是同一个目录。
+ENTS=""; NENT=0
+for e in "$MNT"/loader/entries/*-android-"$SUFFIX".conf; do
+    [ -f "$e" ] || continue
+    ENTS="$ENTS ${e##*/}"; NENT=$((NENT + 1)); ENT=$e
+done
+[ "$NENT" = 1 ] || fail "ESP 上 *-android-$SUFFIX.conf 启动项有 $NENT 个（${ENTS:- 无}）—— 要恰好一个，才知道内核该写进哪个目录。多出来的那个请用安装器 live 清理（或改名成 .conf.disabled）"
+KPATH=$(sed -n 's/^linux[[:space:]][[:space:]]*//p' "$ENT" | head -1 | tr -d '\r')
+case "$KPATH" in
+    /*/android/slot_"$SUFFIX"/Image) ;;
+    *) fail "启动项 ${ENT##*/} 的 linux 行是 '$KPATH'，不是 /<目录>/android/slot_$SUFFIX/Image —— 不知道该往哪写" ;;
+esac
+MID=${KPATH#/}; MID=${MID%%/*}
+[ -n "$MID" ] && [ -d "$MNT/$MID" ] || fail "启动项 ${ENT##*/} 指向的目录 /$MID 在 ESP 上不存在"
 DEST="$MNT/$MID/android/slot_$SUFFIX"
 mkdir -p "$DEST" || fail "mkdir $DEST"
-log "目标目录 = $DEST"
+log "启动项 = ${ENT##*/} → 目标目录 = $DEST"
+
+# ★ v1.0 OTA-8（2026-10-05）：recovery ramdisk 只在 recovery 启动项开着时才铺。
+#   原来只要 vendor 里有 recovery-ramdisk.img（实机 14974339 字节）就每次 OTA 往 ESP 写一份，而启动项默认根本不建
+#   （见下面 recovery 一节），两个槽合计白占约 30 MB —— 开发机 ESP 只剩约 46 MB。
+#   关着时顺手删掉两个槽里已有的那份，但【只删没有任何启动项引用的】（grep 整个 loader/entries）——
+#   当前在跑的槽目录里也只动这一个文件，Image / ramdisk / dtb 一概不碰，回滚不受影响。
+REC_ON=0
+[ "$(getprop persist.vendor.gaokun3.recovery_entry 2>/dev/null)" = "1" ] && REC_ON=1
+if [ "$REC_ON" = 0 ]; then
+    # 目标槽自己的 recovery 条目（调试时 recovery_entry=1 建过的）先删：这个槽正要被换掉、不在跑，
+    # 删了它下面那份 ramdisk 才没人引用，空间检查前就能腾出来。只删我们起的这个名字。
+    REC_ENT_T="$MNT/loader/entries/$MID-recovery-$SUFFIX.conf"
+    [ -f "$REC_ENT_T" ] && rm -f "$REC_ENT_T" && log "recovery 启动项没开 ⇒ 删掉旧的 ${REC_ENT_T##*/}"
+    for sl in a b; do
+        r="$MNT/$MID/android/slot_$sl/recovery-ramdisk.img"
+        [ -f "$r" ] || continue
+        if grep -qs "slot_$sl/recovery-ramdisk.img" "$MNT"/loader/entries/*.conf; then
+            log "slot_$sl 的 recovery-ramdisk.img 还被启动项引用，保留"
+        else
+            rm -f "$r" && log "recovery 启动项没开 ⇒ 删掉 slot_$sl 里用不上的 recovery-ramdisk.img"
+        fi
+    done
+fi
 
 # ★ 先看空间：ESP 只有 300 MiB，还要和固件自己那个 73 MiB 的
 #   Persisted_Capsules.bin 共处。空间不够必须【当场失败】，
 #   而不是写出一个被截断的内核 —— 那会变成一台不开机的机器。
 #   目标目录里的旧文件会被覆盖，所以它们占的空间算作可用。
 avail_kb=$(df -k "$MNT" | tail -1 | awk '{print $4}')
-for f in Image ramdisk.img gaokun3.dtb recovery-ramdisk.img; do
+# recovery-ramdisk.img 只在这次要重写它时（REC_ON=1）才算"将被覆盖"；没开时它要么已被上面删掉，
+# 要么还被别的启动项引用、不会动 —— 都不能算进可用空间。
+OVERWRITE="Image ramdisk.img gaokun3.dtb"
+[ "$REC_ON" = 1 ] && OVERWRITE="$OVERWRITE recovery-ramdisk.img"
+for f in $OVERWRITE; do
     [ -f "$DEST/$f" ] && avail_kb=$((avail_kb + $(stat -c%s "$DEST/$f") / 1024))
 done
 log "可用（含将被覆盖的旧文件）约 ${avail_kb} KB"
-# zboot 内核 13 + ramdisk 13 + dtb 0.2 + recovery ramdisk 15 ≈ 42 MB，留 56 MB 余量
-[ "$avail_kb" -gt 57344 ] || \
-    fail "ESP 空间不足（需约 56 MB）。清掉 <ESP>/$MID/android/ 下的 *.bak-* 再试"
+# zboot 内核 13 + ramdisk 13 + dtb 0.2 + recovery ramdisk 15 ≈ 42 MB，留 56 MB 余量。
+# 不铺 recovery 时少 15 MB（14974339 字节 ≈ 14.3 MiB），门槛同减 15 MiB，余量不变。
+need_kb=57344
+[ "$REC_ON" = 0 ] && need_kb=$((need_kb - 15360))
+[ "$avail_kb" -gt "$need_kb" ] || \
+    fail "ESP 空间不足（需约 $((need_kb / 1024)) MB）。清掉 <ESP>/$MID/android/ 下的 *.bak-* 再试"
 
 # 解包器自己会写临时文件再改名，并逐段核对长度
 "$EXTRACT" "$BOOT_DEV" "$DEST" || fail "从 $BOOT_DEV 解包失败"
@@ -125,7 +177,7 @@ log "可用（含将被覆盖的旧文件）约 ${avail_kb} KB"
 #   v0.6.2 的 himax_hx83121a_spi.disable_pressure=0 就是这么静默丢掉的。
 #   现在 options = cmdline.txt 的内容 + slot_suffix，与 boot.img 永远一致。
 #   写法与 recovery 条目一样：临时文件再改名；cmdline.txt 缺失或为空则保留旧 options。
-ENT="$MNT/loader/entries/$MID-android-$SUFFIX.conf"
+# ENT 是上面 OTA-9 那段选出来的启动项（不再按 $MID-android-$SUFFIX.conf 拼名字）。
 if [ -s "$DEST/cmdline.txt" ] && [ -f "$ENT" ]; then
     NEWCMD=$(tr -d '\r\n' < "$DEST/cmdline.txt")
     case " $NEWCMD " in
@@ -148,7 +200,11 @@ fi
 #   boot.img 里的 sha256 完全相同），所以条目直接复用该槽刚解出来的
 #   Image 与 gaokun3.dtb，ESP 上只多一个 ramdisk。
 REC_SRC="$HERE/../boot/recovery-ramdisk.img"
-if [ -f "$REC_SRC" ]; then
+DST_ENT="$MNT/loader/entries/$MID-recovery-$SUFFIX.conf"
+if [ "$REC_ON" = 0 ]; then
+    # OTA-8：启动项没开就不铺 ramdisk（旧文件与本槽的旧条目在空间检查之前已处理）。
+    log "recovery 按默认跳过（persist.vendor.gaokun3.recovery_entry 不是 1；未验证，会复位循环）"
+elif [ -f "$REC_SRC" ]; then
     log "铺设 recovery ramdisk"
     if cp "$REC_SRC" "$DEST/.recovery-ramdisk.new" &&
        mv -f "$DEST/.recovery-ramdisk.new" "$DEST/recovery-ramdisk.img"; then
@@ -157,8 +213,7 @@ if [ -f "$REC_SRC" ]; then
         #   BOARD_KERNEL_CMDLINE 与 BLS 条目漂移各教育过一次。
         #   recovery 不需要特殊 cmdline：实测它内嵌的 cmdline 与 boot 的完全相同，
         #   是 ramdisk 决定它是 recovery。
-        SRC_ENT="$MNT/loader/entries/$MID-android-$SUFFIX.conf"
-        DST_ENT="$MNT/loader/entries/$MID-recovery-$SUFFIX.conf"
+        SRC_ENT="$ENT"
         # ⚠️★ 默认【不】创建 recovery 启动项 —— 2026-08-20 实测这个 ramdisk 在本机
         #   会进复位循环（Android 一次都没进，启动原因历史里没有新条目），
         #   而且不留 panic 记录（本机 init 的服务级失败是主动 reboot() 而不是
@@ -166,10 +221,8 @@ if [ -f "$REC_SRC" ]; then
         #   条目一旦存在，用户在 15 秒菜单里误选一次就要跑到机器旁按电源键 ——
         #   在验证通过之前不能把这个坑发出去。
         #   要调试就设 persist.vendor.gaokun3.recovery_entry=1 再触发一次 OTA/部署。
-        if [ "$(getprop persist.vendor.gaokun3.recovery_entry 2>/dev/null)" != "1" ]; then
-            log "recovery 启动项按默认跳过（未验证会复位循环）；"
-            log "  要调试请 setprop persist.vendor.gaokun3.recovery_entry 1"
-        elif [ -f "$SRC_ENT" ]; then
+        #   （REC_ON=1 才会走到这里，OTA-8。）
+        if [ -f "$SRC_ENT" ]; then
             sed -e "s|^initrd .*|initrd     /$MID/android/slot_$SUFFIX/recovery-ramdisk.img|" \
                 -e "s|^title .*|title      Recovery (gaokun3) — slot _$SUFFIX|" \
                 -e "s|^version .*|version    gaokun3-recovery-$SUFFIX|" \
