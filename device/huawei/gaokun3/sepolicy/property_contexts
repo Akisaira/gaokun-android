@@ -18,11 +18,25 @@
 #   而 postinstall（coredomain）要 getprop 那个 recovery_entry ⇒ 只能是 public。
 #   ⚠️ 2026-09-29 更正：这里原先还写着"shell 要 `adb shell setprop`"—— 那做不到：shell 设 vendor 属性
 #      被 private/property.te:492-502 禁（vendor_gaokun3_props.te 顶上记着那次构建失败）。
-#      排查时走 `adb root`（userdebug 下 su 域是 permissive）。类型定义与 allow 在 vendor_gaokun3_props.te。
+#      排查时：开发构建 `adb root`（userdebug 下 su 域是 permissive）后 setprop；发布构建（ro.debuggable=0，
+#      没有 adb root）装 ReSukiSU 管理器、给 Shell（com.android.shell）授 root 后
+#      `adb shell su -c "setprop …"`（⬜ 发布构建上的 su 路径未实测）；Parts 开关见 docs/v1.0-plan.md
+#      PWR-16 / SEC-4（批 2）。类型定义与 allow 在 vendor_gaokun3_props.te。
 persist.vendor.gaokun3.  u:object_r:vendor_gaokun3_prop:s0
 # 非持久的 vendor.gaokun3.*（2026-09-26 起）：扬声器增强总开关的镜像 vendor.gaokun3.histen.on，
 # 由 etc/histen.rc 在 vendor_init 里 setprop、音频 HAL 读。`vendor.` 也在允许的前缀清单里。
 vendor.gaokun3.          u:object_r:vendor_gaokun3_prop:s0
+# 只读的 ro.vendor.gaokun3.*（2026-10-05 起，REL-5）：目前只有 ro.vendor.gaokun3.version，
+# 值在 device.mk 里由构建环境变量 GK3_VERSION 注入、落进 /vendor/build.prop。⬜ 未编译、未上机。
+#   · 为什么要这一行：上面两条是前缀匹配，`vendor.gaokun3.` 匹配不到 `ro.vendor.gaokun3.…`；
+#     不加的话它落到 refs/lineage-sepolicy/private/property_contexts:271 的 `ro.vendor.` → vendor_default_prop。
+#     归到 vendor_gaokun3_prop（vendor_public_prop，vendor_gaokun3_props.te:14）才能沿用已有的那几条
+#     get_prop 规则被读（postinstall / 音频 HAL / usbrole 等，coredomain 读 vendor 属性也只豁免 public 类型）。
+#   · `ro.vendor.` 在允许前缀清单里（refs/lineage-sepolicy/build/soong/selinux_contexts.go:377）。
+#   ⚠️ 退路：若构建时 check_prop_prefix 或某条 neverallow 报错，删掉这一行即可 —— 属性照样会以
+#     vendor_default_prop 落进 /vendor/build.prop（vendor_init 能设它，refs/lineage-sepolicy/private/vendor_init.te:306），
+#     scripts/release.sh 只读 build.prop 文件，不受影响；受影响的只是运行期别的域能不能读它。
+ro.vendor.gaokun3.       u:object_r:vendor_gaokun3_prop:s0
 
 # WiFi HAL 写的固件 / 驱动版本号（类型与理由见 sepolicy/hal_wifi_default.te）
 vendor.wlan.firmware.version   u:object_r:vendor_wlan_versions_prop:s0 exact string

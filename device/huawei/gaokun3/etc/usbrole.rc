@@ -3,7 +3,11 @@
 #
 # 默认【启用】（device.mk：persist.vendor.gaokun3.allow_suspend=1；2026-09-18～09-24 开发期曾是 0）。
 #   为 1 时 gaokun3_nosuspend 被放开，改由 gaokun3_usbrole 单独把关。
-#   关：adb root 之后 adb shell setprop persist.vendor.gaokun3.allow_suspend 0（persist，重启不丢）。
+#   关（persist，重启不丢）：
+#     · 开发构建：adb root 之后 adb shell setprop persist.vendor.gaokun3.allow_suspend 0；
+#     · 发布构建（ro.debuggable=0，没有 adb root）：装 ReSukiSU 管理器、给 Shell（com.android.shell）授 root 后
+#       adb shell su -c "setprop persist.vendor.gaokun3.allow_suspend 0"（⬜ 发布构建上的 su 路径未实测）；
+#       Parts 开关见 docs/v1.0-plan.md PWR-16 / SEC-4（批 2）。
 #   ⚠️ 普通 adb shell（shell 域）设不了：coredomain 设 vendor 属性被 private/property.te:492-502 禁，
 #      enforcing 下会 "Failed to set property"。开发机能直接设是因为 adbd 跑在 KernelSU 的 ksu 域。
 #
@@ -11,7 +15,8 @@
 #    不是 0/1（2026-08-22 实机核对过，差点按 0/1 写错）。
 #
 # ⚠️ 代价：息屏时会切到 host，于是 USB device-mode adb 断开，亮屏后恢复。
-#    TCP adb（persist.adb.tcp.port=5555）不受影响。
+#    开发构建的 TCP adb（persist.adb.tcp.port=5555）不受影响；发布构建默认不开 TCP adb，
+#    无线调试走 Wi-Fi，同样不受 USB 角色影响。
 
 service gaokun3_role_host /vendor/bin/gaokun3-usbrole.sh host
     user root

@@ -37,9 +37,12 @@
       point you at the rule as the cause.
 
       {device} is replaced with DeviceInfoUtils.device, which reads
-      ro.crdroid.device (= gaokun3), so this resolves to ota/gaokun3.json —
-      the manifest committed in this repository. Keeping the placeholder rather
-      than hardcoding the filename means a second device would work unchanged.
+      ro.crdroid.device (= gaokun3), so this resolves to ota/gaokun3.json on
+      the R2 custom domain above. The authoritative manifest exists only there
+      (scripts/release.sh uploads it last, after every payload); the repository
+      no longer carries a copy (removed in a1712b2, REL-14 / OTA-16).
+      Keeping the placeholder rather than hardcoding the filename means a
+      second device would work unchanged.
     -->
     <!-- ⚠️ 2026-09-14 试过切到 raw.githubusercontent.com，又改回来了：GitHub（raw 与 release-assets）在国内
          不可达/极慢，v0.6.0 一发就有用户反馈更新失败。释放 R2 桶的前提是先有一个国内可达的镜像

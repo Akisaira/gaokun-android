@@ -248,6 +248,30 @@ PRODUCT_VENDOR_PROPERTIES += \
 PRODUCT_VENDOR_PROPERTIES += \
     ro.hw_timeout_multiplier=5
 
+# ★ REL-5（docs/v1.0-plan.md）：项目自己的版本号，只读属性 ro.vendor.gaokun3.version。
+#   ⬜ 2026-10-05 写，未编译、未上机。
+#   · 值来自构建环境变量 GK3_VERSION（例如 v1.0.0）；没设（开发构建的常态）就整段不生效，
+#     build.prop 里没有这一行，不会出现空值属性。
+#   · 落点：PRODUCT_VENDOR_PROPERTIES → /vendor/build.prop
+#     （refs/aosp-build/core/sysprop.mk:198 的 _prop_vars_）。
+#   · 前缀合规：`ro.vendor.` 在 vendor property_contexts 的允许前缀清单里
+#     （refs/lineage-sepolicy/build/soong/selinux_contexts.go:365-382，`ro.vendor.` 在 :377）。
+#     上下文归 vendor_gaokun3_prop（sepolicy/property_contexts 里那行 `ro.vendor.gaokun3.`，理由写在那边）。
+#   · 开机时 init 以 vendor_init 的身份核对 /vendor/build.prop 里每一行能不能设
+#     （refs/lineage-system-core/init/property_service.cpp:716-729 选上下文、:797 CheckPermissions）——
+#     vendor_init 对 vendor_gaokun3_prop 有 set_prop（sepolicy/vendor_gaokun3_props.te:56），
+#     退回 vendor_default_prop 时也有（refs/lineage-sepolicy/private/vendor_init.te:306），两种都不会被丢。
+#   · scripts/release.sh 第 2 步要断言它等于发版时的 GK3_VERSION（⬜ 那条断言由 release.sh 那组加，
+#     本提交只定属性名）；发版脚本读的是 build.prop 文件本身，与运行期 SELinux 无关。
+#   · 不动 OTA 清单 gaokun3.json 的 version 字段（Updater 的兼容判断可能用到它）。
+#   ⚠️ 待构建机核实：环境变量能不能进到 Kati 的产品配置阶段（soong_ui 是否原样传环境）；
+#     若进不去，build.prop 里就没有这一行；发版时设了 GK3_VERSION 的话 release.sh 的断言会拦下，
+#     不会静默发出去（没设就不断言 —— 那条断言按 handoff 的写法是 `[ -z "${GK3_VERSION:-}" ] || …`）。
+ifneq ($(GK3_VERSION),)
+PRODUCT_VENDOR_PROPERTIES += \
+    ro.vendor.gaokun3.version=$(GK3_VERSION)
+endif
+
 # 硬件 feature 声明 —— 没有它 AppWidgetService 等一票系统服务不启动，
 # Launcher 直接 NPE（"AppWidgetManager...on a null object" 实测）。
 PRODUCT_COPY_FILES += \
@@ -594,8 +618,12 @@ PRODUCT_COPY_FILES += \
 #    而本机正是 0（见 CLAUDE.md 状态框）。默认改成 0，改名前后行为一致。
 #    ⚠️ 代价说清楚：**新装机的用户默认也不进 s2idle**，息屏耗电按不睡算 ——
 #      这与 v0.3.0～v0.6.2 的镜像默认相反，发版说明里必须写。
-#      要开：adb root 之后 adb shell setprop persist.vendor.gaokun3.allow_suspend 1（persist 属性，重启不丢；
-#      普通 adb shell 在 enforcing 下设不了 vendor 属性，见 etc/usbrole.rc 顶部）。
+#      要开（persist 属性，重启不丢）：
+#        · 开发构建：adb root 之后 adb shell setprop persist.vendor.gaokun3.allow_suspend 1；
+#        · 发布构建（ro.debuggable=0，没有 adb root）：装 ReSukiSU 管理器、给 Shell（com.android.shell）
+#          授 root 后 adb shell su -c "setprop persist.vendor.gaokun3.allow_suspend 1"
+#          （⬜ 发布构建上的 su 路径未实测）；Parts 开关见 docs/v1.0-plan.md PWR-16 / SEC-4（批 2）。
+#      普通 adb shell 在 enforcing 下设不了 vendor 属性，见 etc/usbrole.rc 顶部。
 #    ★ 2026-09-23 用户定：开发期保持 0；【正式版】发布前改回 1（老用户 OTA 后不能丢待机，
 #      TODO S1）。改回 1 之后，开发机自己 setprop … 0（persist 属性重启不丢）。
 #    ✅ 2026-09-24 已改回 1（这一版起的构建就是 v0.6.3 的候选版）。开发机已显式
@@ -608,7 +636,8 @@ PRODUCT_COPY_FILES += \
 #
 # 开启后：息屏切 role=host（挂起安全）、亮屏切回 device（USB adb 可用）。
 # 实测 Android 真实挂起/唤醒 ×4 零复位、救援 Ubuntu systemctl suspend 3/3。
-# ⚠️ 开启的可见代价：息屏时 USB device-mode adb 断开，亮屏恢复；TCP adb 不受影响。
+# ⚠️ 开启的可见代价：息屏时 USB device-mode adb 断开，亮屏恢复。开发构建的 TCP adb（5555）不受影响；
+#    发布构建默认不开 TCP adb，无线调试走 Wi-Fi，同样不受 USB 角色影响。
 #
 # ★ 变量也换了：PRODUCT_PROPERTY_OVERRIDES 是 build/make 明确标了
 #   "TODO(b/117892318) deprecate this ... in favor of PRODUCT_VENDOR_PROPERTIES"

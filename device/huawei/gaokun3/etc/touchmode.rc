@@ -1,8 +1,10 @@
 # 触摸手感模式。改一个属性就行：
 #   setprop persist.sys.gaokun3.touch_mode game    # 更跟手（默认）
 #   setprop persist.sys.gaokun3.touch_mode daily   # 驱动默认，更稳
-#   ⚠️ enforcing 下普通 adb shell 设不了 system_prop（policy-query：shell system_prop set DENY），
-#      要先 adb root。Parts 里还没有这个开关（⬜ TODO B1 的第七轮待办）。
+#   ⚠️ enforcing 下普通 adb shell 设不了 system_prop（policy-query：shell system_prop set DENY）：
+#      开发构建先 adb root 再 setprop；发布构建（ro.debuggable=0，没有 adb root）装 ReSukiSU 管理器、
+#      给 Shell（com.android.shell）授 root 后 adb shell su -c "setprop …"（⬜ 发布构建上的 su 路径未实测）。
+#      Parts 里还没有这个开关（⬜ TODO B1 的第七轮待办；Parts 开关的规划见 docs/v1.0-plan.md PWR-16 / SEC-4，批 2）。
 #
 # ★ 用 persist.sys.* 与键盘开关同理：属性上下文是 system_prop，系统应用
 #   （Settings，uid system）能直接 SystemProperties.set()，不必再造一个服务。
