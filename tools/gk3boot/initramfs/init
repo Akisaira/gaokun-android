@@ -1,0 +1,696 @@
+#!/bin/sh
+# gaokun3 执行端（fastboot.img）的 /init —— 统一启动入口方案 Y 的 S7b。
+#
+# 设计稿：docs/boot-entry-design.md §4.4（进入、命令、菜单）、§4.13（界面）；
+#         docs/fastboot-design.md §4.2.2（initramfs）、§4.7（USB 与电源）、§4.8（界面）、§4.10（安全）。
+# 由 gk3boot.efi 用【和 Android 同一个内核】（boot_x 里的 Image）+ 本 initramfs 引导，cmdline 带
+#   panic=10 gk3.mode=fastboot gk3.why=<…> gk3.slot=<a|b> gk3.bootver=<ver> gk3.disk=<misc 的 PARTUUID>
+# （tools/gk3boot/core/src/cmdline.c gk3_cmdline_fastboot）。
+#
+# 分工：本文件只管"环境 + 界面"——挂文件系统、USB 角色与 gadget、不挂起、空闲关机、tty1 文本菜单、
+#   按键。fastboot 协议本身、清 BCB、擦数据都在 /bin/gk3-fastbootd（S7a，另一份代码）。
+#   两边的接口约定见 tools/gk3boot/README.md §13（退出码、子命令、环境变量、状态文件）。
+#   gk3-fastbootd 不在 → 显示 "executor missing"，菜单照样能用（重启 / 关机 / 看日志）。
+#
+# ★ PID 1 不许退出：退出 = 内核 panic（panic=10 → 10 秒后重启）。所以不用 set -e，每一步自己判。
+# ★ 界面一律英文 ASCII：Linux VT 画不了 CJK（fastboot-design.md §4.8）。
+# ★ 不挂起：这里没有 systemd / logind，也没人写 /sys/power/state；另外拿一个 wakelock 作保险（§4.7）。
+#   电源键只是 evdev 事件，由我们解释为"确认"。
+# ★ 确认页没有超时自动执行（§4.8）。唯一的定时动作是空闲关机：没有主机连接、也没有按键 30 分钟（U6）。
+#
+# 离线测试：scripts/gk3boot/test-initramfs.sh（QEMU）。测试时 initrd 后面会再拼一份 overlay cpio，
+#   里面带 /etc/gk3-fbi/test-hook（本文件 source 它：加载测试内核的模块、改 UDC 名、缩短超时）。
+#   发布的 fastboot.img 里没有这个文件，cmdline 也打不开它。
+
+PATH=/bin:/sbin
+export PATH
+umask 022
+
+RUN=/run/gk3
+LOG=$RUN/init.log
+FBD_LOG=$RUN/fastbootd.log
+KEYS_LOG=$RUN/keys.log
+
+# —— 可被 test-hook 覆盖的默认值（真机的值）——
+FBD=/bin/gk3-fastbootd
+GK3_UDC=a600000.usb                                         # port0 的 dwc3（fastboot-design.md §4.7）
+GK3_ROLE=/sys/class/usb_role/a600000.usb-role-switch/role   # 同 gaokun3-usbrole.sh
+GK3_USB_PLAT=/sys/bus/platform/devices/a600000.usb
+GK3_IDLE_TIMEOUT=${GK3_IDLE_TIMEOUT:-1800}                  # 秒；U6 = 30 分钟。cmdline 里写 GK3_IDLE_TIMEOUT=60 也行
+GK3_TRACE=${GK3_TRACE:-0}                                   # 1 = 每条日志也打到控制台（测试用）
+GK3_QUIET=${GK3_QUIET:-1}                                   # 1 = dmesg -n 1，内核消息不盖住界面
+GK3_TTY=${GK3_TTY:-/dev/console}                            # 真机 console=tty0 → 前台 VT（fbcon）
+GK3_FONT=/usr/share/gk3/font.psf
+
+G=/sys/kernel/config/usb_gadget/gk3fb
+FFS=/dev/usb-ffs/fastboot
+
+# ------------------------------------------------------------------ 基础
+
+up_s() { local u; read -r u _ < /proc/uptime 2>/dev/null; echo "${u%.*}"; }
+
+# ★ 函数里的临时变量一律 local（busybox ash 支持）：sh 的变量默认全局，函数互相调用时会踩掉对方的值。
+log() {
+    local t
+    t=$(up_s)
+    echo "[$t] $*" >> "$LOG" 2>/dev/null
+    echo "gk3-fbi: $*" > /dev/kmsg 2>/dev/null
+    trace "$*"
+}
+# 只给测试看的跟踪行（GK3_TRACE=1）：只打控制台，不进日志文件 —— 否则"看日志"那一页会因为自己的跟踪行不停重画
+trace() { [ "$GK3_TRACE" = 1 ] && echo "[gk3-fbi] $*" > /dev/console 2>/dev/null; return 0; }
+
+# 最早期的失败（连 /proc 都挂不上）：照 scripts/live/initramfs-init 的做法，打印原因、60 秒后重启。
+# 重启 = 回到 gk3boot：BCB 驱动的进入会再来一次，wipe 有 3 次上限，bootloader/fastboot 的 BCB
+# 入口进来之前已经清了（boot-entry-design.md §4.3.4），不会无限循环。
+early_fail() {
+    echo
+    echo "================ gaokun3 fastboot: cannot start ================"
+    echo "reason: $*"
+    echo "rebooting in 60 seconds"
+    echo "================================================================"
+    sleep 60
+    reboot -f
+    while :; do sleep 60; done
+}
+
+mkdir -p /proc /sys /dev /run /tmp
+mount -t proc proc /proc || early_fail "mount /proc failed"
+mount -t sysfs sysfs /sys || early_fail "mount /sys failed"
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || { mount -t tmpfs tmpfs /dev && mdev -s; }
+mount -t tmpfs -o mode=0755 tmpfs /run || early_fail "mount /run failed"
+mkdir -p "$RUN"
+: > "$LOG"
+
+# cmdline。gk3.* 带点，内核不会把它们当环境变量传进来，只能自己解析。
+WHY=; SLOT=; DISK=; BOOTVER=; MODE=
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in
+        gk3.mode=*)    MODE=${arg#gk3.mode=} ;;
+        gk3.why=*)     WHY=${arg#gk3.why=} ;;
+        gk3.slot=*)    SLOT=${arg#gk3.slot=} ;;
+        gk3.disk=*)    DISK=${arg#gk3.disk=} ;;
+        gk3.bootver=*) BOOTVER=${arg#gk3.bootver=} ;;
+    esac
+done
+[ -n "$WHY" ] || WHY=menu
+case "$SLOT" in a|b) ;; *) SLOT=? ;; esac
+
+# 测试钩子（只在测试 overlay 里存在）
+[ -f /etc/gk3-fbi/test-hook ] && . /etc/gk3-fbi/test-hook
+
+log "start: mode=$MODE why=$WHY slot=$SLOT bootver=$BOOTVER disk=$DISK"
+[ "$MODE" = fastboot ] || log "warning: gk3.mode is '$MODE', not 'fastboot' - continuing anyway"
+
+[ "$GK3_QUIET" = 1 ] && dmesg -n 1 2>/dev/null
+
+# ------------------------------------------------------------------ 电源：不挂起
+
+# CONFIG_PM_WAKELOCKS=y（v0.7.1 config）。PM_AUTOSLEEP 没开，autosleep 文件通常不存在 —— 有就关掉。
+if [ -e /sys/power/wake_lock ]; then
+    echo gk3fastboot > /sys/power/wake_lock 2>/dev/null && log "power: wake_lock gk3fastboot held" \
+        || log "power: writing wake_lock failed"
+else
+    log "power: no /sys/power/wake_lock (nothing here suspends anyway)"
+fi
+[ -e /sys/power/autosleep ] && { echo off > /sys/power/autosleep 2>/dev/null; log "power: autosleep off"; }
+# ★ 不碰 /dev/watchdog：qcom_wdt 由内核自己喂（WATCHDOG_HANDLE_BOOT_ENABLED=y），用户态一打开就得接着喂。
+
+# ------------------------------------------------------------------ 屏幕
+
+# 前台 VT：不黑屏（ESC[9;0]）、不省电（ESC[14;0]）、藏光标。
+printf '\033[9;0]\033[14;0]\033[?25l' > "$GK3_TTY" 2>/dev/null
+# 本机内核只编进了 8x16 字体（CONFIG_FONT_8x16），2560x1600 上字太小 —— 换 Terminus 32x16（PSF2，
+# gk3-fbi font：busybox 的 loadfont 不认这个字体）。没有 fb 时（QEMU 无显卡）不装。
+if [ -e /sys/class/graphics/fb0 ] && [ -f "$GK3_FONT" ]; then
+    vt=$GK3_TTY
+    [ "$vt" = /dev/console ] && vt=/dev/tty0          # console=tty0 时 /dev/console 就是前台 VT；tty0 更直接
+    if lf=$(gk3-fbi font "$GK3_FONT" "$vt" 2>&1); then log "screen: font loaded on $vt ($lf)"
+    else log "screen: font not loaded: $lf"; fi
+fi
+
+COLS=80; ROWS=25
+sz=$(stty size < "$GK3_TTY" 2>/dev/null)
+case "$sz" in
+    [1-9]*" "[1-9]*) ROWS=${sz% *}; COLS=${sz#* } ;;
+esac
+log "screen: ${ROWS} rows x ${COLS} columns on $GK3_TTY"
+[ "$COLS" -gt 100 ] && COLS=100                    # 分隔线不画满 160 列（本机 rotate:1 + 16x32 是 50 行 x 160 列）
+
+# ------------------------------------------------------------------ USB 角色
+
+role_now() { local r=; [ -e "$GK3_ROLE" ] && read -r r < "$GK3_ROLE" 2>/dev/null; echo "${r:-none}"; }
+
+# xhci 下有没有下游设备（同 gaokun3-usbrole.sh has_downstream）：有 = 用户在 port0 插了键盘 / U 盘，
+# 这时 host 是对的，不去抢。
+has_downstream() {
+    local u
+    for u in "$GK3_USB_PLAT"/xhci-hcd.*/usb*; do
+        [ -d "$u" ] && ls "$u" 2>/dev/null | grep -qE '^[0-9]+-[0-9.]+$' && return 0
+    done
+    return 1
+}
+
+ROLE_LAST_WRITE=-100
+# 要 device。启动时已经是 device（patch 0012 之后冷启动默认就是）就不写；不是才写，
+# 之后每 10 秒最多再写一次（UCSI 插拔可能把它改回 host，boot-entry-design.md T12 / fastboot-design.md T6）。
+# 不 unbind / rebind dwc3（patch 0012:13）。
+role_reconcile() {
+    local r t
+    [ -e "$GK3_ROLE" ] || return 0
+    r=$(role_now)
+    [ "$r" = device ] && return 0
+    has_downstream && return 0
+    t=$(up_s)
+    [ $((t - ROLE_LAST_WRITE)) -lt 10 ] && return 0
+    ROLE_LAST_WRITE=$t
+    if echo device > "$GK3_ROLE" 2>/dev/null; then
+        log "usb: role was '$r', wrote device"
+    else
+        log "usb: role was '$r', writing device failed"
+    fi
+}
+
+# ------------------------------------------------------------------ USB gadget（configfs + FunctionFS）
+
+GADGET_OK=0
+gadget_setup() {
+    if ! grep -q configfs /proc/filesystems; then
+        log "gadget: kernel has no configfs"; return 1
+    fi
+    mount -t configfs none /sys/kernel/config 2>/dev/null
+    [ -d /sys/kernel/config/usb_gadget ] || { log "gadget: no usb_gadget in configfs (USB_CONFIGFS missing?)"; return 1; }
+    mkdir -p "$G" || return 1
+    # 18D1:4EE0 = Google fastboot（refs/aosp-build/target/product/base_vendor.mk:33-35），
+    # 主机端的 fastboot 按接口 0xff/0x42/0x03 认（描述符由 gk3-fastbootd 写进 ep0）。
+    echo 0x18d1 > "$G/idVendor"
+    echo 0x4ee0 > "$G/idProduct"
+    echo 0x0100 > "$G/bcdDevice"
+    echo 0x0200 > "$G/bcdUSB"
+    mkdir -p "$G/strings/0x409"
+    echo gaokun3     > "$G/strings/0x409/serialnumber"   # 与 Android 的 adb 序列号一致（init.gaokun3.usb.rc）
+    echo HUAWEI      > "$G/strings/0x409/manufacturer"
+    echo MateBookEGo > "$G/strings/0x409/product"
+    mkdir -p "$G/configs/b.1/strings/0x409"
+    echo fastboot > "$G/configs/b.1/strings/0x409/configuration"
+    echo 500 > "$G/configs/b.1/MaxPower"
+    # ★ 顺序：先 mkdir 函数实例，再挂 functionfs（反过来 mount 报 ENODEV，stage2-findings 8.3quinquies）
+    mkdir -p "$G/functions/ffs.fastboot" || { log "gadget: mkdir ffs.fastboot failed (USB_CONFIGFS_F_FS?)"; return 1; }
+    [ -e "$G/configs/b.1/ffs.fastboot" ] || ln -s "$G/functions/ffs.fastboot" "$G/configs/b.1/ffs.fastboot"
+    mkdir -p "$FFS"
+    if ! grep -q " $FFS " /proc/mounts; then
+        mount -t functionfs fastboot "$FFS" || { log "gadget: mount functionfs failed"; return 1; }
+    fi
+    GADGET_OK=1
+    log "gadget: $(cat "$G/idVendor"):$(cat "$G/idProduct") serial=$(cat "$G/strings/0x409/serialnumber") ffs=$FFS ready"
+}
+
+udc_state() {
+    local s=
+    [ -e "/sys/class/udc/$GK3_UDC/state" ] && read -r s < "/sys/class/udc/$GK3_UDC/state" 2>/dev/null
+    echo "${s:-absent}"
+}
+udc_bound() { local b=; read -r b < "$G/UDC" 2>/dev/null; [ -n "$b" ]; }
+
+# 等 gk3-fastbootd 写完描述符（FunctionFS 那时才长出 ep1）再绑 UDC。绑不上不算错：UDC 可能还没出现
+# （role 还在切、dwc3 还没 probe 完），主循环每轮都会再试。
+udc_reconcile() {
+    [ "$GADGET_OK" = 1 ] || return 0
+    [ "$FBD_STATE" = running ] || return 0
+    [ -e "$FFS/ep1" ] || return 0
+    udc_bound && return 0
+    [ -e "/sys/class/udc/$GK3_UDC" ] || return 0
+    if echo "$GK3_UDC" > "$G/UDC" 2>/dev/null; then
+        log "gadget: bound to UDC $GK3_UDC"
+    else
+        log "gadget: binding UDC $GK3_UDC failed"
+    fi
+}
+udc_unbind() { udc_bound && { echo "" > "$G/UDC" 2>/dev/null; log "gadget: unbound"; }; return 0; }
+
+# ------------------------------------------------------------------ gk3-fastbootd 的生命周期
+
+# 状态：missing（镜像里没有）/ starting / running / stopped / crashed
+FBD_STATE=stopped
+FBD_CRASHES=0
+FBD_STARTED_AT=0
+FBD_NOTE=
+
+export GK3_WHY="$WHY" GK3_SLOT="$SLOT" GK3_DISK="$DISK" GK3_BOOTVER="$BOOTVER" GK3_FFS="$FFS" \
+       GK3_UDC GK3_GADGET="$G" GK3_RUN="$RUN"
+
+# $1 = 界面上显示的备注（为什么又起了一次），可空
+fbd_start() {
+    local i
+    if [ ! -x "$FBD" ]; then
+        FBD_STATE=missing; FBD_NOTE="$FBD is not in this image"
+        log "fastbootd: missing ($FBD)"
+        return 1
+    fi
+    rm -f "$RUN/fastbootd.rc" "$RUN/fastbootd.pid" "$RUN/fastbootd.status"
+    # 包一层子 shell 记退出码：PID 1 的 ash 不保证及时回收，靠 kill -0 判活会被僵尸骗。
+    ( "$FBD" >> "$FBD_LOG" 2>&1 &
+      echo $! > "$RUN/fastbootd.pid"
+      wait $!
+      echo $? > "$RUN/fastbootd.rc" ) &
+    FBD_STATE=starting; FBD_NOTE=$1
+    FBD_STARTED_AT=$(up_s)
+    log "fastbootd: started"
+    # 最多等 10 秒描述符就位（只为了让第一屏就显示真实状态；没等到也不算失败，主循环接着查）
+    i=0
+    while [ $i -lt 20 ] && [ ! -e "$FFS/ep1" ] && [ ! -e "$RUN/fastbootd.rc" ]; do
+        sleep 0.5; i=$((i + 1))
+    done
+    fbd_poll
+    return 0
+}
+
+fbd_stop() {
+    local p i
+    [ "$FBD_STATE" = running ] || [ "$FBD_STATE" = starting ] || return 0
+    udc_unbind
+    p=; read -r p < "$RUN/fastbootd.pid" 2>/dev/null
+    if [ -n "$p" ]; then
+        kill -TERM "$p" 2>/dev/null
+        i=0
+        while [ $i -lt 6 ] && [ ! -e "$RUN/fastbootd.rc" ]; do sleep 0.5; i=$((i + 1)); done
+        [ -e "$RUN/fastbootd.rc" ] || { kill -KILL "$p" 2>/dev/null; sleep 0.5; }
+    fi
+    FBD_STATE=stopped
+    log "fastbootd: stopped"
+}
+
+# 退出码约定（README §13）：
+#   0 = 重启进 Android（fastboot reboot）     10 = 关机
+#   11 = 重启 fastboot（reboot-bootloader / reboot-fastboot：软重新枚举）
+#   12 = 切到菜单（reboot-recovery）           其他 = 崩溃：自动重启它，60 秒内第 3 次就停下
+fbd_poll() {
+    local rc t
+    case "$FBD_STATE" in starting|running) ;; *) return 0 ;; esac
+    if [ ! -e "$RUN/fastbootd.rc" ]; then
+        [ "$FBD_STATE" = starting ] && [ -e "$FFS/ep1" ] && { FBD_STATE=running; log "fastbootd: descriptors written"; }
+        # ffs 没长出 ep1 也照样算 running（QEMU 之外不会这样；界面上 USB 一行会显示 gadget 没绑）
+        [ "$FBD_STATE" = starting ] && [ $(( $(up_s) - FBD_STARTED_AT )) -ge 10 ] && {
+            FBD_STATE=running; FBD_NOTE="no FunctionFS endpoints after 10 s"; log "fastbootd: $FBD_NOTE"; }
+        return 0
+    fi
+    rc=; read -r rc < "$RUN/fastbootd.rc"
+    udc_unbind
+    FBD_STATE=stopped
+    log "fastbootd: exited rc=$rc"
+    case "$rc" in
+        0)  do_reboot "fastboot reboot" ;;
+        10) do_poweroff "fastboot requested power off" ;;
+        11) fbd_start "restarted by host (reboot-bootloader)" ;;
+        12) FBD_NOTE="host asked for the menu (reboot-recovery)"; goto main ;;
+        *)
+            t=$(up_s)
+            if [ $((t - FBD_LAST_CRASH)) -gt 60 ]; then FBD_CRASHES=0; fi
+            FBD_LAST_CRASH=$t
+            FBD_CRASHES=$((FBD_CRASHES + 1))
+            if [ $FBD_CRASHES -ge 3 ]; then
+                FBD_STATE=crashed; FBD_NOTE="exited with code $rc three times - see Show log"
+                log "fastbootd: giving up after $FBD_CRASHES crashes"
+            else
+                fbd_start "restarted after exit code $rc"
+            fi
+            ;;
+    esac
+}
+FBD_LAST_CRASH=-100
+
+# 跑 gk3-fastbootd 的一个子命令（擦数据 / 清 BCB）。守护进程先停：同一块盘不能有两个写者。
+# 输出（英文一行或几行）留在 $SUB_OUT 给界面显示，退出码原样返回。
+SUB_OUT=
+fbd_sub() {
+    local rc
+    if [ ! -x "$FBD" ]; then SUB_OUT="$FBD is not in this image"; return 127; fi
+    fbd_stop
+    log "fastbootd: run $*"
+    SUB_OUT=$("$FBD" "$@" 2>> "$FBD_LOG")
+    rc=$?
+    log "fastbootd: $* -> rc=$rc ${SUB_OUT}"
+    return $rc
+}
+
+# ------------------------------------------------------------------ 退出动作
+
+do_reboot() {
+    log "reboot: $1"
+    screen_msg "Rebooting" "$1"
+    fbd_stop
+    sync
+    sleep 1
+    reboot -f
+    sleep 5
+    early_fail "reboot -f returned"
+}
+do_poweroff() {
+    log "poweroff: $1"
+    screen_msg "Powering off" "$1"
+    fbd_stop
+    sync
+    sleep 1
+    poweroff -f
+    sleep 5
+    early_fail "poweroff -f returned"
+}
+
+# 离开菜单回 Android 之前：why=recovery / prompt_wipe 的 BCB 由执行端清（boot-entry-design.md §4.3.4），
+# 不清的话 gk3boot 下次还会把机器送回这里。why=wipe 只在用户【明确拒绝】擦除时清（$1 = declined）；
+# 擦除失败后从菜单重启则不清 —— 让 gk3boot 的 3 次上限去记 wipe_failed、通知 Android。
+reboot_to_android() {
+    local w=$WHY
+    [ "$w" = wipe ] && [ "$1" != declined ] && w=
+    case "$w" in
+        recovery|prompt_wipe|wipe)
+            if fbd_sub --clear-bcb; then
+                log "bcb: cleared"
+            else
+                log "bcb: clear failed (rc=$?) - gk3boot may bring us back here"
+            fi
+            ;;
+    esac
+    do_reboot "user chose Reboot to Android"
+}
+
+# ------------------------------------------------------------------ 界面
+
+why_text() {
+    case "$WHY" in
+        bootloader)  echo "fastboot requested (adb reboot bootloader)" ;;
+        fastboot)    echo "fastboot requested (adb reboot fastboot)" ;;
+        wipe)        echo "factory reset requested by Android" ;;
+        prompt_wipe) echo "Android failed to start repeatedly (RescueParty)" ;;
+        recovery)    echo "recovery requested - this device has no Android recovery, use this menu" ;;
+        bootloop)    echo "Android did not finish booting several times in a row" ;;
+        noslot)      echo "no bootable slot" ;;
+        merging)     echo "an update is merging and the active slot cannot boot" ;;
+        menu)        echo "opened from the boot menu" ;;
+        *)           echo "unknown ($WHY)" ;;
+    esac
+}
+
+STATUS_TXT=
+refresh_status() {
+    if [ -z "$DISK" ]; then
+        STATUS_TXT="Disk:    no gk3.disk on the command line"
+    elif command -v gk3-fbi > /dev/null; then
+        STATUS_TXT=$(gk3-fbi status "$DISK" 2>&1)
+    else
+        STATUS_TXT="Disk:    gk3-fbi missing"
+    fi
+}
+
+hr() { local i=0 s=; while [ $i -lt $((COLS - 2)) ]; do s="$s-"; i=$((i + 1)); done; echo "$s"; }
+
+cls() { printf '\033[H\033[2J'; }
+
+header() {
+    local t
+    t="gaokun3 fastboot"
+    [ -n "$BOOTVER" ] && t="$t  (gk3boot $BOOTVER)"
+    printf '\033[1m%s\033[0m\n' "$t"
+    hr
+}
+
+# 一页菜单：MENU_N 项，MENU_LABEL_i / MENU_ACT_i；SEL 是高亮的那一项
+menu_reset() { MENU_N=0; }
+menu_add() { eval "MENU_ACT_$MENU_N=\$1; MENU_LABEL_$MENU_N=\$2"; MENU_N=$((MENU_N + 1)); }
+menu_draw() {
+    local i=0 l
+    while [ $i -lt $MENU_N ]; do
+        eval "l=\$MENU_LABEL_$i"
+        if [ $i -eq "$SEL" ]; then
+            printf '  \033[7m > %s \033[0m\n' "$l"
+        else
+            printf '     %s\n' "$l"
+        fi
+        i=$((i + 1))
+    done
+}
+menu_act() { eval "echo \$MENU_ACT_$SEL"; }
+
+footer() {
+    echo
+    echo "Volume up/down: move   Power: select   (keyboard: arrows, Enter, Esc)"
+}
+
+usb_line() {
+    local st b=no
+    st=$(udc_state)
+    udc_bound && b=yes
+    echo "USB:     role=$(role_now) udc=$GK3_UDC state=$st bound=$b"
+}
+
+fbd_line() {
+    local s
+    case "$FBD_STATE" in
+        missing) echo "Fastboot: EXECUTOR MISSING - $FBD_NOTE" ;;
+        crashed) echo "Fastboot: STOPPED - $FBD_NOTE" ;;
+        *)       echo "Fastboot: $FBD_STATE${FBD_NOTE:+ ($FBD_NOTE)}" ;;
+    esac
+    s=; [ -f "$RUN/fastbootd.status" ] && s=$(head -n 1 "$RUN/fastbootd.status" 2>/dev/null)
+    [ -n "$s" ] && echo "          $s"
+    return 0
+}
+
+# 每一页：build_<page> 填菜单，draw_<page> 画正文
+PAGE=main
+SEL=0
+
+build_main() {
+    menu_reset
+    menu_add reboot   "Reboot to Android"
+    if [ "$FBD_STATE" = running ] || [ "$FBD_STATE" = starting ]; then
+        menu_add restart "Restart fastboot"
+    else
+        menu_add restart "Start fastboot"
+    fi
+    menu_add reset    "Factory reset (erase all user data)"
+    menu_add log      "Show log"
+    menu_add poweroff "Power off"
+}
+draw_main() {
+    case "$WHY" in
+        bootloader|fastboot) echo "FASTBOOT MODE" ;;
+        *) echo "BOOT MENU" ;;
+    esac
+    echo "Reason:  $(why_text)"
+    echo "Slot:    current _$SLOT"
+    echo "$STATUS_TXT"
+    usb_line
+    fbd_line
+    if [ "$GK3_IDLE_TIMEOUT" -ge 120 ] 2>/dev/null; then
+        echo "Idle:    powers off after $((GK3_IDLE_TIMEOUT / 60)) min without a host connection or key press"
+    elif [ "$GK3_IDLE_TIMEOUT" -gt 0 ] 2>/dev/null; then
+        echo "Idle:    powers off after ${GK3_IDLE_TIMEOUT} s without a host connection or key press"
+    fi
+    hr
+}
+
+build_confirm_reset() {
+    menu_reset
+    menu_add cancel "Cancel"
+    menu_add wipe   "Yes - erase all user data"
+}
+draw_confirm_reset() {
+    echo "FACTORY RESET"
+    echo
+    echo "This erases ALL user data (apps, photos, accounts, settings)."
+    echo "It cannot be undone. The system itself is not touched."
+    echo
+}
+
+# why=wipe 而 gk3-fastbootd 说"免确认的条件不满足"（退出码 3，boot-entry-design.md §4.4.3）
+build_wipe_confirm() {
+    menu_reset
+    menu_add cancel_reboot "No - keep my data and reboot to Android"
+    menu_add wipe          "Yes - erase all user data"
+}
+draw_wipe_confirm() {
+    echo "FACTORY RESET REQUESTED"
+    echo
+    echo "Android asked to erase all user data, but the request could not be"
+    echo "verified automatically. Erase ALL user data now? This cannot be undone."
+    [ -n "$SUB_OUT" ] && { echo; echo "$SUB_OUT"; }
+    echo
+}
+
+# why=prompt_wipe：RescueParty（boot-entry-design.md §4.3.4：必须按键确认，永不自动清）
+build_prompt_wipe() {
+    menu_reset
+    menu_add tryagain "Try again (reboot to Android)"
+    menu_add reset    "Factory data reset"
+    menu_add main     "Advanced (boot menu)"
+}
+draw_prompt_wipe() {
+    echo "ANDROID CANNOT START"
+    echo
+    echo "Android failed to start several times in a row. You can try again,"
+    echo "or erase all user data. Erasing cannot be undone."
+    echo
+}
+
+draw_log() {
+    local n
+    echo "LOG  (any key: back)"
+    n=$(( (ROWS - 10) / 3 )); [ $n -lt 4 ] && n=4
+    echo "-- init --"
+    tail -n "$n" "$LOG" 2>/dev/null
+    echo "-- gk3-fastbootd --"
+    tail -n "$n" "$FBD_LOG" 2>/dev/null
+    echo "-- keys --"
+    tail -n "$n" "$KEYS_LOG" 2>/dev/null
+}
+
+MSG_TITLE=; MSG_BODY=
+build_msg() { menu_reset; menu_add main "Back"; }
+draw_msg() { echo "$MSG_TITLE"; echo; echo "$MSG_BODY"; echo; }
+
+screen_msg() {
+    { cls; header; echo "$1"; echo; echo "$2"; } > "$GK3_TTY" 2>/dev/null
+    LAST_SCREEN=
+}
+
+LAST_SCREEN=
+render() {
+    local body
+    case "$PAGE" in
+        log) build_msg ;;
+        *) "build_$PAGE" ;;
+    esac
+    [ "$SEL" -ge "$MENU_N" ] && SEL=$((MENU_N - 1))
+    [ "$SEL" -lt 0 ] && SEL=0
+    if [ "$PAGE" = log ]; then
+        body=$(header; draw_log)
+    else
+        body=$(header; "draw_$PAGE"; menu_draw; footer)
+    fi
+    # 内容没变就不重画（fbcon 上整屏重画会闪）
+    [ "$body" = "$LAST_SCREEN" ] && return 0
+    LAST_SCREEN=$body
+    { cls; echo "$body"; } > "$GK3_TTY" 2>/dev/null
+    [ "$GK3_TRACE" = 1 ] && trace "screen: page=$PAGE sel=$SEL item=$(menu_act)"
+    return 0
+}
+
+goto() { PAGE=$1; SEL=0; LAST_SCREEN=; }
+
+do_wipe_confirmed() {
+    local rc
+    screen_msg "Erasing user data..." "Do not turn the device off."
+    if fbd_sub --wipe-data --confirm; then
+        do_reboot "user data erased"
+    else
+        rc=$?
+        MSG_TITLE="FACTORY RESET FAILED (code $rc)"
+        MSG_BODY=${SUB_OUT:-"see Show log"}
+        goto msg
+        fbd_start
+    fi
+}
+
+activate() {
+    local a
+    a=$(menu_act)
+    log "menu: page=$PAGE action=$a"
+    case "$a" in
+        reboot|tryagain) reboot_to_android ;;
+        cancel_reboot) reboot_to_android declined ;;
+        poweroff) do_poweroff "user chose Power off" ;;
+        restart)
+            screen_msg "Restarting fastboot" ""
+            fbd_stop; FBD_CRASHES=0; fbd_start "restarted from the menu"
+            goto main ;;
+        reset)  goto confirm_reset ;;
+        wipe)   do_wipe_confirmed ;;
+        cancel|main) goto main ;;
+        log)    goto log ;;
+    esac
+}
+
+on_key() {
+    case "$PAGE" in
+        log) goto main; return ;;
+    esac
+    case "$1" in
+        up)   SEL=$((SEL - 1)); [ $SEL -lt 0 ] && SEL=$((MENU_N - 1)) ;;
+        down) SEL=$((SEL + 1)); [ $SEL -ge $MENU_N ] && SEL=0 ;;
+        ok)   activate ;;
+        back)
+            case "$PAGE" in
+                confirm_reset|msg) goto main ;;
+            esac ;;
+    esac
+}
+
+# ------------------------------------------------------------------ 开始
+
+refresh_status
+role_reconcile
+gadget_setup || log "gadget: setup failed - fastboot over USB will not work"
+
+# 按键：常驻的 gk3-fbi keyd 往 FIFO 里写一行一个词。读写方式打开 FIFO：不会因为写的一方还没起来而卡住。
+mkfifo "$RUN/keys.fifo" 2>/dev/null
+exec 3<> "$RUN/keys.fifo"
+if command -v gk3-fbi > /dev/null; then
+    gk3-fbi keyd > "$RUN/keys.fifo" 2>> "$KEYS_LOG" &
+    log "keys: keyd started"
+else
+    log "keys: gk3-fbi missing - no key input"
+fi
+
+# 进入原因决定第一页
+case "$WHY" in
+    wipe)
+        # 免确认的判据（迁移标记 + BCB 摘要一致，boot-entry-design.md §4.4.3）由 gk3-fastbootd 判
+        screen_msg "Factory reset requested by Android" "Checking the request..."
+        fbd_sub --wipe-data
+        rc=$?
+        case "$rc" in
+            0) do_reboot "user data erased (requested by Android)" ;;
+            3) goto wipe_confirm ;;
+            *) MSG_TITLE="FACTORY RESET NOT DONE (code $rc)"
+               MSG_BODY=${SUB_OUT:-"see Show log"}
+               goto msg ;;
+        esac
+        ;;
+    prompt_wipe) goto prompt_wipe ;;
+    *) goto main ;;
+esac
+# why=wipe 的确认页上不跑协议（同一块盘只有一个写者）；其他页都跑
+[ "$PAGE" = wipe_confirm ] || [ "$PAGE" = prompt_wipe ] || fbd_start
+
+LAST_ACT=$(up_s)
+udc_conn_last=
+while :; do
+    role_reconcile
+    fbd_poll
+    udc_reconcile
+    # 主机连着（被枚举了）就不算空闲
+    case "$(udc_state)" in
+        configured|addressed|default|suspended) LAST_ACT=$(up_s) ;;
+    esac
+    # gk3-fastbootd 写状态文件 = 有活干（刷写中也许拔了线，但别在刷写中途关机）
+    if [ -f "$RUN/fastbootd.status" ]; then
+        m=$(stat -c %Y "$RUN/fastbootd.status" 2>/dev/null)
+        [ -n "$m" ] && [ "$m" != "$udc_conn_last" ] && { udc_conn_last=$m; LAST_ACT=$(up_s); }
+    fi
+    render
+    key=
+    if read -t 1 key <&3; then
+        case "$key" in
+            up|down|ok|back)
+                LAST_ACT=$(up_s)
+                log "key: $key (page=$PAGE)"
+                on_key "$key"
+                # 状态信息可能变了（擦过数据、清过 BCB），重读
+                [ "$key" = ok ] && refresh_status
+                ;;
+        esac
+    fi
+    if [ "$GK3_IDLE_TIMEOUT" -gt 0 ] 2>/dev/null && [ $(( $(up_s) - LAST_ACT )) -ge "$GK3_IDLE_TIMEOUT" ]; then
+        do_poweroff "idle: no host connection and no key press for ${GK3_IDLE_TIMEOUT}s"
+    fi
+done
