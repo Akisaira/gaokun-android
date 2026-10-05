@@ -553,6 +553,39 @@ M4b 那次"ESP 写满、却报告成功"之后，让一个独立的审查专找�
   （真后端录；BitLocker 那份也是录的）+ 流程测试 2 条 → 界面 63/63。生成 fixture 时 docker 的盘写满过一次（每个场景真装一遍实写约 12 GiB）⇒ 场景录完即 `drop_disk`。
 * ⚠️ 新路径（自动算大小、加密卷提问、关快速启动）只有单元测试，没在虚拟机里重跑；真机上的双系统依旧没装过。
 
+### 5.13 1.0 批 3：写盘不许被打断、失败了看得见（2026-10-05，v1.0 计划 B5 / GUI-3/5/11/12、INST-6/12/16/17）
+
+都只在本机（容器、loop 设备、假 ESP）测过，**没重建 live 镜像、没上机**。
+* **B5：写盘期间关不了机、睡不了**，三层，任何一层单独失效另两层还在（`3608a52`）：
+  ① `overlay-common/etc/systemd/logind.conf.d/gaokun3.conf` 让 logind 不管电源键 / 睡眠键 / 休眠键 / 合盖（三种合盖都 ignore）；
+  ② `build-rootfs.sh` 把 sleep / suspend / hibernate / hybrid-sleep / suspend-then-hibernate 五个 target 全 mask，体检逐个断言；
+  ③ 写盘的那次调用套 `systemd-inhibit --mode=block`（拿不到——logind 没在跑——就照样执行、记一笔，前两层不靠 logind）。
+  rescue 也铺 overlay-common ⇒ 在救援系统里短按电源键也不再关机。
+  ⓘ 原因：live 里 a600000.usb 停在 role=device、没有 usbrole 守卫，挂起会整板复位（stage4-findings #52）——赶上缩 NTFS 或写 super 就是一块坏盘。
+* **GUI-3/5：失败页分两种**：下载失败（盘没动过）⇒ "重试 / 返回修改"，重试接着半截文件续传；写盘失败 ⇒ 另一页（盘可能已改）。
+  侧栏常驻"重新启动 / 关机"，只在 `gk3_apply` 期间禁用、先确认（下载期间可用：没有取消按钮时它们就是出口）。
+  `gk3_net_fetch`：`--speed-limit 10240 --speed-time 60`（60 秒平均不到 10 KiB/s 判这次失败）+ `--connect-timeout 20`，
+  外层最多 `GK3_NET_TRIES`=5 次按已有长度续传；408 / 429 / 5xx 与网络类失败（6/7/16/18/28/35/52/55/56/92）重试，404 不重试；
+  用完了仍是网络类失败 ⇒ 半截文件留着（不交给 sha256 删掉）。换了版本时先比新旧校验清单，变了的文件先丢。
+  ⬜ 阈值在国内走 R2 慢速下载时会不会误判，要真机看。
+* **GUI-11：界面崩了不连带杀写盘进程**（本轮，后端已就位，**前端还没接**）：Flutter 一崩 cage 退出、`gk3-installer.service` 停，
+  systemd 按默认 KillMode=control-group 杀整个 cgroup。`installer-lib.sh` 末尾加了 `gk3_job_run / _start / _follow / _status`：
+  写盘调用进 `systemd-run --unit=gk3-job-<id> --collect --service-type=exec` 的临时单元，GK3_* 环境用 `--setenv` 带过去，
+  `systemd-inhibit` 套在单元**里面**（锁跟写盘进程活，不跟界面活）；输出写 `/run/gaokun3/jobs/<id>/{out,err}`、结束写 `rc`，
+  并存一份到介质 `gaokun3/diag/job-<id>.log`。`gk3_job_follow` 只转发完整的行（python3，按字节偏移），退出码 = job 的退出码；
+  job 没写状态就没了 ⇒ 125。不是 systemd 系统时退回 `setsid -f`（会说一句：cgroup 被整个杀时仍会被连带）。
+  **前端要做的**：`ShellBackend.call` 里 `writesDisk(fn)` 时把 argv 的 `fn` 换成 `gk3_job_run fn`（其余不变：stdout / stderr / 退出码逐行相同，
+  JOB 记录在 stderr 上）；启动时 `gk3_job_status` 看有没有 `state=running` 的 job，有就进运行页并 `gk3_job_follow <id>` 接上。
+  ⬜ systemd-run 那条路在容器里只用假的 systemd-run 测过参数；真 systemd 下单元能不能拿到 logind 的 inhibitor、`--setenv` 继承值，要在 live 里看。
+* **GUI-12（后端）：日志另存到拿得到的地方**：U 盘只有一个 ESP 类型的分区，Windows / macOS 不自动挂。`gk3_log_targets` 列出可写的
+  FAT / exFAT（另插的 U 盘在前，启动介质最后、标 `esp=yes`；不往 NTFS 写），`gk3_save_logs [分区|目录]` 写 `gaokun3-logs-<时间>/`
+  （会话日志、各 job、dmesg、journal、探测、sgdisk -p、分区表备份；不含 WiFi 配置），stdout `LOGSAVED …`。
+  ⬜ 前端的"保存日志"按钮没做；U 盘分区改 0700 类型要先实测华为固件能否回落启动。
+* **INST-6**：Windows 安装包的 GK3LIVE 上只有 `live.squashfs`，原先按 `rescue.squashfs` 找 ⇒ 从 Windows 开始的安装永远没有救援系统。
+  `gk3__find_rescue_squashfs` 兜底用它；`release-installer.sh` 另把 `rescue.squashfs` + `initramfs.img` 作为附件（命令行安装用），`--r2` 同时传 R2 的 `installer/<版本>/`。
+* **INST-17 / OTA-10**：救援条目两条（借 slot_a / slot_b 的内核，`<mid>-rescue.conf` / `<mid>-rescue-b.conf`），postinstall 给借刚换内核那个槽的那条同步 options（规则同 `gk3__rescue_cmdline`），老机器 OTA 到 b 时派生第二条。
+* **INST-12**：救援里 `gk3-boot-android [a|b] [--reboot]`（镜像里没有 bootctl）。**INST-16**：`CHECK id=tools` 加 `pkgs=`。
+
 ## 6. 风险（按"会不会让方案作废"排序）
 
 1. 🔴 mesa/freedreno 在 Debian arm64 用户态不可用 → 回落 `FLUTTER_LINUX_RENDERER=software`

@@ -67,7 +67,7 @@ someone using the screen. Turning encryption on later would mean erasing
 
 | What | Where |
 |---|---|
-| **Graphical installer** `gaokun3-installer-<version>-…` | GitHub only, on the **[v0.7.0-alpha](https://github.com/vahiru/gaokun-android/releases/tag/v0.7.0-alpha)** release page — later releases have not re-attached it |
+| **Graphical installer** `gaokun3-installer-<version>-…` (plus `rescue.squashfs`, `initramfs.img` for the command line, from its next release on) | GitHub: the release page it was published with — so far only **[v0.7.0-alpha](https://github.com/vahiru/gaokun-android/releases/tag/v0.7.0-alpha)**; later releases have not re-attached it. Mirror: `https://ota.072172.xyz/installer/<version>/<file>` — ⬜ nothing uploaded there yet; the next installer release goes to both |
 | **System images** `boot.img`, `super.img.zst`, `install-artifacts.sha256` (command line only; the graphical installer downloads these itself) | GitHub: [latest release](https://github.com/vahiru/gaokun-android/releases/latest). Mirror, usually reachable where GitHub's download servers are not (mainland China): `https://ota.072172.xyz/install/<build>/<file>` |
 
 `<build>` is the name of that release's OTA package without `.zip`. For
@@ -110,8 +110,19 @@ into its own 1 GiB partition, as a non-default boot entry — see
 Power Options → *Choose what the power buttons do*) and shut down with *Shut
 down*, not *Hibernate*. A hibernated Windows volume must not be resized — the
 installer checks for this and refuses — and Windows cannot mount it safely
-afterwards either. If BitLocker / device encryption is on, have the recovery
-key at hand: changing the boot setup can make Windows ask for it.
+afterwards either.
+
+**BitLocker / device encryption, in this order** (the Windows script below
+walks you through it the same way): first make sure you have the recovery key
+(<https://aka.ms/myrecoverykey>); then suspend BitLocker on the system drive
+for two restarts — the script asks and runs
+`Suspend-BitLocker -MountPoint $env:SystemDrive -RebootCount 2` (normally C:) for you; only **then**
+restart into the firmware setup and turn Secure Boot off. Turning Secure Boot
+off, or the changed boot path afterwards, is what can make Windows ask for the
+recovery key, so it must not come first. (The script also checks that the
+machine booted in UEFI mode before it suspends anything.) ⬜ Whether two
+restarts are enough on this tablet, and how BitLocker re-seals afterwards,
+has not been checked on hardware.
 
 ### From Windows, no USB stick
 
@@ -161,6 +172,25 @@ plug it in, and pick it from the firmware's boot menu. Secure Boot must be off.
 same system has, many times, from the internal disk. Which of the two USB-C
 ports works for booting has not been checked either. (For USB debugging under
 Android it is the port next to the power button; the other port is host-only.)
+
+### If an install fails: the logs
+
+The installer writes its log onto the medium it started from, in
+`gaokun3/diag/` (`installer.log`). From Windows (the no-USB path) that is the
+`GK3LIVE` drive. On the USB
+stick it is harder: its only partition is an EFI system partition, which
+Windows and macOS do not mount by themselves. Easiest is a second USB stick
+formatted FAT32 or exFAT: plug it in and, in the installer's terminal
+(Ctrl+Alt+F2, `root`, no password), run
+
+```sh
+bash -c '. /usr/share/gaokun3/installer-lib.sh && gk3_save_logs'
+```
+
+It copies the logs, `dmesg`, the boot journal, the disk layout and the
+partition-table backups into a `gaokun3-logs-<time>` folder on that stick
+(no Wi-Fi passwords). A *Save logs* button on the failure page is planned.
+⬜ Not yet run on hardware.
 
 ## Advanced: the command-line installer
 

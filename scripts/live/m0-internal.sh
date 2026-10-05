@@ -43,7 +43,19 @@ warn(){ echo "   ⚠️ $*"; }
 
 S true >/dev/null 2>&1 || die "adb 连不上 ${SER}（走 TCP：SER=192.168.10.239:5555；找设备：bash scripts/find-device.sh）"
 [ "$(S getprop ro.crdroid.device)" = gaokun3 ] || die "$SER 不是 gaokun3（局域网里那台小米手机也开着 5555）"
-[ "$(S id -u)" = 0 ] || die "需要 adbd 以 root 运行（adb -s $SER root）"
+# 要 adb shell 本身就是 root：下面的命令都是多行脚本直接交给 S，不经 su -c 转发（套进 su -c '…' 要把里面的引号全改写）。
+# ⚠️ 发布构建（1.0 起 ro.debuggable=0，D1 / B1）上 adb root 走不通。开发机上 adb shell 经 KSU 直接就是 root（CLAUDE.md
+#   "现在设备上跑的是什么"那段；是 KSU 的哪项设置让它这样，没核实）；不是的话在 ReSukiSU（KSU）管理器里给 Shell 授 root ——
+#   授权之后 adb shell 是不是就直接是 uid 0、还是只能 su，未验证（TODO V10）。
+if [ "$(S id -u)" != 0 ]; then
+    if [ "$(S getprop ro.debuggable)" = 1 ]; then
+        die "adb shell 不是 root：开发构建上 adb -s $SER root（本机老办法：先 adb -s $SER shell setprop service.adb.root 1）"
+    elif [ "$(S "su -c 'id -u'" 2>/dev/null)" = 0 ]; then
+        die "adb shell 不是 root（发布构建没有 adb root），su -c 倒是能用 —— 本脚本不经 su 转发：在 KSU 管理器里给 Shell（com.android.shell）授 root，让 adb shell 本身就是 root，再重跑"
+    else
+        die "adb shell 不是 root，su 也不可用：发布构建（ro.debuggable=0）没有 adb root —— 装 ReSukiSU 管理器、给 Shell（com.android.shell）授 root 后重跑"
+    fi
+fi
 
 umount_all() { S "umount $ESPM 2>/dev/null; umount $P3M 2>/dev/null; rmdir $ESPM $P3M 2>/dev/null; true" >/dev/null; }
 trap umount_all EXIT
