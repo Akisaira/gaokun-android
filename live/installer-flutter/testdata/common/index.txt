@@ -5,6 +5,10 @@ gk3_preflight                                                                  p
 gk3_wifi_scan                                                                  wifi_scan.txt   # 录（真 gk3-wpa-scan.py，合成的 scan_results）
 gk3_wifi_connect *                                                             wifi_connect-ok.txt   # 手写（容器里没有 wlan0）
 gk3_net_status                                                                 net_status-off.txt   # 手写
+gk3_job_status                                                                 job_status-none.txt   # 手写（没有在跑的写盘任务）
+#  job_status-running.txt / job_follow-apply.txt：界面重新起来时 apply 还在跑（测试用 overrides 选它们）
+gk3_log_targets                                                                log_targets.txt   # 录（假 U 盘挂在 /media/gk3）
+gk3_save_logs *                                                                save_logs.txt   # 录（存到假 U 盘上）
 gk3_release_info                                                               release_info.txt   # 录
 #  release_info-none.txt：U 盘里没有镜像（界面测试用 overrides 选它）
 gk3_net_release *                                                              net_release.txt   # 录（本地服务器，内容是上面那份发布目录）

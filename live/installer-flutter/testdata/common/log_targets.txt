@@ -1,0 +1,4 @@
+D 56
+O LOGTARGET part=/dev/sdb1 fs=vfat size_mib=1022 label=KINGSTON removable=yes medium=no esp=no
+O LOGTARGET part=/dev/sda1 fs=vfat size_mib=7678 label=GK3LIVE removable=yes medium=yes esp=yes
+X 0

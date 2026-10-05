@@ -11,7 +11,7 @@ E 现有 ESP /dev/nvme0n1p1 空闲 299 MiB（需要 16）
 E PROGRESS 2 plan
 E 重新安装：不改分区表，复用现有的 7 个分区
 E PROGRESS 15 format
-D 82
+D 80
 E 复用现有 ESP：/dev/nvme0n1p1（不格式化；空间与类型在动盘之前已验过）
 E + mkfs.ext4 -q -F -L metadata /dev/nvme0n1p3
 E + mkfs.ext4 -q -F -m 0 -L userdata /dev/nvme0n1p8
@@ -19,102 +19,101 @@ E + dd if=/dev/zero of=/dev/nvme0n1p2 bs=1024 count=4096 conv=fsync,nocreat stat
 E + mkfs.ext4 -q -F -L gk3rescue /dev/nvme0n1p7
 E PROGRESS 30 write-super
 E PROGRESS 30 write-super done_mib=0 total_mib=12288
-D 51
 E PROGRESS 31 write-super done_mib=337 total_mib=12288
-D 56
+D 63
 E PROGRESS 32 write-super done_mib=657 total_mib=12288
-D 156
+D 146
 E PROGRESS 33 write-super done_mib=980 total_mib=12288
-D 388
+D 297
 E PROGRESS 34 write-super done_mib=1236 total_mib=12288
-D 293
+D 1500
 E PROGRESS 35 write-super done_mib=1556 total_mib=12288
-D 152
+D 116
 E PROGRESS 36 write-super done_mib=1876 total_mib=12288
-D 59
+D 710
 E PROGRESS 37 write-super done_mib=2196 total_mib=12288
-D 271
+D 1500
 E PROGRESS 38 write-super done_mib=2516 total_mib=12288
-D 149
+D 67
 E PROGRESS 39 write-super done_mib=2772 total_mib=12288
 D 60
 E PROGRESS 40 write-super done_mib=3092 total_mib=12288
-D 68
+D 1500
 E PROGRESS 41 write-super done_mib=3412 total_mib=12288
-D 279
+D 1500
 E PROGRESS 42 write-super done_mib=3732 total_mib=12288
-D 1104
+D 571
 E PROGRESS 43 write-super done_mib=4000 total_mib=12288
-D 104
+D 1500
 E PROGRESS 44 write-super done_mib=4336 total_mib=12288
-D 70
+D 1500
 E PROGRESS 45 write-super done_mib=4656 total_mib=12288
-D 1218
+D 1500
 E PROGRESS 46 write-super done_mib=4976 total_mib=12288
-D 107
+D 96
 E PROGRESS 47 write-super done_mib=5232 total_mib=12288
-D 94
+D 107
 E PROGRESS 48 write-super done_mib=5552 total_mib=12288
-D 60
+D 1500
 E PROGRESS 49 write-super done_mib=5872 total_mib=12288
-D 282
+D 1500
 E PROGRESS 50 write-super done_mib=6192 total_mib=12288
-D 1500
+D 102
 E PROGRESS 51 write-super done_mib=6512 total_mib=12288
-D 91
+D 393
 E PROGRESS 52 write-super done_mib=6768 total_mib=12288
-D 86
+D 1500
 E PROGRESS 53 write-super done_mib=7088 total_mib=12288
-D 499
+D 192
 E PROGRESS 54 write-super done_mib=7408 total_mib=12288
-D 81
-E PROGRESS 55 write-super done_mib=7728 total_mib=12288
-D 71
-E PROGRESS 56 write-super done_mib=8048 total_mib=12288
-D 479
-E PROGRESS 57 write-super done_mib=8304 total_mib=12288
-D 1500
-E PROGRESS 58 write-super done_mib=8624 total_mib=12288
-D 95
-E PROGRESS 59 write-super done_mib=8944 total_mib=12288
-D 77
-E PROGRESS 60 write-super done_mib=9272 total_mib=12288
-D 765
-E PROGRESS 61 write-super done_mib=9528 total_mib=12288
-D 1500
-E PROGRESS 62 write-super done_mib=9848 total_mib=12288
-D 83
-E PROGRESS 63 write-super done_mib=10168 total_mib=12288
-D 59
-E PROGRESS 64 write-super done_mib=10488 total_mib=12288
-D 1017
-E PROGRESS 65 write-super done_mib=10808 total_mib=12288
-D 1500
-E PROGRESS 66 write-super done_mib=11064 total_mib=12288
-D 79
-E PROGRESS 67 write-super done_mib=11384 total_mib=12288
 D 57
+E PROGRESS 55 write-super done_mib=7728 total_mib=12288
+D 747
+E PROGRESS 56 write-super done_mib=8048 total_mib=12288
+D 1500
+E PROGRESS 57 write-super done_mib=8304 total_mib=12288
+D 275
+E PROGRESS 58 write-super done_mib=8624 total_mib=12288
+D 75
+E PROGRESS 59 write-super done_mib=8944 total_mib=12288
+D 1076
+E PROGRESS 60 write-super done_mib=9272 total_mib=12288
+D 1500
+E PROGRESS 61 write-super done_mib=9528 total_mib=12288
+D 53
+E PROGRESS 62 write-super done_mib=9848 total_mib=12288
+D 277
+E PROGRESS 63 write-super done_mib=10168 total_mib=12288
+D 1500
+E PROGRESS 64 write-super done_mib=10488 total_mib=12288
+D 1500
+E PROGRESS 65 write-super done_mib=10808 total_mib=12288
+D 226
+E PROGRESS 66 write-super done_mib=11064 total_mib=12288
+D 473
+E PROGRESS 67 write-super done_mib=11384 total_mib=12288
+D 1500
 E PROGRESS 68 write-super done_mib=11704 total_mib=12288
-D 1500
+D 114
 E PROGRESS 69 write-super done_mib=12024 total_mib=12288
-D 1500
+D 63
 E PROGRESS 70 write-super done_mib=12288 total_mib=12288
-D 465
+D 530
 E gk3-unsparse: 3145728 块 × 4096 字节 = 12288 MiB，200 个块段
 E super：LP geometry 魔数正确
 E PROGRESS 70 write-boot
 E + dd if=/media/gk3/gaokun3/payload/boot.img of=/dev/nvme0n1p4 bs=4M conv=fsync,nocreat status=none
 E + dd if=/media/gk3/gaokun3/payload/boot.img of=/dev/nvme0n1p5 bs=4M conv=fsync,nocreat status=none
 E PROGRESS 80 bootloader
-E + mount -t vfat /dev/nvme0n1p1 /tmp/tmp.MpD5V7z0dH
+E + mount -t vfat /dev/nvme0n1p1 /tmp/tmp.aIIWU1byqe
 E 原有的 loader/loader.conf 已备份为 loader/loader.conf.before-gaokun3
-E + umount /tmp/tmp.MpD5V7z0dH
+E + umount /tmp/tmp.aIIWU1byqe
 E /dev/nvme0n1p1：9 个文件从介质读回核对一致
 E PROGRESS 92 write-rescue
-E + mount /dev/nvme0n1p7 /tmp/tmp.taTqk6QYUp
+E + mount /dev/nvme0n1p7 /tmp/tmp.f8GCGRX3nZ
 E 警告：没有 WiFi 配置可带给救援系统 —— 它开机后连不上网，只能在机器旁操作
 E 警告：没有 ssh 公钥可带给救援系统 —— 只能在机器旁登录（放一份到 U 盘的 gaokun3/authorized_keys）
-E + umount /tmp/tmp.taTqk6QYUp
+E + umount /tmp/tmp.f8GCGRX3nZ
 E /dev/nvme0n1p7：1 个文件从介质读回核对一致
 E PROGRESS 100 done
 X 0
