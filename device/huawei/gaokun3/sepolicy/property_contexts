@@ -20,8 +20,9 @@
 #      被 private/property.te:492-502 禁（vendor_gaokun3_props.te 顶上记着那次构建失败）。
 #      排查时：开发构建 `adb root`（userdebug 下 su 域是 permissive）后 setprop；发布构建（ro.debuggable=0，
 #      没有 adb root）装 ReSukiSU 管理器、给 Shell（com.android.shell）授 root 后
-#      `adb shell su -c "setprop …"`（⬜ 发布构建上的 su 路径未实测）；Parts 开关见 docs/v1.0-plan.md
-#      PWR-16 / SEC-4（批 2）。类型定义与 allow 在 vendor_gaokun3_props.te。
+#      `adb shell su -c "setprop …"`（⬜ 发布构建上的 su 路径未实测）。给用户的入口是 Parts 的待机开关
+#      （1.0 PWR-16）：它写 persist.sys.gaokun3.allow_suspend（system_prop），init.gaokun3.rc 镜像过来。
+#      类型定义与 allow 在 vendor_gaokun3_props.te。
 persist.vendor.gaokun3.  u:object_r:vendor_gaokun3_prop:s0
 # 非持久的 vendor.gaokun3.*（2026-09-26 起）：扬声器增强总开关的镜像 vendor.gaokun3.histen.on，
 # 由 etc/histen.rc 在 vendor_init 里 setprop、音频 HAL 读。`vendor.` 也在允许的前缀清单里。

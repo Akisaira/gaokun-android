@@ -218,15 +218,16 @@
 
 ### 待机时收不到消息推送
 <!-- APP-5 / NET-9 / PWR-12（1.0 先测量后披露；WoW 推迟到 1.0 之后）。证据：docs/stage4-findings.md #131 §1（ath11k 在本机只走断电挂起）；
-     device/huawei/gaokun3/device.mk:607 默认 persist.vendor.gaokun3.allow_suspend=1；device.mk:586-591 关待机的写法。
+     device/huawei/gaokun3/device.mk 默认 persist.vendor.gaokun3.allow_suspend=1；1.0 起关待机走 Parts 的开关（PWR-16，
+     parts/…/StandbySettingsActivity.java + init.gaokun3.rc 的镜像触发器），⬜ 开关在「电池」页的位置与文案待上机核对。
      实际延迟没量过（批 4 测完把数字补进来）。v0.7.1 发版说明：每次唤醒 Wi-Fi 约 2 秒回来。 -->
 * **现象**：屏幕关掉、机器进入待机后，微信、QQ 等的新消息不会实时提醒，要等你点亮屏幕（或系统定时唤醒）才一起到。
   每次唤醒后，Wi-Fi 要过几秒才连上。
 * **原因**：待机时 Wi-Fi 芯片整个断电，网络上的数据没法唤醒机器。国内 App 在这个系统上也没有厂商推送通道可用。
 * **替代办法**：
   * 需要及时收消息时，让屏幕保持常亮，或者用手机收消息。
-  * 也可以彻底关掉待机，代价是息屏时耗电明显增加。这需要 root（在 ReSukiSU 管理器里给 Shell 授权）：
-    `adb shell su -c "setprop persist.vendor.gaokun3.allow_suspend 0"`。这个设置重启后仍然有效；改回 `1` 就恢复待机。
+  * 也可以彻底关掉待机，代价是息屏时耗电明显增加：**设置 → 电池 → 待机（睡眠）**，关掉「允许待机」。
+    关闭立刻生效，重启后仍然有效；打开从下一次息屏起恢复待机。
 
 ### 未通过 Google 认证
 <!-- T2 / INST-14 / APP-4。证据：docs/INSTALL.md 第 4 节（登记流程与 Play Integrity 说明）；实机 verifiedbootstate=orange。 -->
