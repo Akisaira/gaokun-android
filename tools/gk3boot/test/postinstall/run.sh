@@ -160,6 +160,50 @@ sc f9 action "$V1" "$FBBIG"; FREE_KB=43000 go f9
 chk "带 3000 KB 执行端 ⇒ 空间不足、RC=1" '[ "$RC" = 1 ] && echo "$OUT" | grep -q "空间不足"'
 sc f9 off "$V1" "$FBBIG"; FREE_KB=43000 go f9
 chk "off ⇒ 不算入口、照常通过" '[ "$RC" = 0 ]'
+
+# ── R：救援条目（v1.0 计划 OTA-10 / GUI-10 / INST-17）──────────────────────────────────
+# 期望值不在这里手抄：拿安装器的 gk3__rescue_cmdline（bash）对同一份 cmdline 算一遍 —— 两边的规则必须逐字相同
+RCL="androidboot.hardware=gaokun3 init=/init firmware_class.path=/vendor/firmware/ console=tty0 clk_ignore_unused gk3.x=1"
+RWANT=$(bash -c '. "$1" >/dev/null 2>&1; gk3__rescue_cmdline "$2"' _ "$G/../../scripts/live/installer-lib.sh" "$RCL")
+resc() {   # resc <场景> <文件名> <槽> <title> <options>：放一条安装器样式的救援条目
+    printf 'title      %s\nversion    gaokun3-rescue\nsort-key   linux1\nlinux      /%s/android/slot_%s/Image\ndevicetree /%s/android/slot_%s/gaokun3.dtb\ninitrd     /%s/rescue/initramfs.img\noptions    %s\n' \
+        "$4" "$MID" "$3" "$MID" "$3" "$MID" "$5" > "$P/sc-$1/esp/loader/entries/$2"
+}
+gor() { OUT=$(GK3_PI_CMDLINE="$RCL" bash "$H/harness.sh" "$SH" "$P/sc-$1" "$2" 2>&1); RC=$(echo "$OUT" | LC_ALL=C sed -n 's/^RC=//p'); }
+opt() { sed -n 's/^options *//p' "$E/$1"; }
+
+echo "  R1 老机器（v1.0 之前装的：只有借 slot_a 的 rescue.conf、旧标题、旧 options），OTA 到 b ⇒ 派生 rescue-b.conf"
+sc r1 off ""; resc r1 "$MID-rescue.conf" a "gaokun3 rescue (runs from RAM)" "old loglevel=4 panic=10 gk3.squash=/gaokun3/rescue.squashfs"
+gor r1 1
+chk "RC=0、期望值算得出来（${RWANT}）" '[ "$RC" = 0 ] && [ -n "$RWANT" ] && ! echo "$RWANT" | grep -q androidboot'
+chk "rescue-b.conf：借 slot_b 的内核与 dtb、initramfs 不变" 'grep -q "^linux      /$MID/android/slot_b/Image$" "$E/$MID-rescue-b.conf" && grep -q "^devicetree /$MID/android/slot_b/gaokun3.dtb$" "$E/$MID-rescue-b.conf" && grep -q "^initrd     /$MID/rescue/initramfs.img$" "$E/$MID-rescue-b.conf"'
+chk "rescue-b.conf：options 按安装器的规则从新 cmdline 派生、标题 / version / sort-key 改好" '[ "$(opt "$MID-rescue-b.conf")" = "$RWANT" ] && grep -q "^title      gaokun3 rescue (slot b kernel)$" "$E/$MID-rescue-b.conf" && grep -q "^version    gaokun3-rescue-b$" "$E/$MID-rescue-b.conf" && grep -q "^sort-key   linux2$" "$E/$MID-rescue-b.conf"'
+chk "rescue.conf（借 slot_a，内核没换）原样不动" '[ "$(opt "$MID-rescue.conf")" = "old loglevel=4 panic=10 gk3.squash=/gaokun3/rescue.squashfs" ] && grep -q "(runs from RAM)" "$E/$MID-rescue.conf"'
+chk "没有留下 .new" '! find "$P/run/esp" -name "*.new" | grep -q .'
+
+echo "  R2 两条都在，OTA 到 a ⇒ 只同步 rescue.conf（并把旧标题改成 slot a kernel），rescue-b.conf 不动"
+sc r2 off ""; resc r2 "$MID-rescue.conf" a "gaokun3 rescue (runs from RAM)" "old gk3.squash=/gaokun3/rescue.squashfs"
+resc r2 "$MID-rescue-b.conf" b "gaokun3 rescue (slot b kernel)" "oldb gk3.squash=/gaokun3/rescue.squashfs"
+gor r2 0
+chk "RC=0、rescue.conf 的 options = 安装器规则、标题改成 slot a kernel" '[ "$RC" = 0 ] && [ "$(opt "$MID-rescue.conf")" = "$RWANT" ] && grep -q "^title      gaokun3 rescue (slot a kernel)$" "$E/$MID-rescue.conf"'
+chk "rescue-b.conf 不动、直连条目 a 照常同步" '[ "$(opt "$MID-rescue-b.conf")" = "oldb gk3.squash=/gaokun3/rescue.squashfs" ] && [ "$(opt "$MID-android-a.conf")" = "$RCL androidboot.slot_suffix=_a" ]'
+
+echo "  R3 两条都在，OTA 到 b ⇒ 同步 rescue-b.conf，不再派生第二份"
+sc r3 off ""; resc r3 "$MID-rescue.conf" a "gaokun3 rescue (slot a kernel)" "olda gk3.squash=/gaokun3/rescue.squashfs"
+resc r3 "$MID-rescue-b.conf" b "gaokun3 rescue (slot b kernel)" "oldb gk3.squash=/gaokun3/rescue.squashfs"
+gor r3 1
+chk "rescue-b.conf 同步、rescue.conf 不动、条目数不变" '[ "$RC" = 0 ] && [ "$(opt "$MID-rescue-b.conf")" = "$RWANT" ] && [ "$(opt "$MID-rescue.conf")" = "olda gk3.squash=/gaokun3/rescue.squashfs" ] && [ "$(ls "$E" | grep -c rescue)" = 2 ]'
+
+echo "  R4 不是安装器写的（手写的、没有 gk3.squash=/gaokun3/rescue.squashfs）⇒ 不碰、不派生"
+sc r4 off ""; resc r4 "$MID-rescue.conf" a "my rescue" "console=tty0 gk3.squash=/my/own.squashfs"
+gor r4 1
+chk "RC=0、没有派生 rescue-b.conf、原条目不变" '[ "$RC" = 0 ] && [ ! -e "$E/$MID-rescue-b.conf" ] && [ "$(opt "$MID-rescue.conf")" = "console=tty0 gk3.squash=/my/own.squashfs" ]'
+gor r4 0
+chk "OTA 到 a 也不碰它" '[ "$RC" = 0 ] && [ "$(opt "$MID-rescue.conf")" = "console=tty0 gk3.squash=/my/own.squashfs" ]'
+
+echo "  R5 没装救援系统 ⇒ 什么都不多出来"
+sc r5 off ""; gor r5 1
+chk "RC=0、没有任何 rescue 条目" '[ "$RC" = 0 ] && ! ls "$E" | grep -q rescue'
 done
 
 D=$G/build/hal-test/driver

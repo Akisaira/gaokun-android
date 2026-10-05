@@ -231,6 +231,61 @@ else
     log "⚠️ 没有 cmdline.txt 或找不到 $ENT，启动项 options 未更新"
 fi
 
+# ── 救援条目：借这个槽内核的那条，options 也跟着 boot.img 走（v1.0 计划 OTA-10 / GUI-10 / INST-17）────────
+# 安装器装了救援系统时写两条（scripts/live/installer-lib.sh 的 gk3_apply）：<MID>-rescue.conf 借 slot_a 的内核与 dtb、
+#   <MID>-rescue-b.conf 借 slot_b 的，initramfs 共用 <MID>/rescue/initramfs.img。上面刚把这个槽的内核换了 ——
+#   借它的那条救援条目的 options 原先是装机当天写死的，与新内核的 cmdline 会漂（与直连条目 #116 §17 是同一种漂移）。
+# 规则与安装器的 gk3__rescue_cmdline【逐字相同】（改一边就要改另一边；tools/gk3boot/test/postinstall/run.sh 的 R 组交叉核对）：
+#   去掉 androidboot.* / init= / firmware_class.path=，末尾加 loglevel=4 panic=10 gk3.squash=/gaokun3/rescue.squashfs。
+# 只动安装器写的那种：文件名 <MID>-rescue*.conf、linux 行正好是 /<MID>/android/slot_<槽>/Image、options 里有
+#   gk3.squash=/gaokun3/rescue.squashfs。别的（手写的、指向别处的）一概不碰。
+# v1.0 之前装的机器只有借 slot_a 的那一条：目标是 b 时从它派生借 slot_b 的那条（只多一个 .conf，不占 ESP 空间）；
+#   原标题 "(runs from RAM)" 不准（squashfs 是只读挂的，只有写入层在内存），顺手改成与安装器一致的 "(slot a kernel)"。
+# ★ 这一节任何失败都只记日志、不让 OTA 失败：救援条目不影响 Android 启动。
+rescue_cmdline() {   # $1 = Android 的 cmdline
+    _rk=""
+    set -f
+    for _t in $1; do
+        case "$_t" in androidboot.*|init=*|firmware_class.path=*) ;; *) _rk="$_rk$_t " ;; esac
+    done
+    set +f
+    echo "${_rk}loglevel=4 panic=10 gk3.squash=/gaokun3/rescue.squashfs"
+}
+rescue_ours() {   # $1=条目 $2=槽字母：是安装器写的、借这个槽内核的救援条目时返回 0
+    _rl=$(sed -n 's/^linux[[:space:]][[:space:]]*//p' "$1" | head -1 | tr -d '\r' | sed 's/[[:space:]]*$//')
+    [ "$_rl" = "/$MID/android/slot_$2/Image" ] || return 1
+    grep -qE '^options[[:space:]].*gk3\.squash=/gaokun3/rescue\.squashfs([[:space:]]|$)' "$1"
+}
+RESC_OLD_TITLE="gaokun3 rescue (runs from RAM)"
+RA="$MNT/loader/entries/$MID-rescue.conf"; RB="$MNT/loader/entries/$MID-rescue-b.conf"
+if [ -s "$DEST/cmdline.txt" ] && [ -f "$RA" ]; then
+    RCMD=$(rescue_cmdline "$(tr -d '\r\n' < "$DEST/cmdline.txt")")
+    if [ "$SUFFIX" = b ] && [ ! -e "$RB" ] && rescue_ours "$RA" a; then
+        if sed -e "s|^title .*|title      gaokun3 rescue (slot b kernel)|" -e "s|^version .*|version    gaokun3-rescue-b|" \
+               -e "s|^sort-key .*|sort-key   linux2|" -e "s|^\(linux[[:space:]].*\)/android/slot_a/|\1/android/slot_b/|" \
+               -e "s|^\(devicetree[[:space:]].*\)/android/slot_a/|\1/android/slot_b/|" "$RA" > "$RB.new" &&
+           grep -q "^linux .*/android/slot_b/Image" "$RB.new" && mv -f "$RB.new" "$RB"; then
+            log "救援条目：从 ${RA##*/} 派生了借 slot_b 内核的 ${RB##*/}（INST-17）"
+        else
+            rm -f "$RB.new"; log "⚠️ 派生 ${RB##*/} 失败（救援系统仍可从 ${RA##*/} 进）"
+        fi
+    fi
+    for e in "$MNT/loader/entries/$MID"-rescue*.conf; do
+        [ -f "$e" ] || continue
+        rescue_ours "$e" "$SUFFIX" || continue
+        if awk -v cmd="$RCMD" -v old="$RESC_OLD_TITLE" -v sl="$SUFFIX" '
+               /^options[[:space:]]/ { print "options    " cmd; next }
+               /^title[[:space:]]/ { t = $0; sub(/^title[[:space:]]+/, "", t); if (t == old) { print "title      gaokun3 rescue (slot " sl " kernel)"; next } }
+               { print }' "$e" > "$e.new" && grep -q "^options " "$e.new"; then
+            if cmp -s "$e.new" "$e"; then rm -f "$e.new"
+            elif mv -f "$e.new" "$e"; then log "救援条目 ${e##*/}：options 已同步为 boot.img 的 cmdline（按安装器的规则派生）"
+            else rm -f "$e.new"; log "⚠️ 救援条目 ${e##*/} 的 options 没同步上（救援系统用旧 cmdline 起，仍可用）"; fi
+        else
+            rm -f "$e.new"; log "⚠️ 救援条目 ${e##*/} 的 options 没同步上（救援系统用旧 cmdline 起，仍可用）"
+        fi
+    done
+fi
+
 # ── 统一启动入口 gk3boot.efi（2026-10-05，S9；docs/boot-entry-design.md §4.6.2、§4.8、§4.11）──────────
 # 开关 persist.vendor.gaokun3.gk3boot（缺省 off，1.0 发版时再定默认值）：
 #   off            删掉 ESP 上全部 gk3boot-android-* / gk3prev-android-* 条目（含 .staged）与 gk3boot-tools.conf

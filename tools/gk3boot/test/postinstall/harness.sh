@@ -15,10 +15,12 @@ sed -e "s#/dev/block/by-name/#$R/dev/#g" \
     -e "s#/mnt/gaokun3_ota_esp#$R/esp#g" \
     -e "s#/mnt/gaokun3_esp_probe#$R/mnt/probe#g" \
     "$REPO/device/huawei/gaokun3/bin/gaokun3-ota-postinstall.sh" > "$R/bin/gaokun3-ota-postinstall.sh"
-cat > "$R/bin/gaokun3-bootimg-extract" <<'EOF'
+# GK3_PI_CMDLINE：解包器"解出来"的 cmdline.txt（默认 console=tty0 foo=bar；救援条目的 R 组要带 androidboot.* 的）
+printf '%s' "${GK3_PI_CMDLINE:-console=tty0 foo=bar}" > "$R/cmdline.src"
+cat > "$R/bin/gaokun3-bootimg-extract" <<EOF
 #!/bin/sh
-d=$2; printf 'IMAGE' > "$d/Image"; printf 'RD' > "$d/ramdisk.img"; printf 'DTB' > "$d/gaokun3.dtb"
-printf 'console=tty0 foo=bar' > "$d/cmdline.txt"
+d=\$2; printf 'IMAGE' > "\$d/Image"; printf 'RD' > "\$d/ramdisk.img"; printf 'DTB' > "\$d/gaokun3.dtb"
+cat "$R/cmdline.src" > "\$d/cmdline.txt"
 EOF
 chmod +x "$R/bin/gaokun3-bootimg-extract"
 # 桩：mount 只在 -o ro 探测时"成功"并把探测挂载点链到假 ESP；真挂载是 no-op（MNT 已经是假 ESP）
