@@ -98,6 +98,28 @@ gk3_part_delete() { echo "PARTOP op=delete part=$1"; }
     expect(ShellBackend.cancellable('gk3_apply'), isFalse);
   }, timeout: const Timeout(Duration(seconds: 30)));
 
+  // GUI-11：库里有 gk3_job_run 时，写盘的调用经它跑（独立单元，界面死了不连带）；别的调用照旧直接调
+  test('写盘调用经 gk3_job_run；JOB 记录（stderr）解析成记录；不写盘的不经它', () async {
+    File(lib.path).writeAsStringSync(r'''
+gk3_job_run() { echo "JOB id=j1 state=running mode=setsid unit=-" >&2; echo "via-job:$1" >&2; "$@"; }
+gk3_part_delete() { echo "PARTOP op=delete part=$1"; }
+gk3_demo() { echo "REC n=1"; }
+''');
+    final b = ShellBackend(lib.path, log: log, inhibitor: ['${tmp.path}/no-such-inhibit']);
+    expect(b.hasJobs, isTrue);
+    final ev = await b.call('gk3_part_delete', ['/dev/nvme0n1p6']).toList();
+    expect(ev.whereType<Gk3Log>().map((e) => e.line), contains('via-job:gk3_part_delete'));
+    expect(ev.whereType<Gk3Record>().firstWhere((r) => r.type == 'JOB')['id'], 'j1');
+    expect(ev.whereType<Gk3Record>().firstWhere((r) => r.type == 'PARTOP')['part'], '/dev/nvme0n1p6');
+    final ev2 = await b.call('gk3_demo').toList();
+    expect(ev2.whereType<Gk3Log>().where((e) => e.line.startsWith('via-job')), isEmpty);
+    // 旧库（没有 gk3_job_run）：照旧直接调
+    File(lib.path).writeAsStringSync('gk3_part_delete() { echo "PARTOP op=delete part=\$1"; }\n');
+    final old = ShellBackend(lib.path, log: log, inhibitor: ['${tmp.path}/no-such-inhibit']);
+    expect(old.hasJobs, isFalse);
+    expect((await old.call('gk3_part_delete', ['/dev/x']).toList()).last, isA<Gk3Exit>());
+  });
+
   test('拿不到 inhibitor（logind 没在跑 / 没有 systemd-inhibit）：照样执行，日志里记一笔', () async {
     final b = ShellBackend(lib.path, log: log, inhibitor: ['${tmp.path}/no-such-inhibit']);
     final ev = await b.call('gk3_part_delete', ['/dev/nvme0n1p6']).toList();

@@ -200,13 +200,21 @@
   要在已验收的发布构建上确认 `ro.adb.secure=1` / `ro.debuggable=0` / 没有 5555 之后，才保留 INSTALL / FAQ / README 里"Release builds after v0.7.1 no longer…""From 1.0…"这些句子，并改掉两份 README 里"计划在 1.0 关掉"那句；如果 B1 没进这一版，就撤回这些句子。
 
 **等安装器**（`scripts/live/`、`live/installer-flutter/`、`scripts/windows/`）—— 安装器组 10-05 00:55 已合进 main，下面这些现在都可以做了，只是本轮没碰：
-* ✅ 本表已记（上表第 13 行）：B5、GUI-3、GUI-5、GUI-20、STOR-5（安装器侧）、GUI-7 / INST-11 都已写、已在本机测过，待构建与上机。⬜ v1.0-plan 那边还没标。⬜ GUI-5 里 RunPage 下载阶段的取消按钮和速度 / 剩余时间显示**没做**。
+* ✅ 本表已记（上表第 13 行）：B5、GUI-3、GUI-5、GUI-20、STOR-5（安装器侧）、GUI-7 / INST-11 都已写、已在本机测过，待构建与上机。⬜ v1.0-plan 那边还没标。✅ GUI-5 里 RunPage 下载阶段的取消按钮和速度 / 剩余时间显示（批 3 前端组，见下"批 3 前端组"一条）。
 * ✅ STOR-5 的第二道保险已经随 `3608a52` 落地：`installer-lib.sh` 里 userdata 的 `mkfs.ext4` 加了 `-m 0`，test-apply 也断言了保留块为 0。⬜ 真盘装一次后只读跑 `tune2fs -l` 确认（ROM 侧 `reservedsize` 生效后应为 32768，见 V9）。
 * ✅ release-checklist B13（G5）要的两样都已合进 main：`build-rootfs.sh` mask 了 5 个睡眠 target，`flow_test.dart` 有"下载失败（盘没动）… 重试"的用例。⬜ mask 要等 build-live 重建以后在真 live 里验（见下）。
 * ✅ GUI-7 / INST-11（2026-10-05 批 3 后端组）：INSTALL "Before you start, in Windows" 的 BitLocker 一段改成与 ps1 同序（先确认恢复密钥 → Suspend-BitLocker 2 次重启 → 再关安全启动；先查 UEFI）。⬜ RebootCount 2 够不够仍要真机（见下）。
 * ✅ `docs/stage7-flutter-debian.md` §5.13 记了 B5 三层、失败页两种、侧栏重启 / 关机、`gk3_net_fetch` 停滞判死与重试上限，连同本轮的 GUI-11/12、INST-6/12/16/17。
-* ⬜ `live/installer-flutter/testdata` 的 fixture 下次用 `scripts/live/gen-fixtures.sh` 重录（会自然带上 `fixed_mib`），届时删掉手补的那几行和 index 的头注释。
-* ⬜ `live/installer-flutter/lib/l10n/app_en.arb` 与 `app_zh.arb` 的 `optsRescueBody`（"a Linux that runs from RAM"）改成准确的说法：squashfs 从分区只读 loop 挂载，写入层在 RAM（`initramfs-init:119-123`）。
+* ✅ fixture 已用 `gen-fixtures.sh` 按新协议重录（2026-10-05，批 3 前端组），手补的 `fixed_mib` 与 index 头注释随之消失。
+* ✅ `optsRescueBody` 改准确了：squashfs 从分区只读挂载、运行中的改动在内存里（`initramfs-init` 的 `mount -o ro,loop` + tmpfs 上层）。
+* ✅ **批 3 前端组**（INST-10 / GUI-4/5/8/9/11/12/14/17/18/19、INST-16 前端；本机测过，没重建 live、没上机，细节 stage7 §5.14）：
+  后端给界面的只有 `PROGRESS <代码> k=v` / `ERR code=… [touched=]`，前端查 l10n（`ui/messages.dart`，`test/messages_test.dart` 从 installer-lib.sh 抓全部代码核对两种语言都有）；
+  侧栏"安装器"走 l10n；`gk3.lang=` + 记住语言（介质 `gaokun3/installer-lang`）；下载可取消（setsid 进程组）+ 速度 / 剩余时间；`CHECK id=power`（<15% 且没接电源拦）；
+  纯 WPA3 `key_mgmt SAE` + `ieee80211w 2`、混合模式按 PSK、WEP / OWE 标灰；免 U 盘不提示拔介质、默认不另装救援；确认页标出华为一键恢复分区（Onekey）；
+  写盘经 `gk3_job_run`、启动时 `gk3_job_status` 有 running 就接着跟；失败页"保存日志"；预检显示 `pkgs=`；命令行版失败时说盘动没动过。
+  test-apply 160/160、test-wifi-connect 20/20、test-wpa-scan 12/12、flutter test 见 stage7 §5.14。
+  ⬜ 上机要看：live 内核里 `gaokun-ec-battery` / `gaokun-ec-adapter` 在不在（电量预检）；纯 SAE 的 AP 真连一次；取消下载时 curl 跟着死（`ps`）；
+  真 systemd 下界面被杀后重新起来能接上 job；"保存日志"存到另插的 U 盘、Windows 上能打开；英文界面（`gk3.lang=en`）走一遍。
 * ✅ INST-6（批 3 后端组，离线测过）：`installer-lib.sh` 的 `gk3__find_rescue_squashfs` 在 `/media/gk3/gaokun3/live.squashfs` 上兜底（Windows 安装包那条路），`install-gaokun3.sh` 也走它；`release-installer.sh` 把 `rescue.squashfs` + `initramfs.img` 作为附件（命令行安装放进发布目录即可）；INSTALL 那句已改。test-apply D 组改成 Windows 安装包的介质并带救援系统。⬜ 真机：从 Windows 安装包开始装一次、救援条目能起。
 * ✅（部分）`release-installer.sh` 加 `--r2`：传 R2 的 `installer/<安装器版本>/`（同名不同内容就停，传完经公开域名 HEAD 核字节数），打印 GitHub 与 R2 链接；INSTALL 的 Downloads 表两边都写了（R2 那边标"还没传过"）。⬜ 没跑过（发布要用户点头）；"指向 latest"要等用户定是否每版都附安装器；README 的表没动。
 * ✅ `scripts/live/m0-internal.sh` 的 root 提示按发布构建改写（userdebug：adb root；发布构建：su 可用 / 不可用两种提示，都指向在 KSU 管理器里给 Shell 授权）。⬜ 授权后 adb shell 是否直接是 uid 0 仍等 V10。
@@ -215,9 +223,9 @@
 * ⬜ B4 / M4a 的真机路径：U 盘启动安装器 → tty2 root 免密登录 → curl 下载到 `/tmp` → 跑 `/usr/share/gaokun3/install-gaokun3.sh` 整盘安装，这一整条从没在真机上跑过；图形安装器"Reinstall Android"默认清除数据这条路径（现在是文档推荐的唯一真正清数据的办法），B4 验收时优先跑。
 * ✅ INST-12：救援 overlay 加 `/usr/bin/gk3-boot-android [a|b] [--reboot] | --list | --clear`（选直连条目 `<mid>-android-<槽>.conf`、写 LoaderEntryOneShot；镜像里没有 bootctl），build-rootfs 体检它；INSTALL "About the rescue system" 已换成用它。`test-boot-android.sh` 11/11。⬜ 真机救援里写 EFI 变量（V16）。
 * ✅ INST-17 / GUI-10 / OTA-10：安装器写两条救援条目（`<mid>-rescue.conf` 借 slot_a、`<mid>-rescue-b.conf` 借 slot_b，不多占 ESP）；postinstall 给借刚换内核那个槽的那条按 `gk3__rescue_cmdline` 的规则同步 options，老机器 OTA 到 b 时派生第二条。postinstall 离线测试 R1–R5（mksh/dash/ksh）。⬜ 要随下一次 ROM 构建上机：OTA 后两条救援条目都能起。
-* ✅ INST-16：`CHECK id=tools` 加 `pkgs=`（包名在 live 镜像里 dpkg -S 核过），命令行版照它提示。⬜ 图形前端显示 pkgs（另一个代理的协议改动之后再接）。
-* ✅（后端）GUI-11：`gk3_job_run/_start/_follow/_status`（systemd-run 临时单元 + 状态文件 + 介质上的 job 日志；inhibitor 在单元里）。⬜ 前端接入：`ShellBackend.call` 写盘时把 fn 换成 `gk3_job_run fn`，启动时 `gk3_job_status` 找 running 的 job 接着跟（stage7 §5.13）；⬜ 真 systemd 下验。
-* ✅（后端）GUI-12：`gk3_log_targets` + `gk3_save_logs`（另插 FAT/exFAT U 盘优先，介质 esp=yes 标出来）；INSTALL 加"If an install fails: the logs"。⬜ 失败页"保存日志"按钮；⬜ U 盘分区改 0700 前先实测固件回落启动。
+* ✅ INST-16：`CHECK id=tools` 加 `pkgs=`（包名在 live 镜像里 dpkg -S 核过），命令行版照它提示。✅ 图形前端预检失败那行显示 `apt install <pkgs>`（批 3 前端组）。
+* ✅（后端）GUI-11：`gk3_job_run/_start/_follow/_status`（systemd-run 临时单元 + 状态文件 + 介质上的 job 日志；inhibitor 在单元里）。✅ 前端接入（批 3 前端组：库里有 `gk3_job_run` 才走它；欢迎页发现 running 的 job 直接进运行页 `gk3_job_follow`）；⬜ 真 systemd 下验。
+* ✅（后端）GUI-12：`gk3_log_targets` + `gk3_save_logs`（另插 FAT/exFAT U 盘优先，介质 esp=yes 标出来）；INSTALL 加"If an install fails: the logs"。✅ 失败页"保存日志"按钮（两种失败页都有；列出目标、启动介质标"电脑上看不到"）；⬜ U 盘分区改 0700 前先实测固件回落启动。
 
 ### ▶ 1.0 批 2 · 网络（NET-2 / NET-4 / NET-7 / NET-10）已写、未编译、未上机（2026-10-05）
 

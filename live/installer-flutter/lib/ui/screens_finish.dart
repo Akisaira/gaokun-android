@@ -9,6 +9,8 @@ import '../backend/protocol.dart';
 import '../model/model.dart';
 import '../session.dart';
 import 'messages.dart';
+import 'save_logs.dart';
+import 'screens_start.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -297,7 +299,10 @@ class ConfirmPage extends StatelessWidget {
 // ── 进度 ─────────────────────────────────────────────────────────────────────
 
 class RunPage extends StatefulWidget {
-  const RunPage({super.key});
+  const RunPage({super.key, this.resume});
+
+  /// 不是新开一次安装，而是接着跟一个还在跑的写盘任务（gk3_job_status 的 JOB 记录，GUI-11）
+  final Gk3Record? resume;
   @override
   State<RunPage> createState() => _RunPageState();
 }
@@ -318,7 +323,8 @@ class _RunPageState extends State<RunPage> {
   }
 
   void _start() {
-    _sub = context.session.install().listen((e) {
+    final s = context.session, job = widget.resume;
+    _sub = (job == null ? s.install() : s.follow(job['id'])).listen((e) {
       if (!mounted) return;
       setState(() {
         switch (e) {
@@ -346,13 +352,15 @@ class _RunPageState extends State<RunPage> {
 
   void _finish(int code) {
     final s = context.session;
+    final job = widget.resume;
     if (code == 0) {
-      go(context, const DonePage(), replace: true);
+      // 接着跟的是缩分区 / 调整磁盘：做完了就从头走一遍（盘变了，前面的判断都要重来）
+      go(context, job == null || job['fn'] == 'gk3_apply' ? const DonePage() : const WelcomePage(), replace: true);
       return;
     }
     // 盘没动过的失败（下载阶段、取消、或者 gk3_apply 在第一次写盘之前的检查里停下 —— ERR touched=no）：
     // 可以返回、可以重试。写盘阶段的失败才是"盘可能写了一半"（v1.0 计划 GUI-3）
-    final untouched = s.stage == InstallStage.download || _err?['touched'] == 'no';
+    final untouched = job == null && (s.stage == InstallStage.download || _err?['touched'] == 'no');
     go(
       context,
       FailPage(
@@ -403,8 +411,8 @@ class _RunPageState extends State<RunPage> {
       canPop: false, // 装到一半不许返回
       child: StepPage(
         step: Gk3Step.install,
-        title: l.runTitle,
-        subtitle: l.runSub,
+        title: widget.resume == null ? l.runTitle : l.runResumeTitle,
+        subtitle: widget.resume == null ? l.runSub : l.runResumeSub,
         bottom: Row(children: [
           Btn(_showLog ? l.runHideLog : l.runShowLog, kind: BtnKind.secondary, icon: Icons.subject, onPressed: () => setState(() => _showLog = !_showLog)),
           const Spacer(),
@@ -520,11 +528,15 @@ class _FailPageState extends State<FailPage> {
                 Btn(l.failBackEdit, kind: BtnKind.text, icon: Icons.arrow_back, onPressed: () => Navigator.pop(context)),
                 const SizedBox(width: 12),
                 Btn(l.shellOpen, kind: BtnKind.secondary, icon: Icons.terminal, onPressed: () => openShell(context)),
+                const SizedBox(width: 12),
+                const SaveLogsButton(),
                 const Spacer(),
                 Btn(l.btnRetry, icon: Icons.refresh, autofocus: true, onPressed: () => go(context, const RunPage(), replace: true)),
               ])
             : Row(children: [
                 Btn(l.shellOpen, kind: BtnKind.secondary, icon: Icons.terminal, onPressed: () => openShell(context)),
+                const SizedBox(width: 12),
+                const SaveLogsButton(),
                 const SizedBox(width: 16),
                 Expanded(child: Text(l.shellHint, style: tt.bodySmall)),
               ]),

@@ -586,6 +586,39 @@ M4b 那次"ESP 写满、却报告成功"之后，让一个独立的审查专找�
 * **INST-17 / OTA-10**：救援条目两条（借 slot_a / slot_b 的内核，`<mid>-rescue.conf` / `<mid>-rescue-b.conf`），postinstall 给借刚换内核那个槽的那条同步 options（规则同 `gk3__rescue_cmdline`），老机器 OTA 到 b 时派生第二条。
 * **INST-12**：救援里 `gk3-boot-android [a|b] [--reboot]`（镜像里没有 bootctl）。**INST-16**：`CHECK id=tools` 加 `pkgs=`。
 
+### 5.14 1.0 批 3 前端组：界面不再显示后端的中文、下载可取消、接上 §5.13 留的三个接口（2026-10-05）
+
+都只在本机（Mac 上 flutter test、容器里 test-apply / gen-fixtures）测过，**没重建 live 镜像、没上机**。
+* **协议（INST-10）**：`installer-lib.sh` 给界面的只有代码 —— `PROGRESS <百分比> <代码> [k=v…]`（`gk3_prog` 带编码好的字段）与
+  `ERR code=<代码> [k=v…]`（新的 `gk3_fail <代码> [k=v…] -- <中文说明>`：先出 ERR，再出原来的 `!! 中文`，日志与命令行版不变）。
+  ERR 也走 stderr（`x=$(gk3__…)` 吞 stdout，报错会跟着丢）。在 `gk3_apply` / `gk3_shrink` 的调用栈里自动带 `touched=yes|no`（盘动过没有；
+  看栈不看变量 —— 同一个 shell 里先后调过它们，变量会留着）。前端 `lib/ui/messages.dart` 按代码查 l10n；`test/messages_test.dart`
+  从 installer-lib.sh / gk3-unsparse.py 里把所有代码抓出来，要求两种语言都有、英文的不含 CJK。没改的四处 `gk3_die`
+  （救援分区那几行：rescue.squashfs / initramfs.img 缺失、救援分区写失败 / 卸不下）界面上显示通用的"没有完成（退出码）"。
+* **英文界面无 CJK（GUI-14）**：flow_test 逐页扫屏幕上的文字（日志区除外）。⚠️ 日志是后端原样输出、部分是中文 ——
+  失败页在英文界面里默认收起，点"Show the technical log"才展开（bug 报告要它）。"中文"两个字是语言按钮自己的名字，不算。
+  变体清单可带 `name_en` / `desc_en`（没有就用 `name` / `desc`）。
+* **语言（GUI-4 / GUI-19）**：侧栏底部"安装器 <版本>"走 l10n；记住的 > 内核参数 `gk3.lang=`（`gk3-installer-session` 转成 `GK3_LANG`，
+  Dart 也直接读 `/proc/cmdline`）> 中文。记在 `/media/gk3/gaokun3/installer-lang`（会话脚本已把介质挂成可写），只读时 `/run/gk3-installer/lang`。
+* **下载（GUI-5）**：curl 进度表的最后两列（Current Speed、Time Left）进 `PROGRESS … dl … speed= left=`，界面显示"1.8 MB/s · 还要约 8 分钟"；
+  ⬜ 两列的含义按 curl 的进度表格式，只在桩上验过。"取消下载"只在下载阶段有、先确认；`ShellBackend` 用 `setsid` 让下载自成进程组、取消时整组 TERM
+  （只杀 bash 的话 curl 成了孤儿，重试时两个 curl 写同一个文件）。取消后是"下载已取消"页（盘没动，可重试 / 返回）。
+  另外：`gk3_apply` 在第一次写盘之前的检查里失败（ERR `touched=no`）现在也走"盘没动过"那种失败页，不再说"写了一半"。
+* **GUI-8 电量**：`CHECK id=power ok=… value=<%> ac=yes|no min=15`。名字取自 EC 驱动（`gaokun-ec-battery` / `gaokun-ec-adapter`，
+  `refs/gaokun-buildbot/drivers/gaokun-ec/huawei-gaokun-battery.c:174-175`、`:435`），找不到按 `type` 找，找不到电池 ⇒ unknown 不拦。
+  ⬜ live 内核里这个驱动在不在没在 live 里看过。
+* **GUI-9 WiFi**：`gk3-wpa-scan.py` 改成"有 PSK 就是 psk"（WPA2/WPA3 混合模式按 PSK 连），只有纯 SAE 报 sae；`gk3_wifi_connect … sae` 设
+  `key_mgmt SAE` + `ieee80211w 2`（Debian wpasupplicant 2:2.10-24 的 `examples/wpa_supplicant.conf:991`；密码照放 psk，同文件 `:1047-1051`），
+  存给救援系统的配置也带上。WEP / OWE / EAP 在列表里标灰并写原因。⬜ 纯 SAE 的 AP 没真连过。
+* **GUI-17 / GUI-18**：安装器所在的盘就是目标盘时，选项页默认不另装救援（写明原因、可打开），完成页不说"移除安装介质"；
+  整盘清空的确认页把卷标 Onekey 的分区标成"华为一键恢复分区"并写后果（WINPE 是否属于同一套没核实，没标）。
+* **§5.13 的三个接口**：GUI-11 —— `ShellBackend` 在库里有 `gk3_job_run` 时，写盘调用改成 `gk3_job_run <fn> …`（stderr 上的 JOB 记录解析成记录）；
+  欢迎页先问 `gk3_job_status`，有 `state=running` 的就直接进运行页 `gk3_job_follow <id>`（标题"正在接着刚才的写盘"，侧栏禁用；跟完 apply 进完成页，
+  跟完别的回欢迎页重来）。job 没写状态就没了 ⇒ `ERR code=job-lost touched=yes`。GUI-12 —— 两种失败页都有"保存日志"：`gk3_log_targets` 列目标
+  （启动介质标"电脑上默认看不到"）、`gk3_save_logs <分区>`，存完说存到哪。INST-16 —— 预检失败那行显示 `apt install <pkgs>`。
+* fixture 用 `gen-fixtures.sh` 重录（进度 / ERR 只有代码；预检带 power；WiFi 列表加纯 WPA3 / WEP / OWE；`log_targets` / `save_logs` 在假 U 盘上录；
+  `job_status-*` 手写，跟读内容是 blank 场景录的那次 apply）。⚠️ 改了 `.arb` 之后先 `flutter gen-l10n`，`flutter test` 不会重新生成。
+
 ## 6. 风险（按"会不会让方案作废"排序）
 
 1. 🔴 mesa/freedreno 在 Debian arm64 用户态不可用 → 回落 `FLUTTER_LINUX_RENDERER=software`

@@ -24,8 +24,13 @@ class _WelcomePageState extends State<WelcomePage> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (context.session.checks == null) context.session.start();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final s = context.session;
+      if (s.checks != null) return;
+      await s.start();
+      // 写盘任务还在跑（界面刚才崩过又起来了）：直接接上去看它（GUI-11）
+      final job = s.runningJob;
+      if (job != null && mounted) go(context, RunPage(resume: job));
     });
   }
 
@@ -50,7 +55,7 @@ class _WelcomePageState extends State<WelcomePage> {
       'secureboot' => l.checkSecurebootBad,
       'uefi' => l.checkUefiBad,
       'root' => l.checkRootBad,
-      'tools' => l.checkToolsBad(c.missing.replaceAll(',', ', ')),
+      'tools' => c.pkgs.isEmpty ? l.checkToolsBad(c.missing.replaceAll(',', ', ')) : l.checkToolsBadPkgs(c.missing.replaceAll(',', ', '), c.pkgs.replaceAll(',', ' ')),
       'power' => l.checkPowerBad(c.min),
       _ => null,
     };

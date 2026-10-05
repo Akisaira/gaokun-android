@@ -98,8 +98,9 @@ Gk3Event parseStderrLine(String line) {
     final c = _coded(text);
     return Gk3Progress(int.parse(m.group(1)!), text, code: c?.$1, fields: c?.$2 ?? const {});
   }
-  // ERR 走 stderr（理由在 installer-lib.sh 的文件头），解析成与 stdout 记录一样的 Gk3Record
-  if (line.startsWith('ERR ')) {
+  // ERR 走 stderr（理由在 installer-lib.sh 的文件头），解析成与 stdout 记录一样的 Gk3Record；
+  // gk3_job_run 的 JOB 记录同样打在 stderr 上（不混进被调函数自己的 stdout 记录流）
+  if (line.startsWith('ERR ') || line.startsWith('JOB ')) {
     final r = parseStdoutLine(line);
     if (r is Gk3Record) return r;
   }

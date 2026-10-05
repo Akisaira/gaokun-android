@@ -15,7 +15,7 @@ import 'package:gk3_installer/ui/widgets.dart';
 
 /// 包一层 FixtureBackend：记下每一次调用；可以让某个函数失败
 class Rec extends Gk3Backend {
-  Rec(this.inner, {this.failApply = false, this.failApplyUntouched = false, this.shellError, this.failNetOnce = false, this.holdApply, this.holdNet});
+  Rec(this.inner, {this.failApply = false, this.failApplyUntouched = false, this.shellError, this.failNetOnce = false, this.holdApply, this.holdNet, this.holdFollow});
   final FixtureBackend inner;
   final bool failApply;
 
@@ -30,6 +30,9 @@ class Rec extends Gk3Backend {
 
   /// 给了就让 gk3_net_release 停在半路（看"下载期间"界面的样子）
   final Completer<void>? holdNet;
+
+  /// 给了就让 gk3_job_follow 停在半路（接着跟一个写盘任务时的界面）
+  final Completer<void>? holdFollow;
 
   /// 侧栏 / 完成页发出的重启与关机
   final power = <String>[];
@@ -57,6 +60,10 @@ class Rec extends Gk3Backend {
     if (fn == 'gk3_net_release' && holdNet != null) {
       yield parseStderrLine('PROGRESS 30 dl name=super.img.zst pct=31 speed=1843k left=0:07:12');
       await holdNet!.future;
+    }
+    if (fn == 'gk3_job_follow' && holdFollow != null) {
+      yield parseStderrLine('PROGRESS 30 write-super');
+      await holdFollow!.future;
     }
     if (fn == 'gk3_apply' && holdApply != null) {
       yield parseStderrLine('PROGRESS 30 write-super');
@@ -118,12 +125,13 @@ Future<Rec> pumpApp(WidgetTester t, String scenario,
     String? shellError,
     bool failNetOnce = false,
     Completer<void>? holdApply,
-    Completer<void>? holdNet}) async {
+    Completer<void>? holdNet,
+    Completer<void>? holdFollow}) async {
   t.view.physicalSize = const Size(1280, 800);
   t.view.devicePixelRatio = 1;
   addTearDown(t.view.reset);
   final rec = Rec(FixtureBackend(scenario, bundle: DiskBundle(), speed: speed, overrides: overrides),
-      failApply: failApply, failApplyUntouched: failApplyUntouched, shellError: shellError, failNetOnce: failNetOnce, holdApply: holdApply, holdNet: holdNet);
+      failApply: failApply, failApplyUntouched: failApplyUntouched, shellError: shellError, failNetOnce: failNetOnce, holdApply: holdApply, holdNet: holdNet, holdFollow: holdFollow);
   final session = Session(rec, prefs: prefs ?? LangPrefs.none);
   if (prefs == null) session.language = language;
   await t.pumpWidget(InstallerApp(session: session));

@@ -95,6 +95,14 @@ String errText(L10n l, Gk3Record e) {
   String f(String k) => e[k];
   return switch (e['code']) {
     'usage' => l.errUsage,
+    'job-start' => l.errJobStart,
+    'job-missing' => l.errJobMissing(f('id')),
+    'job-lost' => l.errJobLost,
+    'logs-no-target' => l.logsNoTarget,
+    'logs-not-fat' => l.errLogsNotFat(f('part')),
+    'logs-readonly' => l.errLogsReadonly(f('part')),
+    'logs-mount' => l.errLogsMount(f('part')),
+    'logs-mkdir' => l.errLogsMkdir,
     'verify-remount' => l.errVerifyRemount(f('dev')),
     'verify-mismatch' => l.errVerifyMismatch(f('dev')),
     'cmd-failed' => l.errCmdFailed(f('cmd')),

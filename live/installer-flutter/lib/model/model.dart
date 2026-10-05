@@ -107,12 +107,16 @@ class Check {
         why = r['why'],
         missing = r['missing'],
         min = r['min'],
-        ac = r.yes('ac');
+        ac = r.yes('ac'),
+        pkgs = r['pkgs'];
   final String id, value, why, missing;
 
   /// CHECK id=power 的门槛（百分比）与"接着电源"
   final String min;
   final bool ac;
+
+  /// CHECK id=tools 缺的工具对应的 Debian 包名（INST-16，逗号分隔；旧后端没有）
+  final String pkgs;
   final CheckState state;
 }
 

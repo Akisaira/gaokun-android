@@ -1058,5 +1058,71 @@
         "type": "String"
       }
     }
-  }
+  },
+  "logsSave": "保存日志",
+  "logsTitle": "把日志存到 U 盘",
+  "logsPick": "存到哪里？另插一个 U 盘（FAT / exFAT）最方便：拿到电脑上就能打开。",
+  "logsNoTarget": "没找到能存日志的地方。插一个 FAT / exFAT 格式的 U 盘，再点\"重新查找\"。",
+  "logsRescan": "重新查找",
+  "logsSaved": "已存到 {target} 上的 {dir}。报告问题时请附上整个文件夹。",
+  "@logsSaved": {
+    "placeholders": {
+      "target": {
+        "type": "String"
+      },
+      "dir": {
+        "type": "String"
+      }
+    }
+  },
+  "logsSavedEsp": "这是安装介质的 EFI 分区：Windows 和 macOS 默认看不到它。最好再另插一个 U 盘存一份。",
+  "logsEspNote": "安装介质本身（EFI 分区，电脑上默认看不到）",
+  "runResumeTitle": "正在接着刚才的写盘",
+  "runResumeSub": "安装器刚才重新启动过；写盘的进程一直在后台运行，这里接着显示它的进度。不要关机。",
+  "checkToolsBadPkgs": "缺少工具：{missing}（Debian / Ubuntu：apt install {pkgs}）",
+  "@checkToolsBadPkgs": {
+    "placeholders": {
+      "missing": {
+        "type": "String"
+      },
+      "pkgs": {
+        "type": "String"
+      }
+    }
+  },
+  "errJobStart": "写盘进程起不来（systemd-run / setsid 失败）",
+  "errJobMissing": "找不到这个写盘任务（{id}）",
+  "@errJobMissing": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "errJobLost": "写盘进程没写完成状态就没了（被杀，或者机器出错）：盘可能只写了一半",
+  "errLogsNotFat": "{part} 不是 FAT / exFAT，不往别的文件系统写日志",
+  "@errLogsNotFat": {
+    "placeholders": {
+      "part": {
+        "type": "String"
+      }
+    }
+  },
+  "errLogsReadonly": "{part} 改不成可写（写保护？）",
+  "@errLogsReadonly": {
+    "placeholders": {
+      "part": {
+        "type": "String"
+      }
+    }
+  },
+  "errLogsMount": "挂不上 {part}",
+  "@errLogsMount": {
+    "placeholders": {
+      "part": {
+        "type": "String"
+      }
+    }
+  },
+  "errLogsMkdir": "在那里建不了目录（满了？）"
 }

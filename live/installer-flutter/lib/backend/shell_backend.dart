@@ -73,6 +73,15 @@ class ShellBackend extends Gk3Backend {
 
   final String libPath;
 
+  /// 库里有没有 gk3_job_run（GUI-11 的后端，2026-10-05 起才有）。没有就照旧直接调 —— 旧库、测试里的假库
+  late final bool hasJobs = () {
+    try {
+      return File(libPath).readAsStringSync().contains('gk3_job_run()');
+    } on FileSystemException {
+      return false;
+    }
+  }();
+
   @override
   Stream<Gk3Event> call(String fn, [List<String> args = const []]) {
     Process? proc;
@@ -94,7 +103,12 @@ class ShellBackend extends Gk3Backend {
     _log.writeln('[${ts()}] >> $fn ${redact(fn, args).join(' ')}'.trimRight());
     () async {
       final Process p;
-      var argv = ['bash', '-c', r'. "$0" && "$@"', libPath, fn, ...args];
+      // ★ 写盘的调用放进独立的 systemd 临时单元（GUI-11，installer-lib.sh 的 gk3_job_run）：界面崩了、cage 退出、
+      //   gk3-installer.service 的 cgroup 被整个杀掉时，写 super / 缩 NTFS 的那个进程不跟着死。stdout / stderr / 退出码
+      //   与直接调用逐行相同，只多一条 stderr 上的 JOB 记录（id 记进日志，界面重新起来时按它接着跟）
+      final viaJob = writesDisk(fn) && hasJobs;
+      var argv = ['bash', '-c', r'. "$0" && "$@"', libPath, if (viaJob) 'gk3_job_run', fn, ...args];
+      if (viaJob) _log.writeln('   （gk3_job_run：写盘进程在独立单元里，界面死了它照样写完）');
       if (writesDisk(fn)) {
         if (await _canInhibit()) {
           argv = [...inhibitor, '--what=$inhibitWhat', '--who=gaokun3 installer', '--why=writing the disk ($fn)', '--mode=block', ...argv];

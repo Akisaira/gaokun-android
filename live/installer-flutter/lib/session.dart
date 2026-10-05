@@ -148,7 +148,15 @@ class Session extends ChangeNotifier {
   Release? usbRelease;
   bool get blocked => checks?.any((c) => c.state == CheckState.fail) ?? false;
 
+  /// 安装器（重新）起来时还在跑的写盘任务（GUI-11）：界面崩过、被 systemd 拉起来了，写盘进程在独立单元里没死。
+  /// 欢迎页看到它就直接进运行页、gk3_job_follow 接着跟，而不是让人对着一块正在被写的盘从头再装一遍
+  Gk3Record? runningJob;
+
   Future<void> start() async {
+    // 最近的一个 state=running（id 以时间开头，按 id 排序就是按时间）
+    final jobs = (await backend.run('gk3_job_status')).ofType('JOB').where((j) => j['state'] == 'running').toList()
+      ..sort((a, b) => a['id'].compareTo(b['id']));
+    runningJob = jobs.lastOrNull;
     checks = (await backend.run('gk3_preflight')).ofType('CHECK').map(Check.new).toList();
     final r = (await backend.run('gk3_release_info')).first('RELEASE');
     usbRelease = r == null ? null : Release(r);
@@ -407,6 +415,21 @@ class Session extends ChangeNotifier {
     _dl = null;
     _dlOut?.close();
     return true;
+  }
+
+  /// 接着跟一个还在跑的写盘任务（[runningJob]）。算写盘阶段：侧栏的重启 / 关机照样禁用
+  Stream<Gk3Event> follow(String id) async* {
+    stage = InstallStage.write;
+    cancelled = false;
+    _writing++;
+    _changed();
+    try {
+      yield* backend.call('gk3_job_follow', [id]);
+    } finally {
+      _writing--;
+      runningJob = null;
+      _changed();
+    }
   }
 
   /// 网络安装先下载（占总进度 0–40%），再走和 U 盘安装完全相同的 gk3_apply

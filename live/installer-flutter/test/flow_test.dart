@@ -817,4 +817,77 @@ void main() {
       expect(normalizeLang(' EN '), 'en');
     });
   });
+
+  // ── 后端留给前端的三个接口（stage7-flutter-debian.md §5.13）：GUI-11 / GUI-12 / INST-16 ──────────────
+
+  testWidgets('界面重新起来时写盘任务还在跑：欢迎页直接接上去跟（gk3_job_follow <id>），侧栏禁用，跟完到完成页（GUI-11）', (t) async {
+    final rec = await pumpApp(t, 'blank', overrides: {'gk3_job_status': 'job_status-running.txt', 'gk3_job_follow': 'job_follow-apply.txt'});
+    await see(t, find.text(l.doneTitle));
+    expect(rec.last('gk3_job_follow'), ['gk3_job_follow', '20261005-101500-4242-31337']);
+    expect(rec.last('gk3_apply'), isNull, reason: '不该再起一次安装');
+  });
+
+  testWidgets('接着跟的过程中：标题说"接着刚才的写盘"，侧栏的重启 / 关机禁用', (t) async {
+    final gate = Completer<void>();
+    await pumpApp(t, 'blank', overrides: {'gk3_job_status': 'job_status-running.txt', 'gk3_job_follow': 'job_follow-apply.txt'}, holdFollow: gate);
+    await see(t, find.text(l.runResumeTitle));
+    await see(t, find.text(l.railBusy));
+    expect(find.text(l.runCancel), findsNothing);
+    gate.complete();
+    await see(t, find.text(l.doneTitle));
+  });
+
+  testWidgets('没有在跑的写盘任务：照常停在欢迎页', (t) async {
+    final rec = await pumpApp(t, 'blank');
+    await see(t, find.text(l.welcomeTitle));
+    expect(rec.last('gk3_job_status'), isNotNull);
+    expect(rec.last('gk3_job_follow'), isNull);
+  });
+
+  Future<void> failWipe(WidgetTester t) async {
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await tap(t, find.text(l.modeWipeTitle));
+    await next(t);
+    await next(t);
+    await next(t);
+    await hold(t, l.confirmHoldIdle);
+    await see(t, find.text(l.failTitle));
+  }
+
+  testWidgets('失败页"保存日志"：列出能存的地方（启动介质标出"电脑上看不到"），存完说存到哪（GUI-12）', (t) async {
+    final rec = await pumpApp(t, 'blank', failApply: true);
+    await failWipe(t);
+    await tap(t, find.text(l.logsSave));
+    await see(t, find.text(l.logsTitle));
+    await see(t, find.text(l.logsEspNote));
+    await see(t, find.textContaining('KINGSTON'));   // 另插的 U 盘排在前面（gk3_log_targets 的顺序）
+    await tap(t, find.textContaining('GK3LIVE'));
+    await see(t, find.textContaining(l.logsSavedEsp));
+    expect(rec.last('gk3_save_logs'), ['gk3_save_logs', '/dev/sda1']);
+  });
+
+  testWidgets('保存日志：没有能存的地方 → 叫人插 U 盘、能重新查找', (t) async {
+    final rec = await pumpApp(t, 'blank', failApply: true, overrides: {'gk3_log_targets': 'job_status-none.txt'});
+    await failWipe(t);
+    await tap(t, find.text(l.logsSave));
+    await see(t, find.text(l.logsNoTarget));
+    final n = rec.calls.where((c) => c.first == 'gk3_log_targets').length;
+    await tap(t, find.text(l.logsRescan));
+    expect(rec.calls.where((c) => c.first == 'gk3_log_targets').length, n + 1);
+    expect(rec.last('gk3_save_logs'), isNull);
+  });
+
+  testWidgets('下载失败页也有"保存日志"', (t) async {
+    await netInstall(t, failNetOnce: true);
+    await see(t, find.text(l.failDlTitle));
+    await see(t, find.text(l.logsSave));
+  });
+
+  testWidgets('预检缺工具：写出要装的 Debian 包（CHECK id=tools 的 pkgs=，INST-16）', (t) async {
+    await pumpApp(t, 'blank', overrides: {'gk3_preflight': 'preflight-tools.txt'});
+    await see(t, find.text(l.checkToolsBadPkgs('sgdisk, partprobe', 'gdisk parted')));
+    await see(t, find.text(l.checkBlocked));
+  });
 }
