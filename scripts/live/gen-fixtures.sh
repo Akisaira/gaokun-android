@@ -325,6 +325,17 @@ O CHECK id=tools ok=yes
 O CHECK id=power ok=no value=9 ac=no min=15
 X 0
 EOF
+# 缺工具（INST-16：pkgs= 是 Debian 包名；在别的 arm64 live U 盘上跑命令行版 / 图形版时会遇到）
+cat > "$C/preflight-tools.txt" <<'EOF'
+O CHECK id=root ok=yes
+O CHECK id=uefi ok=yes
+O CHECK id=model ok=yes value=GK-W7X
+O CHECK id=bios ok=yes value=2.16
+O CHECK id=secureboot ok=yes value=disabled
+O CHECK id=tools ok=no missing=sgdisk,partprobe pkgs=gdisk,parted
+O CHECK id=power ok=yes value=76 ac=no min=15
+X 0
+EOF
 # BIOS 2.17 照样 ok=yes（不再限制 BIOS 版本，2026-09-25）；拦住它的是安全启动
 cat > "$C/preflight-secureboot.txt" <<'EOF'
 O CHECK id=root ok=yes
@@ -379,6 +390,27 @@ O NET if=wlan0 ip=none ssid=none online=no
 X 0
 EOF
 printf '%-78s %s\n' "gk3_net_status" "net_status-off.txt   # 手写" >> "$C/index.txt"
+# GUI-11：写盘任务。没有在跑的（默认）；"界面崩过又起来、apply 还在跑"那种给测试按文件名用。
+# 手写：容器里起不了 systemd 单元；格式照 gk3_job_status / gk3_job_start 的输出写。跟读的内容就是 blank 场景录的那次 apply
+printf 'X 0\n' > "$C/job_status-none.txt"
+printf '%-78s %s\n' "gk3_job_status" "job_status-none.txt   # 手写（没有在跑的写盘任务）" >> "$C/index.txt"
+cat > "$C/job_status-running.txt" <<'EOF'
+O JOB id=20261005-101500-4242-31337 fn=gk3_apply state=running rc=- mode=systemd-run unit=gk3-job-20261005-101500-4242-31337
+X 0
+EOF
+cp "$OUT/blank/apply-wipe.txt" "$C/job_follow-apply.txt"
+echo "#  job_status-running.txt / job_follow-apply.txt：界面重新起来时 apply 还在跑（测试用 overrides 选它们）" >> "$C/index.txt"
+# 录：GUI-12 的日志另存 —— 另插一个 FAT 的 U 盘（Basic data 类型，像普通 U 盘那样）+ 安装介质本身（ESP 类型，esp=yes）。
+# 只留这两块的行：容器里别的场景留下的 loop 盘（GK3_ALLOW_LOOP=1 下也算"可移动"）不是真机上会有的东西
+U2=$(new_disk usb2 1G); sgdisk -o -n 1:2048:0 -t 1:0700 -c 1:"Basic data partition" "$U2" >/dev/null 2>&1; settle "$U2"
+mkfs.vfat -F 32 -n KINGSTON "${U2}p1" >/dev/null
+python3 scripts/live/record-fixture.py "$C/log_targets.txt" --sub "${STICK}p=/dev/sda" --sub "${U2}p=/dev/sdb" \
+    -- bash -c ". scripts/live/installer-lib.sh && gk3_log_targets | grep -e 'part=${STICK}p' -e 'part=${U2}p'"
+drop_disk "$U2"
+printf '%-78s %s\n' "gk3_log_targets" "log_targets.txt   # 录（假 U 盘挂在 /media/gk3）" >> "$C/index.txt"
+python3 scripts/live/record-fixture.py "$C/save_logs.txt" --sub "${STICK}p=/dev/sda" \
+    -- bash -c ". scripts/live/installer-lib.sh && gk3_save_logs ${STICK}p1"
+printf '%-78s %s\n' "gk3_save_logs *" "save_logs.txt   # 录（存到假 U 盘上）" >> "$C/index.txt"
 # 录：发布目录 / 安装 U 盘里带了什么
 python3 scripts/live/record-fixture.py "$C/release_info.txt" --sub "$REL=/media/gk3/gaokun3/payload" \
     -- bash -c ". scripts/live/installer-lib.sh && gk3_release_info $REL"

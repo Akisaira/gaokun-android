@@ -784,6 +784,7 @@ mkdir -p "$GK3_JOBDIR/lost-1"; echo gk3_apply > "$GK3_JOBDIR/lost-1/fn"; date +%
 bash -c 'exit 0' & wait $!; echo $! > "$GK3_JOBDIR/lost-1/pid"
 OUT=$(gk3_job_follow lost-1 2>&1); rc=$?
 [ "$rc" = 125 ] && printf '%s' "$OUT" | grep -q '没写完成状态就没了' && gk3_job_status lost-1 | grep -q ' state=lost ' \
+    && printf '%s' "$OUT" | grep -q '^ERR code=job-lost id=lost-1 touched=yes$' \
     && ok "进程没了又没写状态：follow 返回 125 并说明，状态 lost" || bad "lost 的处理不对（rc=${rc}）：$OUT"
 
 # ── L. 失败时把日志另存到用户拿得到的地方（v1.0 计划 GUI-12 的后端）─────────────────

@@ -2238,12 +2238,12 @@ gk3__job_keep "$d" 2>/dev/null
 exit "$rc"'
 
 gk3_job_start() {
-    [ $# -ge 1 ] || { gk3_die "用法：gk3_job_start <函数> [参数…]"; return 1; }
+    [ $# -ge 1 ] || { gk3_fail usage -- "用法：gk3_job_start <函数> [参数…]"; return 1; }
     local id d mode unit="" sr v
     local -a pre=() env=()
     id=$(date +%Y%m%d-%H%M%S)-$$-$RANDOM
     d=$GK3_JOBDIR/$id
-    mkdir -p "$d" || { gk3_die "建不了 $d"; return 1; }
+    mkdir -p "$d" || { gk3_fail job-start -- "建不了 $d"; return 1; }
     printf '%s\n' "$1" > "$d/fn"
     printf '%s\n' "$PWD" > "$d/cwd"
     date +%s > "$d/started"
@@ -2261,13 +2261,13 @@ gk3_job_start() {
         "$sr" --quiet --collect --unit="$unit" --service-type=exec --description="gaokun3 installer: $1" \
               --working-directory="$PWD" "${env[@]}" \
               ${pre[@]+"${pre[@]}"} "$(command -v bash)" -c "$GK3__JOB_BODY" gk3-job "$d" "$GK3_LIBDIR/installer-lib.sh" "$@" >&2 \
-            || { echo "systemd-run 起不来 $unit" > "$d/start-error"; gk3_die "systemd-run 起不来写盘单元（${unit}）"; return 1; }
+            || { echo "systemd-run 起不来 $unit" > "$d/start-error"; gk3_fail job-start -- "systemd-run 起不来写盘单元（${unit}）"; return 1; }
     else
         mode=setsid
         echo "⚠️ 不是 systemd 系统（或没有 systemd-run）：写盘进程只用 setsid 脱离 —— 界面所在的 cgroup 被整个杀掉时它仍会被连带" >&2
-        command -v setsid >/dev/null 2>&1 || { gk3_die "没有 setsid"; return 1; }
+        command -v setsid >/dev/null 2>&1 || { gk3_fail tool-missing tool=setsid -- "没有 setsid"; return 1; }
         setsid -f ${pre[@]+"${pre[@]}"} bash -c "$GK3__JOB_BODY" gk3-job "$d" "$GK3_LIBDIR/installer-lib.sh" "$@" \
-            </dev/null >/dev/null 2>&1 || { gk3_die "setsid 起不来写盘进程"; return 1; }
+            </dev/null >/dev/null 2>&1 || { gk3_fail job-start -- "setsid 起不来写盘进程"; return 1; }
     fi
     printf '%s\n' "$mode" > "$d/mode"; printf '%s\n' "${unit:--}" > "$d/unit"
     echo "JOB id=$id state=running mode=$mode unit=${unit:--}"
@@ -2301,7 +2301,7 @@ gk3_job_status() {
 # 用 python3（预检本来就要它）：bash 按字节偏移读文件要绕很多弯，而这里错一个字节就是一条被切开的协议记录。
 gk3_job_follow() {
     local d=$GK3_JOBDIR/${1:-}
-    [ -n "${1:-}" ] && [ -f "$d/fn" ] || { gk3_die "没有这个 job：${1:-（没给 id）}"; return 1; }
+    [ -n "${1:-}" ] && [ -f "$d/fn" ] || { gk3_fail job-missing "id=${1:-}" -- "没有这个 job：${1:-（没给 id）}"; return 1; }
     # 已转发到哪个字节：记在跟读者自己的临时目录里 —— 同一个 job 可以有几个人同时跟（界面崩了又起来），各记各的
     local st od rc
     od=$(mktemp -d) || return 1
@@ -2332,7 +2332,7 @@ sys.exit(0)
 PY
         case "$st" in
             done) rm -rf "$od"; return "$(cat "$d/rc")" ;;
-            lost) rm -rf "$od"; gk3_die "写盘进程（job ${1}）没写完成状态就没了（被杀？机器出错？）—— 盘可能只写了一半；日志在 $d/"; return 125 ;;
+            lost) rm -rf "$od"; gk3_fail job-lost "id=$1" touched=yes -- "写盘进程（job ${1}）没写完成状态就没了（被杀？机器出错？）—— 盘可能只写了一半；日志在 $d/"; return 125 ;;
         esac
         sleep "${GK3_JOB_POLL:-0.3}"
     done
@@ -2411,24 +2411,24 @@ gk3_save_logs() {
     local tgt=${1:-} part="-" m="" own="" was="" esp=no dir n=0 f
     if [ -z "$tgt" ]; then
         tgt=$(gk3_log_targets | head -1 | sed -n 's/^LOGTARGET part=\([^ ]*\).*/\1/p')
-        [ -n "$tgt" ] || { gk3_die "找不到能存日志的地方：插一个 FAT / exFAT 的 U 盘再试"; return 1; }
+        [ -n "$tgt" ] || { gk3_fail logs-no-target -- "找不到能存日志的地方：插一个 FAT / exFAT 的 U 盘再试"; return 1; }
     fi
     if [ -d "$tgt" ]; then
         m=$tgt
     elif [ -b "$tgt" ]; then
         part=$tgt
-        case "$(blkid -p -o value -s TYPE "$part" 2>/dev/null)" in vfat|exfat) ;; *) gk3_die "$part 不是 FAT / exFAT —— 不往别的文件系统写日志"; return 1 ;; esac
+        case "$(blkid -p -o value -s TYPE "$part" 2>/dev/null)" in vfat|exfat) ;; *) gk3_fail logs-not-fat "part=$part" -- "$part 不是 FAT / exFAT —— 不往别的文件系统写日志"; return 1 ;; esac
         [ "$(blkid -p -o value -s PART_ENTRY_TYPE "$part" 2>/dev/null | tr 'A-F' 'a-f')" = c12a7328-f81f-11d2-ba4b-00a0c93ec93b ] && esp=yes
         m=$(findmnt -rno TARGET -S "$part" 2>/dev/null | head -1)
         if [ -n "$m" ]; then
             was=$(findmnt -rno OPTIONS -S "$part" 2>/dev/null | head -1 | cut -d, -f1)
-            [ "$was" = rw ] || mount -o remount,rw "$m" 2>/dev/null || { gk3_die "$part 改不成读写（写保护？）"; return 1; }
+            [ "$was" = rw ] || mount -o remount,rw "$m" 2>/dev/null || { gk3_fail logs-readonly "part=$part" -- "$part 改不成读写（写保护？）"; return 1; }
         else
             m=$(mktemp -d /tmp/gk3-logs.XXXX); own=1
-            mount "$part" "$m" 2>/dev/null || { rmdir "$m"; gk3_die "挂不上 $part"; return 1; }
+            mount "$part" "$m" 2>/dev/null || { rmdir "$m"; gk3_fail logs-mount "part=$part" -- "挂不上 $part"; return 1; }
         fi
     else
-        gk3_die "不是分区也不是目录：$tgt"; return 1
+        gk3_fail usage -- "不是分区也不是目录：$tgt"; return 1
     fi
     dir=$m/gaokun3-logs-$(date +%Y%m%d-%H%M%S)
     if mkdir -p "$dir/jobs"; then
@@ -2458,6 +2458,6 @@ gk3_save_logs() {
     fi
     if [ -n "$own" ]; then umount "$m" 2>/dev/null; rmdir "$m" 2>/dev/null
     elif [ -n "$part" ] && [ "$part" != - ] && [ "$was" = ro ]; then mount -o remount,ro "$m" 2>/dev/null; fi
-    [ "$n" -ge 0 ] || { gk3_die "在 $tgt 上建不了目录（满了？）"; return 1; }
+    [ "$n" -ge 0 ] || { gk3_fail logs-mkdir -- "在 $tgt 上建不了目录（满了？）"; return 1; }
     echo "LOGSAVED dir=$(gk3__enc "${dir#"$m"/}") part=$part files=$n esp=$esp"
 }
