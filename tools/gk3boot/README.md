@@ -1644,3 +1644,52 @@ Parts 的页脚写了这一条。
 Windows 更新的多次重启与本机默认系统的关系、BitLocker 在入口多一次复位之后要不要密钥（入口不在 Windows 的镜像链里，按 §4.9.7 推断不影响）、
 共用 ESP 上 `gk3-windows.conf` 与 `auto-windows` 的 PCR4 是否相同、Parts 页在有真 Windows 的机器上的显示。判据：`gk3-misc dump` 里的事件
 （`to_windows` / `intent_dropped` / `default_set`）+ `LoaderEntryDefault` / `LoaderEntryOneShot` 的值（live 里 `efivar`，或 Windows 侧伴随工具）+ 用户目视。
+
+## 17. S10 / S15 安装器那一侧（2026-10-05，test-apply / flutter test / postinstall 离线全绿，⬜ 没重建 live 镜像、没上机、没有双系统真机样本）
+
+设计稿 §4.7、§4.8、§4.9.3、§4.9.5、§4.9.7、§4.9.8、§4.9.10、§4.9.11；U12、U13、U16、U17、U18（U19 写着"待 D4"，不做）。
+
+### 17.1 `gk3-misc init`（安装器初始化 misc）
+
+`gk3-misc init <misc 分区或镜像> [--slot a|b] [--default windows|android|none]`（`misc/gk3-misc.c` 文件头有全文）：
+只写三处 —— BCB 清零、`bootloader_control` = `gk3_bcab_init_install`（目标槽 15/6/未成功，另一槽 0/0）、GK3 记录 =
+`gk3_rec_init` + `gk3_rec_migrate(全零 BCB, GK3_DISPATCH_VER)`（迁移标记 + 一条 `migrated` 事件，与入口首跑在空 BCB 上做的一样）
++ 可选的 `set_default` 请求；写完 fsync、O_DIRECT 读回逐字节比对再复核两个 validate。其余字节不碰（清零是安装器 dd 的事）。
+`make misc-test`：期望字节由 Python 独立算（zlib / hashlib），9/9。live 镜像里是 `build-rootfs.sh` 静态编进 `/usr/share/gaokun3/gk3-misc`
+的那一份（体检在 chroot 里对 64 KiB 空文件 init + dump 一次）；从仓库跑命令行版时 `gk3__misc_tool` 用 cc 现编到 `$GK3_RUNDIR/bin/`。
+
+### 17.2 安装器做了什么（`scripts/live/installer-lib.sh` 的 `gk3_apply`）
+
+| 项 | 做法 |
+|---|---|
+| misc | 整块清零后 `gk3-misc init --slot a --default <x>`；`x` = 双系统时用户选的（android / windows），纯 Android 为 none。失败 ⇒ ERR `misc-init`。工具找不到 ⇒ 动盘前 ERR `tool-missing tool=gk3-misc` |
+| 默认系统（U12） | **不直接写 `LoaderEntryDefault`**，写成 GK3 的 `set_default` 请求，由入口第一次在动作模式下运行时按 `core/src/dual.c` 写（与 Parts 同一条通路；main 已认可）。理由：直接写 ⇒ 装完第一次重启就进 Windows；第一次开机走直连条目、入口没运行就没有预置 OneShot ⇒ Android 里的重启都会落进 Windows；装的是不带入口的旧版本时变量没人管。代价：Windows 为默认在 Android 第二次开机（经入口）之后生效 |
+| `LoaderEntryDefault` | 装完一律删掉（任何值：§4.9.3 的"不是合法值就删"+ 选 Windows 时也要先回到 Android）；整盘清空时连 `LoaderEntryOneShot` 一起删。删不掉不算失败：stdout 一条 `NOTE code=loadervar-stuck name= value=`，完成页说怎么在菜单里按 `d` 清除 |
+| 统一启动入口 | **安装器不部署**（main 已认可）：重新安装时删掉 `gk3boot-android-*`（含 `+N` 与 `.staged`）、`gk3prev-android-*`、`gk3boot-tools.conf`，以及没有任何条目引用的 `EFI/gk3boot/<ver>/`（`log/` 和手放条目引用的目录留着）。装好的系统第一次开机完成时由 HAL 部署它自己 vendor 里那一版（§12）——入口二进制只在 vendor 里有一份，版本永远跟着系统走；装的是不带入口的版本（0.7.x）时也不会留下一个没人清 boot_streak 的入口。⇒ release.sh 不加入口附件，设计稿 §4.7 的"ESP 上已有更新的入口（不降级）"用例不适用 |
+| 停用匹配 | 只认 `^[0-9a-f]{32}-android-[ab]\.conf$`（S9 时已收紧，这轮补了 test-apply 用例） |
+| BOOTAA64（U16 规则 1） | `EFI/BOOT/BOOTAA64.EFI` 与 `EFI/systemd/systemd-bootaa64.efi` 字节相同就不写（test-apply 看 mtime） |
+| BitLocker（U16 规则 3） | 有 Windows、同盘有 `TYPE=BitLocker` 的卷、这次 BOOTAA64 要变 ⇒ 没给 `--bitlocker-key yes` 就动盘前 ERR `bitlocker-key-unconfirmed`。界面的勾选框按"走过 Windows 工具（安装器在内置盘上）/ 从 U 盘来"两种文案 |
+| 休眠（U18） | 有 Windows 时查同盘每个 NTFS 卷的 `hiberfil.sys`（`gk3__ntfs_hibernated`）⇒ 在休眠就动盘前 ERR `esp-windows-hibernated`；有 BitLocker 卷读不到时只警告（`hibernated=unknown`） |
+| 余量（U17） | 有 Windows 时：装完、扣掉一个槽 + 一版入口（`GK3_ESP_GK3BOOT_KIB`=5 MiB）之后还要 ≥ `GK3_ESP_WIN_RESERVE_KIB`=32 MiB，否则 ERR `esp-win-reserve`；双系统时 ESP 小于 `GK3_ESP_MIN_SIZE_MIB`=200 MiB 明确拒绝（ERR `esp-too-small`）。⬜ postinstall / gk3-esp-sync 还没加同一道 32 MiB 断言 |
+| 菜单（U13 / U3） | ESP 上有 `bootmgfw.efi` ⇒ `timeout 5`，否则 15（D19 未确认）；都不写 menu-hidden |
+| `gk3_esp_info` | 多报 `small bootaa64 bitlocker hibernated entry entry_mode entry_state staged prev loader_default boot_entries` |
+
+OTA postinstall（U13）：双系统机器上只把**正好是** `timeout 15` 的那一行改成 `timeout 5`（`.new` → 核对 → 改名，失败只记日志）；纯 Android、用户改过的不动。`make postinstall-test` 的 T1–T5。
+
+### 17.3 测试（2026-10-05）
+
+```sh
+make -C tools/gk3boot misc-test           # 9/9
+make -C tools/gk3boot postinstall-test    # mksh / dash / ksh 163/163（加 T1–T5）
+bash scripts/live/test-in-container.sh scripts/live/test-apply.sh   # 见 docs/stage7-flutter-debian.md §5.15
+(cd live/installer-flutter && flutter test)
+```
+
+### 17.4 没做 / 未验证 / 上机判据
+
+* 没重建 live 镜像：`build-rootfs.sh` 的静态编译与体检、`patch-live-installer.sh` 的那段、`release-installer.sh` 的 `GK3_MISC_SHA256` 断言都只过了 `bash -n`（构建环境 `live-build.Dockerfile` 加了 gcc / libc6-dev，换了标签 ⇒ `patch-live-installer.sh` 要先跑一次 `build-live.sh`）。
+* 真机 live 里能不能删 EFI 变量没实测（同 TODO V16）；删不掉时界面有 NOTE。
+* 真 BitLocker 卷 / 真休眠的 Windows 只在合成的卷头上测过（blkid 认 `-FVE-FS-`、`hiberfil.sys` 以 `hibr` 开头）。
+* 上机判据（装完第一次开机前，live 里）：`gk3-misc dump`（`dd if=<misc> bs=4096 count=16`）看 `_a 15/6 未成功`、`_b 0/0`、`GK3 有效 migrated=1`、
+  双系统选 Windows 时 `set_default=windows`；ESP 上没有 `gk3boot-*` 条目；`LoaderEntryDefault` 没了。第一次开机完成后 ESP 上出现 `gk3boot-android-{a,b}+3.conf`（HAL 部署）、
+  第二次开机经入口：`vendor.gaokun3.bootentry.default=windows`（选了 Windows 时），之后从 Android 关机再开机进 Windows。

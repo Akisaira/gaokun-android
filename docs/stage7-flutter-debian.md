@@ -625,6 +625,27 @@ M4b 那次"ESP 写满、却报告成功"之后，让一个独立的审查专找�
 * fixture 用 `gen-fixtures.sh` 重录（进度 / ERR 只有代码；预检带 power；WiFi 列表加纯 WPA3 / WEP / OWE；`log_targets` / `save_logs` 在假 U 盘上录；
   `job_status-*` 手写，跟读内容是 blank 场景录的那次 apply）。⚠️ 改了 `.arb` 之后先 `flutter gen-l10n`，`flutter test` 不会重新生成。
 
+### 5.15 1.0 S10 / S15：安装器认识统一启动入口与双系统（2026-10-05，docs/boot-entry-design.md §4.7、§4.9）
+
+都只在本机（容器、loop 设备、假 efivarfs、Mac 上 flutter test）测过，**没重建 live 镜像、没上机、没有双系统真机样本**。细节与取舍在 `tools/gk3boot/README.md` §17。
+* **misc 不再留全零**：清零后 `gk3-misc init --slot a`（`_a` 15/6 未成功、`_b` 0/0、GK3 记录带迁移标记）。原先全零 ⇒ libboot_control 重建成每槽 7/7，
+  新装机器没有 system 的 `_b` 也"可启动"。live 镜像里 `build-rootfs.sh` 静态编进 `/usr/share/gaokun3/gk3-misc`（构建环境加了 gcc / libc6-dev，体检跑一次 init），
+  `release.txt` 多一行 `GK3_MISC_SHA256`，`release-installer.sh` 断言它；仓库里跑命令行版时现编（`test-env.Dockerfile` 也加了 gcc）。
+* **入口不由安装器部署**（main 认可）：重新安装删掉入口条目与没人引用的版本目录，装好的系统第一次开机完成时 HAL 部署自己那一版。
+* **默认启动哪个系统（U12）**：确认页在双系统（ESP 上有 `bootmgfw.efi`）时出"开机默认进入"——预选 Android，大字写"冷开机进这里选的、Android 里重启总回 Android、
+  以后在「设置 → 系统 → 启动选项」改"。选 Windows ⇒ `gk3_apply --default-os windows` ⇒ GK3 的 `set_default` 请求（**不直接写 `LoaderEntryDefault`**，main 认可），
+  界面说明"装好后前两次开机进 Android"。装完 `LoaderEntryDefault` 一律删（整盘清空连 OneShot），删不掉 ⇒ `NOTE code=loadervar-stuck`，完成页说怎么按 `d` 清。
+* **双系统菜单 5 秒（U13）**：安装器写 `timeout 5`；已装机器由 OTA postinstall 把安装器写的 `timeout 15` 改成 5（用户改过的不动）。纯 Android 保持 15（U3：D19 没确认）。
+* **BitLocker（U16）**：同盘有 BitLocker 卷、BOOTAA64 要变 ⇒ 确认页出勾选框"我已经拿到了 BitLocker 恢复密钥"，不勾按住也开始不了；文案按"走过 Windows 工具（安装器在内置盘上）"
+  /"从 U 盘来"分两种。后端没收到 `--bitlocker-key yes` 就动盘前拒绝。BOOTAA64 字节相同不重写。
+* **休眠（U18）/ 小 ESP 与余量（U17）**：Windows 卷在休眠 ⇒ 双系统、重新安装都禁用并写明原因（后端动盘前 ERR `esp-windows-hibernated`）；100 MiB 级的 ESP 明确说"这个版本不支持"
+  （ERR `esp-too-small`），装完扣掉一次 OTA 后给 Windows / 固件留不到 32 MiB ⇒ ERR `esp-win-reserve`。U19（GPT bit 0）待 D4，不做。
+* 改了文案：`modeAlongOk`、`confirmAlongHead`（原文"不会对你现有的分区进行任何更改"与事实不符：EFI 分区里要放启动器）。
+* 测试：test-apply 加 K 组（假 BitLocker 卷头、真 NTFS 上的 hiberfil.sys、只读 tmpfs 当删不掉的 efivarfs）和每次装完的 misc 逐字节核对；postinstall T1–T5；
+  flow_test 加 9 条；fixture 重录（`esp_info` 带上新字段），BitLocker / 休眠 / 小 ESP / NOTE 四份由 gen-fixtures.sh 从录到的输出改字段得来。结果（2026-10-05）：test-apply 205/205（原 160，容器里，测试环境加了 gcc）、flutter test 112/112、postinstall 163/163（mksh / dash / ksh）、`make misc-test` 9/9、libgk3core 466/466、HAL 94/94；`build-rootfs.sh` 那条 `gcc -static -Werror` 在 arm64 Debian 容器里单独编过、静态 ELF 跑 init 对
+* ⬜ 没做：`gk3-windows.conf` + `auto-entries no`（U22）、live 开机时检查 `LoaderEntryDefault` 并一键清除、完成页的伴随工具提示（U23）、postinstall / gk3-esp-sync 的 32 MiB 断言、
+  machine-id 目录改按 `linux` 行取（§4.9.11）。
+
 ## 6. 风险（按"会不会让方案作废"排序）
 
 1. 🔴 mesa/freedreno 在 Debian arm64 用户态不可用 → 回落 `FLUTTER_LINUX_RENDERER=software`
