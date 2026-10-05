@@ -114,7 +114,8 @@ GPIO185 复位可能由 TA 经 QSEE-GPIO 自己做（待确认）。届时加一
 ## 8. 复现 M1（加载测试）
 
 前提：内核带 **patch 0050**（`patches/0050-firmware-qcom-scm-qseecom-app-load-shutdown-listener.patch`，
-已进 `scripts/kernel-apply-patches.sh`）。工具在 `tools/fingerprint-bringup/`。
+在 `scripts/kernel-apply-patches.sh` 的 `FP_PATCHES` 里）。⚠️ 2026-10-05 起（v1.0-plan D21）它**不进发版内核**：
+实验内核要 `bash scripts/kernel-apply-patches.sh <树> --with-fp`（`--verify` 同样加 `--with-fp`）。工具在 `tools/fingerprint-bringup/`。
 
 1. **构建**：内核树打满补丁链（含 0050）后 `make Image modules`；out-of-tree 编两个模块：
    `make -C <kernel> M=<repo>/tools/fingerprint-bringup ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules`。

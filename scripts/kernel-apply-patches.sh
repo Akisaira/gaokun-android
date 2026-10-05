@@ -148,10 +148,7 @@ KPATCHES=(
     #    ⚠️ 同号的前身（前 90 / 后 270，按 PR #6 描述）与目视结论相反，已作废 —— 构建机树上若还打着它，
     #    先 `git apply -R` 旧版（正文在 git 历史 cecb9ec 里）再打这一版。
     0049-arm64-dts-gaokun3-camera-rear-rotation-180-confirmed.patch
-    # ⚠️ 0050（#124，指纹）：QSEECOM APP_START/SHUTDOWN + listener，把 TZ 内存约束到 32 位。
-    #    只碰 drivers/firmware/qcom/qcom_scm.c 与其头文件（与相机/触摸/USB 补丁互不相干）。
-    #    编译通过；LOAD 未在硬件验证（首次发 LOAD SMC 需人在设备旁，有硬挂风险）。
-    0050-firmware-qcom-scm-qseecom-app-load-shutdown-listener.patch
+    # ⚠️ 0050（#124，指纹）已移到下面的 FP_PATCHES（v1.0 D21：只进指纹实验内核，--with-fp 才打）。
     # ★★ 0053–0065（#128；0058、0062 不列）：视频编解码 qcom-venus → qcom-iris。iris 靠 DT 的回落 compatible
     #    "qcom,sc8280xp-iris", "qcom,sm8250-venus" 直接用 v7.2-rc2 自带的 sm8250_data，驱动不用加平台。
     #    ⚠️ 需要 .config 里 VIDEO_QCOM_IRIS=y、VIDEO_QCOM_VENUS 不设（kernel-config-android.sh 已断言）。
@@ -222,6 +219,30 @@ DIAG_PATCHES=(
     # 0064（#128 §8–§9）：iris 收尾 / 断电全程跟踪 + A/B 开关。独立于上面四个（只动 iris 目录），打在 0065 之上。
     0064-media-iris-DIAG-pc-teardown-trace-and-ab-switches.patch
 )
+# ★ 指纹实验补丁（v1.0-plan D21，用户 2026-10-04 采纳"只放进实验内核"）：
+#   0050（#124/#125）：QSEECOM APP_START/SHUTDOWN + listener，把 TZ 内存约束到 32 位。只碰 drivers/firmware/qcom/qcom_scm.c
+#   与其头文件。2026-09-24 在本机把签名 TA 加载成功（app_id=5），但 client driver / HAL 都还没有 ⇒ 发版内核里它只是
+#   一段没人用的 SMC 通路。v0.6.x–1.0.0-dev.8 的发版内核都带着它（休眠，#125）；从下一次内核构建起不带。
+#   原来排在 0049 之后、0053 之前；它与 0053–0076 不相干（--verify 会在干净 worktree 上重放证明这一点）。
+FP_PATCHES=(
+    0050-firmware-qcom-scm-qseecom-app-load-shutdown-listener.patch
+)
+WITH_FP=0
+for a in "$@"; do [ "$a" = "--with-fp" ] && WITH_FP=1; done
+if [ "$WITH_FP" = 1 ]; then
+    KPATCHES+=("${FP_PATCHES[@]}")
+    echo "⚠️ --with-fp：指纹实验补丁也会打（${#FP_PATCHES[@]} 个，排在链尾），这不是发版内核"
+else
+    for p in "${FP_PATCHES[@]}"; do
+        f="$REPO/patches/$p"
+        [ -f "$f" ] || continue
+        if git -C "$TREE" apply --check -R "$f" 2>/dev/null; then
+            echo "✗ 指纹实验补丁 $p 还在树里 —— 发版内核不带它（D21）。撤掉：git apply -R patches/${p}；或者这是实验内核，加 --with-fp" >&2
+            exit 1
+        fi
+    done
+fi
+
 WITH_DIAG=0
 for a in "$@"; do [ "$a" = "--with-diag" ] && WITH_DIAG=1; done
 if [ "$WITH_DIAG" = 1 ]; then
