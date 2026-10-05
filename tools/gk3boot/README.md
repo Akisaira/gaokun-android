@@ -6,8 +6,9 @@
 **S5 的最小可上机版本** `gk3boot.efi`：观察模式 + H2 交接 + fail-open，给 E4 门槛用（§10，2026-10-05 真机通过）；
 **S5 后续**：动作模式（扣 tries → 自动回滚、VAB 守卫、GK3 记录）、fail-open 写 OneShot、BCB 分派开关（默认关），
 到"可以当开发机默认条目"的程度，给 E5–E8 用（§11）；**S9 Android 侧**（开机完成 bless / 清 streak / 通知、按开关部署，§12，未编译未上机）；
-**S7a 执行端 `gk3-fastbootd` 协议核心**（fastboot 协议 + FunctionFS / TCP 传输 + 白名单写盘 + ESP 同步 + set_active，离线全绿、未上机，§13）。
-S7b（fastboot initramfs）、S7c（gk3boot 接线：分派到执行端）还没做。
+**S7a 执行端 `gk3-fastbootd` 协议核心**（fastboot 协议 + FunctionFS / TCP 传输 + 白名单写盘 + ESP 同步 + set_active，离线全绿、未上机，§13）；
+**S7b 执行端 initramfs** `fastboot.img`（/init + 文本菜单 + USB gadget，§14，QEMU 11/11，未上机）。
+S7c（gk3boot 接线：分派到执行端）还没做。
 
 ## 1. 结构
 
@@ -36,6 +37,8 @@ tools/gk3boot/
 │  │                        BlockIo → gk3_blk 包装（只读 / 动作模式的读写版）、计时（CNTVCT）、列目录、SetVariable
 │  ├─ probe/                gk3probe.efi（S4 / E3 只读探针）+ 内嵌的测试 PE child.c
 │  └─ boot/                 gk3boot.efi（§10、§11）：gk3boot.c 定位 / 决策 / 写 misc / fail-open，handoff.c H2 交接
+├─ initramfs/               执行端 fastboot.img（§14）：init（POSIX sh，PID 1）、gk3-fbi.c（按键 / 只读状态 / 字体，链接 libgk3core）、
+│                           build.sh（容器内打包）、test/（QEMU 场景 qemu_fbi.py、假 gk3-fastbootd）
 ├─ qemu/                    QEMU 夹具（§9.2、§10.4）：fixture.py 造盘 / 快照 / 比对 / 写变量 / 打 boot.img，qemu_run.py 无头跑，
 │                           check_probe.py / check_boot.py / check_misc.py 判 PASS/FAIL，run-tests.sh / run-boot-tests.sh 串起来；
 │                           fake-android.c 冒充直连条目的内核；init.c 是测试 initramfs 的 /init
@@ -212,7 +215,9 @@ boot_b 没有 —— 谁写的不知道（不是我们的安装器会做的事�
   这里只提供了它要用的全部原语；
 - `gk3-misc init`（安装器初始化 misc）属于 S10；
 - `gk3boot.efi`：动作模式的扣 tries / GK3 记录 / fail-open 阶梯第 1 步已有（§11）；还没有的：BCB 真正分派（开关默认关，
-  打开也只记录）、首跑迁移、bootloop 阈值动作、boot_x 坏时换槽 / H1、阶梯第 2、3 步、`LoaderEntryDefault` 处理与双系统；执行端（S7）；
+  打开也只记录）、首跑迁移、bootloop 阈值动作、boot_x 坏时换槽 / H1、阶梯第 2、3 步、`LoaderEntryDefault` 处理与双系统；
+  gk3boot 引导执行端（内核 + `fastboot.img` + `gk3_cmdline_fastboot`）；执行端的协议守护进程 `gk3-fastbootd`（S7a）；
+  执行端的 initramfs 与界面见 §14（S7b）；
 - 在 misc 写入之间断电注入的测试：gk3boot 现在真的写 misc 了（§11），注入还没做；
 - Linux 静态链接版（执行端）只证明了能 freestanding 编译，还没有真正链接成 aarch64 静态二进制（本机没有交叉链接器）。
 
@@ -1182,3 +1187,138 @@ ESP 用 mkfs.vfat + mtools 照安装器摆；LP 元数据用 hashlib 独立算�
 - `fastboot update <zip>` 只在协议层可行（主机拆 zip 后发的还是 flash / set_active），没测。
 - 静态 glibc 约 840 KB；换 musl 应能小很多，S7b 定 initramfs 工具链时再说。
 
+## 14. S7b：执行端 initramfs `fastboot.img`（2026-10-05，QEMU 11/11，⬜ 未上机）
+
+设计稿：`docs/boot-entry-design.md` §4.4（进入、命令、菜单）、§4.13（界面）；沿用的 C′ 部分见 `docs/fastboot-design.md`
+§4.2.2（initramfs）、§4.7（USB 与电源）、§4.8（界面）、§4.10（安全）。gk3boot 用**和 Android 同一个内核**（`boot_x` 里的
+Image）+ 这份 initramfs 引导执行端，cmdline 由 `gk3_cmdline_fastboot`（`core/src/cmdline.c`）生成：
+`panic=10 gk3.mode=fastboot gk3.why=<…> gk3.slot=<a|b> gk3.bootver=<ver> gk3.disk=<misc 的 PARTUUID>`，
+其余照抄 boot.img 的（`console=tty0`、`fbcon=rotate:1` 等都在）。
+**分工**：这里只做"环境 + 界面"；fastboot 协议、清 BCB、擦数据都在 `/bin/gk3-fastbootd`（S7a，另一份代码，接口见 §14.3）。
+
+### 14.1 结构与构建
+
+```
+tools/gk3boot/initramfs/
+├─ init               PID 1（POSIX sh，busybox ash 跑）：挂 proc/sys/devtmpfs/run/configfs/functionfs、USB 角色、gadget、
+│                     不挂起、空闲关机、tty 文本菜单、gk3-fastbootd 的生命周期
+├─ gk3-fbi.c          小帮手（musl 静态，链接 libgk3core，只读）：keyd（evdev → up/down/ok/back）、
+│                     status / find <PARTUUID>（读主 GPT + misc，英文状态）、font（PSF2 → KDFONTOP + PIO_UNIMAP）
+├─ build.sh           容器内打包（busybox-static + init + gk3-fbi + Terminus 32x16 +【有就带】gk3-fastbootd）
+└─ test/              run-tests.sh（取 Debian 内核与模块、编假守护进程）、qemu_fbi.py（11 个场景）、fake-fastbootd.c
+scripts/gk3boot/
+├─ fbi-build.Dockerfile     构建 + 测试环境（Debian 13 arm64，进镜像的包版本钉死），镜像名 fbi-gk3boot-build
+├─ build-fastboot-img.sh    宿主一键打包 → tools/gk3boot/build/fastboot/fastboot.img（+ .sha256、.manifest）
+└─ test-initramfs.sh        宿主一键：打包 + QEMU 场景
+```
+
+```sh
+bash scripts/gk3boot/build-fastboot-img.sh            # 只打包；GK3_FASTBOOTD=<静态 aarch64 二进制> 带上守护进程
+bash scripts/gk3boot/test-initramfs.sh                # 打包 + 全部场景；后面可跟场景名只跑几个
+```
+
+- 守护进程来源：`GK3_FASTBOOTD=…`，否则自动找 `tools/gk3boot/build/fastbootd/gk3-fastbootd`，都没有就打一份只有界面的
+  （屏幕上 `Fastboot: EXECUTOR MISSING`，菜单照用）。带进去之前断言"静态 aarch64"（判失败条件，同 live 的 build-initramfs.sh）。
+- **尺寸**：设计稿预算 2–4 MiB（`boot-entry-design.md` §4.1 布局、§4.9.8 空间账），build.sh 超 4 MiB 直接失败。
+  现在约 **1 074 860 字节（1.03 MiB）**，其中 busybox 1.9 MB 未压缩；守护进程预计再加几百 KB。
+- **可复现**：mtime = `SOURCE_DATE_EPOCH`（宿主脚本取 HEAD 的提交时间）、属主 0:0、按名字排序、`cpio --reproducible`、
+  `gzip -n`。同一份源码、同一个 HEAD 连打两次 sha256 相同（2026-10-05 实测）；HEAD 变了 mtime 就变，sha256 也跟着变
+  （大小差一两个字节）—— 上机用哪一份，以 `fastboot.img.sha256` 为准。根目录摆在容器内的临时目录：colima 挂进来的目录不让 mknod
+  （`/dev/console` 要是字符设备）。
+- 不带内核模块（本机内核 `CONFIGFS_FS / USB_CONFIGFS_F_FS / USB_F_FS / INPUT_EVDEV / PM_WAKELOCKS / FRAMEBUFFER_CONSOLE_ROTATION`
+  全是 `=y`，见 `docs/relnotes/v0.7.1-alpha-config.txt`）、不带固件、不带 python。
+
+### 14.2 /init 做什么
+
+| 步骤 | 做法 | 依据 |
+|---|---|---|
+| 解析 cmdline | `gk3.mode/why/slot/disk/bootver`（带点的键内核不当环境变量传，只能读 `/proc/cmdline`）；`gk3.why` 缺省 = `menu` | `cmdline.c:171-175` |
+| 不挂起 | 写 `/sys/power/wake_lock gk3fastboot`；`/sys/power/autosleep` 有就写 off；没有任何东西写 `/sys/power/state`；**不打开 `/dev/watchdog`**（`QCOM_WDT` + `WATCHDOG_HANDLE_BOOT_ENABLED` 由内核喂） | C′ §4.7 |
+| 屏幕 | 前台 VT 关黑屏（`ESC[9;0]`、`ESC[14;0]`）、藏光标；`dmesg -n 1`；有 fb0 就装 Terminus 32x16（本机内核只编了 8x16 字体）。界面写 `/dev/console`（真机 `console=tty0` = 前台 VT） | C′ §4.8 |
+| USB 角色 | `/sys/class/usb_role/a600000.usb-role-switch/role` 已是 device 就不写；不是才写 device。之后主循环里如果被（UCSI）改回 host 而 xhci 下没有下游设备，每 10 秒最多再写一次；有下游设备（用户在 port0 插了键盘 / U 盘）就不抢。不 unbind dwc3 | C′ §4.7、`gaokun3-usbrole.sh` |
+| gadget | configfs `usb_gadget/gk3fb`：`0x18d1:0x4ee0`、bcdUSB 0x0200、serial `gaokun3`、manufacturer `HUAWEI`、product `MateBookEGo`、`configs/b.1`（MaxPower 500）、`functions/ffs.fastboot`（**先 mkdir 函数再挂 functionfs**）、挂到 `/dev/usb-ffs/fastboot` | C′ §4.2.1 / §4.7、`init.gaokun3.usb.rc` |
+| 绑 UDC | 等守护进程写完描述符（FunctionFS 长出 `ep1`）且 `/sys/class/udc/a600000.usb` 存在，才写 `UDC`；主循环每秒对账（UDC 晚出现、守护进程重起后都会补绑） | C′ §4.7 |
+| 第一页 | `wipe` → 先 `gk3-fastbootd --wipe-data`（不带确认）：0 = 擦完重启，3 = 确认页，其他 = 错误页；`prompt_wipe` → RescueParty 页；其他 → 主菜单。**确认页上不跑协议**（同一块盘只有一个写者） | §4.3.4、§4.4.3 |
+| 空闲关机 | 无主机连接（UDC state 不是 configured/addressed/default/suspended）、无按键、守护进程的状态文件也没更新，`GK3_IDLE_TIMEOUT` 秒（默认 1800 = U6 的 30 分钟）后 `poweroff -f`。确认页没有超时自动执行 | C′ U6、§4.8 |
+| 失败 | PID 1 永不退出（退出 = panic）。连 /proc 都挂不上时照 live 的 initramfs-init：打印原因、60 秒后 `reboot -f` | C′ §4.2.2 |
+
+菜单（音量上 / 下移动、电源确认；键盘盖：方向键、回车 / 空格、Esc / 退格 = 返回）：
+
+- **主菜单**（标题 `FASTBOOT MODE` 或 `BOOT MENU`）：Reboot to Android / Restart fastboot（或 Start fastboot）/
+  Factory reset（→ 二次确认，默认高亮 Cancel）/ Show log / Power off。正文：进入原因、当前槽、`gk3-fbi status`
+  （目标盘、六个名字是否唯一、BCB、两个槽、VAB 合并状态、GK3 记录）、USB（role / UDC / state / 是否已绑）、守护进程状态。
+- **Reboot to Android**：`why=recovery / prompt_wipe` 先 `--clear-bcb`（这两种 BCB 由执行端清，§4.3.4；不清 gk3boot 下次还送回来）；
+  `why=wipe` 只在用户在确认页**明确拒绝**时清，擦除失败后从菜单重启不清（让 gk3boot 的 3 次上限记 `wipe_failed`）。
+- 设计稿 §4.4.4 里的 Boot other slot、Other systems、Device info 还没做（要写 GK3 意图 / efivarfs，属于守护进程那边）。
+
+### 14.3 与 gk3-fastbootd 的接口（S7a 要遵守的约定）
+
+| 项 | 约定 |
+|---|---|
+| 路径 | `/bin/gk3-fastbootd`，静态 aarch64；不在 → 界面显示 EXECUTOR MISSING |
+| 常驻（无参数） | `/init` 起它，stdout/stderr 追加到 `/run/gk3/fastbootd.log`。它打开 `$GK3_FFS/ep0` 写描述符和字符串（接口 `0xff/0x42/0x03`）；**不要碰 configfs 的 `UDC`**，`/init` 看到 `ep1` 才绑、守护进程退出后解绑 |
+| 环境变量 | `GK3_WHY GK3_SLOT GK3_DISK GK3_BOOTVER`（= cmdline 里的值）、`GK3_FFS=/dev/usb-ffs/fastboot`、`GK3_UDC=a600000.usb`、`GK3_GADGET=/sys/kernel/config/usb_gadget/gk3fb`、`GK3_RUN=/run/gk3`。也可以自己读 `/proc/cmdline` |
+| 常驻的退出码 | `0` = 重启进 Android（`fastboot reboot`）；`10` = 关机；`11` = 重起 fastboot（`reboot-bootloader` / `reboot-fastboot`：`/init` 解绑 → 重起守护进程 → 重绑，即软重新枚举）；`12` = 切到菜单（`reboot-recovery`）；其他 = 崩溃，`/init` 自动重起，60 秒内第 3 次就停下并在界面上说明。**守护进程自己不调 reboot()**，由 `/init` 统一 sync + `reboot -f` / `poweroff -f` |
+| 停止 | `/init` 发 SIGTERM，3 秒后 SIGKILL。要停之前（重启、跑子命令前）先解绑 UDC |
+| 状态文件（可选） | `/run/gk3/fastbootd.status` 第一行显示在界面上（如 `flashing boot_a 45%`）；它的 mtime 变化也算"有活干"，空闲关机重新计时 |
+| `--wipe-data` | 不带确认：守护进程自己判"免二次确认"（迁移标记 + `why=wipe` + BCB 原文与 GK3 摘要一致，§4.4.3）。成立就擦（并清 BCB）→ 0；不成立 → **3**（`/init` 显示确认页）；拒绝（MERGING 等守卫，§4.4.3）→ **4**；失败 → 其他。stdout 的英文一两行原样显示在界面上 |
+| `--wipe-data --confirm` | 用户已在确认页确认：照 §4.4.3 擦（守卫照旧，MERGING 仍拒绝）并清 BCB → 0；否则非 0 + stdout 说明 |
+| `--clear-bcb` | 只清 BCB（command + recovery，§4.3.4），写后读回 → 0 |
+| 子命令期间 | `/init` 已先停掉常驻实例（同一块盘只有一个写者），子命令返回后按需再起 |
+
+### 14.4 gk3-fbi
+
+- `keyd`：每 2 秒重扫 `/dev/input/event*`（键盘盖可能后插），只 poll 报 `KEY_VOLUMEUP / KEY_VOLUMEDOWN / KEY_POWER / 方向 / 回车`
+  中任意一个的设备（触摸屏不进来）。映射：音量上、↑、PgUp → up；音量下、↓、PgDn、Tab → down；电源、回车、小键盘回车、空格 → ok；
+  Esc、退格、← → back。按下算一次，按住自动重复只给上下。**每个原始 EV_KEY 事件（设备名、键码、值）都记进 `/run/gk3/keys.log`**，
+  "Show log" 页能看到 —— 真机键码就从这里抄（E3 时没人按过键）。
+- `status <PARTUUID>`：扫所有整盘的主 GPT，按 PARTUUID 找 misc；出现 0 次 / 多于 1 次都不猜（§4.4.1"仍要校验唯一性"）；
+  同时查六个名字各恰好一次；读 misc 前 64 KiB 解 BCB / BCAB / VAB / GK3。只读。
+- `font <psf2> <tty>`：Debian busybox 的 `loadfont` 不认 `Uni2-TerminusBold32x16`（实测 "bad length or unsupported font type"），
+  所以自己装：KDFONTOP（32 点高的 PSF2 字形区原样就是内核要的格式）+ PIO_UNIMAPCLR / PIO_UNIMAP（792 条映射）。
+
+### 14.5 QEMU 测试（2026-10-05，11/11）
+
+`-kernel` Debian 通用 arm64 内核（`linux-image-6.12.111+deb13-arm64-unsigned`，TCG）+ `-initrd` "fastboot.img 原样 + 测试 overlay"
+（两段 gzip cpio 直接拼接）。overlay 只多出 `/etc/gk3-fbi/test-hook`（/init 存在这个文件才 source：insmod 测试内核的 15 个模块、
+`GK3_UDC=dummy_udc.0`、打开跟踪、缩短空闲超时）、`stub.conf`、模块，以及假 `/bin/gk3-fastbootd`（只实现 §14.3 的接口）。
+`dummy_hcd` 同时给出 UDC 和主机，gadget 绑上后被真的枚举一遍；按键走 HMP `sendkey` → virtio-keyboard → evdev。
+盘是照实机向量造的 GPT（misc 内容 = `test/vectors/misc-20261005-1791053208.bin`），另有 BCB=wipe、BCB=prompt_wipe、同 PARTUUID 的第二块。
+
+```
+PASS fastboot          16.8s  gadget 0x18d1:0x4ee0 serial=gaokun3；描述符就位后才绑 dummy_udc.0；主机侧枚举到
+                              idVendor=18d1 idProduct=4ee0 SerialNumber gaokun3、UDC state=configured；界面（标题、原因、槽、
+                              USB、fastboot 状态、菜单）；gk3-fbi find 找到 /dev/vda4；音量上/下、方向上/下移动并环绕；
+                              Show log（电源键进、Esc 回，日志里有 KEY_POWER 原始事件）；Restart fastboot（回车）→ 解绑、
+                              停、重起、重绑、主机重新枚举；Power off → poweroff -f → QEMU 退出
+PASS missing            7.9s  无守护进程：EXECUTOR MISSING、菜单照用；同 PARTUUID 两块盘 → "appears 2 times - refusing to guess"；
+                              why=recovery 选 Reboot → 先试 --clear-bcb（记失败）→ reboot -f
+PASS idle              39.5s  GK3_IDLE_TIMEOUT=20、无 UDC：按键后 19.9 秒关机（按键重新计时）
+PASS wipe-confirm       8.3s  why=wipe、--wipe-data → 3：确认页（默认"不擦"、不跑协议）→ Yes → --wipe-data --confirm → 重启
+PASS wipe-auto          2.6s  why=wipe、--wipe-data → 0：不等按键直接重启
+PASS wipe-decline       7.9s  why=wipe、用户选 No：--clear-bcb → 重启，没有擦
+PASS prompt-tryagain    7.9s  why=prompt_wipe：RescueParty 页（不跑协议、不擦）→ Try again → --clear-bcb → 重启
+PASS prompt-reset       9.9s  why=prompt_wipe：Factory data reset → 二次确认（默认 Cancel，Cancel 能退回主菜单，主菜单显示
+                              BCB: prompt_wipe）→ 再进 → Yes → 擦 → 重启
+PASS reenum            12.9s  守护进程退出码 11 → 重起 + 重绑（软重新枚举）；再退出码 0 → 重启
+PASS crash             12.2s  守护进程连续退出码 1：重起 2 次、第 3 次停下（STOPPED、菜单 Start fastboot），不死循环
+PASS screen            15.7s  virtio-gpu 1600x2560（同本机面板）+ fbcon=rotate:1：Terminus 16x32 装上（512 字形、792 条映射），
+                              tty1 50 行 x 160 列；截图 build/fbi-test/screen.png
+—— 11/11 通过 ——
+```
+
+串口日志、截图都在 `tools/gk3boot/build/fbi-test/`。⚠️ 偶见单个场景在 QEMU 关机 / 复位那一步多花几十秒（colima 里同时有别的负载时），
+测试的等待已放宽到 120 秒；没见过功能性失败。
+
+### 14.6 未决（要真机，E6 / T12）
+
+- **真机键码**：`pmic_pwrkey`（KEY_POWER）、`pmic_resin`（音量下）、`gpio-keys`（音量上）是读源码 / 设备名得出的，没在真机按过。
+  上机时进 Show log 看 `keys.log` 核对；不对就改 `gk3-fbi.c` 的 `map_key`。电源键长按多久会触发 PMIC 硬复位也没测。
+- **UDC 绑定**：真机 port0 冷启动后 dwc3 何时出现 `a600000.usb`、`role` 初值、UCSI 插拔会不会改回 host（T12 / C′ T6）都只在 QEMU 里
+  走过 dummy_udc；USB-1（我方供电时两边都不枚举）在执行端里没有自动纠偏，只能重插。
+- **显示方向**：QEMU 证明 `rotate:1` 在 1600x2560 竖屏上给出 50 行 x 160 列的横向文字；实际方向对不对（会不会倒过来）要真机看。
+  Android 的 cmdline 已经带 `fbcon=rotate:1`，执行端沿用。
+- `efi=noruntime` 在实机 cmdline 里（`test/vectors/proc-cmdline-20261005.txt`）：执行端里 efivarfs 大概率不可用，
+  "Other systems" 写 OneShot 那条路要按设计稿 §4.4.4 的退化方案走（守护进程那边的事）。
+- 菜单里还缺 Boot other slot / Other systems / Device info（§4.4.4）；`why=recovery` 时执行端缺失会让每次开机都回到菜单（BCB 清不掉），
+  这时只能从 systemd-boot 菜单手选直连条目。
