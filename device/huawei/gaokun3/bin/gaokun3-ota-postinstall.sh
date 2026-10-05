@@ -114,6 +114,7 @@ MOUNTED=1
 #     都匹配 *-android-<槽>.conf；不排除的话这里会数出 2–3 个而让 OTA 失败。它们是 efi 条目、没有 linux 行，
 #     内核目录只能从直连条目反推。（loader.conf 的 default *-android-<槽>.conf 不用改：gk3boot 条目 sort-key
 #     0gk3 排在直连条目 zandroid<槽> 前面，照样先命中，设计稿 §4.2。）
+#     非默认条目 gk3boot-tools.conf 名字里没有 -android-，这里的 glob、default 通配、find_esp 的认盘通配都匹配不到它。
 # $1 = 条目文件名（不带目录），$2 = 槽字母；是直连条目时返回 0。规则与 gk3boot.efi 找 fail-open 目标
 #   （tools/gk3boot/efi/boot/gk3boot.c 的 direct_cb）、安装器的 gk3__esp_pick_mid 一致。
 is_direct_entry() {
@@ -183,14 +184,21 @@ log "可用（含将被覆盖的旧文件）约 ${avail_kb} KB"
 # 不铺 recovery 时少 15 MB（14974339 字节 ≈ 14.3 MiB），门槛同减 15 MiB，余量不变。
 need_kb=57344
 [ "$REC_ON" = 0 ] && need_kb=$((need_kb - 15360))
-# 统一启动入口（见下面 gk3boot 一节）：要部署时再加上它的二进制（约 100 KB）+ 两个条目的余量。
-#   宁可多算：已经是同一份就不会真写，但这里不为省 100 KB 去先比对。
+# 统一启动入口（见下面 gk3boot 一节）：要部署时再加上它的二进制（约 100 KB）+ 执行端 fastboot.img（2–4 MiB，
+#   这一版带了才算，按实际大小）+ 条目的余量（两个现役 / .staged + gk3boot-tools.conf，16 KB 绰绰有余）。
+#   宁可多算：已经是同一份就不会真写，但这里不为省这几 MB 去先比对。
+#   只算【这次要写的一版】：ESP 上已有的版本目录（现役 + gk3prev）早已算在 df 的"已用"里。常态最多两版共存；
+#   这次铺 .staged 之后、新槽开机完成之前是三版（现役 + gk3prev + staged），HAL 激活时只写条目、不新增文件，
+#   并回收没人引用的最老那版 —— 所以峰值就是"已有的 + 这一版"，正是这里检查的。
 GK3_PROP=persist.vendor.gaokun3.gk3boot
 GK3_MODE=$(getprop "$GK3_PROP" 2>/dev/null); [ -n "$GK3_MODE" ] || GK3_MODE=off
 GK3_SRC="$HERE/../boot/gk3boot"
 case "$GK3_MODE" in
     observe|action)
-        [ -f "$GK3_SRC/gk3boot.efi" ] && need_kb=$((need_kb + $(stat -c%s "$GK3_SRC/gk3boot.efi") / 1024 + 16)) ;;
+        if [ -f "$GK3_SRC/gk3boot.efi" ]; then
+            need_kb=$((need_kb + $(stat -c%s "$GK3_SRC/gk3boot.efi") / 1024 + 16))
+            [ -f "$GK3_SRC/fastboot.img" ] && need_kb=$((need_kb + $(stat -c%s "$GK3_SRC/fastboot.img") / 1024 + 1))
+        fi ;;
 esac
 [ "$avail_kb" -gt "$need_kb" ] || \
     fail "ESP 空间不足（需约 $((need_kb / 1024)) MB）。清掉 <ESP>/$MID/android/ 下的 *.bak-* 再试"
@@ -225,18 +233,25 @@ fi
 
 # ── 统一启动入口 gk3boot.efi（2026-10-05，S9；docs/boot-entry-design.md §4.6.2、§4.8、§4.11）──────────
 # 开关 persist.vendor.gaokun3.gk3boot（缺省 off，1.0 发版时再定默认值）：
-#   off            删掉 ESP 上全部 gk3boot-android-* / gk3prev-android-* 条目（含 .staged）⇒ 新槽走直连条目。
+#   off            删掉 ESP 上全部 gk3boot-android-* / gk3prev-android-* 条目（含 .staged）与 gk3boot-tools.conf
+#                  ⇒ 新槽走直连条目。
 #                  EFI/gk3boot/<ver>/ 目录留给新槽开机完成时的 boot_control HAL 回收：删目录要 vfat:dir rmdir，
 #                  而 postinstall 跑在【旧槽】的策略下（sepolicy/postinstall.te 顶上的设计约束），这里不新增权限。
-#   observe/action 从【新】vendor 的 boot/gk3boot/{gk3boot.efi,version} 取入口：
-#                  · 先把二进制写到 EFI/gk3boot/<ver>/（已逐字节相同就不写；.new → cmp → rename）；
+#   observe/action 从【新】vendor 的 boot/gk3boot/{gk3boot.efi,version[,fastboot.img]} 取入口：
+#                  · 先把二进制写到 EFI/gk3boot/<ver>/（已逐字节相同就不写；.new → sync → cmp → rename）；
+#                  · 执行端 fastboot.img（这一版带了才有；与 gk3boot.efi 同版本、同目录、一起轮换）同一条规则写到
+#                    EFI/gk3boot/<ver>/fastboot.img。它写失败【不挡】入口部署、只记日志：没有执行端时 gk3boot 照常
+#                    启动 Android。（vendor 不带它而 ESP 同版本目录里有一份时，这里不删 —— 留给新槽的 HAL 对齐。）
 #                  · ESP 上还没有现役入口（0.7.x/1.0-dev → 第一次部署）⇒ 直接写 gk3boot-android-{a,b}+3.conf，
 #                    重启就经入口启动（§4.8 第 2 步）；连续 3 次没走到开机完成，systemd-boot 自己改走直连条目；
 #                  · 已有现役入口、且就是这一版这个模式 ⇒ 不动；
 #                  · 已有别的版本 / 别的模式 ⇒ 只写 gk3boot-android-{a,b}.conf.staged（不以 .conf 结尾，systemd-boot 不读），
 #                    由新槽开机完成时的 HAL 激活：旧版（祝福过的）改名 gk3prev、新版 +3（§4.11"一次只换一样"）。
 #                    OTA 回滚到旧槽时，旧槽的 HAL 看到 .staged 不是自己那一版，会删掉它。
-# 条目正文与 boot_control/Gk3Boot.cpp 的 EntryText 逐字节一致（改一边要改另一边）。
+#                  · 非默认条目 gk3boot-tools.conf（菜单里直接进执行端，设计稿 §4.1、§4.3.5）总是指向【现役】那一版：
+#                    只在 action 且这一版的 fastboot.img 已在 ESP 上时写；第一次部署 / ESP 上已是这一版时按这条对齐
+#                    （observe、不带执行端、执行端没写上 ⇒ 删掉）；铺 .staged 时【不动】它，等新槽的 HAL 激活时再换。
+# 条目正文与 boot_control/Gk3Boot.cpp 的 EntryText / ToolsText 逐字节一致（改一边要改另一边）。
 # ★ 这一节的任何失败都【不】让 OTA 失败：直连条目上面已经写好，入口没部署上 = 今天的启动路径。
 #   部署到一半失败时撤掉这次写的条目（二进制留着，下次 / HAL 会复用或回收）。
 gk3_entry_text() {   # $1=active|prev $2=槽 $3=版本 $4=observe（0|1）
@@ -250,12 +265,32 @@ gk3_put() {   # $1=文件 $2…=gk3_entry_text 的参数；写 .new 再改名
     gk3_entry_text "$2" "$3" "$4" "$5" > "$1.new" && mv -f "$1.new" "$1" && return 0
     rm -f "$1.new"; return 1
 }
+gk3_tools_text() {   # $1=版本；gk3boot-tools.conf 的正文（不带计数、不带 gk3.hint / gk3.observe）
+    printf 'title      Android fastboot / boot menu\nversion    gk3boot-%s\nsort-key   0gk3tools\nefi        /EFI/gk3boot/%s/gk3boot.efi\noptions    gk3.action=fastboot\n' \
+        "$1" "$1"
+}
+gk3_tools() {   # 对齐 gk3boot-tools.conf：action 且 _gfb=1 ⇒ 指向 $GV（已一样就不写）；否则删掉。失败只记日志
+    _gtf="$GK3_ENT/gk3boot-tools.conf"
+    if [ "$GK3_MODE" = action ] && [ "$_gfb" = 1 ]; then
+        gk3_tools_text "$GV" > "$_gtf.new" || { rm -f "$_gtf.new"; log "⚠️ 统一启动入口：写 gk3boot-tools.conf 失败（菜单里暂时没有 fastboot 项，入口不受影响）"; return 0; }
+        if cmp -s "$_gtf.new" "$_gtf"; then
+            rm -f "$_gtf.new"
+        elif mv -f "$_gtf.new" "$_gtf"; then
+            log "统一启动入口：gk3boot-tools.conf → ${GV}（菜单里的 Android fastboot / boot menu）"
+        else
+            rm -f "$_gtf.new"; log "⚠️ 统一启动入口：写 gk3boot-tools.conf 失败（菜单里暂时没有 fastboot 项，入口不受影响）"
+        fi
+    elif [ -f "$_gtf" ]; then
+        rm -f "$_gtf" && log "统一启动入口：模式 ${GK3_MODE}、执行端就位 = ${_gfb} ⇒ 删掉 gk3boot-tools.conf"
+    fi
+    return 0
+}
 gk3_deploy() {
     GK3_ENT="$MNT/loader/entries"
     case "$GK3_MODE" in
         off)
             _gn=0
-            for _ge in "$GK3_ENT"/gk3boot-android-* "$GK3_ENT"/gk3prev-android-*; do
+            for _ge in "$GK3_ENT"/gk3boot-android-* "$GK3_ENT"/gk3prev-android-* "$GK3_ENT"/gk3boot-tools.conf; do
                 [ -f "$_ge" ] || continue
                 rm -f "$_ge" && _gn=$((_gn + 1))
             done
@@ -297,6 +332,22 @@ gk3_deploy() {
         fi
     fi
 
+    # 执行端 fastboot.img：同一条规则；失败只记日志、不 return（没有执行端时 gk3boot 照常启动 Android）。
+    # _gfb=1 = ESP 上 <ver>/fastboot.img 与 vendor 逐字节相同 —— gk3boot-tools.conf 只在这时才写。
+    _gfb=0
+    if [ ! -f "$GK3_SRC/fastboot.img" ]; then
+        log "统一启动入口：这一版 vendor 不带执行端 fastboot.img（入口照常部署，菜单里没有 fastboot 项）"
+    elif cmp -s "$GK3_SRC/fastboot.img" "$_gd/fastboot.img" 2>/dev/null; then
+        _gfb=1
+    elif cp "$GK3_SRC/fastboot.img" "$_gd/fastboot.img.new" && sync &&
+         cmp -s "$GK3_SRC/fastboot.img" "$_gd/fastboot.img.new" && mv -f "$_gd/fastboot.img.new" "$_gd/fastboot.img"; then
+        _gfb=1
+        log "统一启动入口：写好 EFI/gk3boot/$GV/fastboot.img（$(stat -c%s "$_gd/fastboot.img") 字节，读回一致）"
+    else
+        rm -f "$_gd/fastboot.img.new"
+        log "⚠️ 统一启动入口：写 EFI/gk3boot/$GV/fastboot.img 失败（ESP 满了？）—— 入口照常部署，只是没有执行端"
+    fi
+
     if [ "$_ghave" = 0 ]; then
         for _gx in a b; do
             if ! gk3_put "$GK3_ENT/gk3boot-android-$_gx+3.conf" active "$_gx" "$GV" "$_gobs"; then
@@ -307,10 +358,14 @@ gk3_deploy() {
         done
         rm -f "$GK3_ENT"/gk3boot-android-*.conf.staged
         log "统一启动入口：第一次部署 ${GV}（${GK3_MODE}）：gk3boot-android-{a,b}+3.conf —— 重启后经入口启动；连续 3 次没开机完成会自动改走直连条目"
+        gk3_tools
     elif [ "$_gsame" = 1 ]; then
         rm -f "$GK3_ENT"/gk3boot-android-*.conf.staged
         log "统一启动入口：ESP 上已是 ${GV}（${GK3_MODE}），不动"
+        gk3_tools   # 现役就是这一版：tools 按这一版对齐不会碰到别的版本（例如上次执行端没写上、这次补上）
     else
+        # gk3boot-tools.conf 不动：它跟着现役走，现役要等新槽的 HAL 激活 .staged 时才换
+
         for _gx in a b; do
             if ! gk3_put "$GK3_ENT/gk3boot-android-$_gx.conf.staged" active "$_gx" "$GV" "$_gobs"; then
                 rm -f "$GK3_ENT"/gk3boot-android-*.conf.staged

@@ -57,6 +57,16 @@ cat > "$R/stub/sync" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
+# GK3_PI_FAIL_CP=<后缀>：目标以它结尾的 cp 失败（模拟 ESP 写满 / 介质出错），别的照常交给真 cp
+if [ -n "${GK3_PI_FAIL_CP:-}" ]; then
+    REALCP=$(command -v cp)
+    cat > "$R/stub/cp" <<EOF
+#!/bin/sh
+for a in "\$@"; do last=\$a; done
+case "\$last" in *"$GK3_PI_FAIL_CP") echo "cp: \$last: No space left on device" >&2; exit 1 ;; esac
+exec "$REALCP" "\$@"
+EOF
+fi
 chmod +x "$R/stub/"*
 PATH="$R/stub:$PATH" "$SH" "$R/bin/gaokun3-ota-postinstall.sh" "$SLOT" 3>&1
 echo "RC=$?"
