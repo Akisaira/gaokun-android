@@ -885,9 +885,14 @@ EOF
                  "$mnt/$mid/android/slot_a" "$mnt/$mid/android/slot_b" || { esp_fail "建目录"; return 1; }
         # ⚠️ 别的 <machine-id> 目录下我们的启动项：default 的通配 *-android-<槽>.conf 会同时匹配它们，
         #   开机走哪个看 systemd-boot 的排序（M4b 那次留下的就是这种局面）。改名停用（systemd-boot 只读 *.conf），不删
+        # ★ 2026-10-05（统一启动入口 S9）：只动【直连条目】<32 位十六进制>-android-<槽>.conf。统一启动入口的
+        #   gk3boot-android-<槽>[+N].conf / gk3prev-android-<槽>.conf 也匹配这个通配，但它们不是"别的目录的启动项"——
+        #   default 通配先命中它们是设计如此（sort-key 0gk3，boot-entry-design §4.2），重新安装不该把它们停用
+        #   （安装器怎么处理入口条目是 S10 的事）。规则与 postinstall 的 is_direct_entry、gk3__esp_pick_mid 一致。
         local e
         for e in "$mnt"/loader/entries/*-android-[ab].conf; do
             [ -e "$e" ] || continue
+            [[ ${e##*/} =~ ^[0-9a-f]{32}-android-[ab]\.conf$ ]] || continue
             case "${e##*/}" in "$mid"-android-*) continue ;; esac
             mv "$e" "$e.disabled" || { esp_fail "停用 ${e##*/}"; return 1; }
             echo "停用了另一个目录的启动项 ${e##*/} → ${e##*/}.disabled（默认项的通配会同时匹配它）" >&2

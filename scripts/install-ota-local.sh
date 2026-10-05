@@ -76,6 +76,21 @@ fi
 DEF=$(S 'mkdir -p /mnt/gaokun3_ota_install; mount -t vfat /dev/block/by-name/esp /mnt/gaokun3_ota_install 2>/dev/null; grep ^default /mnt/gaokun3_ota_install/loader/loader.conf' | tr -d '\r')
 ok "ESP 的 $DEF"
 
+# ★ 2026-10-05（统一启动入口 S9）：ESP 上有 gk3boot 条目时，第 4 步的安全网【不起作用】——
+#   loader.conf 的 default 通配先命中 gk3boot-android-<x>，而 gk3boot 按 misc 的 BCAB 选槽、不看 default 的字母；
+#   update_engine 已经把 misc 的 active 切到新槽，所以重启就是进新槽（动作模式下新槽 tries 6 次没起来才自动回旧槽，
+#   观察模式不扣 tries、不会自己回来）。设计稿 §4.15 的改法（set-active 撤回 + OneShot 直连验收 + 验收后再 set-active）
+#   是 S11 的事，这里先拦住：确认有人在场、接受"靠入口回滚"时设 GK3_TRUST_GK3BOOT=1 再 --go。
+GK3E=$(S 'ls /mnt/gaokun3_ota_install/loader/entries/ 2>/dev/null | grep -E "^gk3(boot|prev)-android-"' | tr -d '\r')
+if [ -n "$GK3E" ]; then
+    echo "⚠️ ESP 上有统一启动入口的条目：$(echo $GK3E)"
+    echo "   第 4 步把 default 掰回旧槽对它无效 —— 重启会直接进新槽（见脚本注释）"
+    if [ "$MODE" = "--go" ] && [ "${GK3_TRUST_GK3BOOT:-0}" != 1 ]; then
+        S 'umount /mnt/gaokun3_ota_install 2>/dev/null'
+        die "有人在场、接受靠入口的 tries 回滚时设 GK3_TRUST_GK3BOOT=1；或者先 setprop persist.vendor.gaokun3.gk3boot off 并重启一次（开机完成时撤掉入口）"
+    fi
+fi
+
 # ★ ESP 空间（TODO B13，#110）：postinstall 要求"可用 + 目标槽将被覆盖的旧文件 > 56 MB"，
 #   不够就在最后一步失败，而那看起来像"新版本有问题"。2026-09-14 本机被三周的实验槽位
 #   （slot_cam / slot_cam4）吃到只剩 4.5 MB 可用（合计 47 MB），差 9 MB 就翻车。
@@ -146,11 +161,17 @@ echo "   （boot_control HAL 刚把它改成新槽了 —— 这一步是安全�
 #   ★ 规矩：写 glob 之前先确认它在真实目录上匹配得到东西，匹配不到就 die。
 SLOT=${CUR#_}                       # _b -> b
 GLOB="*-android-${SLOT}.conf"
-S "ls /mnt/gaokun3_ota_install/loader/entries/ | grep -q -- '-android-${SLOT}\.conf'" \
-    || die "ESP 上没有 -android-${SLOT}.conf 这个条目，glob '$GLOB' 会写成死链 —— 停手"
-ok "glob '$GLOB' 在 ESP 上匹配得到条目"
+# ★ 2026-10-05（统一启动入口 S9）：只认直连条目 <32 位十六进制>-android-<槽>.conf。祝福过的 gk3boot 条目
+#   gk3boot-android-<槽>.conf 也匹配这个 glob，但它不是"已知可用的那个槽的内核"，不能拿来证明 glob 不是死链。
+S "ls /mnt/gaokun3_ota_install/loader/entries/ | grep -qE '^[0-9a-f]{32}-android-${SLOT}\.conf\$'" \
+    || die "ESP 上没有 <machine-id>-android-${SLOT}.conf 这个直连条目，glob '$GLOB' 会写成死链 —— 停手"
+ok "glob '$GLOB' 在 ESP 上匹配得到直连条目"
 S "sed -i 's|^default .*|default ${GLOB}|' /mnt/gaokun3_ota_install/loader/loader.conf; sync; grep ^default /mnt/gaokun3_ota_install/loader/loader.conf" 2>&1 | tr -d '\r'
 echo
+if [ -n "$GK3E" ]; then
+    echo "⚠️ 统一启动入口在：上面这行 default 只管入口计数用完之后的直连回落；正常重启由 gk3boot 按 misc 进新槽。"
+    echo "   有人在场再 adb reboot；新槽起不来时动作模式会在 tries 用完后自动回 $CUR，观察模式要手动在菜单里选直连条目。"
+fi
 echo "⬜ 剩下的手工两步（故意不自动做）："
 echo "   1) 写 LoaderEntryOneShot 指向新槽的条目"
 echo "   2) adb reboot，然后验收：uname / getprop ro.build.date.utc / tinymix 看 PA"

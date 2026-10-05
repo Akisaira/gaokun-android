@@ -70,7 +70,7 @@ esp_info() {   # 挂 ESP（只读），打印 MID 与 slot_b 的内核、options
        echo FREE_KB=\$(df -k $ESPM | tail -1 | awk '{print \$4}')
        echo DEFAULT=\$(sed -n 's/^default *//p' $ESPM/loader/loader.conf)
        for f in Image gaokun3.dtb; do [ -f $ESPM/\$MID/android/slot_b/\$f ] && echo HAVE_\$(echo \$f | tr -c 'A-Za-z0-9\n' _)=yes; done
-       e=\$(ls $ESPM/loader/entries/*-android-b.conf 2>/dev/null | head -1); echo ENTRY_B=\$(basename \"\$e\")
+       n=\$(ls $ESPM/loader/entries/ 2>/dev/null | grep -E '^[0-9a-f]{32}-android-b\.conf\$' | head -1); e=$ESPM/loader/entries/\$n; echo ENTRY_B=\$n
        echo OPTS_B=\$(sed -n 's/^options *//p' \"\$e\")
        echo ENTRIES=\$(ls $ESPM/loader/entries/ | tr '\n' ' ')
        umount $ESPM"

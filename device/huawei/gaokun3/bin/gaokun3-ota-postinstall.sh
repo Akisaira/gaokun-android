@@ -62,6 +62,8 @@ find_esp() {
     #   ⚠️ 名字只是候选：盘上可能同时有 Windows 的 ESP（就叫这个名字）和另起名字的 Android ESP
     #   （用户反馈 #1 那种手工分区）⇒ 候选也要过内容检查。全都不过才扫全盘；
     #   扫全盘在 enforcing 下走不通（那些节点是通用 block_device，domain.te:705）。
+    # ⓘ 这里的 *-android-*.conf 只用来认"是不是我们的 ESP"，gk3boot / gk3prev 条目也是我们写的，所以不必像
+    #   下面选直连条目那样排除它们（gk3boot 条目不会脱离直连条目单独存在：它的 fail-open 要指向直连条目）。
     PROBE=/mnt/gaokun3_esp_probe; mkdir -p "$PROBE" || return 1
     NAMED=""
     for n in esp EFI_system_partition; do
@@ -107,12 +109,26 @@ MOUNTED=1
 #   按同一个通配找条目），失败了用户留在当前能用的槽上，比"报成功、重启进一个起不来的槽"好。
 #   安装器写的条目正是这个形状（scripts/live/installer-lib.sh:919-926：$mid-android-$slot.conf，
 #   linux /$mid/android/slot_$slot/Image），所以装好的机器两边选出的是同一个目录。
+#   ★ 统一启动入口（2026-10-05，S9）：只认【直连条目】<32 位小写十六进制 machine-id>-android-<槽>.conf。
+#     gk3boot 的条目被祝福（去掉计数）之后叫 gk3boot-android-<槽>.conf、上一版入口叫 gk3prev-android-<槽>.conf，
+#     都匹配 *-android-<槽>.conf；不排除的话这里会数出 2–3 个而让 OTA 失败。它们是 efi 条目、没有 linux 行，
+#     内核目录只能从直连条目反推。（loader.conf 的 default *-android-<槽>.conf 不用改：gk3boot 条目 sort-key
+#     0gk3 排在直连条目 zandroid<槽> 前面，照样先命中，设计稿 §4.2。）
+# $1 = 条目文件名（不带目录），$2 = 槽字母；是直连条目时返回 0。规则与 gk3boot.efi 找 fail-open 目标
+#   （tools/gk3boot/efi/boot/gk3boot.c 的 direct_cb）、安装器的 gk3__esp_pick_mid 一致。
+is_direct_entry() {
+    _id=${1%-android-"$2".conf}
+    [ "$_id" != "$1" ] && [ "${#_id}" -eq 32 ] || return 1
+    case "$_id" in *[!0-9a-f]*) return 1 ;; esac
+    return 0
+}
 ENTS=""; NENT=0
 for e in "$MNT"/loader/entries/*-android-"$SUFFIX".conf; do
     [ -f "$e" ] || continue
+    is_direct_entry "${e##*/}" "$SUFFIX" || continue
     ENTS="$ENTS ${e##*/}"; NENT=$((NENT + 1)); ENT=$e
 done
-[ "$NENT" = 1 ] || fail "ESP 上 *-android-$SUFFIX.conf 启动项有 $NENT 个（${ENTS:- 无}）—— 要恰好一个，才知道内核该写进哪个目录。多出来的那个请用安装器 live 清理（或改名成 .conf.disabled）"
+[ "$NENT" = 1 ] || fail "ESP 上 <machine-id>-android-$SUFFIX.conf 直连启动项有 $NENT 个（${ENTS:- 无}）—— 要恰好一个，才知道内核该写进哪个目录。多出来的那个请用安装器 live 清理（或改名成 .conf.disabled）"
 KPATH=$(sed -n 's/^linux[[:space:]][[:space:]]*//p' "$ENT" | head -1 | tr -d '\r' | sed 's/[[:space:]]*$//')
 # ↑ 行尾空白 systemd-boot 容忍，这里也去掉（审查建议修 2）
 case "$KPATH" in
