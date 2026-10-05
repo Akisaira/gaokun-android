@@ -479,6 +479,64 @@ are currently running.
 If the hook fails (the usual reason is a full ESP), the whole update fails
 loudly rather than leaving you with a new system and an old kernel.
 
+## The boot entry and fastboot (from 1.0)
+
+<!-- S13（docs/boot-entry-design.md）。真机证据：E3–E8、执行端 E6 与分派 E7（docs/hw/gk3boot-*-20261005.txt）。
+     镜像默认 persist.vendor.gaokun3.gk3boot=action（device.mk），条目文字见 boot_control/Gk3Boot.cpp 的 EntryText / ToolsText。
+     ⚠️ E10（恢复出厂）与双系统（S15）没在真机上验过 —— 下面对应的句子都标了。 -->
+
+From 1.0 Android has its own small boot loader on the ESP, **gk3boot**. It plays
+the part a phone's bootloader plays: it reads the A/B state Android keeps in the
+`misc` partition, picks the slot, and starts that slot's kernel straight from its
+`boot_a` / `boot_b` partition. systemd-boot still shows the menu and still owns
+Windows and the rescue system; gk3boot is just the entry it starts by default.
+
+**When it takes over.** The first boot after installing or updating to 1.0 still
+goes through the old per-slot entries. Once that boot has finished, Android
+copies gk3boot onto the ESP and adds an entry titled `Android`, listed first;
+every later boot goes through it.
+
+**What you get from it:**
+
+* **Automatic rollback after a bad update.** A freshly updated slot gets six
+  tries. If it never finishes booting (it keeps crashing or restarting), gk3boot
+  goes back to the previous slot by itself, and Android shows a notification
+  that it has rolled back. This was tested on the machine with a deliberately
+  broken update. A hang that never restarts still needs the power button.
+* **A safety net for the loader itself.** If the `Android` entry fails to start
+  three times in a row, systemd-boot falls back to the old per-slot entry, so a
+  broken gk3boot cannot lock you out (tested on the machine).
+* **fastboot.** See below.
+
+**fastboot.** `adb reboot bootloader` (or `adb reboot fastboot`), or the boot
+menu entry `Android fastboot / boot menu`, starts a small fastboot environment
+built from the same kernel. The screen shows `FASTBOOT MODE`, the reason, the
+slot and the USB state. Then:
+
+* Connect the cable to the USB-C port **next to the power button** (port0); the
+  other port does not do fastboot.
+* From a computer with the Android platform tools: `fastboot devices` (the
+  device is called `gaokun3`), `fastboot getvar all`, `fastboot oem device-info`
+  (disk, partitions, A/B and boot-entry state), `fastboot reboot` (back to
+  Android), `fastboot reboot bootloader` (back into fastboot).
+* On the machine itself: the volume buttons move the selection, the power
+  button confirms (the volume buttons were checked on the machine; confirming
+  with the power button not yet).
+
+Everything else above was checked on the machine. Flashing (`fastboot flash`) is
+implemented and passes the emulator tests, but **has not been tried on real
+hardware yet** — for now reinstall with the graphical installer instead.
+
+**Turning it off.** As root (`adb shell` on these builds; see [adb](#adb)):
+`setprop persist.vendor.gaokun3.gk3boot off`, then reboot once. Android removes
+the `Android` and fastboot entries from the ESP when that boot finishes, and the
+machine boots exactly as before 1.0. `observe` instead of `off` keeps gk3boot in
+a log-only mode that never changes anything in `misc`.
+
+**Dual boot.** gk3boot leaves Windows alone. Choosing Windows as the default
+system and "restart into Windows" from Android are implemented, but **they have
+not been tested on a real dual-boot machine yet**.
+
 ## Erasing your data (factory reset)
 
 ⚠️ **Settings → System → Reset options → *Erase all data* currently does
@@ -486,8 +544,10 @@ nothing.** That path writes `boot-recovery` into the bootloader control block
 in `misc` and reboots, expecting the bootloader to hand control to recovery.
 systemd-boot does not read that block and there is no working recovery here
 (see below), so the request lands nowhere — your data is still there
-afterwards. For 1.0 this is to be taken over by a fastboot for this machine
-(being designed).
+afterwards. From 1.0 the request is meant to be carried out by the boot entry's
+fastboot environment ([above](#the-boot-entry-and-fastboot-from-10)); that path
+passes the emulator tests but **has not been verified on the machine yet**, so
+until a release says otherwise, treat *Erase all data* as not working.
 
 **To really erase `/data` today:** boot the graphical installer (the rescue
 entry in the boot menu, or the USB stick) → **Reinstall Android**, leaving
@@ -507,7 +567,7 @@ What that costs you today:
 
 * No `adb sideload`. Not a big loss — updates come through Settings, and the
   rescue system can write any partition directly.
-* No `fastboot` / `fastbootd` yet (see above).
+* No `fastbootd` inside Android. From 1.0 there is a fastboot environment started by the boot entry instead (see [above](#the-boot-entry-and-fastboot-from-10)).
 * No factory reset from Settings (see above).
 
 If you want to debug it: a recovery ramdisk you built yourself

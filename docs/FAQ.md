@@ -40,8 +40,10 @@ Every boot stops at the systemd-boot menu for 15 seconds, then starts the defaul
 
 | Entry | What it is |
 |---|---|
-| `crDroid 16.0 (gaokun3) — slot _a`<br>`crDroid 16.0 (gaokun3) — slot _b` | Android's two slots. **The entry highlighted by default is the one you are running.** Whether the other one still works: see [rolling back](#something-broke-after-an-update-can-i-go-back) |
-| `gaokun3 rescue (runs from RAM)` | The rescue system. Only present if you installed with the graphical installer and kept the rescue system option. It is the graphical installer itself, running in RAM: it can reinstall Android, and you can SSH into it |
+| `Android` | From 1.0: Android's own boot entry (gk3boot). It picks the slot by itself and rolls back after a failed update. Added on the first boot after installing / updating to 1.0. See [INSTALL](INSTALL.md#the-boot-entry-and-fastboot-from-10) |
+| `Android fastboot / boot menu` | From 1.0: the fastboot environment (USB-C port next to the power button) |
+| `crDroid 16.0 (gaokun3) — slot _a`<br>`crDroid 16.0 (gaokun3) — slot _b` | Android's two slots, started directly (from 1.0 these are the fallback; the `Android` entry is used normally). **The entry highlighted by default is the one you are running.** Whether the other one still works: see [rolling back](#something-broke-after-an-update-can-i-go-back) |
+| `gaokun3 rescue (slot a kernel)`<br>`gaokun3 rescue (slot b kernel)` | The rescue system (older installs: `gaokun3 rescue (runs from RAM)`, one entry). Only present if you installed with the graphical installer and kept the rescue system option. It is the graphical installer itself: it can reinstall Android, and you can SSH into it. The two entries differ only in which slot's kernel they borrow |
 | `Windows Boot Manager` | Only on dual boot; the menu finds it automatically |
 | `gaokun3 installer` | Left behind when the installer was started from Windows without a USB stick |
 

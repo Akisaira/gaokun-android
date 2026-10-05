@@ -39,8 +39,10 @@
 
 | 菜单项 | 是什么 |
 |---|---|
-| `crDroid 16.0 (gaokun3) — slot _a`<br>`crDroid 16.0 (gaokun3) — slot _b` | Android 的两个槽。**默认高亮的那一项就是现在在用的**。另一项能不能用，见下面的[回退](#更新后出了问题能回到上一版吗) |
-| `gaokun3 rescue (runs from RAM)` | 救援系统。只有用图形安装器安装、并且保留了"救援系统"选项时才有。它就是图形安装器本身，在内存里运行，可以重新安装 Android，也可以 SSH 进去 |
+| `Android` | 1.0 起：Android 自己的启动入口（gk3boot），自己选槽，更新后起不来会自动退回旧版本。装上 / 升级到 1.0 后的第一次开机完成时加上。见 [INSTALL](INSTALL.md#the-boot-entry-and-fastboot-from-10) |
+| `Android fastboot / boot menu` | 1.0 起：fastboot 环境（数据线插靠近电源键的 USB-C 口） |
+| `crDroid 16.0 (gaokun3) — slot _a`<br>`crDroid 16.0 (gaokun3) — slot _b` | Android 的两个槽，直接启动（1.0 起它们是后备，平时走上面的 `Android`）。**默认高亮的那一项就是现在在用的**。另一项能不能用，见下面的[回退](#更新后出了问题能回到上一版吗) |
+| `gaokun3 rescue (slot a kernel)`<br>`gaokun3 rescue (slot b kernel)` | 救援系统（老机器上是一条 `gaokun3 rescue (runs from RAM)`）。只有用图形安装器安装、并且保留了"救援系统"选项时才有。它就是图形安装器本身，可以重新安装 Android，也可以 SSH 进去。两条只差借用哪个槽的内核 |
 | `Windows Boot Manager` | 双系统时才有，菜单会自动找到它 |
 | `gaokun3 installer` | 用 Windows 免 U 盘方式启动安装器时留下的条目 |
 
