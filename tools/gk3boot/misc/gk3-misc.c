@@ -1,9 +1,25 @@
-/* gk3-misc：libgk3core 的只读 CLI（设计稿 §4.1；安装器用的 init 子命令是 S10 的事，这里还没有）。
+/* gk3-misc：libgk3core 的 CLI（设计稿 §4.1）。
  *
  *   gk3-misc dump    <misc 镜像（≥64 KiB，dd if=/dev/block/by-name/misc bs=4096 count=16）>
  *   gk3-misc select  <misc 镜像> [hint a|b]     入口在这份 misc 上会怎么选（只算，不写）
  *   gk3-misc gpt     <盘头镜像（LBA 0–33）> [块大小]
  *   gk3-misc bootimg <boot.img>                 解析头、复算 SHA1(id)、打印 cmdline
+ *
+ * S10（安装器）：
+ *   gk3-misc init <misc 分区或镜像> [--slot a|b] [--default windows|android|none]
+ *     安装器清零 misc 之后调它（scripts/live/installer-lib.sh 的 gk3_apply；设计稿 §4.7 "misc"）。只写三处、其余字节不碰：
+ *       0      BCB 2048 字节清零（迁移标记的前提：标记的意思是"这之前的 BCB 都已清掉"）
+ *       2048   bootloader_control = gk3_bcab_init_install：目标槽 priority 15 / tries 6 / 未成功，另一槽 0 / 0
+ *              （新装机器的另一槽没有 system，LP 里那一槽是陈旧元数据 —— C′ §2.6）
+ *       8192   GK3 记录 v1：gk3_rec_init + gk3_rec_migrate(全零 BCB, GK3_DISPATCH_VER)（= 入口首跑迁移在空 BCB 上做的那一步，
+ *              事件环里一条 migrated）；--default windows|android 时再放一个 set_default 请求（设计稿 §4.9.3、U12：
+ *              安装器不直接写 LoaderEntryDefault，由入口第一次在动作模式下运行时按 core/src/dual.c 的同一套规则写，理由见
+ *              installer-lib.sh 的"默认启动哪个系统"一节）。
+ *     写完 fsync，再【绕过页缓存】读回 64 KiB 逐字节比对（块设备上 O_DIRECT；不支持时退回普通读并说一声），
+ *     并用 gk3_bcab_validate / gk3_rec_validate 复核。stdout 一行
+ *       MISCINIT slot=a default=none bcab=<32 字节 hex> rec_crc=<8 hex> rest=zero|nonzero direct=yes|no
+ *     rest：2080–8192 与 10240–65536 是不是全零（安装器先整块清零，所以应为 zero；只报告不判死）。
+ *     退出码：0 成功；1 写 / 读回 / 复核失败；2 用法 / 打不开 / 小于 64 KiB。
  *
  * S15（双系统）的三个【写】子命令，只改镜像文件里 misc+8 KiB 的 GK3 记录（记录无效时报错、不建）——
  * 开发时在 dd 出来的镜像上模拟 Android 侧，QEMU 夹具与上机前的离线演练用：
@@ -13,9 +29,14 @@
  * 设备上 on shutdown 跑的不是这个 CLI，而是 boot HAL 二进制的 --gk3-mark-poweroff（同一个库函数
  * gk3_rec_mark_poweroff；理由见 device/huawei/gaokun3/boot_control/Gk3Boot.cpp 顶部）。
  */
+#define _GNU_SOURCE   /* O_DIRECT（Linux）；macOS 上没有它，下面按 #ifdef 退回 */
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "gk3core.h"
 
@@ -108,7 +129,12 @@ static int dump(const unsigned char *m, size_t n)
     gk3_vab_parse(m + GK3_MISC_SYSTEM_OFF, &v);
     printf("VAB      %s version=%u magic=%08x merge_status=%u source_slot=%u\n", v.valid ? "有效" : "无效",
            v.version, v.magic, v.merge_status, v.source_slot);
-    printf("其他     2K+32..32K %s\n", gk3_is_zero(m + 2080, 32768 - 2080) ? "全零" : "有非零内容");
+    /* GK3 记录（8 KiB 处 2 KiB）不算"其他" */
+    printf("其他     2K+32..8K、10K..32K %s\n",
+           gk3_is_zero(m + 2080, GK3_MISC_GK3_OFF - 2080) &&
+                   gk3_is_zero(m + GK3_MISC_GK3_OFF + GK3_REC_SIZE, 32768 - GK3_MISC_GK3_OFF - GK3_REC_SIZE)
+               ? "全零"
+               : "有非零内容");
     return 0;
 }
 
@@ -233,14 +259,146 @@ static int edit(const char *path, unsigned char *m, size_t n, const char *cmd, c
     return 0;
 }
 
+/* S10：安装器初始化 misc（文件头的说明）。不走 slurp：目标多半是块设备，只读写前 64 KiB。 */
+static int full_pwrite(int fd, const void *b, size_t n, off_t off)
+{
+    const unsigned char *p = b;
+    while (n) {
+        ssize_t w = pwrite(fd, p, n, off);
+        if (w < 0 && errno == EINTR)
+            continue;
+        if (w <= 0)
+            return -1;
+        p += w, n -= (size_t)w, off += w;
+    }
+    return 0;
+}
+
+static int full_pread(int fd, void *b, size_t n, off_t off)
+{
+    unsigned char *p = b;
+    while (n) {
+        ssize_t r = pread(fd, p, n, off);
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r <= 0)
+            return -1;
+        p += r, n -= (size_t)r, off += r;
+    }
+    return 0;
+}
+
+static int init_misc(int argc, char **argv)
+{
+    const char *path = argv[2];
+    unsigned slot = 0;
+    gk3_setdef def = GK3_SETDEF_NONE;
+    static const char *const defname[] = {"none", "windows", "android"};
+    for (int i = 3; i < argc; i++) {
+        if (!strcmp(argv[i], "--slot") && i + 1 < argc && (!strcmp(argv[i + 1], "a") || !strcmp(argv[i + 1], "b")))
+            slot = argv[++i][0] == 'b';
+        else if (!strcmp(argv[i], "--default") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "windows"))
+                def = GK3_SETDEF_WINDOWS;
+            else if (!strcmp(v, "android"))
+                def = GK3_SETDEF_ANDROID;
+            else if (strcmp(v, "none"))
+                return fprintf(stderr, "--default windows|android|none\n"), 2;
+        } else
+            return fprintf(stderr, "用法：gk3-misc init <misc 分区或镜像> [--slot a|b] [--default windows|android|none]\n"), 2;
+    }
+
+    int fd = open(path, O_RDWR);
+    if (fd < 0)
+        return fprintf(stderr, "%s：%s\n", path, strerror(errno)), 2;
+    off_t size = lseek(fd, 0, SEEK_END);
+    if (size < (off_t)GK3_MISC_READ_SIZE) {
+        fprintf(stderr, "%s：只有 %lld 字节，misc 至少要 64 KiB（入口一次读 0–64 KiB）\n", path, (long long)size);
+        close(fd);
+        return 2;
+    }
+
+    /* 0–2080：BCB 清零 + BCAB；8192–10240：GK3 记录 */
+    unsigned char head[GK3_MISC_BCAB_OFF + GK3_MISC_BCAB_SIZE], rec[GK3_REC_SIZE];
+    memset(head, 0, sizeof(head));
+    gk3_bcab_init_install(head + GK3_MISC_BCAB_OFF, slot);
+    gk3_rec_init(rec);
+    gk3_rec_migrate(rec, head /* 全零的 BCB */, GK3_DISPATCH_VER);
+    if (def != GK3_SETDEF_NONE)
+        gk3_rec_put_set_default_req(rec, def);
+    gk3_rec_seal(rec);
+    if (gk3_bcab_validate(head + GK3_MISC_BCAB_OFF) || gk3_rec_validate(rec)) {   /* 自己造的都不过 = 库坏了 */
+        fprintf(stderr, "内部错误：造出来的 BCAB / GK3 记录自己都不合法\n");
+        close(fd);
+        return 1;
+    }
+    if (full_pwrite(fd, head, sizeof(head), 0) || full_pwrite(fd, rec, sizeof(rec), GK3_MISC_GK3_OFF) || fsync(fd)) {
+        fprintf(stderr, "%s：写失败：%s\n", path, strerror(errno));
+        close(fd);
+        return 1;
+    }
+    close(fd);
+
+    /* 读回：绕过页缓存读的才是盘上的字节（同 HAL 的 gk3_blk_write_bytes_verify、安装器的 gk3__verify_on） */
+    unsigned char *m = NULL;
+    int direct = 0;
+    if (posix_memalign((void **)&m, 4096, GK3_MISC_READ_SIZE))
+        return fprintf(stderr, "内存不够\n"), 1;
+#ifdef O_DIRECT
+    fd = open(path, O_RDONLY | O_DIRECT);
+    if (fd >= 0) {
+        if (full_pread(fd, m, GK3_MISC_READ_SIZE, 0) == 0)
+            direct = 1;
+        else
+            close(fd), fd = -1;
+    }
+#else
+    fd = -1;
+#endif
+    if (!direct) {
+        if (fd >= 0)
+            close(fd);
+        fd = open(path, O_RDONLY);
+        if (fd < 0 || full_pread(fd, m, GK3_MISC_READ_SIZE, 0)) {
+            fprintf(stderr, "%s：读回失败：%s\n", path, strerror(errno));
+            if (fd >= 0)
+                close(fd);
+            free(m);
+            return 1;
+        }
+        fprintf(stderr, "（%s 不支持 O_DIRECT，读回走的是页缓存）\n", path);
+    }
+    close(fd);
+    int bad = memcmp(m, head, sizeof(head)) || memcmp(m + GK3_MISC_GK3_OFF, rec, sizeof(rec)) ||
+              gk3_bcab_validate(m + GK3_MISC_BCAB_OFF) || gk3_rec_validate(m + GK3_MISC_GK3_OFF);
+    int rest = gk3_is_zero(m + sizeof(head), GK3_MISC_GK3_OFF - sizeof(head)) &&
+               gk3_is_zero(m + GK3_MISC_GK3_OFF + GK3_REC_SIZE, GK3_MISC_READ_SIZE - GK3_MISC_GK3_OFF - GK3_REC_SIZE);
+    if (bad) {
+        fprintf(stderr, "%s：读回来的 BCB / BCAB / GK3 记录与写下去的不一致\n", path);
+        free(m);
+        return 1;
+    }
+    printf("MISCINIT slot=%c default=%s bcab=", 'a' + slot, defname[def]);
+    for (unsigned i = 0; i < GK3_MISC_BCAB_SIZE; i++)
+        printf("%02x", m[GK3_MISC_BCAB_OFF + i]);
+    printf(" rec_crc=%02x%02x%02x%02x rest=%s direct=%s\n", m[GK3_MISC_GK3_OFF + GK3_REC_SIZE - 1],
+           m[GK3_MISC_GK3_OFF + GK3_REC_SIZE - 2], m[GK3_MISC_GK3_OFF + GK3_REC_SIZE - 3],
+           m[GK3_MISC_GK3_OFF + GK3_REC_SIZE - 4], rest ? "zero" : "nonzero", direct ? "yes" : "no");
+    free(m);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     size_t n;
     unsigned char *d;
     if (argc < 3) {
-        fprintf(stderr, "用法：gk3-misc dump|select|gpt|bootimg|mark-poweroff|set-next|set-default <文件> [参数]\n");
+        fprintf(stderr, "用法：gk3-misc dump|select|gpt|bootimg|init|mark-poweroff|set-next|set-default <文件> [参数]\n");
         return 2;
     }
+    if (!strcmp(argv[1], "init"))
+        return init_misc(argc, argv);
     d = slurp(argv[2], &n);
     if (!strcmp(argv[1], "dump"))
         return dump(d, n);

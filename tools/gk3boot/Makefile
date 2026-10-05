@@ -3,7 +3,9 @@
 #   make test            主机单测（ASan + UBSan），向量在 test/vectors/
 #   make upstream        与真正的 libboot_control.cpp 逐字节对拍（要 refs/，先跑 scripts/clone-refs.sh）
 #   make freestanding    按 UEFI 的条件编 aarch64 目标文件，并断言没有任何外部符号依赖（T9）
-#   make gk3-misc        主机版只读 CLI（dump misc / gpt / boot.img）
+#   make gk3-misc        主机版 CLI（dump misc / gpt / boot.img；init = 安装器初始化 misc，S10）
+#   make gk3-misc-static Linux 上静态链接的 gk3-misc（live 镜像里安装器调的就是它；scripts/live/build-rootfs.sh 照这条编）
+#   make misc-test       gk3-misc init 的字节测试（期望值由 Python 独立算，test/misc/run.sh）
 #   make hal-test        boot_control HAL 开机完成线程（device/…/boot_control/Gk3Boot.cpp）的主机场景测试（test/hal/run.sh）
 #   make postinstall-test OTA postinstall 的选直连条目 + 入口部署一节，mksh/dash/ksh 各跑一遍（test/postinstall/run.sh；先 hal-test 才有交叉核对）
 #   make fastbootd       执行端 gk3-fastbootd 的主机版（ASan + UBSan；macOS 上也能编，只是没有 USB / 挂载 ESP）
@@ -27,7 +29,7 @@ HOSTFLAGS:= -std=c11 -O1 -g $(WARN) -Werror -Icore/include $(SAN)
 
 TEST_SRC := $(wildcard test/*.c)
 
-.PHONY: all test upstream freestanding check clean hal-test postinstall-test fastbootd fastbootd-static fbd-unit
+.PHONY: all test upstream freestanding check clean hal-test postinstall-test fastbootd fastbootd-static fbd-unit gk3-misc-static misc-test
 all: check
 
 $(B):
@@ -85,6 +87,17 @@ $(B)/gk3-misc: misc/gk3-misc.c $(CORE_SRC) core/include/gk3core.h | $(B)
 
 gk3-misc: $(B)/gk3-misc
 
+# 发布形态（live 镜像，/usr/share/gaokun3/gk3-misc）：静态、去符号，只在 Linux 上编得出来。
+# ⚠️ build-rootfs.sh 不经 make（构建容器里没装 make），照抄了这一行 —— 改一边要改另一边
+$(B)/gk3-misc.static: misc/gk3-misc.c $(CORE_SRC) core/include/gk3core.h | $(B)
+	$(CC) -std=c11 -O2 $(WARN) -Werror -Wno-missing-prototypes -Icore/include -static -o $@ misc/gk3-misc.c $(CORE_SRC)
+	strip $@
+
+gk3-misc-static: $(B)/gk3-misc.static
+
+misc-test: $(B)/gk3-misc
+	bash test/misc/run.sh
+
 # —— 执行端 gk3-fastbootd（S7a） ——
 FBD_SRC  := $(wildcard fastbootd/*.c)
 FBD_HDR  := fastbootd/fbd.h core/include/gk3core.h
@@ -111,7 +124,7 @@ $(B)/test_fbd: test/fbd/test_fbd.c fastbootd/sparse.c fastbootd/lp.c $(CORE_SRC)
 fbd-unit: $(B)/test_fbd
 	$(B)/test_fbd
 
-check: test upstream freestanding gk3-misc fastbootd fbd-unit
+check: test upstream freestanding gk3-misc misc-test fastbootd fbd-unit
 
 hal-test:
 	bash test/hal/run.sh

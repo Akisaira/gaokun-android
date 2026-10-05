@@ -31,7 +31,7 @@ tools/gk3boot/
 │     ├─ dual.c             双系统的决定（S15：LoaderEntryDefault 分类、set_default、next=windows / sdboot-menu、clean_poweroff；§16）
 │     ├─ bootimg.c          boot.img v0–v2 头解析 + SHA1(id) 复算
 │     └─ cmdline.c          Android 交接 cmdline（§4.3.1）、执行端 cmdline（§4.4.1）、ASCII→UCS-2
-├─ misc/gk3-misc.c          只读 CLI：dump / select / gpt / bootimg（安装器要的 init 子命令留给 S10）
+├─ misc/gk3-misc.c          CLI：dump / select / gpt / bootimg；init（S10：安装器初始化 misc，§17）；S15 的离线写子命令
 ├─ fastbootd/               执行端 gk3-fastbootd（S7a，§13）：proto 协议框架、cmds 命令、vars getvar、disk 目标盘与白名单、
 │                           sparse、lp（LP 元数据只读 + SHA-256）、esp（ESP 同步 / loader.conf default）、usb（FunctionFS）、tcp、log
 ├─ efi/                     UEFI 程序（在容器里构建，§9）
@@ -119,6 +119,7 @@ GK3      无记录（bad magic），8 KiB 处 2 KiB 全零
 VAB      有效 version=2 magic=56740ab0 merge_status=0 source_slot=0
 其他     2K+32..32K 全零
 ```
+（2026-10-05 S10 起这一行改成 `2K+32..8K、10K..32K`：8 KiB 处的 GK3 记录不算"其他"。）
 
 系统区（32 KiB 起）除了 VAB，`+128` 有一份 kcmdline 消息（v1，`0x6ab5110c`，flags 0），
 `+192` 有一份 misctrl 消息（v1，`0x736d6f72`）—— `bootloader_message.h:134-139`，由 misctrl 写。
@@ -219,7 +220,7 @@ boot_b 没有 —— 谁写的不知道（不是我们的安装器会做的事�
 
 - 决策编排（§4.2 第 3–7 步串起来的 `gk3_decide`：迁移 → 一次性意图 → BCB 分派 → bootloop 计数 → 选槽）属于 S5/S6，
   这里只提供了它要用的全部原语；
-- `gk3-misc init`（安装器初始化 misc）属于 S10；
+- ~~`gk3-misc init`（安装器初始化 misc）属于 S10~~ 已做（§17）；
 - `gk3boot.efi`：动作模式的扣 tries / GK3 记录 / fail-open 阶梯第 1 步已有（§11）；还没有的：BCB 真正分派（开关默认关，
   打开也只记录）、首跑迁移、bootloop 阈值动作、boot_x 坏时换槽 / H1、阶梯第 2、3 步、`LoaderEntryDefault` 处理与双系统；
   gk3boot 引导执行端（内核 + `fastboot.img` + `gk3_cmdline_fastboot`）；执行端的协议守护进程 `gk3-fastbootd`（S7a）；
