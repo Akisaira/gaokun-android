@@ -2,7 +2,10 @@
 # 测得了：语法、编码、有没有 5.1 不认的语法、以及全部纯逻辑（bcdedit 输出解析、PSK 推导、WiFi 配置转换、
 # 压缩大小计算）。测不了：Resize-Partition / New-Partition / mountvol / bcdedit 本身 —— 那些只在 Windows 上有。
 # -Out <文件>：把测试里生成的 wpa_supplicant 网络块写出去，test-setup.sh 再拿真 wpa_supplicant 解析它。
-param([string]$Out = '')
+# -Fixtures <目录>：test-fixtures.sh 用真 sgdisk / mkfs 造的 GPT 盘镜像（-RemoveAndroid 的 GPT 解析、内容识别、相邻断言拿它核）。
+# 伴随工具（§4.9.15）那几节：ESP 是临时目录、固件变量是内存里的表、BitLocker / 分区 / schtasks / powercfg / bcdedit 全是桩
+# （函数同名即覆盖 cmdlet）—— 测的是我们的判定与顺序，【不是】Windows 本身的行为（那些只能等 D4 / D5 / D6）。
+param([string]$Out = '', [string]$Fixtures = '')
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $PSCommandPath
 $target = Join-Path $here 'gaokun3-setup.ps1'
@@ -124,6 +127,8 @@ Check 'abc → 再问' ($null -eq (ConvertFrom-AndroidGiBAnswer 'abc' 64))
 Write-Host '═══ loader.conf ═══'
 $lc = Format-LoaderConf
 Check 'default 指向安装器、有超时（Windows 在菜单里）、编辑器关' ($lc -match '(?m)^default gaokun3-live\.conf$' -and $lc -match '(?m)^timeout [1-9]' -and $lc -match '(?m)^editor no$')
+
+. (Join-Path $here 'test-companion.ps1')
 
 Write-Host ''
 Write-Host "═══ 通过 $script:pass · 失败 $script:fail ═══"

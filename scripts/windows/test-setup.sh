@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # 测 Windows 那一侧的免 U 盘安装脚本（开发机是 macOS，本机的 Windows 已抹掉 —— 只能测到这一步）：
-#   1. PowerShell 7 容器里跑 test-setup.ps1：语法 / BOM / CRLF / 没有 5.1 不认的语法 / 全部纯逻辑
+#   0. gk3-test-env 容器里用真 sgdisk / mkfs.ext4 / mkntfs 造 GPT 盘镜像（test-fixtures.sh；-RemoveAndroid 的 GPT 解析与断言拿它核）
+#   1. PowerShell 7 容器里跑 test-setup.ps1：语法 / BOM / CRLF / 没有 5.1 不认的语法 / 全部纯逻辑；
+#      再 dot-source test-companion.ps1 测 Windows 伴随工具（模拟 ESP、固件变量、BitLocker / manage-bde、分区 cmdlet、schtasks）
 #   2. 拿 live 镜像里【真的】wpa_supplicant 解析它生成的 WiFi 配置，wpa_passphrase 交叉核对 PSK
 #
 #   bash scripts/windows/test-setup.sh
@@ -14,18 +16,21 @@ die() { echo "✗ $*" >&2; exit 1; }
 mkdir -p "$REPO/out/tools"
 OUT=$(mktemp -d "$REPO/out/tools/wintest.XXXX"); trap 'rm -rf "$OUT"' EXIT
 
-echo "══ 1. PowerShell：test-setup.ps1"
+H=$(shasum -a 256 "$REPO/scripts/live/test-env.Dockerfile" | cut -c1-12)
+docker image inspect "gk3-test-env:$H" >/dev/null 2>&1 || die "没有 gk3-test-env:${H}（先跑一次 scripts/live/test-in-container.sh）"
+echo "══ 0. 真 GPT 盘镜像（sgdisk / mkfs）"
+docker run --rm -v "$REPO/scripts/windows:/w:ro" -v "$OUT:/out" "gk3-test-env:$H" bash /w/test-fixtures.sh /out/fx || die "造盘镜像失败"
+
+echo "══ 1. PowerShell：test-setup.ps1 + test-companion.ps1"
 # ⚠️ 只认 arm64 的镜像：2026-09-25 拉下来的 latest 是 32 位 arm（Architecture=arm），在 colima（aarch64）里 exec format error
 if [ "$(docker image inspect mcr.microsoft.com/powershell:latest --format '{{.Architecture}}' 2>/dev/null)" = arm64 ]; then
     docker run --rm -v "$REPO/scripts/windows:/w:ro" -v "$OUT:/out" mcr.microsoft.com/powershell:latest \
-        pwsh -NoProfile -File /w/test-setup.ps1 -Out /out/wpa.conf || die "test-setup.ps1 有失败项"
+        pwsh -NoProfile -File /w/test-setup.ps1 -Out /out/wpa.conf -Fixtures /out/fx || die "test-setup.ps1 有失败项"
 elif [ -f "$REPO/out/tools/ps.tar.gz" ]; then
-    H=$(shasum -a 256 "$REPO/scripts/live/test-env.Dockerfile" | cut -c1-12)
-    docker image inspect "gk3-test-env:$H" >/dev/null 2>&1 || die "没有 gk3-test-env:${H}（先跑一次 scripts/live/test-in-container.sh）"
     # 没装 ICU：用不变区域（本脚本只用到 UTF-8 与 Get-UICulture，够了）
     docker run --rm -e DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 -v "$REPO/scripts/windows:/w:ro" -v "$OUT:/out" \
         -v "$REPO/out/tools/ps.tar.gz:/ps.tar.gz:ro" "gk3-test-env:$H" \
-        sh -c 'mkdir -p /opt/pwsh && tar -xzf /ps.tar.gz -C /opt/pwsh && /opt/pwsh/pwsh -NoProfile -File /w/test-setup.ps1 -Out /out/wpa.conf' \
+        sh -c 'mkdir -p /opt/pwsh && tar -xzf /ps.tar.gz -C /opt/pwsh && /opt/pwsh/pwsh -NoProfile -File /w/test-setup.ps1 -Out /out/wpa.conf -Fixtures /out/fx' \
         || die "test-setup.ps1 有失败项"
 else
     die "没有 PowerShell：docker pull mcr.microsoft.com/powershell，或把 linux-arm64 压缩包放到 out/tools/ps.tar.gz"
