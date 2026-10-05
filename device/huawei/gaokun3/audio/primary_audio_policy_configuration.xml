@@ -131,8 +131,10 @@
              hw:0,0 正是 RX_CODEC_DMA_RX_0（MultiMedia1）耳机后端；
              扬声器在另一个后端（WSA / MultiMedia2 / hw:0,1），两者不争用，
              切换发生在 PCM 层面。
-             ⚠️ 耳机麦要的是 hw:0,2，回落成 (0,0) 会失败 —— "按设备类型回落"【还没做】
-             （patches/0010 只让 primary 模块接受外部设备连接，没有这张表；见下面耳机麦那段）。
+             ⚠️ 耳机麦要的是 hw:0,2，回落成 (0,0) 会失败 —— 所以 v1.0 AV-10 加了"按设备类型回落"：
+             patches/0077（tree-fix [21]）让 getCardAndDeviceId() 在地址解析失败时先读
+             ro.vendor.audio.primary.alsa.<类型>（device.mk 只设了 in_headset）；输出两口没设属性，
+             仍走上面这个 (0,0) 回落，行为不变。见下面耳机麦那段。
 
              Profile 显式写出而不留空：Speaker 留空能行是因为它开机就 attached，
              可插拔设备留空会走"连接时问 HAL"那条没验证过的路。
@@ -150,18 +152,27 @@
 
         <devicePort tagName="Built-In Mic" type="AUDIO_DEVICE_IN_BUILTIN_MIC" address="bottom CARD_0_DEV_3" role="source">
         </devicePort>
-        <!-- ⚠️★ 耳机麦（AUDIO_DEVICE_IN_WIRED_HEADSET）【刻意不声明】。
-             硬件是好的：hw:0,2 实测 `tinycap -c 2` 录到 384000 帧，
-             `audio-route.sh` 也把 TX 通路摆好了。但声明它现在会【弄坏录音】：
-             可插拔端口不能带 address（见上面那段守卫），而不带 address 时
-             HAL 回落到 hw:0,0，那是个【只有播放】的设备
-             （/dev/snd 里只有 pcmC0D0p，没有 pcmC0D0c）→ 打开必失败。
-             于是插着耳机时录音会从"能用的内置麦"退化成"什么都录不到"。
-             不声明则一直用内置麦，严格优于现状。
-             ★ 正解是给 HAL 加一张"按设备类型回落"的表
-             （StreamPrimary::getCardAndDeviceId 在地址解析失败时只会回落到
-              kDefaultCardAndDeviceId = (0,0)，不看设备类型）。
-             那是改 AOSP 共享代码，单独一轮做，见 docs/TODO.md。 -->
+        <!-- ★ 耳机麦（AUDIO_DEVICE_IN_WIRED_HEADSET → AIDL IN_HEADSET + CONNECTION_ANALOG），
+             v1.0 AV-10（2026-10-05）起声明，⬜ 未编译、未上机。
+             此前【刻意不声明】：可插拔端口不能带 address（见上面那段守卫），不带 address 时
+             HAL 回落到 hw:0,0，那是个【只有播放】的设备（/dev/snd 里只有 pcmC0D0p，没有 pcmC0D0c）
+             → 打开必失败，插着耳机录音会从"能用的内置麦"退化成"什么都录不到"。
+             现在 patches/0077 + device.mk 的 ro.vendor.audio.primary.alsa.in_headset=CARD_0_DEV_2
+             让它落到 hw:0,2（TX_CODEC_DMA_TX_3 → MultiMedia3）；混音器 TX 通路 audio-route.sh 开机就摆好了
+             （"耳机麦路由已应用（PCM2 / TX）"那段），这里不用再加控件。
+             ⚠️ 前提三条，缺一条就会重现上面那个退化（插耳机后录音为空）：
+               ① tree-fix [21] 打上了（构建日志里 [21] 是"已应用"/"已打过"）；
+               ② 属性在 /vendor/build.prop 里；
+               ③ 只在带麦的耳机上连接 —— 框架只有 WiredAccessoryManager 报 BIT_HEADSET（三段 + 麦检测）时
+                  才连 IN_WIRED_HEADSET，三段耳机（无麦）只连 OUT_WIRED_HEADPHONE、录音继续用内置麦。
+             ⚠️ hw:0,2 以前只在【没插耳机】时录过（RMS −62 dBFS、半数精确零，开路的样子，
+                docs/stage4-findings.md "耳机麦的数据符合没插耳机"那段），真信号与麦偏压（MIC BIAS）待上机核实。
+             Profile 与内置麦同理只写 48000 / STEREO（两个采集 PCM 都定频 48 kHz、只支持双声道，见 mixPorts 那段）。 -->
+        <devicePort tagName="Wired Headset Mic" type="AUDIO_DEVICE_IN_WIRED_HEADSET"
+                    role="source">
+            <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
+                     samplingRates="48000" channelMasks="AUDIO_CHANNEL_IN_STEREO"/>
+        </devicePort>
     </devicePorts>
     <routes>
         <route type="mix" sink="Speaker"
@@ -171,6 +182,6 @@
         <route type="mix" sink="Wired Headset"
                sources="primary output"/>
         <route type="mix" sink="primary input"
-               sources="Built-In Mic"/>
+               sources="Built-In Mic,Wired Headset Mic"/>
     </routes>
 </module>

@@ -180,6 +180,13 @@ PRODUCT_COPY_FILES += \
 #   USB_ACCESSORY 端口（Android 当配件时的音频，AIDL 示例 HAL 的 getUsbConfiguration() 里也没有它）。理由在文件头。
 #   IModule/usb 的 VINTF 声明在 manifest.xml（APEX 自带的那份把它注释掉了）。
 
+# v1.0 AV-10：耳机麦走 hw:0,2。可插拔端口在策略里不能写 address（理由见 primary_audio_policy_configuration.xml
+# 耳机那段），HAL 只拿得到设备类型 ⇒ 补丁 0077（tree-fix [21]）让 StreamPrimary 按类型读这个属性。
+# 映射来自 bin/audio-route.sh / docs/stage4-findings.md 的 PCM 表：头戴麦 = hw:0,2（TX_CODEC_DMA_TX_3 → MultiMedia3）。
+# 属性落在 ro.vendor. → vendor_default_prop，vendor 域可读（refs/lineage-sepolicy/private/domain.te:473），不用加规则。
+PRODUCT_VENDOR_PROPERTIES += \
+    ro.vendor.audio.primary.alsa.in_headset=CARD_0_DEV_2
+
 # ------------------------------------------------------------------ 固件
 # [measured] 全部来自 Stage 0 的 dmesg 固件加载路径。
 # 配合 cmdline 里的 firmware_class.path=/vendor/firmware/，

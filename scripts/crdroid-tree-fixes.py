@@ -759,6 +759,12 @@ def main():
     # v1.0 NET-4：稳定的设备 MAC（HAL 出厂 MAC 由 soc0 序列号派生）+ 新网络默认按网络固定的随机 MAC
     step(" [19] Wi-Fi HAL 出厂 MAC 由 SoC 序列号派生（稳定的设备 MAC）: ", patch_wifi_stable_factory_mac(tree))
     step(" [20] Wi-Fi 新网络 MAC 随机化默认改回 AUTO（按网络固定）: ", patch_wifi_mac_randomization_default(tree))
+    # v1.0 AV-10：耳机麦。可插拔端口不能带 address ⇒ HAL 按设备类型读 ro.vendor.audio.primary.alsa.<type>（device.mk 设）。
+    # 只动 StreamPrimary.cpp 的头文件区与 getCardAndDeviceId()，与 [12]–[17] 的上下文不重叠（构建机上对着打满的树核过：
+    # 正向 --check 干净，打上之后 0010/0051/0052/0069 的反向检查仍过，撤 0069 后 0063 的反向检查仍过）。
+    step(" [21] audio AIDL HAL 地址里没有 CARD_/DEV_ 时按设备类型回落（耳机麦）: ", apply_patch_file(
+        tree, "hardware/interfaces",
+        "0077-audio-aidl-primary-alsa-fallback-by-device-type.patch"))
     if failed:
         print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))
         sys.exit(1)
