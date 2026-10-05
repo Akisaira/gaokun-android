@@ -424,6 +424,12 @@ BitLocker 恢复密钥两项要真机（`scripts/windows/README.md`）。做法�
 Windows 11 ARM 虚拟机验 PowerShell 与 bcdedit 的流程（验不了华为固件对 `bootsequence` 的处理），或找有 Windows
 的用户试。
 
+**2026-10-05（统一启动入口 S12 / U23）**：同一个脚本升级成常驻的 **Windows 伴随工具**（【预览】，只在容器里测过）——
+免 U 盘安装的最后一步把它装到 `%ProgramFiles%\gaokun3`、建开始菜单与 SYSTEM 计划任务（开机自检 BOOTAA64 / `LoaderEntryDefault` /
+BIOS 版本），并提供 `-RepairBoot`、"重启到 Android"、`-SetDefault`、`-SuspendBitLocker`、`-RemoveAndroid`；快速启动改为**一律关**
+（U18，不再只在"要到安装器里缩 D:"那条路上）。U 盘介质上另带一份（`gaokun3-windows\`）。细节与只能等真 Windows 的点：
+`scripts/windows/README.md`「Windows 伴随工具」一节、`docs/boot-entry-design.md` §4.9.15 与 S12 行。
+
 ### 5.9 ★ M4b：第一次真的装了一台（2026-09-26，内置盘，重新安装 + 保留数据）
 
 `docs/stage7-installer-roadmap.md` 那条"从来没有真的装过一台机器"的欠账，今天还上了。

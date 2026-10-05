@@ -136,7 +136,8 @@ has not been checked on hardware.
    installer, adds a boot entry, and sets the **next** boot only to go into the
    installer. The space for Android is chosen later, in the installer.
    Two exceptions it asks about: if Fast Startup is on it offers to turn it off
-   (the installer refuses to shrink a partition Windows left hibernated), and
+   — on every path now, because with dual boot it has to stay off — (the
+   installer refuses to shrink a partition Windows left hibernated), and
    if D: is encrypted with BitLocker / device encryption — which the installer
    cannot shrink — it offers to free the space for Android right now instead.
    Options: `-AndroidGiB 64` (free that much for Android now), `-ShrinkDrive C`,
@@ -162,6 +163,16 @@ not yet verified on Huawei's firmware), run it again with
 ⚠️ This script has been run end to end in a Windows 11 ARM virtual machine,
 not yet on a MateBook E Go (and the "only its own space" default, the
 encryption question and the Fast Startup step so far only in unit tests).
+
+**Windows companion (preview, from 1.0).** As its last step the script also
+installs itself to `%ProgramFiles%\gaokun3`, with a *gaokun3* Start menu folder
+(Restart into Android, Boot Android / Windows by default, Repair Android boot,
+Check boot status, Suspend BitLocker only, Remove Android) and a check at every
+Windows start that warns you if Windows replaced the boot loader. Installed from
+a USB stick instead? In Windows, run `gaokun3-windows\gaokun3-setup.cmd` from the
+stick. ⬜ It has not run on real Windows yet, and whether Windows can write the
+boot variables on this machine (restart into Android, default system) is
+unverified.
 
 ### From a USB stick
 
