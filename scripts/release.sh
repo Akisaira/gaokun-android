@@ -391,6 +391,25 @@ PY
     ok "boot.img 的 dtb 段只含 1 个 FDT"
 fi
 
+# ★ 统一启动入口（2026-10-05，S9）：vendor 里那份 gk3boot.efi / version 必须就是设备树 prebuilt-gk3boot/ 里那份
+#   （设计稿 §4.11：sha256 清单随 vendor 下发，release.sh 断言一致）。device.mk 对它用 wildcard ——
+#   prebuilt 在而 vendor 里没有 / 不同，说明 out/ 是另一次构建或增量构建没重拷，发出去的入口不是验过的那个。
+#   prebuilt 不在时只报 vendor 里有没有（发不带入口的版本是允许的，属性缺省 off 也不会部署）。
+GKP=device/huawei/gaokun3/prebuilt-gk3boot
+GKV=$OUT/vendor/boot/gk3boot
+if [ -f "$GKP/gk3boot.efi" ]; then
+    for f in gk3boot.efi version; do
+        [ -f "$GKV/$f" ] || die "prebuilt-gk3boot/$f 在，而 \$OUT/vendor/boot/gk3boot/$f 不在 —— vendor 镜像没带上入口（device.mk 的 wildcard？两样要同时在）"
+        [ "$(sha256sum "$GKP/$f" | cut -d' ' -f1)" = "$(sha256sum "$GKV/$f" | cut -d' ' -f1)" ] \
+            || die "vendor 里的 gk3boot/$f 与 prebuilt-gk3boot/$f 不同 —— out/ 不是用这份入口编的"
+    done
+    ok "vendor 里的统一启动入口 = prebuilt-gk3boot（版本 $(head -1 "$GKV/version")，sha256 $(sha256sum "$GKV/gk3boot.efi" | cut -c1-16)）"
+elif [ -f "$GKV/gk3boot.efi" ]; then
+    echo "· prebuilt-gk3boot 不在，但 vendor 里有 gk3boot $(head -1 "$GKV/version" 2>/dev/null) —— 来自更早的构建？核对后再发"
+else
+    echo "· 这一版 vendor 不带统一启动入口（prebuilt-gk3boot 不在）"
+fi
+
 # ★ TODO S1（2026-09-24）：发给用户的版本，待机默认必须是开的。开发期（2026-09-18～09-24）
 #   这个默认值是 0；而 v0.6.2 的用户多半从没设过这个属性 ⇒ 发出默认 0 的版本，所有人 OTA 后
 #   都会失去 s2idle。--stage-only（只给自己验）不拦。

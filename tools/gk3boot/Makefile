@@ -5,6 +5,7 @@
 #   make freestanding    按 UEFI 的条件编 aarch64 目标文件，并断言没有任何外部符号依赖（T9）
 #   make gk3-misc        主机版只读 CLI（dump misc / gpt / boot.img）
 #   make hal-test        boot_control HAL 开机完成线程（device/…/boot_control/Gk3Boot.cpp）的主机场景测试（test/hal/run.sh）
+#   make postinstall-test OTA postinstall 的选直连条目 + 入口部署一节，mksh/dash/ksh 各跑一遍（test/postinstall/run.sh；先 hal-test 才有交叉核对）
 #   make check           以上全部
 #
 # 可覆盖：REFS=<refs 目录>  BOOTIMG=<完整 boot.img，用来复算整份 SHA1(id)>
@@ -23,7 +24,7 @@ HOSTFLAGS:= -std=c11 -O1 -g $(WARN) -Werror -Icore/include $(SAN)
 
 TEST_SRC := $(wildcard test/*.c)
 
-.PHONY: all test upstream freestanding check clean hal-test
+.PHONY: all test upstream freestanding check clean hal-test postinstall-test
 all: check
 
 $(B):
@@ -85,6 +86,9 @@ check: test upstream freestanding gk3-misc
 
 hal-test:
 	bash test/hal/run.sh
+
+postinstall-test:
+	bash test/postinstall/run.sh
 
 clean:
 	rm -rf $(B)

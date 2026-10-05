@@ -793,6 +793,21 @@ PRODUCT_PACKAGES += \
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/gaokun3-ota-postinstall.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-ota-postinstall.sh
 
+# ★ 统一启动入口 gk3boot.efi（2026-10-05，S9；docs/boot-entry-design.md §4.6.2、§4.11）：随 vendor 下发，
+#   由 OTA postinstall（ESP 上还没有入口时直接部署、已有别的版本时铺 .staged）与 boot_control HAL 的开机完成线程
+#   （boot_control/Gk3Boot.cpp：激活 / 撤除）按 persist.vendor.gaokun3.gk3boot（缺省 off）部署到 ESP 的
+#   EFI/gk3boot/<version>/。二进制不入库（prebuilt-gk3boot/README.md）⇒ 用 wildcard：没有就不装，照样能编；
+#   两样（gk3boot.efi + version）必须同时在，缺一样就都不装（只有二进制、没有版本串的入口没法部署）。
+#   构建机上由 sync-device-tree.sh 第 2d / 3c 步同步并断言；release.sh 断言 vendor 里那份与 prebuilt 逐字节相同。
+#   ⚠️ .efi 是 PE 不是 ELF，不撞 BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES 那条检查。
+GAOKUN3_GK3BOOT_EFI := $(LOCAL_PATH)/prebuilt-gk3boot/gk3boot.efi
+GAOKUN3_GK3BOOT_VER := $(LOCAL_PATH)/prebuilt-gk3boot/version
+ifneq ($(and $(wildcard $(GAOKUN3_GK3BOOT_EFI)),$(wildcard $(GAOKUN3_GK3BOOT_VER))),)
+PRODUCT_COPY_FILES += \
+    $(GAOKUN3_GK3BOOT_EFI):$(TARGET_COPY_OUT_VENDOR)/boot/gk3boot/gk3boot.efi \
+    $(GAOKUN3_GK3BOOT_VER):$(TARGET_COPY_OUT_VENDOR)/boot/gk3boot/version
+endif
+
 # ═══════════ 硬件视频编解码：Android 这一半（external/v4l2_codec2）═══════════
 #
 # 内核那一半 M14 就通了（当时是 qcom-venus：qcom-venus-decoder / -encoder，

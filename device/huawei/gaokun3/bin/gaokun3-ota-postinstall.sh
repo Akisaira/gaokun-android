@@ -183,6 +183,15 @@ log "可用（含将被覆盖的旧文件）约 ${avail_kb} KB"
 # 不铺 recovery 时少 15 MB（14974339 字节 ≈ 14.3 MiB），门槛同减 15 MiB，余量不变。
 need_kb=57344
 [ "$REC_ON" = 0 ] && need_kb=$((need_kb - 15360))
+# 统一启动入口（见下面 gk3boot 一节）：要部署时再加上它的二进制（约 100 KB）+ 两个条目的余量。
+#   宁可多算：已经是同一份就不会真写，但这里不为省 100 KB 去先比对。
+GK3_PROP=persist.vendor.gaokun3.gk3boot
+GK3_MODE=$(getprop "$GK3_PROP" 2>/dev/null); [ -n "$GK3_MODE" ] || GK3_MODE=off
+GK3_SRC="$HERE/../boot/gk3boot"
+case "$GK3_MODE" in
+    observe|action)
+        [ -f "$GK3_SRC/gk3boot.efi" ] && need_kb=$((need_kb + $(stat -c%s "$GK3_SRC/gk3boot.efi") / 1024 + 16)) ;;
+esac
 [ "$avail_kb" -gt "$need_kb" ] || \
     fail "ESP 空间不足（需约 $((need_kb / 1024)) MB）。清掉 <ESP>/$MID/android/ 下的 *.bak-* 再试"
 
@@ -213,6 +222,107 @@ if [ -s "$DEST/cmdline.txt" ] && [ -f "$ENT" ]; then
 else
     log "⚠️ 没有 cmdline.txt 或找不到 $ENT，启动项 options 未更新"
 fi
+
+# ── 统一启动入口 gk3boot.efi（2026-10-05，S9；docs/boot-entry-design.md §4.6.2、§4.8、§4.11）──────────
+# 开关 persist.vendor.gaokun3.gk3boot（缺省 off，1.0 发版时再定默认值）：
+#   off            删掉 ESP 上全部 gk3boot-android-* / gk3prev-android-* 条目（含 .staged）⇒ 新槽走直连条目。
+#                  EFI/gk3boot/<ver>/ 目录留给新槽开机完成时的 boot_control HAL 回收：删目录要 vfat:dir rmdir，
+#                  而 postinstall 跑在【旧槽】的策略下（sepolicy/postinstall.te 顶上的设计约束），这里不新增权限。
+#   observe/action 从【新】vendor 的 boot/gk3boot/{gk3boot.efi,version} 取入口：
+#                  · 先把二进制写到 EFI/gk3boot/<ver>/（已逐字节相同就不写；.new → cmp → rename）；
+#                  · ESP 上还没有现役入口（0.7.x/1.0-dev → 第一次部署）⇒ 直接写 gk3boot-android-{a,b}+3.conf，
+#                    重启就经入口启动（§4.8 第 2 步）；连续 3 次没走到开机完成，systemd-boot 自己改走直连条目；
+#                  · 已有现役入口、且就是这一版这个模式 ⇒ 不动；
+#                  · 已有别的版本 / 别的模式 ⇒ 只写 gk3boot-android-{a,b}.conf.staged（不以 .conf 结尾，systemd-boot 不读），
+#                    由新槽开机完成时的 HAL 激活：旧版（祝福过的）改名 gk3prev、新版 +3（§4.11"一次只换一样"）。
+#                    OTA 回滚到旧槽时，旧槽的 HAL 看到 .staged 不是自己那一版，会删掉它。
+# 条目正文与 boot_control/Gk3Boot.cpp 的 EntryText 逐字节一致（改一边要改另一边）。
+# ★ 这一节的任何失败都【不】让 OTA 失败：直连条目上面已经写好，入口没部署上 = 今天的启动路径。
+#   部署到一半失败时撤掉这次写的条目（二进制留着，下次 / HAL 会复用或回收）。
+gk3_entry_text() {   # $1=active|prev $2=槽 $3=版本 $4=observe（0|1）
+    if [ "$1" = prev ]; then _gt="Android (previous loader)"; _gk=0gk3prev
+    elif [ "$4" = 1 ]; then _gt="Android (gk3boot observe)"; _gk=0gk3
+    else _gt="Android"; _gk=0gk3; fi
+    printf 'title      %s\nversion    gk3boot-%s\nsort-key   %s\nefi        /EFI/gk3boot/%s/gk3boot.efi\noptions    gk3.observe=%s gk3.hint=%s\n' \
+        "$_gt" "$3" "$_gk" "$3" "$4" "$2"
+}
+gk3_put() {   # $1=文件 $2…=gk3_entry_text 的参数；写 .new 再改名
+    gk3_entry_text "$2" "$3" "$4" "$5" > "$1.new" && mv -f "$1.new" "$1" && return 0
+    rm -f "$1.new"; return 1
+}
+gk3_deploy() {
+    GK3_ENT="$MNT/loader/entries"
+    case "$GK3_MODE" in
+        off)
+            _gn=0
+            for _ge in "$GK3_ENT"/gk3boot-android-* "$GK3_ENT"/gk3prev-android-*; do
+                [ -f "$_ge" ] || continue
+                rm -f "$_ge" && _gn=$((_gn + 1))
+            done
+            [ "$_gn" = 0 ] || log "统一启动入口：$GK3_PROP=off ⇒ 删掉 $_gn 个入口条目（EFI/gk3boot/ 下的目录由新槽开机完成时回收）"
+            return 0 ;;
+        observe) _gobs=1 ;;
+        action)  _gobs=0 ;;
+        *) log "⚠️ 统一启动入口：$GK3_PROP='$GK3_MODE' 不是 off|observe|action，不动 ESP 上的入口"; return 0 ;;
+    esac
+    if [ ! -f "$GK3_SRC/gk3boot.efi" ] || [ ! -f "$GK3_SRC/version" ]; then
+        log "统一启动入口：新 vendor 里没有 boot/gk3boot/（这一版不带入口），不动 ESP 上的入口"
+        return 0
+    fi
+    GV=$(head -n 1 "$GK3_SRC/version" | tr -d '\r')
+    case "$GV" in
+        ''|*[!A-Za-z0-9._+-]*|log|LOG|.|..) log "⚠️ 统一启动入口：vendor 里的版本串 '$GV' 不合法，不部署"; return 0 ;;
+    esac
+    [ "${#GV}" -le 64 ] || { log "⚠️ 统一启动入口：版本串太长，不部署"; return 0; }
+
+    # 现役条目（gk3boot-android-<x>[+N[-M]].conf；.staged 不以 .conf 结尾、匹配不到）
+    _ghave=0; _gsame=1
+    for _ge in "$GK3_ENT"/gk3boot-android-*.conf; do
+        [ -f "$_ge" ] || continue
+        _ghave=1
+        grep -qF "/EFI/gk3boot/$GV/gk3boot.efi" "$_ge" || _gsame=0
+        if grep -qE '^options[[:space:]].*gk3\.observe=1([[:space:]]|$)' "$_ge"; then _go=1; else _go=0; fi
+        [ "$_go" = "$_gobs" ] || _gsame=0
+    done
+
+    _gd="$MNT/EFI/gk3boot/$GV"
+    if ! cmp -s "$GK3_SRC/gk3boot.efi" "$_gd/gk3boot.efi" 2>/dev/null; then
+        if mkdir -p "$_gd" && cp "$GK3_SRC/gk3boot.efi" "$_gd/gk3boot.efi.new" && sync &&
+           cmp -s "$GK3_SRC/gk3boot.efi" "$_gd/gk3boot.efi.new" && mv -f "$_gd/gk3boot.efi.new" "$_gd/gk3boot.efi"; then
+            log "统一启动入口：写好 EFI/gk3boot/$GV/gk3boot.efi（$(stat -c%s "$_gd/gk3boot.efi") 字节，读回一致）"
+        else
+            rm -f "$_gd/gk3boot.efi.new"
+            log "⚠️ 统一启动入口：写 EFI/gk3boot/$GV/gk3boot.efi 失败（ESP 满了？）—— 这次不部署，直连条目照常可用"
+            return 0
+        fi
+    fi
+
+    if [ "$_ghave" = 0 ]; then
+        for _gx in a b; do
+            if ! gk3_put "$GK3_ENT/gk3boot-android-$_gx+3.conf" active "$_gx" "$GV" "$_gobs"; then
+                rm -f "$GK3_ENT/gk3boot-android-a+3.conf" "$GK3_ENT/gk3boot-android-b+3.conf"
+                log "⚠️ 统一启动入口：写条目失败，撤掉这次写的条目 —— 直连条目照常可用"
+                return 0
+            fi
+        done
+        rm -f "$GK3_ENT"/gk3boot-android-*.conf.staged
+        log "统一启动入口：第一次部署 ${GV}（${GK3_MODE}）：gk3boot-android-{a,b}+3.conf —— 重启后经入口启动；连续 3 次没开机完成会自动改走直连条目"
+    elif [ "$_gsame" = 1 ]; then
+        rm -f "$GK3_ENT"/gk3boot-android-*.conf.staged
+        log "统一启动入口：ESP 上已是 ${GV}（${GK3_MODE}），不动"
+    else
+        for _gx in a b; do
+            if ! gk3_put "$GK3_ENT/gk3boot-android-$_gx.conf.staged" active "$_gx" "$GV" "$_gobs"; then
+                rm -f "$GK3_ENT"/gk3boot-android-*.conf.staged
+                log "⚠️ 统一启动入口：写 .staged 失败 —— 新槽开机完成时 HAL 仍会从它自己的 vendor 部署这一版"
+                return 0
+            fi
+        done
+        log "统一启动入口：已有别的入口，新版 ${GV}（${GK3_MODE}）只铺目录 + gk3boot-android-{a,b}.conf.staged；新槽开机完成时由 boot_control HAL 激活（旧版留作 gk3prev）"
+    fi
+    return 0
+}
+gk3_deploy
 
 # ── recovery ────────────────────────────────────────────────────────────────
 # ★ recovery 与系统【共用同一个内核和 dtb】（实测 recovery.img 里的 kernel 与

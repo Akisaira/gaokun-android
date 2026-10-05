@@ -61,11 +61,13 @@ echo "═══ 1. 同步受版本控制的部分（--delete 但排除四样不�
 rsync -a --delete \
       --exclude '._*' --exclude '.DS_Store' \
       --include 'firmware/README.md' --include 'hexagonrpcd-root/README.md' --include 'prebuilt-boot/README.md' \
+      --include 'prebuilt-gk3boot/README.md' \
       --exclude 'adb_keys' --exclude 'firmware/**' --exclude 'hexagonrpcd-root/**' --exclude 'prebuilt-boot/**' \
+      --exclude 'prebuilt-gk3boot/**' \
       --exclude 'effects/prebuilt/**' \
       --exclude '/gk3core/' \
       -e "$SSH" "$SRC/" "$DST/"
-ok "device/ 已同步（不动 adb_keys / firmware / hexagonrpcd-root / prebuilt-boot / effects/prebuilt / gk3core）"
+ok "device/ 已同步（不动 adb_keys / firmware / hexagonrpcd-root / prebuilt-boot / prebuilt-gk3boot / effects/prebuilt / gk3core）"
 
 echo "═══ 2. prebuilt-boot 单独同步，【不带 --delete】═══"
 if [ -f "$SRC/prebuilt-boot/vmlinuz.efi" ]; then
@@ -97,6 +99,16 @@ CR=$($SSH "vahiru@$HOST" 'cd ~/crdroid/device/huawei/gaokun3/gk3core && find . -
 [ "$CL" = "$CR" ] || { echo "本机："; echo "$CL"; echo "构建机："; echo "$CR"; die "构建机的 gk3core/ ≠ tools/gk3boot/core/"; }
 ok "gk3core/ 与 tools/gk3boot/core/ 逐字节一致（$(echo "$CL" | wc -l | tr -d ' ') 个文件）"
 
+echo "═══ 2d. prebuilt-gk3boot（统一启动入口 gk3boot.efi + version）单独同步，【不带 --delete】═══"
+# ★ 2026-10-05（S9）：与 prebuilt-boot 同一个规矩 —— 二进制不入库，本机有就带过去，没有就保留构建机上的那份；
+#   device.mk 对它用 wildcard（缺了构建照样通过、ROM 里只是没有入口 = 又一种"静默消失"）⇒ 第 3c 步断言。
+if [ -f "$SRC/prebuilt-gk3boot/gk3boot.efi" ]; then
+    rsync -a --exclude '._*' --exclude '.DS_Store' -e "$SSH" "$SRC/prebuilt-gk3boot/" "$DST/prebuilt-gk3boot/"
+    ok "prebuilt-gk3boot 已同步（版本 $(cat "$SRC/prebuilt-gk3boot/version" 2>/dev/null || echo '<缺 version>')，sha256 $(shasum -a 256 "$SRC/prebuilt-gk3boot/gk3boot.efi" | cut -c1-16)）"
+else
+    echo "· 本机没有 prebuilt-gk3boot/gk3boot.efi，保留构建机上的那份（若有）"
+fi
+
 echo "═══ 3. 断言：构建机上不入库的构建输入都在 ═══"
 # adb_keys 的下限：开发构建要 >500 字节（一把 RSA 公钥约 720），发布构建不要求（0）。
 if [ "${GAOKUN3_DEV_BUILD:-}" = 1 ]; then AK_MIN=500; AK_WHAT="adb_keys（开发构建）"
@@ -122,6 +134,30 @@ elif [ "${GK3_ALLOW_NO_HISTEN:-0}" = 1 ]; then
 else
     if [ -n "$got" ]; then why="sha256 不符（${got}）"; else why="缺失"; fi
     die "构建机上的 Histen 引擎$why —— 见 effects/prebuilt/README.md；确实不要它就设 GK3_ALLOW_NO_HISTEN=1"
+fi
+
+echo "═══ 3c. 断言：统一启动入口 gk3boot.efi 在、version 与二进制里嵌的版本串一致 ═══"
+# 规矩与理由见 prebuilt-gk3boot/README.md：version 决定 ESP 上的目录名 EFI/gk3boot/<version>/，
+#   与二进制里的 androidboot.bootloader=gk3boot-<串> 对不上就是"换了二进制没换版本串"。
+#   确实不想带入口构建时（例如别人的构建机）：GK3_ALLOW_NO_GK3BOOT=1。
+GK=$($SSH "vahiru@$HOST" 'cd ~/crdroid/device/huawei/gaokun3/prebuilt-gk3boot 2>/dev/null || exit 0
+  [ -f gk3boot.efi ] && [ -f version ] || exit 0
+  v=$(head -1 version | tr -d "\r\n")
+  e=$(LC_ALL=C grep -ao "gk3boot-[A-Za-z0-9._+-]*" gk3boot.efi | sort -u | tr "\n" " ")
+  echo "$v|$e|$(sha256sum gk3boot.efi | cut -d" " -f1)"' || true)
+if [ -z "$GK" ]; then
+    if [ "${GK3_ALLOW_NO_GK3BOOT:-0}" = 1 ]; then
+        echo "· 构建机上没有 prebuilt-gk3boot/{gk3boot.efi,version}，GK3_ALLOW_NO_GK3BOOT=1 ⇒ 这一版 vendor 不带入口"
+    else
+        die "构建机上没有 prebuilt-gk3boot/{gk3boot.efi,version} —— 见 prebuilt-gk3boot/README.md；确实不要入口就设 GK3_ALLOW_NO_GK3BOOT=1"
+    fi
+else
+    GV=${GK%%|*}; rest=${GK#*|}; GE=${rest%%|*}; GS=${rest#*|}
+    case "$GV" in ''|*[!A-Za-z0-9._+-]*|log|LOG|.|..) die "prebuilt-gk3boot/version 不合法：'$GV'（只准 [A-Za-z0-9._+-]）" ;; esac
+    [ "${#GV}" -le 64 ] || die "prebuilt-gk3boot/version 太长（${#GV} > 64）"
+    case "$GV" in *.dirty*) die "prebuilt-gk3boot/version 带 .dirty（${GV}）—— 那一版对不上任何提交，别发" ;; esac
+    [ "$GE" = "gk3boot-$GV " ] || die "prebuilt-gk3boot：version='$GV'，二进制里嵌的是 '${GE% }' —— 换了二进制没换版本串？"
+    ok "gk3boot.efi 在：版本 ${GV}（与二进制一致），sha256 $GS"
 fi
 
 echo "═══ 4. 受版本控制的文件逐一 md5 ═══"

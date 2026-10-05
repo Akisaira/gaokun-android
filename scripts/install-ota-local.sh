@@ -170,7 +170,7 @@ S "sed -i 's|^default .*|default ${GLOB}|' /mnt/gaokun3_ota_install/loader/loade
 echo
 if [ -n "$GK3E" ]; then
     echo "⚠️ 统一启动入口在：上面这行 default 只管入口计数用完之后的直连回落；正常重启由 gk3boot 按 misc 进新槽。"
-    echo "   有人在场再 adb reboot；新槽起不来时动作模式会在 tries 用完后自动回 $CUR，观察模式要手动在菜单里选直连条目。"
+    echo "   有人在场再 adb reboot；新槽起不来时动作模式会在 tries 用完后自动回 ${CUR}，观察模式要手动在菜单里选直连条目。"
 fi
 echo "⬜ 剩下的手工两步（故意不自动做）："
 echo "   1) 写 LoaderEntryOneShot 指向新槽的条目"

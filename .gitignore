@@ -59,6 +59,11 @@ device/huawei/gaokun3/hexagonrpcd-root/**
 device/huawei/gaokun3/prebuilt-boot/**
 !device/huawei/gaokun3/prebuilt-boot/README.md
 
+# 统一启动入口 gk3boot.efi 的预编译产物（tools/gk3boot/ 编出来、随 vendor 下发，S9）。同上：二进制不入库，
+# 整目录忽略 + 只放行 README.md；构建机上由 sync-device-tree.sh 同步并断言。
+device/huawei/gaokun3/prebuilt-gk3boot/**
+!device/huawei/gaokun3/prebuilt-gk3boot/README.md
+
 # 扬声器增强试验功能（PR #7）的 Histen 引擎 libhw_histen_processing.so ——
 # 华为专有二进制（取自麒麟 V10 SP1，为 bionic 打过补丁），未获再分发授权。
 # device.mk 用 wildcard 判断：有就装进 vendor，没有照样能编（effect 只跑扬声器链）。

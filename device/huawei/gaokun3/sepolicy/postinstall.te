@@ -50,6 +50,13 @@ allow postinstall gaokun3_esp_block_device:blk_file rw_file_perms;
 # gaokun3-bootimg-extract 从刚刷好的那个槽解包（只读）。
 allow postinstall boot_block_device:blk_file r_file_perms;
 
+# ── 统一启动入口一节（2026-10-05，S9，脚本里的 gk3_deploy）：【故意不新增任何规则】─────────────
+# 它只用到上面已有的：读 /postinstall/boot/gk3boot/*（postinstall_file，private/postinstall.te:17-19）、
+# 在 ESP 上 mkdir（vfat:dir create）、写 .new / rename / unlink 条目（vfat:file 那一行）、cmp 读回、
+# getprop persist.vendor.gaokun3.gk3boot（vendor_gaokun3_props.te 的 get_prop(postinstall, …)）。
+# 撤除时【不删目录】（不要 vfat:dir rmdir），目录留给新槽开机完成时的 boot_control HAL 回收 ——
+# 正是因为本文件顶上那条约束：postinstall 跑在旧槽的策略下，新加的权限要晚一版才可用。
+
 # ── 不用写、已经现成的那些（核对过，免得下次又有人补一遍）──────────────
 #   * 执行 /system/bin/sh、toybox、以及同目录的 gaokun3-bootimg-extract：
 #     private/postinstall.te:22-25（shell_exec / system_file / toolbox_exec）
