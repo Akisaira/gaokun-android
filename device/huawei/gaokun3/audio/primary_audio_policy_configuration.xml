@@ -16,24 +16,27 @@
 
 <!-- Default Primary Audio HAL Module Audio Policy Configuration include file -->
 <module name="primary" halVersion="3.0">
+    <!-- ★ v1.0 AV-16（2026-10-05，⬜ 未编译、未上机）：删掉了从 cuttlefish 示例抄来的
+         Telephony Tx / Telephony Rx（mixPort telephony_tx / telephony_rx）、FM Tuner（fm_tuner）
+         与 compressed_offload（AUDIO_FORMAT_APE 的 COMPRESS_OFFLOAD 直通口）。本机没有 modem、没有 FM，
+         HAL 也没有任何压缩解码：
+           * 这几个设备在 HAL 里本来就只走桩：StreamPrimary::useStubStream() 把 IN_TELEPHONY_RX /
+             IN_FM_TUNER / OUT_TELEPHONY_TX 一律交给 DriverStubImpl（primary/StreamPrimary.cpp:245-258，
+             crDroid 16.0 原文），不碰 ALSA，留着只会让 dumpsys 里多出几个"已连接"的假设备。
+           * 仓库里别处没有引用这些端口名（2026-10-05 grep 整个仓库，命中只有本文件和案卷里的历史记录）；
+             Telephony 接口（ModulePrimary::getTelephony()）不依赖策略里的端口，不受影响。
+           * 放音、录音、游戏都走 primary output / primary input，不经过被删的口。
+         上机判据：`dumpsys media.audio_policy` 的设备列表里不再有 Telephony / FM Tuner，
+         Outputs 里没有 compressed_offload；放音（看 PCM 状态，不必出声）、录音、插拔耳机照常。 -->
     <attachedDevices>
         <item>Speaker</item>
         <item>Built-In Mic</item>
-        <item>Telephony Tx</item>
-        <item>Telephony Rx</item>
-        <item>FM Tuner</item>
     </attachedDevices>
     <defaultOutputDevice>Speaker</defaultOutputDevice>
     <mixPorts>
         <mixPort name="primary output" role="source" flags="AUDIO_OUTPUT_FLAG_PRIMARY">
             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
                      samplingRates="8000 11025 16000 32000 44100 48000"
-                     channelMasks="AUDIO_CHANNEL_OUT_MONO AUDIO_CHANNEL_OUT_STEREO"/>
-        </mixPort>
-        <mixPort name="compressed_offload" role="source"
-                 flags="AUDIO_OUTPUT_FLAG_DIRECT AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD AUDIO_OUTPUT_FLAG_NON_BLOCKING">
-            <profile name="" format="AUDIO_FORMAT_APE"
-                     samplingRates="44100 48000"
                      channelMasks="AUDIO_CHANNEL_OUT_MONO AUDIO_CHANNEL_OUT_STEREO"/>
         </mixPort>
         <!-- ★ mmap_no_irq_out 已删除（2026-08-20 M4）。
@@ -85,22 +88,6 @@
                      samplingRates="48000"
                      channelMasks="AUDIO_CHANNEL_IN_STEREO"/>
         </mixPort>
-        <mixPort name="telephony_tx" role="source">
-            <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
-                     samplingRates="8000 11025 16000 32000 44100 48000"
-                     channelMasks="AUDIO_CHANNEL_OUT_MONO AUDIO_CHANNEL_OUT_STEREO"/>
-        </mixPort>
-        <mixPort name="telephony_rx" role="sink">
-            <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
-                     samplingRates="8000 11025 16000 32000 44100 48000"
-                     channelMasks="AUDIO_CHANNEL_IN_MONO AUDIO_CHANNEL_IN_STEREO"/>
-        </mixPort>
-
-        <mixPort name="fm_tuner" role="sink">
-            <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
-                     samplingRates="8000 11025 16000 32000 44100 48000"
-                     channelMasks="AUDIO_CHANNEL_IN_MONO AUDIO_CHANNEL_IN_STEREO"/>
-        </mixPort>
    </mixPorts>
    <devicePorts>
         <!-- ★ address 里的 CARD_<n>_DEV_<m> 决定 HAL 开哪个 ALSA 设备：
@@ -114,8 +101,6 @@
                头戴麦 = hw:0,2（TX_CODEC_DMA_TX_3  → MultiMedia3） -->
         <devicePort tagName="Speaker" type="AUDIO_DEVICE_OUT_SPEAKER" role="sink"
                     address="CARD_0_DEV_1">
-        </devicePort>
-        <devicePort tagName="Telephony Tx" type="AUDIO_DEVICE_OUT_TELEPHONY_TX" role="sink">
         </devicePort>
 
         <!-- Headset jack. Removable, so deliberately NOT in attachedDevices:
@@ -177,28 +162,15 @@
              （StreamPrimary::getCardAndDeviceId 在地址解析失败时只会回落到
               kDefaultCardAndDeviceId = (0,0)，不看设备类型）。
              那是改 AOSP 共享代码，单独一轮做，见 docs/TODO.md。 -->
-        <devicePort tagName="Telephony Rx" type="AUDIO_DEVICE_IN_TELEPHONY_RX" role="source">
-        </devicePort>
-
-        <devicePort tagName="FM Tuner" type="AUDIO_DEVICE_IN_FM_TUNER" role="source">
-        </devicePort>
     </devicePorts>
     <routes>
         <route type="mix" sink="Speaker"
-               sources="primary output,compressed_offload"/>
+               sources="primary output"/>
         <route type="mix" sink="Wired Headphones"
-               sources="primary output,compressed_offload"/>
+               sources="primary output"/>
         <route type="mix" sink="Wired Headset"
-               sources="primary output,compressed_offload"/>
+               sources="primary output"/>
         <route type="mix" sink="primary input"
                sources="Built-In Mic"/>
-
-        <route type="mix" sink="telephony_rx"
-               sources="Telephony Rx"/>
-        <route type="mix" sink="Telephony Tx"
-               sources="telephony_tx"/>
-
-        <route type="mix" sink="fm_tuner"
-               sources="FM Tuner"/>
     </routes>
 </module>
