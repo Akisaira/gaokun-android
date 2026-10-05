@@ -16,6 +16,9 @@
 #              过滤规则与装机时的救援条目是【同一个函数】（installer-lib.sh 的 gk3__rescue_cmdline）。
 #              ⚠️ 不给就退回下面那份手抄的 —— 那正是 TODO B15 那一类漂移（它缺 himax disable_pressure）。
 #   --entry    多放几个启动项（M0 用：Skia / 浸泡测试…），在开机菜单里选
+#   --windows-tools <目录>  可选：把 Windows 伴随工具（目录里的 gaokun3-setup.ps1 / gaokun3-setup.cmd）放进 U 盘的
+#              gaokun3-windows/ —— 从 U 盘装双系统的用户回到 Windows 后双击它安装伴随工具（boot-entry-design §4.9.15，U23）。
+#              FAT 分区 Windows 能直接读；不给就不放（与原来一样）
 #   --rescue-squashfs  装机时装进救援分区的镜像（rescue profile）→ U 盘的 gaokun3/install-rescue/。
 #              不给的话安装器只能把 live 镜像本身当救援系统装进去（见 installer-lib.sh 的 gk3_apply）
 #
@@ -25,7 +28,7 @@
 # 写盘： sudo dd if=gaokun3-live.img of=/dev/sdX bs=4M conv=fsync status=progress
 set -euo pipefail
 
-SQUASH=; INITRAMFS=; KERNEL=; DTB=; SDBOOT=; PAYLOAD=; OUT=; SIZE_MIB=; WIFI=; CMDLINE=; RESCUE_SQ=
+SQUASH=; INITRAMFS=; KERNEL=; DTB=; SDBOOT=; PAYLOAD=; OUT=; SIZE_MIB=; WIFI=; CMDLINE=; RESCUE_SQ=; WINTOOLS=
 ENTRIES=()
 die() { echo "!! $*" >&2; exit 1; }
 say() { echo; echo "══ $*"; }
@@ -43,6 +46,7 @@ while [ $# -gt 0 ]; do
         --cmdline)   CMDLINE=$2; shift 2 ;;
         --entry)     ENTRIES+=("$2"); shift 2 ;;
         --rescue-squashfs) RESCUE_SQ=$2; shift 2 ;;
+        --windows-tools) WINTOOLS=$2; shift 2 ;;
         --release-info) RELINFO=$2; shift 2 ;;
         --size)      SIZE_MIB=$2; shift 2 ;;
         --out)       OUT=$2; shift 2 ;;
@@ -120,6 +124,16 @@ if [ -n "$PAYLOAD" ]; then
         M "$f" "::/gaokun3/payload/$(basename "$f")"
     done
     ok "带上了安装载荷（$(ls -1 "$PAYLOAD" | wc -l) 个文件）"
+fi
+
+# Windows 伴随工具（可选，U23）：只放两个脚本（不到 200 KiB），不放 live —— U 盘上本来就有
+if [ -n "$WINTOOLS" ]; then
+    for f in gaokun3-setup.ps1 gaokun3-setup.cmd; do [ -f "$WINTOOLS/$f" ] || die "--windows-tools 里没有 $f"; done
+    [ "$(head -c 3 "$WINTOOLS/gaokun3-setup.ps1" | od -An -tx1 | tr -d ' ')" = efbbbf ] || die "gaokun3-setup.ps1 没有 UTF-8 BOM（Windows PowerShell 5.1 会读成乱码）"
+    mmd -i "$OUT@@$PART_OFF" ::/gaokun3-windows
+    M "$WINTOOLS/gaokun3-setup.ps1" ::/gaokun3-windows/gaokun3-setup.ps1
+    M "$WINTOOLS/gaokun3-setup.cmd" ::/gaokun3-windows/gaokun3-setup.cmd
+    ok "带上了 Windows 伴随工具（gaokun3-windows/，预览）"
 fi
 
 # WiFi 凭据（可选）。放在【介质】上而不是镜像里 —— 公开发布的 LiveCD

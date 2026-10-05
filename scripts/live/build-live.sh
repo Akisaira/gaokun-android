@@ -123,7 +123,7 @@ docker run --rm --privileged "${MOUNTS[@]}" \
     bash /build/scripts/live/build-usb.sh --squashfs $O/gaokun3-$PROFILE.squashfs --initramfs $O/initramfs.img \
         --kernel /build/boot/Image --dtb /build/boot/gaokun3.dtb --sdboot $O/systemd-bootaa64.efi \
         --cmdline /build/boot/cmdline.txt ${PAYLOAD:+--payload /in/payload} ${RSQ:+--rescue-squashfs $RSQ} \
-        ${EA[@]+"${EA[@]}"} --release-info $O/release.txt --out $O/gaokun3-live.img
+        ${EA[@]+"${EA[@]}"} --windows-tools /build/scripts/windows --release-info $O/release.txt --out $O/gaokun3-live.img
     cp $O/gaokun3-$PROFILE.squashfs $O/initramfs.img $O/gaokun3-live.img $O/packages-$PROFILE.lock $O/release.txt /outlive/
     # 免 U 盘安装（用户 2026-09-25）：给 Windows 用户的安装包 —— 同一套内核 / initramfs / squashfs
     if [ "$PROFILE" = live ]; then
