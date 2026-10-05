@@ -1,6 +1,6 @@
 #!/bin/bash
 # OTA postinstall（device/huawei/gaokun3/bin/gaokun3-ota-postinstall.sh）的离线测试：选直连条目（OTA-9 + S9 的排除规则）
-# 与统一启动入口一节（gk3_deploy）。
+# 与统一启动入口一节（gk3_deploy）；T 组：双系统的 loader.conf timeout（U13）。
 #
 #   bash tools/gk3boot/test/postinstall/run.sh     （或 make -C tools/gk3boot postinstall-test）
 #
@@ -200,6 +200,25 @@ gor r4 1
 chk "RC=0、没有派生 rescue-b.conf、原条目不变" '[ "$RC" = 0 ] && [ ! -e "$E/$MID-rescue-b.conf" ] && [ "$(opt "$MID-rescue.conf")" = "console=tty0 gk3.squash=/my/own.squashfs" ]'
 gor r4 0
 chk "OTA 到 a 也不碰它" '[ "$RC" = 0 ] && [ "$(opt "$MID-rescue.conf")" = "console=tty0 gk3.squash=/my/own.squashfs" ]'
+
+# ── T：loader.conf 的 timeout（S15 / U13）：双系统只把安装器写的 15 改成 5，别的一概不动 ────────────────────
+win() { mkdir -p "$P/sc-$1/esp/EFI/Microsoft/Boot"; printf 'MZwin' > "$P/sc-$1/esp/EFI/Microsoft/Boot/bootmgfw.efi"; }
+LCF=$P/run/esp/loader/loader.conf
+echo "  T1 双系统、loader.conf 是安装器写的 timeout 15 ⇒ 改成 5，其余行原样"
+sc t1 off ""; win t1; go t1
+chk "RC=0、timeout 5、console-mode / editor / default 原样、没有 .new" '[ "$RC" = 0 ] && [ "$(cat "$LCF")" = "$(printf "timeout 5\nconsole-mode keep\neditor no\ndefault *-android-a.conf")" ] && [ ! -e "$LCF.new" ] && echo "$OUT" | grep -q "从安装器原来写的 15 改成 5"'
+echo "  T2 双系统、用户改过（timeout 10）⇒ 不动"
+sc t2 off ""; win t2; sed -i.bak 's/^timeout 15$/timeout 10/' "$P/sc-t2/esp/loader/loader.conf"; rm -f "$P/sc-t2/esp/loader/loader.conf.bak"; go t2
+chk "RC=0、还是 timeout 10" '[ "$RC" = 0 ] && grep -qx "timeout 10" "$LCF" && ! grep -q "timeout 5" "$LCF"'
+echo "  T3 纯 Android（没有 bootmgfw.efi）、timeout 15 ⇒ 不动（U3：观察期保持 15）"
+sc t3 off ""; go t3
+chk "RC=0、还是 timeout 15" '[ "$RC" = 0 ] && grep -qx "timeout 15" "$LCF" && ! echo "$OUT" | grep -q "改成 5"'
+echo "  T4 双系统、已是 timeout 5（1.0 安装器装的）⇒ 不动、不写"
+sc t4 off ""; win t4; sed -i.bak 's/^timeout 15$/timeout 5/' "$P/sc-t4/esp/loader/loader.conf"; rm -f "$P/sc-t4/esp/loader/loader.conf.bak"; go t4
+chk "RC=0、timeout 5、日志里没说改" '[ "$RC" = 0 ] && grep -qx "timeout 5" "$LCF" && ! echo "$OUT" | grep -q "改成 5"'
+echo "  T5 双系统、timeout 15 后面多了空格（不是安装器写的原样）⇒ 不动"
+sc t5 off ""; win t5; sed -i.bak 's/^timeout 15$/timeout 15 /' "$P/sc-t5/esp/loader/loader.conf"; rm -f "$P/sc-t5/esp/loader/loader.conf.bak"; go t5
+chk "RC=0、原样" '[ "$RC" = 0 ] && grep -qx "timeout 15 " "$LCF"'
 
 echo "  R5 没装救援系统 ⇒ 什么都不多出来"
 sc r5 off ""; gor r5 1
