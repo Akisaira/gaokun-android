@@ -215,6 +215,26 @@
 * ⬜ B4 / M4a 的真机路径：U 盘启动安装器 → tty2 root 免密登录 → curl 下载到 `/tmp` → 跑 `/usr/share/gaokun3/install-gaokun3.sh` 整盘安装，这一整条从没在真机上跑过；图形安装器"Reinstall Android"默认清除数据这条路径（现在是文档推荐的唯一真正清数据的办法），B4 验收时优先跑。
 * ⬜ INST-12 的 `gk3-boot-android` 助手（放救援 overlay，按 `*-android-<槽>.conf` 通配，批 3）：落地以后，把 INSTALL "About the rescue system"里本轮改写的 `bootctl list` + `set-oneshot <id>` 说明换成用这个助手。
 
+### ▶ 1.0 批 2 · 网络（NET-2 / NET-4 / NET-7 / NET-10）已写、未编译、未上机（2026-10-05）
+
+逐项的源码出处写在改动旁边的注释里（构建机 `~/crdroid` 与 `~/gk3-kernel-72y` 只读 grep）。
+
+| 项 | 提交 | 改了什么 | 关键核实 |
+|---|---|---|---|
+| NET-2 STA+AP | `50ffc15` | `BoardConfig.mk` 设 `WIFI_HAL_INTERFACE_COMBINATIONS := {{{STA}, 1}, {{AP}, 1}}, {{{STA}, 1}, {{P2P}, 1}}`；`bin/gaokun3-wlan-ap.sh` + `gaokun3_wlanap` 服务开机用 `iw_vendor` 预建 wlan1；新 SELinux 域 | libwifi-hal-emu **没有** `wifi_virtual_interface_create`（goldfish `wifi_hal.cpp:423-486`）⇒ HAL 要求 wlan1 事先存在；goldfish 只在 `wifi_initialize` 时枚举 wlan0/wlan1（`info.cpp:23-37`）。ath11k 给 WCN6855 hw2.1 的接口组合里 STA 与 AP 同组（`mac.c:10327-10356`、`core.c:525-529/:572` @7.2.9）⇒ 发版说明的勘误成立，正文无需再改 |
+| NET-4 MAC | `739ee4f` | tree-fix [19]：HAL 的出厂 MAC 由 `/sys/devices/soc0/serial_number` 派生（FNV-1a、本地管理位）；[20]：新网络随机化默认从 ALWAYS 改回 AOSP 的 AUTO（4 处成对）；overlay 开 `config_wifi_connected_mac_randomization_supported`、关 `config_wifiSaveFactoryMacToWifiConfigStore` | 默认 ALWAYS 来自 GrapheneOS 补丁（Wifi `06bc263807`、WifiTrackerLib `3bf65d873`），**没有资源可改**；随机化总开关 false 时每个网络的隐私设置一律无效（`WifiGlobals.java:258-261`），B20 的真因是固件每次开机给新 MAC。框架的出厂 MAC 取自 `ETHTOOL_GPERMADDR`（`interface_tool.cpp:144-165`），开机 `ip link` 改不到 |
+| NET-7 热点 | `d014b59` | overlay 开 `config_wifi5ghzSupport`、`config_wifi_softap_sae_supported`、`config_wifiDriverSupportedNl80211RegChangedEvent`、`config_wifiUpdateCountryCodeFromScanResultGeneric` | 5 GHz 热点 = `config_wifi5ghzSupport`（默认 false）∧ `config_wifiSoftap5ghzSupported`（`ApConfigUtil.java:1377-1380`）；hostapd 带 SAE（`hostapd/Android.bp:458`）；ath11k 自管 regdomain（`reg.c:1021`） |
+| NET-10 探测 | `7987b7f` | NetworkStackOverlay 设 `config_captive_portal_{https,http}_urls`（miui + 华为 hicloud）与 `fallback_urls` | 资源数组优先（`NetworkMonitor.java:2856-2871`），多 URL 走并行探测、任一 HTTPS 204 即判通 |
+
+* ⬜ **构建机先跑** `scripts/crdroid-tree-fixes.py ~/crdroid`：[19][20] 的锚点是在构建机原文件副本上验过的（各命中一次、第二次跑幂等），但没在真树上跑过；然后 `m` 一次看 Java / C++ / sepolicy（`allowxperm … SIOCGIFINDEX`）/ aapt2（`<add-resource type="array">`）都编过。
+* ⬜ **上机判据**（用户在场的部分并进批 2 验收的"热点加 Wi-Fi 同时开"）：
+  * NET-2：`ls /sys/class/net` 有 wlan1（`logcat -s gaokun3-wlan`）；连着 Wi-Fi 开热点，Wi-Fi **不断**、另一台手机连热点能上网；`dumpsys wifi` 里 HalDeviceManager 的 chip mode 有 STA+AP 组合。不重编也能先试：手工 `iw dev wlan0 interface add wlan1 type managed`，再 `setprop persist.vendor.debug.wifi.hal.preset_interface_combination_idx 1`（`wifi_feature_flags.cpp:142-158`）重启 Wi-Fi HAL。⚠️ 双信道组合（STA 5 GHz + AP 2.4 GHz）驱动报了支持（组合 1），固件实际表现未验证。
+  * NET-4：两次重启后同一网络的 `ip link show wlan0` 地址不变、首字节含 0x02；选"使用设备 MAC"时地址 = HAL 派生值、两次重启相同；新加网络的隐私默认显示"使用随机 MAC"（按网络）；`cat /sys/devices/soc0/serial_number` 非空（读不到时 [19] 退回固件地址）。
+  * NET-7：`cmd wifi get-country-code` 非 null；热点设置里能选 5 GHz、能选 WPA3；手机连 5 GHz / WPA3 热点能上网。
+  * NET-10：`dumpsys network_stack` 里 https/http URL 是两项；临时用 iptables 拒掉 connect.rom.miui.com 后网络仍判"已连接"。
+* ⚠️ **要写进发版说明**（NET-4）：老用户已保存的网络存的是 ALWAYS（此前隐私选项根本不显示），这一版打开随机化总开关后会**第一次真的每次连接都换 MAC**（含每次待机恢复后的重连）——校园网 MAC 绑定的用户要到网络详情 → 隐私里改成"使用随机 MAC"或"使用设备 MAC"。没做自动迁移：存储里分不出用户选的 ALWAYS 和默认的 ALWAYS（`randomizedMacLastModifiedTimeMs` 不落盘）。⬜ 要不要补一个一次性迁移（需要在 WifiConfigManager 里加 WifiSettingsConfigStore 标记）——等用户定。
+* ⓘ 热点 MAC 随机化、ACS（`config_wifi_softap_acs_supported`）、11ac/ax 热点这一轮都没动。
+
 ### ▶ v0.7.0-alpha（用户 2026-09-28 定：名字 v0.7.0-alpha、带 SELinux 第六轮、验收全过就推仓库 + 发版 + 发安装器预览）
 * 内核 = iris 候选 `56f9b66a`（全配方 0053–0057、0059–0061、0065–0067 + 0050，不带诊断）+ dtb `bad0cd6e`；候选内核上机验收过：
   解码 15/15、相机前后、host 角色 5 次待机 0 复位（#128 §16–§17）。ROM：`lunch lineage_gaokun3-bp4a-userdebug` + 一次 `m bacon superimage`
