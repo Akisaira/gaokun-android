@@ -155,7 +155,8 @@ gk3_err gk3_cmdline_fastboot(const char *base, const gk3_fastboot_args *a, char 
     if (!out_len)
         return GK3_ENOSPC;
     out[0] = 0;
-    if (a->slot > 1 || !value_ok(a->why) || !value_ok(a->bootver) || !value_ok(a->disk))
+    if (a->slot > 1 || !value_ok(a->why) || !value_ok(a->bootver) || !value_ok(a->disk) ||
+        (a->esp && !value_ok(a->esp)))
         return GK3_EINVAL;
     while ((n = next_token(&p, &t)) != 0) {
         /* 同 installer-lib.sh gk3__rescue_cmdline：去掉只给 Android 的；再去掉
@@ -173,6 +174,12 @@ gk3_err gk3_cmdline_fastboot(const char *base, const gk3_fastboot_args *a, char 
     kv(&b, "gk3.slot", slot);
     kv(&b, "gk3.bootver", a->bootver);
     kv(&b, "gk3.disk", a->disk);
+    if (a->esp)
+        kv(&b, "gk3.esp", a->esp);
+    if (a->dispatch)
+        kv(&b, "gk3.dispatch", "1");
+    if (a->fbtcp)
+        kv(&b, "gk3.fbtcp", "1");
     return b.overflow ? GK3_ENOSPC : GK3_OK;
 }
 

@@ -31,11 +31,21 @@ void test_dispatch(void)
     gk3_rec_migrate(rec, bcb, GK3_DISPATCH_VER);
     for (unsigned i = 1; i <= GK3_WIPE_MAX_ENTRIES; i++) {
         plan_for(rec, bcb, &p);
-        CHECK(p.action == GK3_DISP_EXECUTOR && p.why == GK3_BCB_WIPE && p.count == i && !p.clear_command_first,
+        CHECK(p.action == GK3_DISP_EXECUTOR && p.why == GK3_BCB_WIPE && p.count == i && !p.clear_bcb_first,
               "wipe 第 %u 次 → 执行端（BCB 由执行端擦完再清）", i);
     }
     plan_for(rec, bcb, &p);
     CHECK(p.action == GK3_DISP_WIPE_CAP && p.count == GK3_WIPE_MAX_ENTRIES + 1, "同一份 wipe 第 4 次 → 入口自己清");
+    CHECK(gk3_rec_dispatch_why(rec) == GK3_BCB_WIPE, "分派记录的 why = wipe（执行端免确认判据读它）");
+    /* ok_streak（偏移 27，S7c 的 bootloop 判据）：独立的一个字节，读写不碰别的字段 */
+    {
+        uint8_t before[GK3_REC_SIZE];
+        memcpy(before, rec, sizeof(before));
+        gk3_rec_set_ok_streak(rec, 5);
+        CHECK(gk3_rec_ok_streak(rec) == 5 && rec[27] == 5, "ok_streak 在偏移 27");
+        CHECK(!memcmp(before, rec, 27) && !memcmp(before + 28, rec + 28, sizeof(before) - 28), "ok_streak 只改一个字节");
+        gk3_rec_set_ok_streak(rec, 0);
+    }
     /* 执行端清掉之后（BCB 空）：计数作废 */
     memset(bcb, 0, sizeof(bcb));
     plan_for(rec, bcb, &p);
@@ -56,20 +66,20 @@ void test_dispatch(void)
     memset(bcb, 0, sizeof(bcb));
     memcpy(bcb, "bootonce-bootloader", 19);
     plan_for(rec, bcb, &p);
-    CHECK(p.action == GK3_DISP_EXECUTOR && p.why == GK3_BCB_BOOTLOADER && p.clear_command_first && p.count == 1,
+    CHECK(p.action == GK3_DISP_EXECUTOR && p.why == GK3_BCB_BOOTLOADER && p.clear_bcb_first && p.count == 1,
           "bootonce-bootloader → 先清 command 再进执行端");
     {
         const char *a[] = {"--fastboot"};
         gk3_bcb_write_recovery(bcb, a, 1);
     }
     plan_for(rec, bcb, &p);
-    CHECK(p.action == GK3_DISP_EXECUTOR && p.why == GK3_BCB_FASTBOOT && p.clear_command_first, "--fastboot 同上");
+    CHECK(p.action == GK3_DISP_EXECUTOR && p.why == GK3_BCB_FASTBOOT && p.clear_bcb_first, "--fastboot 同上");
     {
         const char *a[] = {"--update_package=/x.zip"};
         gk3_bcb_write_recovery(bcb, a, 1);
     }
     plan_for(rec, bcb, &p);
-    CHECK(p.action == GK3_DISP_EXECUTOR && p.why == GK3_BCB_RECOVERY && !p.clear_command_first, "其他 recovery → 菜单");
+    CHECK(p.action == GK3_DISP_EXECUTOR && p.why == GK3_BCB_RECOVERY && p.clear_bcb_first, "其他 recovery → 菜单（入口先清，S7c）");
     /* 未知命令：清掉，不计次 */
     memset(bcb, 0, sizeof(bcb));
     memcpy(bcb, "boot-quiescent", 14);

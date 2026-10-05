@@ -18,6 +18,7 @@
 #define O_DISP_SLOT 24
 #define O_DISP_COUNT 25
 #define O_EV_HEAD 26
+#define O_OK_STREAK 27
 #define O_DISP_DIGEST 28
 #define O_MIG_DIGEST 48
 #define O_MIG_CMD 68
@@ -139,6 +140,9 @@ uint8_t gk3_rec_dispatch_enter(uint8_t *rec, gk3_bcb_kind why, uint8_t slot, con
 }
 
 uint8_t gk3_rec_dispatch_count(const uint8_t *rec) { return rec[O_DISP_COUNT]; }
+gk3_bcb_kind gk3_rec_dispatch_why(const uint8_t *rec) { return (gk3_bcb_kind)rec[O_DISP_WHY]; }
+uint8_t gk3_rec_ok_streak(const uint8_t *rec) { return rec[O_OK_STREAK]; }
+void gk3_rec_set_ok_streak(uint8_t *rec, uint8_t v) { rec[O_OK_STREAK] = v; }
 void gk3_rec_dispatch_digest(const uint8_t *rec, uint8_t out[20]) { gk3_memcpy(out, rec + O_DISP_DIGEST, 20); }
 void gk3_rec_dispatch_reset(uint8_t *rec)
 {

@@ -319,7 +319,8 @@ uint8_t gk3_vab_effective(const gk3_vab *v, unsigned current_slot);
  *   24   dispatch_slot u8
  *   25   dispatch_count u8：同一份 BCB 连续进入次数（wipe 3 次上限，§4.3.4）
  *   26   ev_head u8：事件环下一个写入位置
- *   27   reserved
+ *   27   ok_streak u8：【已确认的槽】连续未完成启动（bootloop 判据，S7c；入口维护：上一次开机完成过
+ *        （boot_streak 已被 HAL 清零）就从 0 数；启动未确认的槽（扣 tries 的那条路）清零；进执行端清零）
  *   28   dispatch_digest[20]：分派时 BCB 的 SHA-1
  *   48   migrated_digest[20]：迁移时被清掉的 BCB 的 SHA-1
  *   68   migrated_command[32]：原文
@@ -384,6 +385,11 @@ void gk3_rec_set_next(uint8_t *rec, gk3_next_kind k, uint8_t slot);
 /* 分派计数：同一份 BCB（摘要相同）就 +1 并返回新值，不同就重置为 1。 */
 uint8_t gk3_rec_dispatch_enter(uint8_t *rec, gk3_bcb_kind why, uint8_t slot, const uint8_t digest[20]);
 uint8_t gk3_rec_dispatch_count(const uint8_t *rec);
+gk3_bcb_kind gk3_rec_dispatch_why(const uint8_t *rec);
+/* 已确认槽的连续未完成启动（偏移 27）。boot_streak 的问题：OTA 新槽 6 次 tries 也会把它推过阈值，
+ * 而那 6 次本该由 tries 自动回滚（E8）；bootloop 只管"已确认的槽之后反复起不来"（§4.3.3），所以另记一个。 */
+uint8_t gk3_rec_ok_streak(const uint8_t *rec);
+void gk3_rec_set_ok_streak(uint8_t *rec, uint8_t v);
 void gk3_rec_dispatch_digest(const uint8_t *rec, uint8_t out[20]);
 void gk3_rec_dispatch_reset(uint8_t *rec);
 
@@ -391,6 +397,7 @@ void gk3_rec_dispatch_reset(uint8_t *rec);
 
 #define GK3_DISPATCH_VER     1u     /* 迁移标记里记的"分派版本"（§4.10）；打开分派的那一版入口用它 */
 #define GK3_WIPE_MAX_ENTRIES 3u     /* 同一份 wipe BCB 进执行端的上限，超过 → 入口自己清、event=wipe_failed */
+#define GK3_BOOTLOOP_THRESHOLD 5u   /* 已确认的槽连续这么多次没走到开机完成 → 下一次进执行端菜单 why=bootloop（§4.3.3） */
 
 typedef enum {
     GK3_DISP_NONE = 0,      /* BCB 空：正常启动（若有旧的分派计数就清掉） */
@@ -403,7 +410,9 @@ typedef enum {
 typedef struct {
     gk3_disp_action action;
     gk3_bcb_kind why;
-    bool clear_command_first;   /* bootloader / fastboot：进执行端之前先清 command 写回（GBL 语义，执行端坏了也不循环） */
+    bool clear_bcb_first;       /* bootloader / fastboot / recovery：进执行端之前先把整份 BCB 清掉写回（GBL 的"先清再进"语义，
+                                 * 执行端坏了 / 崩了也不会循环；= fastbootd 进入时的 clear_bootloader_message）。
+                                 * wipe / prompt_wipe 不清：要留给执行端核对、擦完再清（可重入） */
     uint8_t count;              /* EXECUTOR / WIPE_CAP：这份 BCB 第几次进入（gk3_rec_dispatch_enter 之后的值） */
 } gk3_disp_plan;
 
@@ -471,10 +480,14 @@ typedef struct {
     unsigned slot;              /* gk3.slot */
     const char *bootver;        /* gk3.bootver */
     const char *disk;           /* gk3.disk = misc 的 PARTUUID */
+    const char *esp;            /* gk3.esp = 入口自己所在 ESP 的 PARTUUID（S7c），NULL 不加 */
+    bool dispatch;              /* gk3.dispatch=1：入口开着 BCB 分派（执行端据此决定重启类命令写不写 BCB） */
+    bool fbtcp;                 /* gk3.fbtcp=1：执行端打开 TCP 5554（只来自条目 options，开发用；不认证） */
 } gk3_fastboot_args;
 
 /* 执行端用（§4.4.1）：去掉 androidboot.*、init=、firmware_class.path=（同 installer-lib.sh
- * gk3__rescue_cmdline）、deferred_probe_timeout=，再追加 panic=10 gk3.mode=fastboot gk3.why= gk3.slot= gk3.bootver= gk3.disk=。 */
+ * gk3__rescue_cmdline）、deferred_probe_timeout=、panic=、gk3.*，再追加
+ * panic=10 gk3.mode=fastboot gk3.why= gk3.slot= gk3.bootver= gk3.disk= [gk3.esp=] [gk3.dispatch=1] [gk3.fbtcp=1]。 */
 gk3_err gk3_cmdline_fastboot(const char *base, const gk3_fastboot_args *a, char *out, size_t out_len);
 
 /* EFI LoadOptions：ASCII → UCS-2（含结尾 NUL）。非 ASCII 返回 GK3_EINVAL。out_chars 含 NUL。 */

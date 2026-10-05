@@ -95,7 +95,7 @@ void test_cmdline(void)
 
     /* 执行端（§4.4.1）：规则同 installer-lib.sh gk3__rescue_cmdline，再去 deferred_probe_timeout */
     {
-        gk3_fastboot_args f = {"bootloader", 0, "1.0.0", "53912ab2-33ac-49d2-a099-94fed8664a26"};
+        gk3_fastboot_args f = {"bootloader", 0, "1.0.0", "53912ab2-33ac-49d2-a099-94fed8664a26", NULL, false, false};
         CHECK_EQ(gk3_cmdline_fastboot(base, &f, out, sizeof(out)), GK3_OK);
         CHECK_STR(out, "iommu.passthrough=0 iommu.strict=0 printk.devkmsg=on console=tty0 clk_ignore_unused "
                        "pd_ignore_unused arm64.nopauth efi=noruntime fbcon=rotate:1 "
@@ -105,6 +105,18 @@ void test_cmdline(void)
         CHECK_EQ(gk3_cmdline_fastboot("panic=5 gk3.mode=x initrd=y", &f, out, sizeof(out)), GK3_OK);
         CHECK_STR(out, "initrd=y panic=10 gk3.mode=fastboot gk3.why=bootloader gk3.slot=a gk3.bootver=1.0.0 "
                        "gk3.disk=53912ab2-33ac-49d2-a099-94fed8664a26");
+        /* S7c：gk3.esp / gk3.dispatch / gk3.fbtcp 只在给了时追加；base 里的同名 gk3.* 一律先去掉（不让 boot.img 冒充入口） */
+        f.esp = "6d7ac5a1-8b3e-4f24-9a52-0c0ffee00001";
+        f.dispatch = true;
+        f.fbtcp = true;
+        CHECK_EQ(gk3_cmdline_fastboot("console=tty0 gk3.fbtcp=1 gk3.dispatch=0 gk3.esp=zz", &f, out, sizeof(out)), GK3_OK);
+        CHECK_STR(out, "console=tty0 panic=10 gk3.mode=fastboot gk3.why=bootloader gk3.slot=a gk3.bootver=1.0.0 "
+                       "gk3.disk=53912ab2-33ac-49d2-a099-94fed8664a26 gk3.esp=6d7ac5a1-8b3e-4f24-9a52-0c0ffee00001 "
+                       "gk3.dispatch=1 gk3.fbtcp=1");
+        f.esp = "a b";
+        CHECK_EQ(gk3_cmdline_fastboot(base, &f, out, sizeof(out)), GK3_EINVAL);
+        f.esp = NULL;
+        f.dispatch = f.fbtcp = false;
         f.why = "wipe now";
         CHECK_EQ(gk3_cmdline_fastboot(base, &f, out, sizeof(out)), GK3_EINVAL);
     }
