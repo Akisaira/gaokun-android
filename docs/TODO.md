@@ -99,7 +99,7 @@
 > （用户说的"fastboot"指的就是它：一个统一的、用来启动 Android 的入口，设计稿 [`fastboot-design.md`](fastboot-design.md)，还在设计）——
 > **本轮不碰 BCB / misc / 恢复出厂 / 启动链**，批 1 里的"清除旧 BCB"和"B6(a)"一起搁着；D6 保留 root；D7 只发 GApps；其余按计划第 6 节的建议。
 > ⚠️ 2026-10-05 01:00 记账时设备不在线（`adb devices` 是空的；TCP 没扫；审查那边记过 10-04 22:56 USB adb 掉线）⇒ 设备一上线先做 V0，开工前先跑 `bash scripts/find-device.sh`。
-> 下面的编号 V0–V17 只在本节内部用；以后每个发版都要回归的项已经补进 [`release-checklist.md`](release-checklist.md)（A23–A27、B14–B17、D9）。
+> 下面的编号 V0–V18 只在本节内部用；以后每个发版都要回归的项已经补进 [`release-checklist.md`](release-checklist.md)（A23–A27、B14–B17、D9）。
 
 **已合并的改动**
 
@@ -168,8 +168,8 @@
 * ⬜ **V8 传感器：上新 HAL 之前的同会话开关实验**（HW-3 / LIVE-2 / PWR-3；在新 HAL 装机**之前**做）：用新编的 `gaokun3-ssc-test accel 50 20 toggle` 跑 ≥20 轮（⬜ 这个 toggle 模式还没写，见 V6），HAL 停着跑一次、HAL 在跑时再跑一次。判据：每轮都有读数，静止平放时 Z≈9.8，SSC 枚举不坏，退出码 0。
   **绝不能碰 ambient_light**（会污染会话，#37）；弄坏了就重启 hexagonrpcd，再等约 20 秒。**这一项不过，就不上 PWR-3 的新 HAL**（撤 `4db08bc`）。
 * ⬜ **V9 新构建装上以后的检查**（PWR-3 / LIVE-2 / HW-3 / B21 / LIVE-1 / PERF-1 / APP-7 / STOR-5 / NET-1 / NET-12）：
-  * 传感器功耗：息屏且没有订阅者时，`/proc/interrupts` 里 smp2p-slpi（IRQ 19）和 q6v5 handover（IRQ 212）10 秒内不再增长；debugfs `qcom_stats/slpi` 的 Count 和 Accumulated Duration 开始增长；logcat 出现"SscHub: accel 停用"，并且至少 5 分钟内不出现看门狗的"15 秒无读数""60 秒没有读数，重建"。首次 activate 后约 20 秒的沉降期只报 UNRELIABLE，不能把旧值当真值。
-    B21：停用期间 SLPI 自愈或崩溃之后，下一次 activate 时看门狗会在 15 / 60 秒处理，accel 要能回来（B21 本身仍需要再重启一次 hexagonrpcd）。
+  * 传感器功耗：息屏且没有订阅者时，`/proc/interrupts` 里 smp2p-slpi（IRQ 19）和 q6v5 handover（IRQ 212）10 秒内不再增长；debugfs `qcom_stats/slpi` 的 Count 和 Accumulated Duration 开始增长；logcat 出现"SscHub: accel 停用"，并且至少 5 分钟内不出现看门狗的"15 秒无读数""流开着却 60 秒没有读数，请 init 收拾传感器链"（DISP-14 起 HAL 不再自己重建会话，旧的"60 秒没有读数，重建 SSC 会话"这句不会再出现）。首次 activate 后约 20 秒的沉降期只报 UNRELIABLE，不能把旧值当真值。
+    B21（DISP-14 / HW-1，恢复服务 `gaokun3_sscrecover`）：SLPI 崩一次 —— 不要为此激活光感，等到有人在场的 V18 再做；这里只做被动检查：`getprop vendor.gaokun3.sscrecover.runs` 平时为空、`ps -AZ | grep sscrecover` 平时没有进程（oneshot）、`logcat -s gaokun3-sscrecover` 开机后没有任何行（开机期间正常的沉降不该触发它）。
   * 亮灭屏 ≥50 次（TCP adb 下 `input keyevent 26`，lights 和传感器一起看）：dropbox 里不再出现 `system_server_crash`；每次亮屏后 `dumpsys sensorservice` 的 Recent events 里有 accel 的新读数、Z≈9.8，SscHub 没有重建会话；`logcat -s gaokun3-lights` 里有没有"写 …/brightness=… 失败: <errno>"，有就记下 errno 和时序（用来验证"`himax_bl_update_status` 在 DSI 下电时发 DCS"这个推断）。另外几次 allow_suspend=1 的待机唤醒要拔线，并到用户在场的那次里做。
   * STOR-5：`tune2fs -l /dev/block/by-name/userdata | grep -iE 'Reserved block count|Reserved blocks gid'` 应为 32768 和 1065；`getprop vold.has_reserved` 为 1；`dumpsys diskstats` 的 Data-Free 多出约 18 GiB；开机日志里有 fs_mgr 的 `Setting reserved block count`，第二次开机就不再出现；enforcing 下 init 跑 tune2fs（fsck 域）时，对 userdata 块设备没有 avc（块设备标签已经按 by-name 打，#129）。
   * NET：`dumpsys wifi` 的 WifiResourceCache 里 `config_wifiSwPnoEnabled=true`，DeviceConfig 那道门已被 V3 的补丁绕过；`dumpsys network_time_update_service` 里 `mTryAgainTimesMax=-1`，`mServerUris` 第一项是 `ntp.aliyun.com`；正常开机一次（不跑挂起测试），记下从连上网到第一次对时成功花了多久。
@@ -195,6 +195,14 @@
   * A22：真跑一次 `cmd wifi start-softap <ssid> wpa2 <口令>`（会断开 STA，要在 USB adb 下做）。
 * ⬜ **V15 文档里写成"待补 / 未验证"的事实**（INST-4 / INST-18 / OTA-12 / AV-12 / NET-2 / APP-19 / BATT-1 / INST-5；BATT-1 在批 2 测）：进 UEFI 固件设置和启动菜单的按键，以及不接键盘盖时怎么操作；systemd-boot 菜单在不接键盘盖时能不能用音量键 / 电源键操作（结果补进 FAQ / INSTALL，也作为 D19 菜单超时的依据）；前摄方向（v0.7.0 发版说明写"目测确认过"，与 AV-12 矛盾）；WPA2/WPA3 混合模式的路由器能不能连（#107 与 v0.7.1 发版说明的说法冲突）；QQ / 微信的平板模式登录（T5 / APP-19）；R2 在国内网络下能不能直连下载、速度多少（可以在本机 Mac 上用 curl 测）；BATT-1：接低功率电源时显示"充电"（批 2 做放电实验时一起看）。
 * ⬜ **V16 救援系统里 FAQ 写到的行为**（INST-12 / REL-9；批 3。要重启进救援，所以要同意 + 在场）：systemd-pstore 会不会把 EFI 里的 pstore 记录挪进内存里的 `/var/lib/systemd/pstore` 并删掉 EFI 变量（那样一重启就没了；FAQ 让用户先拷到 `/media/gk3/gaokun3/diag/`）；在别人的网络里 `ssh root@gaokun3-live.local`（avahi）能不能用；INSTALL 新写的 `bootctl list` + `bootctl set-oneshot <id>` 在救援里能不能用。
+
+* ⬜ **V18 本轮补的五项：传感器恢复、键盘拔插、振动器、备份、时区**（DISP-14 / HW-1 / B21、DISP-15 / HW-11、HW-6、BKUP-5 / D13、D15；2026-10-05 写，全部未编译、未上机）：
+  * B21：要让 SLPI 崩一次（#121 §2 的 `gaokun3-ssc-test ambient_light 0 4 onchange` 一定能复现，⚠️ 这是唯一一处允许碰光感的地方，目的就是把 SLPI 弄崩），先征得同意。判据：`logcat -s gaokun3-sscrecover` 依次出现"开始第 1 次收拾""步骤 stop / start-rpc / start-hal / done"；约 60 秒内 `logcat -s SscHub` 里有 `accel=1 gyro=1`；`dumpsys sensorservice` 登记 5 个传感器、Recent events 里 accel 有新读数、Z≈9.8，自动旋转跟手。SLPI 崩掉到恢复那段时间 HAL 报 UNRELIABLE（不能还是崩之前的值）。连崩两次（间隔 <120 秒）第二次应记"这次跳过"。`setprop persist.vendor.gaokun3.sscrecover 0` 后再崩一次，应只记"已关闭"。enforcing 试跑时看 `gaokun3_sscrecover` / `hal_sensors_default` 有没有 avc。
+  * DISP-15：设置里把键盘关掉 → 拔下键盘盖 → 插回 → 约 2 秒内名字 `HID 12d1:10b8` 的那几个 `/sys/class/input/input*/inhibited` 全是 1、键盘和触控板都没反应；`logcat -s Gaokun3KbdReplug gaokun3-keyboard` 里先有"再关一次"、再有"键盘已 off"。开关开着时拔插，Gaokun3KbdReplug 不出任何行。要用户动手拔插。
+  * HW-6：`dumpsys vibrator_manager` 里没有振动器、`service list | grep -i vibrator` 只剩框架自己的服务；开机后 dropbox 没有新的 `system_server_crash`；设置里"振动和触感"一项消失（或灰掉）。
+  * BKUP-5：只有全新 /data 才看得到 —— 并进批 3 的新装机验收：`settings get secure backup_transport` = `com.stevesoltys.seedvault.transport.ConfigurableBackupTransport`；`cmd overlay list com.android.providers.settings` 里 `com.android.providers.settings.gaokun3` 排在 `com.mtg.gmssettingsprovideroverlay` 后面且是 [x]；「设置 → 系统 → 备份」打开的是 Seedvault。已装的机器不会变（换用 `bmgr transport <上面那个名字>`），写进 1.0 发版说明。
+  * D15：`/system_ext/etc/build.prop` 里有 `persist.sys.timezone=Asia/Shanghai`；全新 /data 开机 `getprop persist.sys.timezone` = Asia/Shanghai。★ 已装机器：设过时区的不变；**从没设过时区（一直显示 GMT）的机器 OTA 后会变成上海时间** —— 写进 1.0 发版说明（V17）。
+  * D10：fcitx5-android 的预置写法已就位但默认关（`prebuilt-apps/fcitx5/Android.mk` + `GAOKUN3_WITH_FCITX5`），见 B 节"中文输入法"一条。
 
 **批 5（RC）的构建后自检**
 * ⬜ **V17 1.0 发版说明和"从 1.0 起"的说法**（B1 / D1 / REL-10 / REL-15 / SEC-10 / NET-2 / AV-10 / D5 / D10）：从 `docs/relnotes/TEMPLATE.md` 复制出 1.0 的说明，已知限制的摘要逐条对齐发版当时的 known-limitations（SELinux 的 D5、恢复出厂有没有由统一启动入口落地、U 盘 STOR-1、有线耳机麦 AV-10、热点 NET-2、中文输入法 D10）。
@@ -395,7 +403,7 @@ T5 平板声明、B16 Wi-Fi TCP 缓冲 RRO、B18 remoteproc、usbrole follow + 0
 | # | 事情 | 现在卡在哪 | 下一步（具体） |
 |---|---|---|---|
 | **S1** ✅ | **待机默认值 1→0 会波及老用户**（2026-09-24 已改回 1，见下） | 用户 2026-09-23：这是 SELinux 那轮（属性改名）带出来的，不是为待机本身做的决定。09-18 为改名把 `persist.vendor.gaokun3.allow_suspend` 默认设成 0（`device.mk:526`），`device.mk` 注释只说"新装机默认不睡"。但 v0.6.2 的用户**绝大多数从没设过这个属性**（旧默认 1）⇒ OTA 一过、新名字取默认 0 ⇒ **所有老用户也会失去 s2idle**，README 的"待机 ✅"随之失真 | ✅ **用户 2026-09-23 定**：开发期保持 0，**正式版发布前改回 1**。✅ 2026-09-24 候选版起已改回 1（`device.mk` 的 `PRODUCT_VENDOR_PROPERTIES`），开发机已 `setprop … 0` 并核对落盘；✅ `release.sh` 断言发版的 `vendor/build.prop` 里是 1（`--stage-only` 不拦）。✅ 装机验收：v0.6.3 候选版清单第 8 条过（开发机持久 0 不睡、镜像默认 1）；v0.7.0 第 8 项真睡约 3.5 分钟、唤醒不复位；2026-10-04 v0.7.1（`1791053208`）实机 `/vendor/build.prop` 里仍是 `allow_suspend=1`。（按真实用法长时间待机的实测是另一件事，见 [`v1.0-plan.md`](v1.0-plan.md) PWR-7） |
-| **B21** 🆕 | **SLPI 崩溃自愈后系统传感器全丢**（2026-09-24，[#121 §3](stage4-findings.md)） | 自愈时 init 只重启一次 hexagonrpcd，而 SEE 要再重启一次才注册传感器 ⇒ accel 没了、自动旋转失效，直到重启 | 给 hexagonrpcd 的 rc 加"SLPI 回到 running 后再重启一次"（`on property` 盯不住 remoteproc 状态，多半要一个小守护或 uevent 触发），实测：让 SLPI 崩一次（激活光感就能复现）看 accel 能否自己回来 |
+| **B21** 🆕 | **SLPI 崩溃自愈后系统传感器全丢**（2026-09-24，[#121 §3](stage4-findings.md)） | 自愈时 init 只重启一次 hexagonrpcd，而 SEE 要再重启一次才注册传感器 ⇒ accel 没了、自动旋转失效，直到重启 | 🔄 **2026-10-05 已写未编**（DISP-14 / HW-1）：没去盯 remoteproc，而是盯 hexagonrpcd —— SLPI 一崩它就退出，init 置 `init.svc.vendor.hexagonrpcd-sdsp=restarting`；`etc/sscrecover.rc` 据此（以及 HAL 看门狗的 `vendor.gaokun3.sscrecover.req`）拉起 `bin/gaokun3-ssc-recover.sh`：等 SLPI 回到 running → 停 HAL → 停 hexagonrpcd（pidof 清残留）→ 起 hexagonrpcd → 起 HAL。HAL 不再在进程里重建会话，缓存 2 秒不刷新即报 UNRELIABLE。上机见 V18 |
 | **B22** ✅ | **时钟不校准：NTP 只有 `time.android.com`，国内连不上**（2026-09-24，[#122 §3](stage4-findings.md)） | 设备慢 41 分钟、这次开机从没自动校时；Lineage 的中国服务器只在 `values-mcc460`，本机无基带落不到 | ✅ overlay 加 `config_ntpServers`（time.android.com + aliyun / tencent / ntsc）。✅ **已生效**：v0.7.0 验收第 7 项 `ntp.aliyun.com` 对时（与 Mac 差 1 秒）；2026-10-04 v0.7.1（`1791053208`）实机 `dumpsys network_time_update_service`：`mServerUris` 四个都在、`mLastSuccessfulNtpServerUri=ntp://ntp.aliyun.com`，开发机的 `ntp_server` 已删（`null`）。尾巴不在这条：那次开机第一次对时成功用了约 7 分钟、连续失败后下一次定时对时被推到 18 小时后 ⇒ [`v1.0-plan.md`](v1.0-plan.md) NET-12 |
 | **T1** | **触摸** | ✅ v0.6.2 已发（跳点限速线、fuzz=0、按下 17 ms、面积轴、6 个驱动缺陷、可观测性，[#114](stage4-findings.md)–[#116](stage4-findings.md)）。剩：手掌碎成多触点（不影响点击，三种阈值法实测全否） | 下一版驱动做跨帧形态判据；轴已经有了，可以顺手写触摸 IDC（`touch.size.calibration`，本机现在 `ConfigurationFile: <none>`） |
 | **B15** ✅ | **全新安装丢触摸参数**（2026-09-23 已修） | ★ 实锤：`scripts/install-gaokun3.sh:251-257` 写死的 cmdline **没有** `himax_hx83121a_spi.disable_pressure=0`（`BoardConfig.mk:134` 有）⇒ 按 INSTALL.md 全新装 v0.6.2 的机器**没有触点面积轴**，直到第一次 OTA 的 postinstall 把 cmdline 同步过去 | ✅ `install-gaokun3.sh` 改为从 boot.img 头读 cmdline（`cmdline[512]@64 + extra_cmdline[1024]@608`，与 `bootimg_extract.cpp` 同一写法），读不到就拒装。拿 v0.6.2 发布的 `boot.img`（sha `975d7987…`）实测：解出的 cmdline 与 `BoardConfig.mk` **逐字相同**。`deploy-android.sh` 已归档。✅ 2026-09-24 `installer-lib.sh` 那份也改了（随 B4 重启）：cmdline 与内核文件都从 boot.img 拆，命令行版改成 source 这个库，四份只剩 `BoardConfig.mk` 一份真相源（[stage7-flutter-debian.md](stage7-flutter-debian.md) §3.3） |
@@ -1100,6 +1108,22 @@ features xml 补 `android.hardware.camera` + `android.hardware.camera.flash`（S
 ---
 
 ## B. 工程债与正确性
+
+### B12a. 🔄 中文输入法（DISP-3 / D10）：选 fcitx5-android，构建写法已就位、默认关（2026-10-05 调研）
+按 D10"许可证合适、物理键盘可用就预置"调研了两个（只看了项目页、GitHub release、F-Droid 页，**没在本机上装过**）：
+
+| | fcitx5-android | Trime（RIME） |
+|---|---|---|
+| 许可证 | LGPL-2.1（F-Droid："LGPL v2.1 only"） | GPL-3.0 |
+| 自带中文方案 | 拼音 / 双拼 / 五笔 / 仓颉 + 英文，主 APK 自带 | 要自己配 schema |
+| 实体键盘 | 0.1.0 起：用实体键盘打字时隐藏软键盘、显示浮动候选窗 | 文档里找不到说明 |
+| arm64 APK | 45,935,104 字节（0.1.3，2026-07-26） | 8,986,312 字节（v3.3.12，2026-09-01） |
+
+结论：**预置 fcitx5-android**（D10 的前一支）。写法 `device/huawei/gaokun3/prebuilt-apps/fcitx5/Android.mk`（APK 在目录里才定义模块，APK 不入库）+ `device.mk` 的 `GAOKUN3_WITH_FCITX5`（默认关）。打开之前要做三件事：
+1. ⬜ **用户定 APK 来源**：GitHub release（项目自己签名）还是 F-Droid（F-Droid 签名）—— 预装哪份，以后就只能从同一来源更新。
+2. ⬜ 上机验实体键盘：GK-W7X 键盘盖上怎么中英切换（Shift？Ctrl+Space？与 Android 自己的 Ctrl+Space 切输入法冲不冲突），候选窗是否正常。
+3. ⬜ LGPL 义务：发版的 `docs/relnotes/<版本>-sources.md` 与 `NOTICE` 写上所用 tag 的源码地址（`github.com/fcitx5-android/fcitx5-android/tree/<tag>`，含子模块）。
+在这之前 INSTALL / known-limitations 照旧写"自己装中文输入法"。设成默认输入法（`def_input_method` 之类）这次没做。
 
 ### B12. ⬜ 释放 R2 桶的前提：国内可达的下载镜像
 2026-09-14 v0.6.0 把清单 `download` 指到 GitHub Release 附件，用户当天反馈更新失败：附件 302 到
