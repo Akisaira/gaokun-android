@@ -58,8 +58,13 @@
          出厂 MAC 永久存进 WifiSettingsConfigStore（ClientModeImpl.java:8065-8095）。老机器存的是当年那个固件随机地址，
          tree-fix [19] 从 soc0 序列号派生的稳定地址就永远用不上 ⇒ 关掉，每次都问 HAL（HAL 那边本来就稳定）。
       ⬜ 未编译、未上机。判据见 scripts/crdroid-tree-fixes.py 的 [19] / [20]。
+      ★ 2026-10-05 合并时改定：1.0 先【不开】①（保持 false）。老用户已存的网络都记着 crDroid 写死的 ALWAYS，一开总开关
+        就会第一次真的"每次连接都换 MAC"（含每次待机恢复后的重连），校园网 MAC 绑定反而更糟，而存储里分不出用户选的
+        ALWAYS 与默认的 ALWAYS，没有安全的迁移。保持 false ⇒ 所有网络都用 [19] 派生的稳定设备 MAC —— 正是 NET-4 要的
+        "MAC 不再每次开机都变"；代价是和以前一样没有按网络的随机 MAC（隐私选项不显示）。[20] 留着（总开关关时无效、无害），
+        以后要开随机化时连同一次性迁移（WifiConfigManager 加迁移标记）一起做。
     -->
-    <bool name="config_wifi_connected_mac_randomization_supported" translatable="false">true</bool>
+    <bool name="config_wifi_connected_mac_randomization_supported" translatable="false">false</bool>
     <bool name="config_wifiSaveFactoryMacToWifiConfigStore" translatable="false">false</bool>
 
     <!--

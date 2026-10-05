@@ -232,7 +232,7 @@
   * NET-4：两次重启后同一网络的 `ip link show wlan0` 地址不变、首字节含 0x02；选"使用设备 MAC"时地址 = HAL 派生值、两次重启相同；新加网络的隐私默认显示"使用随机 MAC"（按网络）；`cat /sys/devices/soc0/serial_number` 非空（读不到时 [19] 退回固件地址）。
   * NET-7：`cmd wifi get-country-code` 非 null；热点设置里能选 5 GHz、能选 WPA3；手机连 5 GHz / WPA3 热点能上网。
   * NET-10：`dumpsys network_stack` 里 https/http URL 是两项；临时用 iptables 拒掉 connect.rom.miui.com 后网络仍判"已连接"。
-* ⚠️ **要写进发版说明**（NET-4）：老用户已保存的网络存的是 ALWAYS（此前隐私选项根本不显示），这一版打开随机化总开关后会**第一次真的每次连接都换 MAC**（含每次待机恢复后的重连）——校园网 MAC 绑定的用户要到网络详情 → 隐私里改成"使用随机 MAC"或"使用设备 MAC"。没做自动迁移：存储里分不出用户选的 ALWAYS 和默认的 ALWAYS（`randomizedMacLastModifiedTimeMs` 不落盘）。⬜ 要不要补一个一次性迁移（需要在 WifiConfigManager 里加 WifiSettingsConfigStore 标记）——等用户定。
+* ✅ **NET-4 的迁移问题 2026-10-05 合并时绕开**：1.0 **不开**随机化总开关（overlay 保持 `config_wifi_connected_mac_randomization_supported=false`），所有网络都用 [19] 派生的稳定设备 MAC —— 解决"每次开机都换"，且没有"老网络存的 ALWAYS 突然生效、每次连接都换"的问题。实机只读核对（dev.7）：总开关 false 时各网络的 `mRandomizedMacAddress` 存在但没被用，`wlan0` 仍是固件给的 `00:03:7f:12:…` ⇒ 与"false 时连接前不碰 MAC"一致。代价：和以前一样没有按网络的随机 MAC。⬜ 以后要开随机化：连同一次性迁移（WifiConfigManager 加标记）一起做；[20] 已备好（总开关关时无效）。上机判据改为：两次重启 `wlan0` 地址相同且首字节含 0x02。
 * ⓘ 热点 MAC 随机化、ACS（`config_wifi_softap_acs_supported`）、11ac/ax 热点这一轮都没动。
 
 ### ▶ v0.7.0-alpha（用户 2026-09-28 定：名字 v0.7.0-alpha、带 SELinux 第六轮、验收全过就推仓库 + 发版 + 发安装器预览）
