@@ -1042,7 +1042,7 @@ UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起
 | S4 | **`gk3probe.efi`**（只读探针，见 E3） | S | S3 | 探针 |
 | S5 | **gk3boot 主体**：定位、决策、H2 / H1 交接、fail-open、观察模式、cmdline、事件 | L | S2、S3；E3 / E4 门槛 | `gk3boot.efi` |
 | S6 | **BCB 分派与执行端引导**：迁移、分派计数、bootloop 计数、一次性意图、内核来源三级回落 | M | S5 | — |
-| S7 | **执行端**：C′ §5 的第 1、2、4、5、6 步子集，改为读 `gk3.why/disk/slot`；`set_active` 与 slot getvar 用 `libgk3core`；"Other systems" 写 OneShot | L（3–5 周） | 本机 Docker + platform-tools；E6 | `fastboot.img` |
+| S7 | **执行端**：C′ §5 的第 1、2、4、5、6 步子集，改为读 `gk3.why/disk/slot`；`set_active` 与 slot getvar 用 `libgk3core`；"Other systems" 写 OneShot | L（3–5 周） | 本机 Docker + platform-tools；E6 | `fastboot.img`。**S7a（2026-10-05，离线全绿、未上机）**：`gk3-fastbootd` 协议核心 + FunctionFS / TCP + 白名单 + ESP 同步 + set_active，容器端到端 197/197（静态版与 ASan 版各一遍）；与本节不同的取舍（重启类走真重启 + BCB、ESP 同步在 C 里做、set_active 守卫 ④ 的豁免等）与给 S7b / S7c 的接口约定见 `tools/gk3boot/README.md` §13。⬜ S7b initramfs、S7c gk3boot 分派接线 |
 | S8 | `gk3-esp-sync` 抽取 + 静态 bootimg_extract（C′ 第 3 步） | M | 并入 ROM 构建 | 共用件 |
 | S9 | **Android 侧**：HAL 开机完成线程、vendor rc、属性与 sepolicy、Parts 通知；postinstall 部署 / staged / 停铺 recovery-ramdisk；vendor 里加 `/vendor/boot/gk3boot/`；prebuilt 目录 + `sync-device-tree.sh` 断言 | M | 一次 ROM 构建（rom 档，并入已排的批次） | **2026-10-05 已写、未编译未上机**：`boot_control/Gk3Boot.cpp`、Parts `BootEntryNotifier`、postinstall `gk3_deploy`、`prebuilt-gk3boot/`，开关 `persist.vendor.gaokun3.gk3boot`（off 缺省 / observe / action）；说明与上机步骤 `tools/gk3boot/README.md` §12。与原文的差别：第一次部署也可在开机完成时由 HAL 做（属性从 off 改成 observe/action 后重启即可，不必等 OTA）；入口版本跟着正在跑的系统的 vendor 走 |
 | S10 | **安装器**：清单、条目、misc 初始化、收紧停用匹配、`gk3_esp_info`、test-apply 用例；release.sh 附件和断言 | M | 安装器重建 | — |

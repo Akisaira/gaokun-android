@@ -382,6 +382,9 @@ check "gk3-entry 说明清掉了" sh -c "$F getvar gk3-entry 2>&1 | grep -q 'con
 $FX misc "$W/a.img" "$MA" --bcb fastboot
 start_daemon "$CL_A" --disks="$LA" || exit 1
 check "进入时 --fastboot 被消费" test "$($FX misc-dump "$W/a.img" "$MA" | sed -n 's/^bcb_command=//p')" = ""
+$FX misc "$W/a.img" "$MA" --bcb recovery
+start_daemon "$CL_A" --disks="$LA" || exit 1
+check "进入时 boot-recovery（adb reboot recovery）被消费" test "$($FX misc-dump "$W/a.img" "$MA" | sed -n 's/^bcb_command=//p')" = ""
 $FX misc "$W/a.img" "$MA" --bcb wipe
 W1=$($FX misc-dump "$W/a.img" "$MA" | sed -n 's/^bcb_sha256=//p')
 start_daemon "$CL_A" --disks="$LA" || exit 1

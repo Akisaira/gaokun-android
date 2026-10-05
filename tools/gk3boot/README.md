@@ -5,7 +5,9 @@
 以及 **S3 / S4**：aarch64 UEFI 工具链（gnu-efi）、QEMU + AAVMF + systemd-boot 257.13 夹具、只读探针 `gk3probe.efi`（§9）；
 **S5 的最小可上机版本** `gk3boot.efi`：观察模式 + H2 交接 + fail-open，给 E4 门槛用（§10，2026-10-05 真机通过）；
 **S5 后续**：动作模式（扣 tries → 自动回滚、VAB 守卫、GK3 记录）、fail-open 写 OneShot、BCB 分派开关（默认关），
-到"可以当开发机默认条目"的程度，给 E5–E8 用（§11）；**S9 Android 侧**（开机完成 bless / 清 streak / 通知、按开关部署，§12，未编译未上机）。执行端（S7）还没开始。
+到"可以当开发机默认条目"的程度，给 E5–E8 用（§11）；**S9 Android 侧**（开机完成 bless / 清 streak / 通知、按开关部署，§12，未编译未上机）；
+**S7a 执行端 `gk3-fastbootd` 协议核心**（fastboot 协议 + FunctionFS / TCP 传输 + 白名单写盘 + ESP 同步 + set_active，离线全绿、未上机，§13）。
+S7b（fastboot initramfs）、S7c（gk3boot 接线：分派到执行端）还没做。
 
 ## 1. 结构
 
@@ -26,6 +28,8 @@ tools/gk3boot/
 │     ├─ bootimg.c          boot.img v0–v2 头解析 + SHA1(id) 复算
 │     └─ cmdline.c          Android 交接 cmdline（§4.3.1）、执行端 cmdline（§4.4.1）、ASCII→UCS-2
 ├─ misc/gk3-misc.c          只读 CLI：dump / select / gpt / bootimg（安装器要的 init 子命令留给 S10）
+├─ fastbootd/               执行端 gk3-fastbootd（S7a，§13）：proto 协议框架、cmds 命令、vars getvar、disk 目标盘与白名单、
+│                           sparse、lp（LP 元数据只读 + SHA-256）、esp（ESP 同步 / loader.conf default）、usb（FunctionFS）、tcp、log
 ├─ efi/                     UEFI 程序（在容器里构建，§9）
 │  ├─ Makefile              gnu-efi 构建 → build/efi/*.efi，并自检 PE 头
 │  ├─ lib/gk3efi.[ch]       UEFI 侧共用件：GUID、vsnprintf 子集、日志（屏幕 + ESP 文件）、设备路径转文字、
@@ -38,6 +42,7 @@ tools/gk3boot/
 └─ test/
    ├─ *.c                   主机单测（ASan + UBSan）
    ├─ upstream/             把真正的 libboot_control.cpp 编进来逐字节对拍（shim/ 是 android-base 等的最小垫片）
+   ├─ fbd/                  gk3-fastbootd 的主机单测（test_fbd.c）与容器端到端测试（run.sh + fbd_fixture.py，§13.4）
    └─ vectors/              golden 向量（全部来自实机或发布产物，见 §3）
 ```
 
@@ -1057,4 +1062,123 @@ make -C tools/gk3boot postinstall-test   # postinstall 选直连条目 + gk3_dep
    之后每次开机 `ro.boot.gk3boot.streak=1`、`bootentry.streak=1`（入口 +1、开机完成清零；S9 之前它只增不减），
    `adb exec-out 'dd if=/dev/block/by-name/misc bs=65536 count=1' > m.bin; tools/gk3boot/build/gk3-misc dump m.bin` 看 `boot_streak=0`。
 6. 撤回：`setprop … off` → 重启 → 开机完成时全撤（`EFI/gk3boot/log/` 留着）。
+
+## 13. S7a：执行端 `gk3-fastbootd` 协议核心（2026-10-05，⬜ 离线全绿、未上机）
+
+设计：`docs/boot-entry-design.md` §4.4（新方案里执行端的变化，冲突时以它为准）+ `docs/fastboot-design.md` §4.2.1、§4.4–§4.7、§4.10
+（旧方案 C′ 的执行端细节）。C11（gnu11）、静态链接、Linux aarch64；主机版在 macOS 上也编得出（没有 USB、不挂 ESP，用 `--esp-dir`）。
+盘上格式全部走 `libgk3core`（GPT、BCB、BCAB、VAB、GK3、boot.img），这里只多了协议、sparse、LP 元数据只读解析与 ESP 写入。
+
+### 13.1 命令支持
+
+| 命令 | 实现 | 测试覆盖（`test/fbd/run.sh` 的组） |
+|---|---|---|
+| `getvar` 单项 / `all` | 名字与格式照上游 `fastboot/device/variables.cpp`（数值 `0x…`、未知 → `FAIL Unknown variable`、`all` 逐条 INFO、取不到的跳过）。`version 0.4`、`version-bootloader`=`gk3.bootver`、`product gaokun3`、`serialno gaokun3`、`secure no`、`unlocked yes`、`is-userspace yes`（U4）、`max-download-size`、`slot-count 2`、`current-slot`（`gk3.slot`，`set_active` 后跟着变）、`has-slot:<p>`、`slot-successful/unbootable/retry-count:<x>`（直解 BCAB）、`partition-size/type:<p>`（type 恒 `raw`，§4.6.5）、`is-logical:<p> no`、`super-partition-name`、`snapshot-update-status`（misc VAB，同上游映射）、`battery-voltage/soc/soc-ok`（EC power_supply，读不到 FAIL）；自定义 `gk3-fastbootd-version / gk3-why / gk3-disk / gk3-disk-ok / gk3-disk-error / gk3-entry / gk3-esp-default` | getvar 组 36 项；坏盘 / 多盘组看 `gk3-disk-*` |
+| `download:%08x` | 放内存；0、超过 `max-download-size`、不是 8 位十六进制 → FAIL；会话结束即丢 | 其他命令组 |
+| `flash:<p>` raw | 只认 `boot_a/boot_b/super/userdata/metadata`（`boot` 补当前槽）；超出分区 → FAIL 一字节不写；写 → fsync + 丢缓存 → 逐字节读回 | flash boot / 白名单 / sparse 组 |
+| `flash:<p>` sparse | 先整份校验（越界、chunk 长度、块数合计、尾部多余字节、未知类型）再写；DONT_CARE 不碰盘；读回同样按 chunk 比对 | 主机切 3 片的真 super；手造 ok + 5 种畸形 |
+| `flash:boot_x` | 只收 raw 的 header v2（kernel/ramdisk/dtb 非空、SHA1(id) 对）；写完**同一条命令里**同步 ESP 的 `<mid>/android/slot_x/{Image,ramdisk.img,gaokun3.dtb,cmdline.txt}` 与直连条目 `options`；ESP 失败 → FAIL 写明"分区已写、回落路径仍是旧内核" | 出厂 + 双系统布局逐文件 cmp |
+| `flash:super` | 整块；最低写入偏移 < 1 MiB 的那一片刷完后解析 LP 元数据、报服务的槽；active 槽不被服务而另一槽被服务时按 `set_active` 规则自动切；有 cancel 记录时收尾（下文）；MERGING 拒绝 | super 组、set_active 组、VAB 组 |
+| `flash:<逻辑分区>` | FAIL"只支持整块 super" | 白名单组 |
+| `erase:userdata\|metadata` | userdata：BLKDISCARD（尽力）+ 开头 / 末尾 1 MiB 写零读回；metadata：整块写零读回；INFO "Will be formatted by Android on next boot"；SNAPSHOTTED / MERGING 拒绝 | erase 与 -w 组、VAB 组 |
+| `erase:<其他>` | FAIL（cache 在 partition-type 那一步就 FAIL，主机 `-w` 跳过） | 白名单组 |
+| `-w` | 主机侧 = partition-type → erase → "not automatically formatting"（报 raw） | erase 与 -w 组（开头 4 KiB 全零） |
+| `set_active:<a\|b>` | 守卫：①VAB 不是 MERGING；②`boot_x` 是 SHA1 对得上的 boot.img；③super 的 LP 槽 x 有 `_x` 分区；④目标槽可启动，或本会话刷过 `boot_x`；⑤ESP 上 `slot_x` 三个文件在。写 `gk3_bcab_set_active`（libboot_control 语义），再改 loader.conf default（失败只 INFO，misc 是真相源） | BCAB 32 字节与独立 Python 实现逐字节相等；loader.conf；各守卫的拒绝 |
+| `snapshot-update:cancel` | MERGING → FAIL"先正常开机"；没有快照 → OKAY；SNAPSHOTTED → OKAY 并记下，整块刷 super 时收尾：misc VAB 的 merge_status 置 NONE + metadata 整块清零 | VAB 组 |
+| `snapshot-update:merge` | FAIL | VAB 组 |
+| `reboot` | 冷重启，BCB 不动 | 重启组 |
+| `reboot-bootloader` / `reboot-recovery` | BCB 的 command 为空才写 `bootonce-bootloader` / `boot-recovery`（init 的写法，`reboot.cpp:915-937`），写后读回，然后重启 ⇒ gk3boot 按 BCB 分派回执行端 | BCB sha256 与独立期望一致；待执行的 wipe 不被覆盖 |
+| `reboot-fastboot` | 整份重写为 `boot-recovery` + `recovery\n--fastboot\n`（init 的 `write_bootloader_message(options)`）；BCB 里有待执行的 wipe 时不动；主机端因 `is-userspace=yes` 实际不会发它 | 原始命令 |
+| `shutdown` / `powerdown` | 关机 | 原始命令 |
+| `flashing unlock\|unlock_critical` / `get_unlock_ability` / `lock*` | OKAY（恒解锁）/ `get_unlock_ability: 1` / FAIL | 其他命令组 |
+| `oem log` / `oem device-info` / `oem help` | 环形缓冲最近 400 行 / 盘、分区、进入时的 BCB、BCAB、VAB、GK3 记录、ESP default | 其他命令组 |
+| `boot`、`continue`、`fetch`、`upload`、`update-super`、`*-logical-partition`、`gsi` | FAIL 并写原因 | 其他命令组 |
+
+进入时（`fb_entry`）：BCB 是 bootloader / fastboot / recovery 类 ⇒ 已经在执行端，整份清掉（= fastbootd 的 `clear_bootloader_message`，
+否则 `fastboot reboot` 又被送回来）；wipe / prompt_wipe ⇒ 原样留给 S7b；其他 ⇒ 不动（gk3boot 自己清）。
+
+### 13.2 与设计稿不同的取舍
+
+1. **`reboot-bootloader / -fastboot / -recovery` 是真重启 + 写 BCB**，不是设计稿 §4.4.2 的"软重新枚举 / 原地切菜单"。理由：走的是与
+   `adb reboot bootloader` 完全相同的一条路（gk3boot 的 BCB 分派），不用再造一种意图（GK3 记录的一次性意图目前只有 sdboot-menu / slot）；
+   刷了 boot_x 之后 `reboot bootloader` 能真的换上新内核；S7a 也还没有菜单可切。代价：多一次冷启动；**依赖 S7c 打开 BCB 分派** ——
+   分派开关关着时，这三条命令会像今天的 `adb reboot bootloader` 一样回到 Android 并留下 BCB（gk3boot 记 bcb_ignored）。
+   `fastboot reboot fastboot` 主机端因 `is-userspace=yes` 根本不发命令，和设计稿一致。
+2. **ESP 同步在 C 里做**，不等 S8 的 `gk3-esp-sync` sh，也不"标记交给下次 Android"：两份设计稿都要求"同一条命令里同步、失败就 FAIL"，
+   而入口以分区为准、ESP 只剩直连回落一个用途 —— 推迟到 Android 去做，会让"刷坏了正要靠回落"的那一次恰好拿到旧内核。
+   规则逐条照 postinstall（直连条目恰好一个、linux 行反推目录、按真实写入量核空间、`.new` → 读回 → rename、options 同步）。
+   S8 抽 `gk3-esp-sync` 时以这份和 postinstall 互为对照。
+3. **set_active 守卫 ④ 的豁免**：设计稿是"目标槽不可启动就拒绝"，但那样刷完 boot_b + super 之后永远切不过去（`set_active` 本身就是让槽重新
+   可启动的唯一手段）。实现为"不可启动且本会话没刷过 boot_x ⇒ 拒绝"，另加守卫 ②（boot_x 的 SHA1 必须对）挡陈旧 `_b`（fastboot-design §2.6）。
+   LP 守卫 ③ 仍是必要不充分。
+4. **misc 不对外暴露**（设计稿如此；"只许 erase 前 2 KiB"的设想没做）：BCB 只经重启类命令与进入处理写。
+5. **`snapshot-update cancel` 的收尾**：设计稿写"清 `/metadata/ota/` 下的快照状态（待 X2 核实）"。执行端不挂 ext4，于是收尾 = misc VAB 置 NONE +
+   metadata 整块清零（Android 下次开机重建）。只在先 `cancel` 再整块刷 super 的那一次做；没 cancel 就刷 super 只 INFO 警告。
+6. **flash 也认 userdata / metadata**（上游 fastbootd 也认），擦写同受 VAB 守卫。
+7. **download 缓冲在会话结束时丢弃**（上游跨会话保留）：TCP 下每个主机进程是一个会话，防止拿上一个进程的数据去刷。
+8. `max-download-size` 缺省 512 MiB（设计稿），测试里用 16 MiB 逼主机切片。
+
+### 13.3 留给 S7b（initramfs）与 S7c（gk3boot 接线）的接口约定
+
+**命令行**（详见 `fastbootd/main.c` 头注）：
+
+```
+gk3-fastbootd [--usb | --no-usb] [--usb-nosetup] [--udc=a600000.usb] [--tcp[=5554]]
+              [--rundir=/run/gk3-fastbootd] [--max-download=0x20000000] [--kmsg] [--log=<文件>]
+              [--cmdline=<文件>] [--disk=<路径>] [--disks=<a,b>] [--esp-dir=<目录>] [--test-reboot=<文件>] [--no-entry] [--version]
+```
+
+S7b 的 `/init` 只需 `exec gk3-fastbootd --kmsg`（缺省就是 USB + 读 `/proc/cmdline`）。守护进程只在没有任何传输能起来时退出（退出码 1），
+`/init` 照 `initramfs-init:27-45` 打印原因后 60 秒 `reboot -f`。重启 / 关机由守护进程自己 `reboot(2)`（先 sync）。
+
+**读的 cmdline 键**（同名取最后一个；值只收 `[A-Za-z0-9._+-:,=/]`）：
+
+| 键 | 用途 | 谁给 |
+|---|---|---|
+| `gk3.disk=<misc 的 PARTUUID>` | 目标盘：只认 misc 是这个 PARTUUID、六个名字各恰好一次的盘；两块都符合（克隆盘）⇒ 拒绝。缺省 = 扫全部盘、要求恰好一块 | gk3boot（`gk3_cmdline_fastboot` 已有） |
+| `gk3.slot=a\|b\|0\|1` | `current-slot` 初值；没给就取 BCAB 里 priority 最高的槽 | gk3boot（已有） |
+| `gk3.why=<…>` | 只记录（`gk3-why`、日志）；进入时的 BCB 处理看 BCB 本身 | gk3boot（已有） |
+| `gk3.bootver=<…>` | `version-bootloader` | gk3boot（已有） |
+| `gk3.esp=<ESP 的 PARTUUID>` | **新增、可选**：只认这块 ESP（gk3boot 自己从哪个 ESP 起的，LoadedImage→DeviceHandle 的 HD 节点）；没给就在目标盘上按内容找（带 `*-android-*.conf` 的 vfat 恰好一个） | S7c 加进 `gk3_fastboot_args` |
+| `gk3.fbtcp=1` | 打开 TCP 5554（发布缺省关；**不认证**） | 只能手改条目（`editor no`）/ 开发构建 |
+| `gk3.serialno=<…>` | 可选，缺省 `gaokun3`（U5 未定） | — |
+
+`gk3.mode=fastboot` 不看（那是给 `/init` 分流用的）。
+
+**USB gadget 的前置要求**（缺省 `--usb` 时，除前两条外守护进程自己做完）：
+- 内核：`CONFIG_USB_CONFIGFS=y`、`CONFIG_USB_CONFIGFS_F_FS=y`（实机都是 `=y`，fastboot-design §2.7），以及 vfat 和它要的 NLS（ESP 同步要挂）；
+- `/init` 挂好 `proc`、`sysfs`、`devtmpfs`（找盘看 `/sys/block`；整盘 / ESP 分区节点不在就在 rundir 里按 maj:min mknod）；
+- configfs：没挂就自己挂到 `/sys/kernel/config`；建 `usb_gadget/g1`（18D1:4EE0、bcdUSB 0x0200、serial、`configs/b.1`、`functions/ffs.fastboot`）；
+- functionfs：`mount -t functionfs fastboot /dev/usb-ffs/fastboot -o no_disconnect=1`，写描述符（v2 FS/HS/SS，失败退 v1）与字符串，**之后**才写 `UDC`；
+- role：`/sys/class/usb_role/<udc>-role-switch/role` 不是 `device` 才写一次，并等 `/sys/class/udc/<udc>` 出现（≤ 6 秒）；**不碰 dwc3 的 bind**；
+- `/init` 若要自己建 gadget（比如同一个 gadget 里再挂 ACM 控制台），给 `--usb-nosetup`：守护进程只打开 `/dev/usb-ffs/fastboot/ep0` 写描述符，
+  `UDC` 由 `/init` 在那之后写（顺序反了绑不上）；
+- 不挂起：守护进程启动时写 `/sys/power/wake_lock gk3fastboot`；`/init` 不要起任何会写 `/sys/power/state` 的东西。
+
+**misc 的读写面**（S7c 的分派与之对齐）：只写 BCB（0–2 KiB，重启类与进入处理）、BCAB（2048–2079，`set_active`）、VAB（32 KiB 起 64 字节，只在
+cancel 收尾时把 merge_status 置 NONE）；不写 GK3 记录（事件环留给 S7b 的恢复出厂结果）。gk3boot 的 BCB 分派对执行端写出的三种 BCB 应当分别给出
+why=bootloader / fastboot / recovery，bootloader / fastboot 两类照 §4.3.4 先清 command 再进执行端。
+
+### 13.4 测试
+
+```sh
+make -C tools/gk3boot fbd-unit                  # SHA-256 / sparse / LP 元数据：32/32（macOS clang 与容器 gcc 都跑）
+bash scripts/gk3boot/test-fastbootd.sh          # arm64 容器（镜像 fbd-gk3-fastbootd-test，--privileged）：静态版 + ASan/UBSan 版各一遍
+```
+
+2026-10-05 结果：静态版 197/197、ASan+UBSan 版 197/197（守护进程 stderr 无 sanitizer 报告），单测 32/32；
+静态二进制 860,104 字节（glibc 静态、strip；`tools/gk3boot/build/fbd/gk3-fastbootd.static`）。
+夹具（`test/fbd/fbd_fixture.py`）：自写 GPT 的整盘镜像 —— 出厂布局（esp/userdata/救援/misc/boot_a/boot_b/super/metadata，misc 用实机向量）、
+双系统布局（"EFI system partition" + MSR + 两个 "Basic data partition"）、重名 `boot_a`、缺 `metadata`、两块好盘、两块克隆盘；
+ESP 用 mkfs.vfat + mtools 照安装器摆；LP 元数据用 hashlib 独立算校验和；BCAB 期望值是 libboot_control `SetActiveBootSlot` 的独立 Python 实现。
+主机端是 Debian 13 的 `fastboot 34.0.5`；主机端会先拦下或会重排的输入（畸形 sparse、`reboot-fastboot`、`set_active:c` 等）由夹具的 TCP 客户端直发。
+每组前后对整盘做分区级 sha256（含 GPT 区与空隙），断言白名单外一字节不变。
+
+### 13.5 已知限制
+
+- **USB 传输没跑过**：colima 的内核没有 dummy_hcd / usb_f_fs 模块，FunctionFS 一路只在编译期钉住了描述符形状（与上游同形的 `_Static_assert`）。
+  第一次真跑在 S7b 之后的上机。
+- 没有界面、没有恢复出厂流程（BCB 的 wipe / prompt_wipe 原样保留）、没有 "Other systems"（写 OneShot）—— S7b。
+- `fastboot update <zip>` 只在协议层可行（主机拆 zip 后发的还是 flash / set_active），没测。
+- 静态 glibc 约 840 KB；换 musl 应能小很多，S7b 定 initramfs 工具链时再说。
 
