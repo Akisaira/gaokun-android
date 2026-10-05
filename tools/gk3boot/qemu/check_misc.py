@@ -52,7 +52,7 @@ def rec(m):
         s, code, slot, fl, aux = struct.unpack_from("<IHBBI", e, 0)
         if s:
             evs.append((s, EV.get(code, str(code)), slot, aux))
-    return dict(valid=valid, flags=flags, streak=r[20], seq=seq, events=evs, dispatch=(r[23], r[25]),
+    return dict(valid=valid, flags=flags, streak=r[20], ok_streak=r[27], seq=seq, events=evs, dispatch=(r[23], r[25]),
                 bcb_seen=struct.unpack_from("<I", r, 356)[0])
 
 
@@ -68,6 +68,8 @@ def main():
     ap.add_argument("--rec-events", type=int, help="事件环里的条数")
     ap.add_argument("--rec-bcb-seen", action="store_true", help="bcb_seen = CRC32(BCB)（分派关时记下的那份）")
     ap.add_argument("--rec-dispatch", help="分派记录 why:count（why 是 gk3_bcb_kind 的数值，wipe = 3），如 3:1")
+    ap.add_argument("--rec-ok-streak", type=int, help="偏移 27 的 ok_streak（S7c 的 bootloop 判据）")
+    ap.add_argument("--bcb-cleared", action="store_true", help="BCB（0–2 KiB）允许变，且之后必须整份全零（S7c 分派清掉）")
     a = ap.parse_args()
     b, c = open(a.before, "rb").read(), open(a.after, "rb").read()
     ok(len(b) == len(c) == 65536, "两份都是 64 KiB")
@@ -79,12 +81,17 @@ def main():
         ok(not diff, "misc 64 KiB 逐字节不变")
         return
     allowed = set(range(8192, 10240))
+    if a.bcb_cleared:
+        allowed |= set(range(0, 2048))
     if a.bcab:
         allowed |= set(range(2048 + 12, 2048 + 16)) | set(range(2048 + 28, 2048 + 32))
     stray = [i for i in diff if i not in allowed]
     ok(not stray, "只动了允许的字节（%s + GK3 记录）%s" % ("BCAB 槽位与 CRC" if a.bcab else "BCAB 不动",
                                                     "" if not stray else "；越界：%s" % stray[:16]))
-    ok(b[0:2048] == c[0:2048], "BCB（0–2 KiB）原样")
+    if a.bcb_cleared:
+        ok(c[0:2048] == bytes(2048), "BCB（0–2 KiB）整份清零（之前 %s）" % ("非空" if b[0:2048] != bytes(2048) else "已是空的"))
+    else:
+        ok(b[0:2048] == c[0:2048], "BCB（0–2 KiB）原样")
     ok(b[16384:] == c[16384:], "16 KiB 起的系统区（virtual_ab 等）原样")
     bv, bcrc, bsl = bcab(b)
     av, acrc, asl = bcab(c)
@@ -100,12 +107,15 @@ def main():
     else:
         ok(b[2048:2080] == c[2048:2080], "BCAB 逐字节不变")
     r = rec(c)
-    if a.rec_streak is not None or a.rec_flags is not None or a.rec_event or a.rec_events is not None or a.rec_dispatch:
+    if a.rec_streak is not None or a.rec_flags is not None or a.rec_event or a.rec_events is not None or a.rec_dispatch \
+            or a.rec_ok_streak is not None:
         ok(r["valid"], "GK3 记录有效（magic / version / size / CRC32）")
         print("  GK3 记录：streak=%u flags=0x%x seq=%u bcb_seen=%08x dispatch(why,count)=%s 事件=%s" % (
             r["streak"], r["flags"], r["seq"], r["bcb_seen"], r["dispatch"], r["events"]))
     if a.rec_streak is not None:
         ok(r["streak"] == a.rec_streak, "boot_streak = %d" % a.rec_streak)
+    if a.rec_ok_streak is not None:
+        ok(r["ok_streak"] == a.rec_ok_streak, "ok_streak = %d（得到 %d）" % (a.rec_ok_streak, r["ok_streak"]))
     if a.rec_flags is not None:
         ok(r["flags"] == a.rec_flags, "flags = 0x%x（bit0 已迁移、bit1 回落中）" % a.rec_flags)
     if a.rec_events is not None:

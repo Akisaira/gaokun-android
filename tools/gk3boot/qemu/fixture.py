@@ -171,7 +171,8 @@ GK3BOOT_ENTRY = "gk3boot-e4.conf"
 COUNTER = re.compile(r"\+\d+(-\d+)?(?=\.conf$)")
 
 
-def esp_tree(stage, variant, gk3boot_options=None, gk3boot_entry=GK3BOOT_ENTRY, loader_default="*-android-a.conf"):
+def esp_tree(stage, variant, gk3boot_options=None, gk3boot_entry=GK3BOOT_ENTRY, loader_default="*-android-a.conf",
+             fastboot_img=None):
     """在 stage 目录下摆出 ESP 的内容。返回条目文件名等信息。
     gk3boot_options 不为 None 时摆 gk3boot（S5）的条目，否则摆探针（S4）的条目。
     gk3boot_entry：条目文件名。gk3boot-e4.conf（E4 的样子：非默认、经 OneShot 进入）；
@@ -208,6 +209,9 @@ def esp_tree(stage, variant, gk3boot_options=None, gk3boot_entry=GK3BOOT_ENTRY, 
     if gk3boot_options is not None:
         # 与 README §10 的上机步骤同一份条目：文件名不匹配 *-android-*.conf、不带计数、title 只用 ASCII（§4.13）
         put("EFI/gk3boot/e4/gk3boot.efi", open(os.path.join(EFI_BUILD, "gk3boot.efi"), "rb").read())
+        if fastboot_img:
+            # 执行端 initramfs（S7c）：与 gk3boot.efi 同目录（设计稿 §4.1）
+            put("EFI/gk3boot/e4/fastboot.img", open(fastboot_img, "rb").read())
         as_default = gk3boot_entry.startswith("gk3boot-android-")
         put("loader/entries/" + gk3boot_entry, (
             "title      %s\n"
@@ -345,7 +349,7 @@ def cmd_mkdisk(a):
 
         # ESP
         stage = tempfile.mkdtemp()
-        info = esp_tree(stage, a.variant, a.gk3boot_options, a.gk3boot_entry, a.loader_default)
+        info = esp_tree(stage, a.variant, a.gk3boot_options, a.gk3boot_entry, a.loader_default, a.fastboot_img)
         esp = at("esp")
         fat = os.path.join(a.out, "esp.tmp")
         make_fat(stage, esp["last"] - esp["first"] + 1, fat, fill=a.variant == "espfull")
@@ -359,7 +363,8 @@ def cmd_mkdisk(a):
         disk=disk_path, sector=SECTOR, total_sectors=total, variant=a.variant, parts=parts,
         boot_a_id=bootimg_id(ba), boot_b_id=bootimg_id(bb), boot_a_source=src_a, mid=MID,
         disk_guid=str(uuid.UUID(bytes_le=disk_guid)),
-        esp_partuuid=str(uuid.UUID(bytes_le=real["esp"]["guid"])), **info)
+        esp_partuuid=str(uuid.UUID(bytes_le=real["esp"]["guid"])),
+        misc_partuuid=str(uuid.UUID(bytes_le=real["misc"]["guid"])), **info)
     with open(os.path.join(a.out, "manifest.json"), "w") as g:
         json.dump(manifest, g, indent=1)
     print("✓ 夹具盘 %s（%d MiB，变体 %s，boot_a=%s）" % (disk_path, total * SECTOR >> 20, a.variant, src_a))
@@ -430,6 +435,9 @@ def cmd_diff(a):
             if k == "misc" and a.allow_misc:
                 print("  misc 变了（交给 check_misc.py 逐字节判）")
                 continue
+            if k in (a.allow_parts or "").split(","):
+                print("  %s 变了（--allow-parts，另行判内容）" % k)
+                continue
             bad.append("块区域 %s 变了" % k)
     added = sorted(set(c["esp"]) - set(b["esp"]))
     removed = sorted(set(b["esp"]) - set(c["esp"]))
@@ -489,6 +497,15 @@ def cmd_vars_get(a):
             print(bytes.fromhex(v["data"]).decode("utf-16-le", "replace").rstrip("\0"))
             return
     print("(absent)")
+
+
+def cmd_part_get(a):
+    m = json.load(open(a.manifest))
+    p = next(x for x in m["parts"] if x["name"] == a.name)
+    with open(a.disk, "rb") as f:
+        f.seek(p["first"] * SECTOR)
+        data = f.read((p["last"] - p["first"] + 1) * SECTOR)
+    open(a.out, "wb").write(data)
 
 
 def cmd_misc_get(a):
@@ -568,6 +585,42 @@ def fdt_add_root_prop(dtb, name, value):
     return bytes(head) + new_struct + new_strings
 
 
+EXEC_HOOK = r"""# S7c 端到端的测试钩子（只在测试 overlay 里有）：/init 解析完 cmdline 之后 source
+for m in %(mods)s; do insmod /lib/modules-test/$m 2>/dev/null || echo "[test-hook] insmod $m failed" > /dev/console; done
+GK3_UDC=dummy_udc.0
+GK3_TRACE=1
+GK3_QUIET=0
+# 夹具的盘是 NVMe（模块，异步探测）：等它出来再往下走 —— 真机的 nvme 是内建的，/init 跑起来时早就在了
+i=0; while [ ! -e /sys/block/nvme0n1 ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+echo "[test-hook] modules loaded, disk $(ls /sys/block | tr '
+' ' ')" > /dev/console
+# 宿主 fastboot 走 TCP（gk3.fbtcp=1）：QEMU user 网络的固定地址（qemu_run.py --net-fwd）
+busybox ip link set lo up 2>/dev/null
+busybox ip link set eth0 up 2>/dev/null && busybox ip addr add 10.0.2.15/24 dev eth0 2>/dev/null
+echo "[test-hook] net: $(busybox ip -o -4 addr show 2>/dev/null | tr '
+' ' ')" > /dev/console
+# 守护进程的日志抄到串口（判定用）
+( while [ ! -f /run/gk3/fastbootd.log ]; do sleep 0.2; done; tail -n +1 -f /run/gk3/fastbootd.log | sed 's/^/[fbd] /' > /dev/console ) &
+"""
+
+
+def cmd_exec_initrd(a):
+    """执行端的 initrd（S7c 端到端）：fastboot.img 原样 + 一段测试 overlay（gzip cpio 直接拼，内核按顺序解；
+    与 initramfs/test/qemu_fbi.py 同一种做法）。overlay 只多出 test-hook 与测试内核的模块，不替换被测的任何文件。"""
+    order = [m.strip() for m in open(os.path.join(a.modules, "order")) if m.strip()]
+    mods = [m for m in order if not m.startswith(("drm", "virtio-gpu", "virtio_gpu", "virtio_dma_buf"))]
+    ents = [("etc", 0o040755, b"", 0, 0), ("etc/gk3-fbi", 0o040755, b"", 0, 0),
+            ("etc/gk3-fbi/test-hook", 0o100644, (EXEC_HOOK % dict(mods=" ".join(mods))).encode(), 0, 0),
+            ("lib", 0o040755, b"", 0, 0), ("lib/modules-test", 0o040755, b"", 0, 0)]
+    for m in mods:
+        ents.append(("lib/modules-test/" + m, 0o100644, open(os.path.join(a.modules, m), "rb").read(), 0, 0))
+    import gzip
+    with open(a.out, "wb") as f:
+        f.write(open(a.img, "rb").read())
+        f.write(gzip.compress(cpio_newc(ents), mtime=0))
+    print("✓ 执行端 initrd %s（fastboot.img %d 字节 + overlay：%d 个模块）" % (a.out, os.path.getsize(a.img), len(mods)))
+
+
 def cmd_fdt_mark(a):
     d = fdt_add_root_prop(open(a.input, "rb").read(), a.name, a.value)
     open(a.out, "wb").write(d)
@@ -586,10 +639,12 @@ def bcab_slot(prio, tries, ok):
     return prio | (tries << 4) | (int(ok) << 7)
 
 
-def gk3_record(migrated=False):
-    """GK3 记录 v1（README §5 的布局）：magic / version / size / flags，CRC32 在 2044。"""
+def gk3_record(migrated=False, streak=0, ok_streak=0):
+    """GK3 记录 v1（README §5 的布局）：magic / version / size / flags，boot_streak 在 20、ok_streak 在 27，CRC32 在 2044。"""
     r = bytearray(2048)
     struct.pack_into("<IHHII", r, 0, 0x52334B47, 1, 2048, 1 if migrated else 0, 1 if migrated else 0)
+    r[20] = streak
+    r[27] = ok_streak
     struct.pack_into("<I", r, 2044, zlib.crc32(bytes(r[:2044])) & 0xffffffff)
     return bytes(r)
 
@@ -610,7 +665,9 @@ def cmd_misc(a):
       b-ok       _b 15/1/已成功、_a 14/0（= 2026-10-05 开发机的样子，E4 日志）
       bcb-wipe   原样 + BCB = 设置里的"清除所有数据"（boot-recovery / --wipe_data --reason=…）
       bcb-wipe-migrated  bcb-wipe + 一份已迁移的 GK3 记录（分派打开时会走到"进执行端 why=wipe"那一支）
-      merging    VAB merge_status=MERGING（源槽 _a）+ _b 15/0 未成功（不可启动）、_a 14/1 已成功 → 守卫：不许回落到 _a"""
+      merging    VAB merge_status=MERGING（源槽 _a）+ _b 15/0 未成功（不可启动）、_a 14/1 已成功 → 守卫：不许回落到 _a
+      bcb-bootloader-migrated  BCB = bootonce-bootloader（adb reboot bootloader）+ 已迁移的记录（S7c：进执行端 why=bootloader）
+      bootloop   已迁移的记录、boot_streak = ok_streak = 5（已确认的 _a 连续 5 次没开机完成）、BCB 空（S7c：why=bootloop）"""
     m = bytearray(open(MISC_VEC, "rb").read())
     bc = m[2048:2080]
     v = a.variant
@@ -621,6 +678,12 @@ def cmd_misc(a):
     elif v == "b-ok":
         bc[0:3] = b"_b\0"
         struct.pack_into("<HH", bc, 12, bcab_slot(14, 0, False), bcab_slot(15, 1, True))
+    elif v == "bcb-bootloader-migrated":
+        m[0:2048] = b"\0" * 2048
+        m[0:19] = b"bootonce-bootloader"
+        m[8192:10240] = gk3_record(migrated=True)
+    elif v == "bootloop":
+        m[8192:10240] = gk3_record(migrated=True, streak=5, ok_streak=5)
     elif v in ("bcb-wipe", "bcb-wipe-migrated"):
         m[0:2048] = bcb_recovery("--wipe_data", "--reason=MasterClearConfirm", "--locale=zh-CN")
         if v == "bcb-wipe-migrated":
@@ -654,6 +717,7 @@ def main():
     p.add_argument("--corrupt-b", action="store_true")
     p.add_argument("--gk3boot-entry", default=GK3BOOT_ENTRY)
     p.add_argument("--loader-default", default="*-android-a.conf")
+    p.add_argument("--fastboot-img", help="放到 EFI/gk3boot/e4/fastboot.img 的执行端 initramfs（S7c）")
     p = sp.add_parser("snapshot")
     p.add_argument("disk")
     p.add_argument("manifest")
@@ -662,10 +726,16 @@ def main():
     p.add_argument("before")
     p.add_argument("after")
     p.add_argument("--allow-misc", action="store_true")
+    p.add_argument("--allow-parts", help="逗号分隔：这些分区允许变（执行端的恢复出厂擦 userdata / metadata）")
     p.add_argument("--new-logs-out")
     p = sp.add_parser("vars-get")
     p.add_argument("input")
     p.add_argument("name")
+    p = sp.add_parser("part-get")
+    p.add_argument("disk")
+    p.add_argument("manifest")
+    p.add_argument("name")
+    p.add_argument("out")
     p = sp.add_parser("misc-get")
     p.add_argument("disk")
     p.add_argument("manifest")
@@ -682,6 +752,10 @@ def main():
     p = sp.add_parser("initramfs")
     p.add_argument("--init", required=True)
     p.add_argument("--marker", required=True)
+    p.add_argument("--out", required=True)
+    p = sp.add_parser("exec-initrd")
+    p.add_argument("--img", required=True)
+    p.add_argument("--modules", required=True)
     p.add_argument("--out", required=True)
     p = sp.add_parser("fdt-mark")
     p.add_argument("input")
@@ -700,8 +774,8 @@ def main():
     p.add_argument("--out", required=True)
     a = ap.parse_args()
     dict(mkdisk=cmd_mkdisk, snapshot=cmd_snapshot, diff=cmd_diff, vars=cmd_vars, esp_get=cmd_esp_get,
-         vars_get=cmd_vars_get, misc_get=cmd_misc_get,
-         initramfs=cmd_initramfs, fdt_mark=cmd_fdt_mark, mkbootimg=cmd_mkbootimg, misc=cmd_misc)[
+         vars_get=cmd_vars_get, misc_get=cmd_misc_get, part_get=cmd_part_get,
+         initramfs=cmd_initramfs, fdt_mark=cmd_fdt_mark, exec_initrd=cmd_exec_initrd, mkbootimg=cmd_mkbootimg, misc=cmd_misc)[
         a.cmd.replace("-", "_")](a)
 
 

@@ -33,7 +33,17 @@
 #                    跑两次：OneShot 用过即删（变量库里查不到），第二次又回到 gk3boot（默认条目）、再 fail-open 一次；条目计数 +3→+2-1→+1-2
 #   bcb-present      BCB = boot-recovery --wipe_data，分派关 → 照常启动 _a、BCB 原样；第一次记 BCB_IGNORED 事件 + 日志，第二次不重复
 #   vab-merging      VAB 合并中、active 槽 _b 不可启动 → 不回落到 _a（守卫），fail-open 到 _b 的直连条目；misc 一个字节不变
-#   bcb-dispatch     gk3.dispatch=1 + 已迁移的 GK3 记录 + wipe BCB → 决定"进执行端 why=wipe 第 1 次"，只记录、BCB 原样、照常启动
+#   bcb-dispatch     gk3.dispatch=1 + 已迁移的 GK3 记录 + wipe BCB，ESP 上没有执行端 → 记日志、照常启动、BCB 原样（不消费）
+#   migrate          gk3.dispatch=1、没有迁移标记、存量 wipe BCB → 首跑迁移：只清不执行、置标记（§4.10）
+#   exec-missing     同 bcb-dispatch，BCB 换成 bootonce-bootloader
+#
+# S7c 执行端端到端（要 FBI_IMG / FBI_MODULES，见下面 need_exec；scripts/gk3boot/test-executor.sh 一键）：
+#   exec-bootloader  BCB=bootonce-bootloader → 入口清 BCB、用 boot_a 的内核 + ESP 上的 fastboot.img 起执行端 → /init 起 gadget
+#                    （dummy_udc）+ 真 gk3-fastbootd（TCP）→ 宿主 fastboot getvar all、reboot bootloader（守护进程写 BCB、
+#                    退出码 0）→ 冷重启又进执行端 → getvar all、reboot → Android
+#   exec-wipe        BCB=--wipe_data（已迁移）→ 执行端免确认擦 userdata / metadata → 重启 → Android；userdata 头 4 KiB 全零
+#   exec-bootloop    已确认的 _a 连续 5 次没开机完成 → 执行端 why=bootloop → fastboot reboot → Android（ok_streak 清零）
+#   exec-tools       gk3boot-tools.conf（gk3.action=fastboot，经 OneShot）→ 执行端；分派关 ⇒ reboot bootloader 原地重起（11）
 set -uo pipefail
 cd "$(dirname "$0")/.."
 O=build/qemu-boot
@@ -48,7 +58,9 @@ PROC_VEC=test/vectors/proc-cmdline-20261005.txt
 SCEN=("$@")
 if [ ${#SCEN[@]} -eq 0 ]; then
     SCEN=(linux-a linux-b force-a strictnx espfull badsha miscerr
-          action-normal action-tries failopen-oneshot bcb-present vab-merging bcb-dispatch)
+          action-normal action-tries failopen-oneshot bcb-present vab-merging bcb-dispatch migrate exec-missing)
+    [ -n "${FBI_IMG:-}" ] && [ -s "${FBI_IMG:-}" ] && [ -s "${FBI_MODULES:-/nonexistent}/order" ] && \
+        SCEN+=(exec-bootloader exec-wipe exec-bootloop exec-tools)
     [ -n "${BOOTIMG:-}" ] && [ -f "$BOOTIMG" ] && SCEN=(real "${SCEN[@]}")
 fi
 RESULTS=()
@@ -83,9 +95,13 @@ $FX mkbootimg --kernel "$C/vmlinuz" --ramdisk "$P/initramfs.cpio.gz" --dtb "$P/d
     --name linux-a --out "$P/linux-a.img" || exit 1
 $FX mkbootimg --kernel "$C/vmlinuz" --ramdisk "$P/initramfs.cpio.gz" --dtb "$P/dtb-b.dtb" --cmdline "$CL_B" \
     --name linux-b --out "$P/linux-b.img" || exit 1
-for v in b-active b-try3 b-ok bcb-wipe bcb-wipe-migrated merging; do
+for v in b-active b-try3 b-ok bcb-wipe bcb-wipe-migrated merging bcb-bootloader-migrated bootloop; do
     $FX misc --variant $v --out "$P/misc-$v.bin" || exit 1
 done
+
+if [ -n "${FBI_IMG:-}" ] && [ -s "${FBI_IMG:-}" ] && [ -s "${FBI_MODULES:-/nonexistent}/order" ]; then
+    $FX exec-initrd --img "$FBI_IMG" --modules "$FBI_MODULES" --out "$P/exec.initrd" || exit 1
+fi
 
 # ---------------------------------------------------------------- 一次运行
 # run_one 名字 目录 [qemu_run 额外参数...] -- [check_boot 参数...]
@@ -166,6 +182,72 @@ fresh() {   # $1 目录，其余是 mkdisk 参数
     rm -rf "$d" && mkdir -p "$d"
     $FX mkdisk --out "$d" "$@" >/dev/null || return 1
     cp "$VARS0" "$d/vars.fd"
+}
+
+
+# ---------------------------------------------------------------- S7c：执行端端到端（exec-*）
+# 要 FBI_IMG（tools/gk3boot/build/fastboot/fastboot.img，带真 gk3-fastbootd）与 FBI_MODULES（与测试内核同版本的模块，
+# initramfs/test/run-tests.sh --prep 取的 build/cache-fbi/modules）；测试内核也必须是 build/cache-fbi/vmlinuz
+# （scripts/gk3boot/test-boot.sh 在两样都在时自动这么配）。ESP 上的 fastboot.img = 原样 + 测试 overlay（模块、test-hook）。
+FBPORT=15554
+need_exec() {
+    [ -n "${FBI_IMG:-}" ] && [ -s "$FBI_IMG" ] && [ -n "${FBI_MODULES:-}" ] && [ -s "$FBI_MODULES/order" ] && [ -s "$P/exec.initrd" ] \
+        || { echo "✗ 缺 FBI_IMG / FBI_MODULES（用 scripts/gk3boot/test-executor.sh 跑，或先 build-fastboot-img.sh + run-tests.sh --prep）"; return 1; }
+}
+t() {   # t 描述 命令…：一条断言
+    local d=$1
+    shift
+    if "$@" >/dev/null 2>&1; then echo "  ✓ $d"; return 0; fi
+    echo "  ✗ $d"
+    return 1
+}
+# host_script 目录 片段：宿主侧在"守护进程 ready"时跑的脚本（GK3_ON_N = 第几次 ready）；fb = 带重试连上的 fastboot
+host_script() {
+    cat > "$1/host.sh" <<EOF
+D=$1
+fb() { fastboot -s tcp:127.0.0.1:$FBPORT "\$@"; }
+# TCP 监听与 "ready" 那一行之间没有先后保证：先等 getvar 通（≤ 20 秒）
+i=0; until fb getvar product >/dev/null 2>&1 || [ \$i -ge 40 ]; do sleep 0.5; i=\$((i + 1)); done
+$2
+EOF
+}
+# exec_run 场景 目录 允许变的分区 [OneShot 条目]：一次 QEMU 跑完整条路（入口 → 执行端 →（宿主命令）→ … → Android 关机）
+exec_run() {
+    local name=$1 d=$2 allow=$3 oneshot=${4:-} rc=0 out r on=()
+    $FX snapshot "$d/disk.img" "$d/manifest.json" "$d/before.json" || return 1
+    $FX misc-get "$d/disk.img" "$d/manifest.json" "$d/misc-before.bin" || return 1
+    if [ -n "$oneshot" ]; then
+        $FX vars "$d/vars.fd" "$d/vars.fd.new" --oneshot "$oneshot" >/dev/null && mv "$d/vars.fd.new" "$d/vars.fd" || return 1
+    fi
+    [ -f "$d/host.sh" ] && on=(--net-fwd "$FBPORT" --on "] ready" --run "sh $d/host.sh")
+    python3 qemu/qemu_run.py --code "$CODE" --disk "$d/disk.img" --vars "$d/vars.fd" --log "$d/serial.log" \
+        --timeout 900 --machine-opts acpi=off "${on[@]}" || rc=1
+    python3 - "$d/serial.log" "$d/serial.txt" <<'EOF'
+import re, sys
+b = open(sys.argv[1], "rb").read()
+b = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b\[[0-9;]*\]|\x1b[()][A-Za-z0-9]|\x1b[=>]", b"", b).replace(b"\r", b"")
+open(sys.argv[2], "wb").write(b)
+EOF
+    $FX snapshot "$d/disk.img" "$d/manifest.json" "$d/after.json" || return 1
+    $FX misc-get "$d/disk.img" "$d/manifest.json" "$d/misc-after.bin" || return 1
+    echo "盘的前后比对（misc 交给 check_misc.py${allow:+；$allow 允许变}）："
+    out=$($FX diff "$d/before.json" "$d/after.json" --allow-misc ${allow:+--allow-parts "$allow"} --new-logs-out "$d/newlogs.txt"); r=$?
+    printf '%s\n' "$out" | sed 's/^/  /'
+    [ $r = 0 ] || rc=1
+    # gk3boot 在动作模式下不上屏幕：它那一侧的经过只在 ESP 日志里（每进一次执行端一份）
+    : > "$d/gk3boot.txt"
+    while read -r nl; do
+        [ -n "$nl" ] || continue
+        $FX esp-get "$d/disk.img" "$d/manifest.json" "$nl" "$d/log.tmp" && { echo "== $nl"; cat "$d/log.tmp"; } >> "$d/gk3boot.txt"
+    done < "$d/newlogs.txt"
+    rm -f "$d/log.tmp"
+    for f in "$d"/getvar-*.txt "$d"/rb-*.txt "$d"/why.txt; do
+        [ -f "$f" ] && { echo "  —— $(basename "$f")"; sed 's/^/     /' "$f" | head -60; }
+    done
+    MISC_UUID=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["misc_partuuid"])' "$d/manifest.json")
+    ESP_UUID=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["esp_partuuid"])' "$d/manifest.json")
+    BOOT_VERSION_RE=$(printf '%s' "$BOOT_VERSION" | sed 's/[.+]/\\&/g')
+    return $rc
 }
 
 OBS="gk3.observe=1 gk3.hold=1"
@@ -309,15 +391,145 @@ for s in "${SCEN[@]}"; do
             M=(--unchanged)
             act_run "$s" "$d" 1; } ;;
     bcb-dispatch)
-        say "bcb-dispatch：gk3.dispatch=1 + 已迁移记录 + wipe → 决定进执行端（第 1 次），只记录、BCB 原样、照常启动"
+        say "bcb-dispatch：gk3.dispatch=1 + 已迁移记录 + wipe，但 ESP 上没有执行端 → 记日志、照常启动、BCB 原样（不消费）"
         fresh "$d" --boot-a "$P/linux-a.img" --boot-b "$P/linux-b.img" --misc "$P/misc-bcb-wipe-migrated.bin" \
             --gk3boot-options "gk3.dispatch=1 gk3.hold=1" --gk3boot-entry gk3boot-android-a.conf && {
             Q=(--machine-opts acpi=off)
             C=(--kind linux --bootimg "$P/linux-a.img" --slot a --event none --entry gk3boot-android-a.conf --streak 1
                --log-has '^mode: action dispatch=on '
-               --log-has '^note: dispatch: action=executor why=wipe count=1 -> this build has no executor \(S7\): recorded only, BCB left as is, booting Android$'
+               --log-has '^dispatch: action=executor why=wipe count=1$'
+               --log-has '^note: executor \(why=wipe\) unavailable: .*fastboot\.img: not on the ESP .* -- booting Android instead \(BCB left as is\)$'
                --dt-marker "gk3boot-dtb-a-$RUN" --initrd-marker "$IMARK")
-            M=(--rec-streak 1 --rec-flags 1 --rec-events 0 --rec-dispatch 3:1)
+            # 分派计数也不记（用进来之前那份记录）；"看到但没消费"的那份 BCB 照分派关时的规矩记一次 bcb_ignored
+            M=(--rec-streak 1 --rec-flags 1 --rec-events 1 --rec-event bcb_ignored:-:3 --rec-bcb-seen --rec-dispatch 0:0)
+            act_run "$s" "$d" 1; } ;;
+    exec-bootloader)
+        say "exec-bootloader（S7c 端到端）：BCB=bootonce-bootloader → gk3boot 清 BCB、经 H2 引导同一个 boot_a 的内核 + fastboot.img"
+        say "  → /init 起 gadget（dummy_udc）+ 真 gk3-fastbootd（TCP）→ 宿主 fastboot getvar all / reboot bootloader → 再进一次 → reboot → Android"
+        need_exec && fresh "$d" --boot-a "$P/linux-a.img" --boot-b "$P/linux-b.img" --misc "$P/misc-bcb-bootloader-migrated.bin" \
+            --gk3boot-options "gk3.dispatch=1 gk3.fbtcp=1 gk3.hold=1" --gk3boot-entry gk3boot-android-a.conf \
+            --fastboot-img "$P/exec.initrd" && {
+            r=0
+            host_script "$d" '
+case $GK3_ON_N in
+1) fb getvar all > "$D/getvar-1.txt" 2>&1; fb reboot bootloader > "$D/rb-1.txt" 2>&1 ;;
+2) fb getvar all > "$D/getvar-2.txt" 2>&1; fb reboot > "$D/rb-2.txt" 2>&1 ;;
+esac'
+            exec_run "$s" "$d" "" || r=1
+            t "两次都由 BCB 分派进执行端（第二次是守护进程 reboot bootloader 写的 BCB）" \
+                test "$(grep -c 'note: executor: why=bootloader (from BCB) slot=_a (kernel boot_a)' "$d/gk3boot.txt")" = 2 || r=1
+            t "执行端的 cmdline（gk3_cmdline_fastboot：androidboot.* 去掉、gk3.* 追加，带 gk3.esp / gk3.dispatch / gk3.fbtcp）" \
+                grep -qE "^executor: kernel boot_a, cmdline\([0-9]+\): console=ttyAMA0 gk3fixture=linux-a panic=10 gk3\.mode=fastboot gk3\.why=bootloader gk3\.slot=a gk3\.bootver=$BOOT_VERSION_RE gk3\.disk=$MISC_UUID gk3\.esp=$ESP_UUID gk3\.dispatch=1 gk3\.fbtcp=1\$" "$d/gk3boot.txt" || r=1
+            t "  第一次进之前 BCB 先清掉（写后读回）" grep -q 'executor: BCB "bootonce-bootloader" (bootloader) cleared before entering (read back OK)' "$d/gk3boot.txt" || r=1
+            t "/init 起来了：gadget 0x18d1:0x4ee0 绑上 dummy_udc.0" grep -q 'gadget: bound to UDC dummy_udc.0' "$d/serial.txt" || r=1
+            t "守护进程收到的环境 / cmdline：why=bootloader dispatch=1 tcp=1（nosetup）" \
+                grep -qE '\[fbd\] .*gk3-fastbootd .* starting: why=bootloader slot=0 .* dispatch=1 usb=1 \(nosetup\) tcp=1' "$d/serial.txt" || r=1
+            for k in 1 2; do
+                t "#$k getvar all：product gaokun3" grep -q '^(bootloader) product:gaokun3' "$d/getvar-$k.txt" || r=1
+                t "#$k getvar all：version-bootloader = 入口版本" grep -qxF "(bootloader) version-bootloader:$BOOT_VERSION" "$d/getvar-$k.txt" || r=1
+                t "#$k getvar all：current-slot a、is-userspace yes、gk3-why bootloader、gk3-disk-ok yes" sh -c "
+                    grep -q '^(bootloader) current-slot:a' '$d/getvar-$k.txt' && grep -q '^(bootloader) is-userspace:yes' '$d/getvar-$k.txt' &&
+                    grep -q '^(bootloader) gk3-why:bootloader' '$d/getvar-$k.txt' && grep -q '^(bootloader) gk3-disk-ok:yes' '$d/getvar-$k.txt'" || r=1
+            done
+            t "#1 reboot bootloader：守护进程写 BCB，退出码 0 交给 /init 冷重启" sh -c "
+                grep -q 'misc: BCB .bootonce-bootloader. (bootloader) written and read back' '$d/serial.txt' &&
+                grep -q 'fastbootd: exited rc=0' '$d/serial.txt' &&
+                grep -q 'reboot: rebooting to the executor (BCB written, host request)' '$d/serial.txt'" || r=1
+            t "#2 fastboot reboot → Android（fake init 跑起来，cmdline 带 androidboot.gk3boot.mode=action）" sh -c "
+                grep -q 'GK3-INIT hello from the fixture initramfs' '$d/serial.txt' &&
+                grep -q 'androidboot.slot_suffix=_a' '$d/serial.txt' && grep -q 'androidboot.gk3boot.mode=action' '$d/serial.txt'" || r=1
+            t "QEMU 跑完（Android 关机）而不是超时" grep -q '^# qemu exit=0' "$d/serial.log" || r=1
+            echo "misc（开机前 → 全部跑完）："
+            python3 qemu/check_misc.py "$d/misc-before.bin" "$d/misc-after.bin" --bcb-cleared --rec-streak 1 \
+                --rec-ok-streak 1 --rec-flags 1 --rec-events 0 --rec-dispatch 0:0 || r=1
+            [ $r = 0 ]; } ;;
+    exec-wipe)
+        say "exec-wipe（S7c 端到端）：BCB=boot-recovery --wipe_data（已迁移）→ 执行端免确认擦 userdata / metadata → 回 Android"
+        need_exec && fresh "$d" --boot-a "$P/linux-a.img" --boot-b "$P/linux-b.img" --misc "$P/misc-bcb-wipe-migrated.bin" \
+            --gk3boot-options "gk3.dispatch=1 gk3.hold=1" --gk3boot-entry gk3boot-android-a.conf \
+            --fastboot-img "$P/exec.initrd" && {
+            r=0
+            $FX part-get "$d/disk.img" "$d/manifest.json" userdata "$d/ud-before.bin"
+            exec_run "$s" "$d" "userdata,metadata" || r=1
+            t "BCB 分派进执行端 why=wipe（第 1 次），wipe 类 BCB 不先清" sh -c "
+                grep -q 'note: executor: why=wipe (from BCB) slot=_a' '$d/gk3boot.txt' &&
+                ! grep -q 'executor: BCB .* cleared before entering' '$d/gk3boot.txt'" || r=1
+            t "执行端：--wipe-data 免确认成立 → 擦（stdout 原样）" sh -c "
+                grep -q 'fastbootd: --wipe-data -> rc=0 User data erased' '$d/serial.txt'" || r=1
+            t "执行端擦完直接重启（不等按键）" grep -q 'reboot: user data erased (requested by Android)' "$d/serial.txt" || r=1
+            t "回到 Android（fake init）" grep -q 'GK3-INIT hello from the fixture initramfs' "$d/serial.txt" || r=1
+            $FX part-get "$d/disk.img" "$d/manifest.json" userdata "$d/ud.bin"
+            $FX part-get "$d/disk.img" "$d/manifest.json" metadata "$d/md.bin"
+            t "userdata 开头 4 KiB / 1 MiB、末尾 1 MiB 全零；metadata 整块全零" python3 - "$d/ud.bin" "$d/md.bin" "$d/ud-before.bin" <<'EOF'
+import sys
+ud, md, before = (open(x, "rb").read() for x in sys.argv[1:4])
+M = 1 << 20
+assert before[:4096] != bytes(4096), "夹具的 userdata 开头本来就是零？"
+assert ud[:4096] == bytes(4096) and ud[:M] == bytes(M) and ud[-M:] == bytes(M), "userdata 没擦干净"
+assert md == bytes(len(md)), "metadata 没清零"
+EOF
+            [ $? = 0 ] || r=1
+            echo "misc（开机前 → 全部跑完）："
+            # BCB 由执行端擦完才清；回 Android 那次分派计数作废（plan=none）
+            python3 qemu/check_misc.py "$d/misc-before.bin" "$d/misc-after.bin" --bcb-cleared --rec-streak 1 \
+                --rec-flags 1 --rec-events 0 --rec-dispatch 0:0 || r=1
+            [ $r = 0 ]; } ;;
+    exec-bootloop)
+        say "exec-bootloop（S7c 端到端）：已确认的 _a 连续 5 次没开机完成 → 执行端菜单 why=bootloop → fastboot reboot → Android"
+        need_exec && fresh "$d" --boot-a "$P/linux-a.img" --boot-b "$P/linux-b.img" --misc "$P/misc-bootloop.bin" \
+            --gk3boot-options "gk3.dispatch=1 gk3.fbtcp=1 gk3.hold=1" --gk3boot-entry gk3boot-android-a.conf \
+            --fastboot-img "$P/exec.initrd" && {
+            r=0
+            host_script "$d" '
+[ "$GK3_ON_N" = 1 ] && { fb getvar gk3-why > "$D/why.txt" 2>&1; fb reboot > "$D/rb-1.txt" 2>&1; }'
+            exec_run "$s" "$d" "" || r=1
+            t "ok_streak 5 ≥ 阈值 → 执行端 why=bootloop" grep -q 'note: executor: why=bootloop slot=_a' "$d/gk3boot.txt" || r=1
+            t "getvar gk3-why = bootloop" grep -q 'gk3-why: bootloop' "$d/why.txt" || r=1
+            t "回到 Android" grep -q 'GK3-INIT hello from the fixture initramfs' "$d/serial.txt" || r=1
+            echo "misc（开机前 → 全部跑完）："
+            # 进执行端那次：记 bootloop（aux = 5）、ok_streak 清零、boot_streak 不加；回 Android 那次：boot_streak 5→6、ok_streak 0→1
+            python3 qemu/check_misc.py "$d/misc-before.bin" "$d/misc-after.bin" --rec-streak 6 --rec-ok-streak 1 \
+                --rec-flags 1 --rec-events 1 --rec-event bootloop:a:5 || r=1
+            [ $r = 0 ]; } ;;
+    exec-tools)
+        say "exec-tools（S7c 端到端）：systemd-boot 菜单选 gk3boot-tools.conf（gk3.action=fastboot，经 OneShot）→ 执行端 → reboot → 默认条目"
+        need_exec && fresh "$d" --boot-a "$P/linux-a.img" --boot-b "$P/linux-b.img" \
+            --gk3boot-options "gk3.action=fastboot gk3.fbtcp=1 gk3.hold=1" --gk3boot-entry gk3boot-tools.conf \
+            --fastboot-img "$P/exec.initrd" && {
+            r=0
+            host_script "$d" '
+[ "$GK3_ON_N" = 1 ] && { fb getvar gk3-why > "$D/why.txt" 2>&1; fb reboot bootloader > "$D/rb-1.txt" 2>&1; }
+[ "$GK3_ON_N" = 2 ] && { fb reboot > "$D/rb-2.txt" 2>&1; }'
+            exec_run "$s" "$d" "" gk3boot-tools.conf || r=1
+            t "gk3.action=fastboot → 执行端 why=fastboot（不看分派开关）" grep -q 'note: executor: why=fastboot (gk3.action) slot=_a' "$d/gk3boot.txt" || r=1
+            t "getvar gk3-why = fastboot" grep -q 'gk3-why: fastboot' "$d/why.txt" || r=1
+            t "分派关（没有 gk3.dispatch=1）：reboot bootloader 原地重起，不写 BCB（退出码 11）" sh -c "
+                grep -q 'reboot requested: restart (exit code 11 for /init)' '$d/serial.txt' &&
+                grep -q 'fastbootd: exited rc=11' '$d/serial.txt'" || r=1
+            t "第二次 reboot → systemd-boot 默认条目（直连）" grep -q 'GK3-FAKE-ANDROID booted entry=' "$d/serial.txt" || r=1
+            echo "misc（开机前 → 全部跑完）："
+            python3 qemu/check_misc.py "$d/misc-before.bin" "$d/misc-after.bin" --rec-streak 0 --rec-flags 0 --rec-events 0 || r=1
+            [ $r = 0 ]; } ;;
+    exec-missing)
+        say "exec-missing（S7c）：BCB=bootonce-bootloader（已迁移）但 ESP 上没有 fastboot.img → 照常启动 Android，BCB 不消费"
+        fresh "$d" --boot-a "$P/linux-a.img" --boot-b "$P/linux-b.img" --misc "$P/misc-bcb-bootloader-migrated.bin" \
+            --gk3boot-options "gk3.dispatch=1 gk3.hold=1" --gk3boot-entry gk3boot-android-a.conf && {
+            Q=(--machine-opts acpi=off)
+            C=(--kind linux --bootimg "$P/linux-a.img" --slot a --event none --entry gk3boot-android-a.conf --streak 1
+               --log-has '^note: executor \(why=bootloader\) unavailable: .*not on the ESP .* -- booting Android instead \(BCB left as is\)$'
+               --dt-marker "gk3boot-dtb-a-$RUN" --initrd-marker "$IMARK")
+            M=(--rec-streak 1 --rec-flags 1 --rec-events 1 --rec-event bcb_ignored:-:1 --rec-bcb-seen --rec-dispatch 0:0)
+            act_run "$s" "$d" 1; } ;;
+    migrate)
+        say "migrate（S7c，§4.10）：分派开、记录没有迁移标记、BCB 里有一份存量 wipe → 只清不执行、置标记、照常启动"
+        fresh "$d" --boot-a "$P/linux-a.img" --boot-b "$P/linux-b.img" --misc "$P/misc-bcb-wipe.bin" \
+            --gk3boot-options "gk3.dispatch=1 gk3.hold=1" --gk3boot-entry gk3boot-android-a.conf && {
+            Q=(--machine-opts acpi=off)
+            C=(--kind linux --bootimg "$P/linux-a.img" --slot a --event bcb_dropped --entry gk3boot-android-a.conf --streak 1
+               --log-has '^dispatch: action=migrate why=wipe count=0$'
+               --log-has '^note: migration \(§4.10\): first run with dispatch on; existing BCB "boot-recovery" \(wipe\) cleared, NOT executed; marker set \(dispatch_ver 1\)$'
+               --dt-marker "gk3boot-dtb-a-$RUN" --initrd-marker "$IMARK")
+            M=(--bcb-cleared --rec-streak 1 --rec-flags 1 --rec-events 2 --rec-event bcb_dropped:-:3 --rec-dispatch 0:0)
             act_run "$s" "$d" 1; } ;;
     *) echo "✗ 不认识的场景 $s"; false ;;
     esac

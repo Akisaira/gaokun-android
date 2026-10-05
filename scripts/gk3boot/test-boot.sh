@@ -43,6 +43,20 @@ if [ -n "${GK3_TEST_KERNEL:-}" ]; then
     [ -f "$GK3_TEST_KERNEL" ] || { echo "✗ $GK3_TEST_KERNEL 不存在" >&2; exit 2; }
     MNT+=(-v "$GK3_TEST_KERNEL:/testkernel/vmlinuz:ro" -e GK3_TEST_KERNEL=/testkernel/vmlinuz)
 fi
+# S7c 执行端端到端（exec-* 场景）：fastboot.img（build-fastboot-img.sh）与 build/cache-fbi/（initramfs/test/run-tests.sh
+# --prep）都在时自动加上；测试内核换成 cache-fbi 那一份 —— overlay 里的模块必须与内核同版本。
+FB=$ROOT/tools/gk3boot/build
+if [ -s "$FB/fastboot/fastboot.img" ] && [ -s "$FB/cache-fbi/vmlinuz" ] && [ -s "$FB/cache-fbi/modules/order" ]; then
+    MNT+=(-e FBI_IMG=/src/tools/gk3boot/build/fastboot/fastboot.img -e FBI_MODULES=/src/tools/gk3boot/build/cache-fbi/modules)
+    if [ -z "${GK3_TEST_KERNEL:-}" ]; then
+        MNT+=(-e GK3_TEST_KERNEL=/src/tools/gk3boot/build/cache-fbi/vmlinuz)
+    else
+        echo "⚠️ 给了 GK3_TEST_KERNEL：exec-* 场景的模块来自 build/cache-fbi，版本对不上就会 insmod 失败"
+    fi
+    echo "▶ 执行端端到端：fastboot.img $(shasum -a 256 "$FB/fastboot/fastboot.img" | cut -c1-16)…，内核 $(cat "$FB/cache-fbi/vmlinuz.version")"
+else
+    echo "▶ 没有 build/fastboot/fastboot.img 或 build/cache-fbi/（exec-* 场景跳过；scripts/gk3boot/test-executor.sh 会先备齐）"
+fi
 
 # 版本串进 androidboot.bootloader=gk3boot-<串>（→ ro.bootloader）：只准 [A-Za-z0-9._+-]
 rev=$(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
