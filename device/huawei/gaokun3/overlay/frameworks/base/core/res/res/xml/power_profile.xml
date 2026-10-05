@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  gaokun3（华为 MateBook E Go，sc8280xp）的 power_profile —— v1.0 LIVE-5。
+
+  ★ 为什么要有：AOSP 默认那份（frameworks/base/core/res/res/xml/power_profile.xml，crDroid 16.0）
+    "deliberately incorrect"，单核、一个频点、电池 1000 mAh ⇒ 「电池用量」页统计不了 / 全错。
+    这里给一份【保守的估计值】：结构（簇、频点、电池容量）按实测填，各部件的电流是量级估计，
+    【没有用电表测过】—— 只为让用量页按大致合理的比例分摊。批 4（B7 / LIVE-7）用 current_now 实测后整份替换。
+
+  ★ 怎么装上的：DEVICE_PACKAGE_OVERLAYS（device.mk）是【静态】overlay，直接编进 framework-res
+    （构建机实查：framework-res.apk 里 config_defaultRefreshRate = 120、config_ntpRetry = -1，正是本目录
+    values/config.xml 的值；vendor/overlay 里没有 framework-res 的自动 RRO）。PowerProfile 用
+    Resources.getXml(R.xml.power_profile) 读（core/java/com/android/internal/os/PowerProfile.java:345-346、384-391）。
+
+  ★ 单位：mA，按电池标称电压折算（文件头注释的约定）。本机是两串电池：healthd 开机日志
+    `battery l=91 v=8178 … fc=4483000 cc=151` / `l=95 v=7881`（1.0.0-dev.1 / dev.3 的验收 dmesg、logcat，
+    本机 out/accept/ 下）⇒ 标称按 7.7 V（2 × 3.85 V）折算：1 W ≈ 130 mA。同样的功率，数值约是单串手机的一半。
+
+  ★ 键名只用当前解析器认的（PowerProfile.java:495-499、524-525、77-261）。注意 AOSP 默认文件里的
+    cpu.speeds.clusterN / cpu.active.clusterN 已经【不被读取】（解析器没有别名），这里用 cpu.core_speeds / cpu.core_power。
+    用的是"按簇"的老格式（AOSP 自己的 power_profile_test.xml 也是这个格式）：解析器把簇映射成 cpufreq policy 时取
+    每簇第一个 CPU 的编号（PowerProfile.java initCpuScalingPolicies 的 Legacy 分支）⇒ 簇 0 → policy0、簇 1 → policy4，
+    正好对上本机。不写 cpu.power_brackets.*（要么全写要么全不写，否则 initCpuPowerBrackets 抛异常）。
+    步数按下标对应内核的频点表；多了少了框架都只是按 0 处理（getAveragePowerForCpuScalingStep 越界返回 0），不会崩。
+-->
+<device name="Android">
+  <!-- 电池：healthd 的 fc（charge_full，当前满充容量，循环 151 次）= 4483000 µAh。设计容量没读过（EC 0xA2，
+       /sys/class/power_supply/gaokun-ec-battery/charge_full_design），⬜ 上机读一次；用当前满充容量偏保守。 -->
+  <item name="battery.capacity">4483</item>
+
+  <!-- ── CPU ───────────────────────────────────────────────────────────────
+       拓扑：cpu0-3 = Cortex-A78C（capacity-dmips-mhz 981）、cpu4-7 = Cortex-X1C（1024），两个 cpufreq 域
+       （refs/linux-v7.2-rc2/arch/arm64/boot/dts/qcom/sc8280xp.dtsi:49-226，qcom,freq-domain <&cpufreq_hw 0/1>）。
+       频点：实机 /sys/devices/system/cpu/cpufreq/policy{0,4}/stats/time_in_state（1.0.0-dev.3 验收的
+       freq-before.txt）—— policy0 21 档 300.0–2438.4 MHz、policy4 18 档 825.6–2688.0 MHz；与
+       docs/stage6-crdroid.md:1176（max 2.44 / 2.69 GHz）、:1309（cpufreq-cpu0 max_state 20、cpu4 17）一致。
+       每核电流（估计，未实测）：满频 A78C ≈ 1.0 W、X1C ≈ 2.0 W；其余档位按 P = Pmax·(f/fmax)·(V/Vmax)²、
+       电压从最低档的 0.55·Vmax 线性升到满频 Vmax 推算，再按 7.7 V 折成 mA。 -->
+  <array name="cpu.clusters.cores">
+    <value>4</value> <!-- 簇 0：cpu0-3（A78C，policy0） -->
+    <value>4</value> <!-- 簇 1：cpu4-7（X1C，policy4） -->
+  </array>
+  <!-- 整机醒着但 CPU 空闲 / s2idle 挂起时的底电流：没量过（批 4 的 C2 拔线待机会量），先给小值。 -->
+  <item name="cpu.suspend">10</item>
+  <item name="cpu.idle">20</item>
+  <!-- 任一核在跑时的额外开销（互联、DDR 投票等），估计。 -->
+  <item name="cpu.active">20</item>
+  <!-- 簇里有核在跑时簇本身（L3 / 簇电源域）的开销，估计。 -->
+  <item name="cpu.cluster_power.cluster0">10</item>
+  <item name="cpu.cluster_power.cluster1">15</item>
+  <!-- policy0 的 21 个频点（kHz），顺序同 time_in_state。 -->
+  <array name="cpu.core_speeds.cluster0">
+    <value>300000</value>
+    <value>403200</value>
+    <value>499200</value>
+    <value>595200</value>
+    <value>691200</value>
+    <value>806400</value>
+    <value>902400</value>
+    <value>1017600</value>
+    <value>1113600</value>
+    <value>1209600</value>
+    <value>1324800</value>
+    <value>1440000</value>
+    <value>1555200</value>
+    <value>1670400</value>
+    <value>1785600</value>
+    <value>1881600</value>
+    <value>1996800</value>
+    <value>2112000</value>
+    <value>2227200</value>
+    <value>2342400</value>
+    <value>2438400</value>
+  </array>
+  <!-- policy4 的 18 个频点（kHz）。 -->
+  <array name="cpu.core_speeds.cluster1">
+    <value>825600</value>
+    <value>940800</value>
+    <value>1056000</value>
+    <value>1171200</value>
+    <value>1286400</value>
+    <value>1401600</value>
+    <value>1516800</value>
+    <value>1632000</value>
+    <value>1747200</value>
+    <value>1862400</value>
+    <value>1977600</value>
+    <value>2073600</value>
+    <value>2169600</value>
+    <value>2284800</value>
+    <value>2400000</value>
+    <value>2496000</value>
+    <value>2592000</value>
+    <value>2688000</value>
+  </array>
+  <!-- 每核电流（mA），与上面逐档对应：满频 1.0 W / 7.7 V ≈ 130 mA。 -->
+  <array name="cpu.core_power.cluster0">
+    <value>4.8</value>
+    <value>7.0</value>
+    <value>9.3</value>
+    <value>11.9</value>
+    <value>14.7</value>
+    <value>18.5</value>
+    <value>22.0</value>
+    <value>26.6</value>
+    <value>30.9</value>
+    <value>35.4</value>
+    <value>41.4</value>
+    <value>47.9</value>
+    <value>54.9</value>
+    <value>62.5</value>
+    <value>70.8</value>
+    <value>78.1</value>
+    <value>87.5</value>
+    <value>97.6</value>
+    <value>108.3</value>
+    <value>119.8</value>
+    <value>129.9</value>
+  </array>
+  <!-- 每核电流（mA）：满频 2.0 W / 7.7 V ≈ 260 mA。 -->
+  <array name="cpu.core_power.cluster1">
+    <value>24.1</value>
+    <value>30.4</value>
+    <value>37.4</value>
+    <value>45.4</value>
+    <value>54.4</value>
+    <value>64.3</value>
+    <value>75.4</value>
+    <value>87.5</value>
+    <value>100.8</value>
+    <value>115.3</value>
+    <value>131.1</value>
+    <value>145.3</value>
+    <value>160.4</value>
+    <value>179.9</value>
+    <value>200.8</value>
+    <value>219.3</value>
+    <value>239.0</value>
+    <value>259.7</value>
+  </array>
+
+  <!-- ── 屏幕（11 英寸 2560×1600 LCD，HX83121A，120 Hz）：估计，未实测 ──────────────
+       screen.on = 面板 + DSI 不含背光 ≈ 0.5 W；screen.full = 背光满亮额外 ≈ 2.0 W（框架按亮度线性插值）。
+       没有息屏显示（AOD），ambient 给 0。显示器编号 0 = 内屏（PowerProfile.java:251-261 的 *.displayN）。 -->
+  <item name="ambient.on.display0">0</item>
+  <item name="screen.on.display0">65</item>
+  <item name="screen.full.display0">260</item>
+
+  <!-- ── 无线（WCN6855，ath11k）：估计 ──────────────────────────────────────
+       wifi.controller.* 全给 0 ⇒ 框架不走"控制器能耗"那条路，按下面的 wifi.on / scan / active 估。
+       ⬜ ath11k 在本机报不报 link layer stats / 控制器活动时间没核实。 -->
+  <item name="wifi.on">2</item>
+  <item name="wifi.scan">50</item>
+  <item name="wifi.active">100</item>
+  <item name="wifi.controller.idle">0</item>
+  <item name="wifi.controller.rx">0</item>
+  <item name="wifi.controller.tx">0</item>
+  <array name="wifi.controller.tx_levels">
+  </array>
+  <item name="wifi.controller.voltage">0</item>
+  <array name="wifi.batchedscan">
+    <value>.0002</value>
+    <value>.002</value>
+    <value>.02</value>
+    <value>.2</value>
+    <value>2</value>
+  </array>
+  <!-- 蓝牙控制器的 idle / rx / tx / 电压留给 config.xml 的 config_bluetooth_*（PowerProfile.java getDefaultValuesFromConfig）。 -->
+  <item name="bluetooth.on">0.1</item>
+  <item name="bluetooth.active">5</item>
+
+  <!-- ── 多媒体：估计 ──────────────────────────────────────────────────────
+       audio：扬声器功放播放 ≈ 0.25 W；video：iris 硬解 ≈ 0.5 W（CPU / GPU 另算）；
+       camera.avg：传感器 + camss ≈ 1.2 W（libcamera 软件 ISP 的 CPU 另算）；flashlight：后摄闪光灯 LED 常亮 ≈ 0.6 W。 -->
+  <item name="audio">30</item>
+  <item name="video">60</item>
+  <item name="camera.avg">150</item>
+  <item name="camera.flashlight">80</item>
+
+  <!-- ── 没有的硬件：GPS、蜂窝基带（本机无 modem，CLAUDE.md「关键约束」）—— 全 0 ──── -->
+  <item name="gps.on">0</item>
+  <array name="gps.signalqualitybased">
+    <value>0</value>
+    <value>0</value>
+  </array>
+  <item name="gps.voltage">0</item>
+  <item name="radio.active">0</item>
+  <item name="radio.scanning">0</item>
+  <array name="radio.on">
+    <value>0</value>
+    <value>0</value>
+  </array>
+  <modem>
+    <sleep>0</sleep>
+    <idle>0</idle>
+    <active rat="DEFAULT">
+      <receive>0</receive>
+      <transmit level="0">0</transmit>
+      <transmit level="1">0</transmit>
+      <transmit level="2">0</transmit>
+      <transmit level="3">0</transmit>
+      <transmit level="4">0</transmit>
+    </active>
+  </modem>
+  <item name="modem.controller.voltage">0</item>
+
+  <!-- 内存带宽：照 AOSP 默认（一个桶）。 -->
+  <array name="memory.bandwidths">
+    <value>22.7</value>
+  </array>
+</device>
