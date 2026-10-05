@@ -56,7 +56,15 @@ class CallResult {
     return null;
   }
 
-  /// 最能说明失败原因的一句：最后一条 `!! …`
+  /// 后端报的失败原因（最后一条 ERR code=…）。界面按 code 查 l10n（ui/messages.dart 的 errText）
+  Gk3Record? get err {
+    for (final r in records.reversed) {
+      if (r.type == 'ERR') return r;
+    }
+    return null;
+  }
+
+  /// 最后一条 `!! …`（后端给人看的中文说明，只该进日志 —— 界面上的话用 [err]）
   String? get error {
     for (final l in log.reversed) {
       if (l.isError) return l.message;

@@ -109,7 +109,13 @@ SOAK=1 RENDERER=skia bash scripts/live/test-render.sh 600   # 浸泡：持续出
 ```
 
 运行时开关（都是环境变量）：`GK3_FIXTURE=<场景>` 演示数据 · `GK3_SOAK=1` 浸泡页 ·
-`GK3_RENDERER=skia` 关 Impeller · `GK3_WINDOWED=1` 窗口模式 · `GK3_LIB=<路径>` 指定后端。
+`GK3_RENDERER=skia` 关 Impeller · `GK3_WINDOWED=1` 窗口模式 · `GK3_LIB=<路径>` 指定后端 ·
+`GK3_LANG=en|zh` 界面语言的默认（真机上来自内核参数 `gk3.lang=`）· `GK3_LANG_FILE=<路径>` 记住语言的文件
+（默认介质上的 `gaokun3/installer-lang`，只读时 `/run/gk3-installer/lang`；记住的优先于 `gk3.lang=`）。Chrome 预览加 `?lang=en`。
+
+⚠️ **界面上的话不来自后端**（v1.0 计划 INST-10）：后端只给 `PROGRESS <代码>` / `ERR code=<代码>`，这里按代码查 l10n
+（`lib/ui/messages.dart`）。后端加了新代码，`test/messages_test.dart` 会从 `installer-lib.sh` 里把它抓出来、要求两种语言都有。
+⚠️ 改了 `lib/l10n/*.arb` 之后先 `flutter gen-l10n` —— `flutter test` 不会替你重新生成（2026-10-05 踩到：测试跑的还是旧文案）。
 
 ⚠️ **中文字体**：Flutter 在 Linux 上**不按字符回退**系统字体（装了文泉驿、fontconfig 也查得到，中文照样是方块），
 主题里按名字列了回退字体。这一点离线出图验不出来 —— 改了字体相关的东西，看 `test-render.sh` 的截图。

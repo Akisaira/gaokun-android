@@ -4,6 +4,8 @@
 //   例如"双系统要多少空间"：C 版写死了"不足 20.2 GiB"（strings.zh.txt 的 MODE.WHY.NOROOM），
 //   这里用一个空区间去问 gk3_plan，让它在 PLANERR need_mib= 里自己报出来 ——
 //   installer-lib.sh 里的常量一改，界面上的数字跟着变。
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'backend/backend.dart';
@@ -63,6 +65,9 @@ class AlongError extends Along {
   final String msg;
 }
 
+/// 下载被取消时 install() 最后报的退出码（130 = 被信号打断的惯例）
+const kCancelledExit = 130;
+
 /// /run 是 tmpfs：1.2 GiB 的 super.img.zst 放得下，展开是流式写盘的（gk3_net_release 的注释）
 const netPayloadDir = '/run/gaokun3/payload';
 
@@ -70,9 +75,47 @@ const netPayloadDir = '/run/gaokun3/payload';
 /// 可以重试（/run 里下好的部分留着、接着续传）或返回；写盘阶段失败才是"盘可能写了一半"
 enum InstallStage { download, write }
 
+/// 语言从哪来、选了存到哪（v1.0 计划 GUI-19）。真机上是 backend/platform_io.dart 的实现
+/// （内核参数 gk3.lang= 与介质上的一个小文件）；测试与 Web 预览用 [LangPrefs.none]
+abstract class LangPrefs {
+  const LangPrefs();
+
+  /// 用户上次在安装器里选的（记住的），没有 → null
+  String? saved();
+
+  /// 启动项给的默认（内核参数 gk3.lang=），没有 → null
+  String? fromBoot();
+  void save(String lang);
+
+  static const LangPrefs none = _NoPrefs();
+}
+
+class _NoPrefs extends LangPrefs {
+  const _NoPrefs();
+  @override
+  String? saved() => null;
+  @override
+  String? fromBoot() => null;
+  @override
+  void save(String lang) {}
+}
+
+/// 'en'、'en_US'、'zh-CN' → 'en' / 'zh'；不认识 → null
+String? normalizeLang(String? v) {
+  final t = v?.trim().toLowerCase() ?? '';
+  if (t.startsWith('zh')) return 'zh';
+  if (t.startsWith('en')) return 'en';
+  return null;
+}
+
 class Session extends ChangeNotifier {
-  Session(this.backend);
+  /// 语言：记住的 > 启动项的 gk3.lang= > 中文。记住的排在前面：用户在这台机器上明确选过一次，
+  /// 安装器重启（cage 拉起来）、回 Windows 关快速启动再回来，都该沿用；gk3.lang= 是第一次进来时的默认
+  Session(this.backend, {LangPrefs prefs = LangPrefs.none})
+      : _prefs = prefs,
+        language = normalizeLang(prefs.saved()) ?? normalizeLang(prefs.fromBoot()) ?? 'zh';
   final Gk3Backend backend;
+  final LangPrefs _prefs;
 
   void _changed() => notifyListeners();
 
@@ -93,9 +136,10 @@ class Session extends ChangeNotifier {
   }
 
   // ── 语言 ────────────────────────────────────────────────────────────────
-  String language = 'zh';
+  String language;
   void toggleLanguage() {
     language = language == 'zh' ? 'en' : 'zh';
+    _prefs.save(language);
     _changed();
   }
 
@@ -137,6 +181,9 @@ class Session extends ChangeNotifier {
 
   /// 选定一块盘：把两种方式能不能走都问清楚
   Future<void> assess(Disk d) async {
+    // 安装器就在这块盘上（免 U 盘安装）：它自己就留在开机菜单里，默认不再另建 gk3rescue（v1.0 计划 GUI-17）。
+    // 用户在选项页仍可打开
+    if (!identical(disk, d)) rescue = !d.medium;
     disk = d;
     mode = null;
     plan = null;
@@ -312,25 +359,27 @@ class Session extends ChangeNotifier {
   bool get online => net?.yes('online') ?? false;
 
   Future<CallResult> connect(Ap ap, String password, void Function(Gk3Event) onEvent) async {
-    final r = await backend.run('gk3_wifi_connect', ['hex:${ap.ssidHex}', password, if (ap.hidden) 'hidden'], onEvent);
+    // 纯 WPA3 要 key_mgmt SAE + ieee80211w 2（后端按 sae 设；v1.0 计划 GUI-9）
+    final r = await backend.run('gk3_wifi_connect', ['hex:${ap.ssidHex}', password, if (ap.hidden) 'hidden', if (ap.auth == 'sae') 'sae'], onEvent);
     if (r.ok) net = r.first('NET');
     _changed();
     return r;
   }
 
   List<Variant>? variants;
-  String? variantsError;
+  /// 取版本列表失败的那次调用（界面按它的 ERR 说原因）
+  CallResult? variantsFail;
   Variant? variant;
 
   Future<void> fetchVariants() async {
     variants = null;
-    variantsError = null;
+    variantsFail = null;
     _changed();
     final r = await backend.run('gk3_net_manifest');
     if (r.ok) {
       variants = r.ofType('VARIANT').map(Variant.new).toList();
     } else {
-      variantsError = r.error ?? 'exit ${r.exitCode}';
+      variantsFail = r;
     }
     _changed();
   }
@@ -344,6 +393,22 @@ class Session extends ChangeNotifier {
   /// 现在（或失败时）在哪一段
   InstallStage? stage;
 
+  /// 下载被用户取消了（失败页据此说"已取消"）
+  bool cancelled = false;
+  StreamSubscription<Gk3Event>? _dl;
+  StreamController<Gk3Event>? _dlOut;
+
+  /// 下载阶段可以取消（GUI-5）：盘还没动。进了写盘就不行了 —— 那时返回 false，什么都不做
+  bool cancelDownload() {
+    if (stage != InstallStage.download || _dl == null) return false;
+    cancelled = true;
+    // 不 await：取消要等后端那边的流收尾，而 ShellBackend 收尾 = 杀进程组、等它退出
+    unawaited(_dl!.cancel());
+    _dl = null;
+    _dlOut?.close();
+    return true;
+  }
+
   /// 网络安装先下载（占总进度 0–40%），再走和 U 盘安装完全相同的 gk3_apply
   Stream<Gk3Event> install() async* {
     var rel = usbRelease?.dir ?? '';
@@ -351,10 +416,15 @@ class Session extends ChangeNotifier {
     if (net) {
       // 下载阶段不算"写盘"：盘没动，侧栏的重启 / 关机照常可用 —— 下载卡住时它们就是取消（GUI 审查 2026-10-05）
       stage = InstallStage.download;
+      cancelled = false;
       var ok = false;
-      await for (final e in backend.call('gk3_net_release', [variant!.base, netPayloadDir])) {
+      // 中间隔一个 controller：取消时（cancelDownload）直接关掉它，这边的循环立刻结束，
+      // 不必等后端的流先吐完最后一个事件
+      final out = _dlOut = StreamController<Gk3Event>();
+      _dl = backend.call('gk3_net_release', [variant!.base, netPayloadDir]).listen(out.add, onDone: out.close);
+      await for (final e in out.stream) {
         if (e is Gk3Progress) {
-          yield Gk3Progress(e.percent * 40 ~/ 100, e.text);
+          yield e.at(e.percent * 40 ~/ 100);
         } else if (e is Gk3Exit) {
           ok = e.code == 0;
           if (!ok) {
@@ -365,6 +435,12 @@ class Session extends ChangeNotifier {
           yield e;
         }
       }
+      _dl = null;
+      _dlOut = null;
+      if (cancelled) {
+        yield const Gk3Exit(kCancelledExit);
+        return;
+      }
       if (!ok) return;
       rel = netPayloadDir;
     }
@@ -374,7 +450,7 @@ class Session extends ChangeNotifier {
     try {
       final args = ['--release', rel, ..._planArgs()];
       await for (final e in backend.call('gk3_apply', args)) {
-        yield (net && e is Gk3Progress) ? Gk3Progress(40 + e.percent * 60 ~/ 100, e.text) : e;
+        yield (net && e is Gk3Progress) ? e.at(40 + e.percent * 60 ~/ 100) : e;
       }
     } finally {
       _writing--;

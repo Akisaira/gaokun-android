@@ -17,5 +17,5 @@ void main() {
   final scenario = requestedScenario();
   Gk3Backend? backend = scenario == null ? locateShellBackend() : null;
   backend ??= FixtureBackend(FixtureBackend.scenarios.contains(scenario) ? scenario! : 'windows-free');
-  runApp(InstallerApp(session: Session(backend), home: soakRequested() ? const SoakPage() : null));
+  runApp(InstallerApp(session: Session(backend, prefs: platformLangPrefs()), home: soakRequested() ? const SoakPage() : null));
 }

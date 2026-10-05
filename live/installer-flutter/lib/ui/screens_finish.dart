@@ -4,9 +4,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app.dart';
+import '../backend/backend.dart';
 import '../backend/protocol.dart';
 import '../model/model.dart';
 import '../session.dart';
+import 'messages.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -64,6 +66,8 @@ class _OptsPageState extends State<OptsPage> {
           icon: Icons.health_and_safety,
           title: l.optsRescueTitle,
           body: l.optsRescueBody,
+          // 安装器就在目标盘上（免 U 盘安装）：默认关，写明为什么（GUI-17）
+          note: s.disk?.medium == true && s.rescueUsable ? l.optsRescueSameDisk : null,
           reason: !s.rescueAvailable ? l.optsRescueMissing : (s.rescueUsable ? null : l.optsRescueNoPart),
           trailing: Switch(value: s.rescue && s.rescueUsable, onChanged: s.rescueUsable ? s.setRescue : null),
           onTap: s.rescueUsable ? () => s.setRescue(!s.rescue) : null,
@@ -225,11 +229,21 @@ class ConfirmPage extends StatelessWidget {
                     Container(width: 12, height: 12, decoration: BoxDecoration(color: DiskBar.colorOf(context, part.os), shape: BoxShape.circle)),
                     const SizedBox(width: 10),
                     SizedBox(width: 90, child: Text(part.path.split('/').last, style: tt.bodyMedium)),
-                    Expanded(child: Text('${part.label}${part.fs.isNotEmpty ? '  (${part.fs})' : ''}', style: tt.bodyLarge)),
+                    Expanded(
+                      child: Text(
+                        '${part.label}${part.fs.isNotEmpty ? '  (${part.fs})' : ''}${isOnekey(part) ? '  ·  ${l.confirmOnekey}' : ''}',
+                        style: tt.bodyLarge!.copyWith(color: isOnekey(part) ? context.cs.error : null),
+                      ),
+                    ),
                     Text(fmtMib(part.sizeMib), style: tt.bodyMedium),
                   ]),
                 ),
               if (d.parts.length > show) Text(l.confirmMore('${d.parts.length - show}'), style: tt.bodyMedium),
+              // v1.0 计划 GUI-18：整盘清空连华为的一键恢复分区一起删 —— 写明后果
+              if (d.parts.where(isOnekey).firstOrNull case final ok?) ...[
+                const SizedBox(height: 10),
+                Text(l.confirmOnekeyWarn(ok.label), style: tt.bodyMedium!.copyWith(color: context.cs.error)),
+              ],
             ] else if (re) ...[
               // 重新安装：逐个列出要重写的分区与做什么 —— 格式化的那几个（数据会没）用 error 色
               Text(l.confirmReinstallHead, style: tt.titleMedium!.copyWith(color: p.keepData ? context.cs.onSurface : context.cs.error)),
@@ -271,7 +285,7 @@ class ConfirmPage extends StatelessWidget {
                 ),
               const Divider(height: 24),
               Text(l.confirmRescue(s.rescue && s.rescueUsable ? l.wordInstall : l.wordNoInstall), style: tt.bodyLarge),
-              if (s.source == Source.net && s.variant != null) Text(s.variant!.name, style: tt.bodyLarge),
+              if (s.source == Source.net && s.variant != null) Text(s.variant!.nameFor(s.language), style: tt.bodyLarge),
             ]),
           ),
         ),
@@ -292,7 +306,8 @@ class _RunPageState extends State<RunPage> {
   final _log = <String>[];
   final _scroll = ScrollController();
   int _pct = 0;
-  String _step = '';
+  Gk3Progress? _last;
+  Gk3Record? _err, _planErr;
   bool _showLog = false;
   StreamSubscription<Gk3Event>? _sub;
 
@@ -303,25 +318,22 @@ class _RunPageState extends State<RunPage> {
   }
 
   void _start() {
-    _step = context.l.stepPrep;
     _sub = context.session.install().listen((e) {
       if (!mounted) return;
       setState(() {
         switch (e) {
           case Gk3Progress():
             _pct = e.percent;
-            _step = e.text;
+            _last = e;
             _log.add('[${e.percent}%] ${e.text}');
           case Gk3Log():
             _log.add(e.line);
           case Gk3Record():
+            if (e.type == 'ERR') _err = e;
+            if (e.type == 'PLANERR') _planErr = e;
             _log.add('${e.type} ${e.fields}');
           case Gk3Exit():
-            if (e.code == 0) {
-              go(context, const DonePage(), replace: true);
-            } else {
-              go(context, FailPage(log: List.of(_log), code: e.code, downloadOnly: context.session.stage == InstallStage.download), replace: true);
-            }
+            _finish(e.code);
         }
       });
       if (_showLog && _scroll.hasClients) {
@@ -330,6 +342,47 @@ class _RunPageState extends State<RunPage> {
         });
       }
     });
+  }
+
+  void _finish(int code) {
+    final s = context.session;
+    if (code == 0) {
+      go(context, const DonePage(), replace: true);
+      return;
+    }
+    // 盘没动过的失败（下载阶段、取消、或者 gk3_apply 在第一次写盘之前的检查里停下 —— ERR touched=no）：
+    // 可以返回、可以重试。写盘阶段的失败才是"盘可能写了一半"（v1.0 计划 GUI-3）
+    final untouched = s.stage == InstallStage.download || _err?['touched'] == 'no';
+    go(
+      context,
+      FailPage(
+        log: List.of(_log),
+        code: code,
+        err: _err,
+        planErr: _planErr,
+        untouched: untouched,
+        download: s.stage == InstallStage.download,
+        cancelled: s.cancelled,
+      ),
+      replace: true,
+    );
+  }
+
+  /// 取消下载（GUI-5）：先问一句；问的这会儿要是已经下完、进了写盘，就什么都不做
+  Future<void> _cancel() async {
+    final l = context.l;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(l.runCancelTitle),
+        content: SizedBox(width: 520, child: Text(l.runCancelBody)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(l.runCancelKeep)),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: Text(l.runCancel)),
+        ],
+      ),
+    );
+    if (ok == true && mounted) context.session.cancelDownload();
   }
 
   @override
@@ -341,24 +394,35 @@ class _RunPageState extends State<RunPage> {
 
   @override
   Widget build(BuildContext context) {
-    final l = context.l, tt = Theme.of(context).textTheme;
+    final s = context.session, l = context.l, tt = Theme.of(context).textTheme;
+    final last = _last;
+    final step = last == null ? l.stepPrep : progressText(l, last);
+    final rate = last == null ? null : downloadRate(l, last);
+    final downloading = s.stage == InstallStage.download;
     return PopScope(
       canPop: false, // 装到一半不许返回
       child: StepPage(
-      step: Gk3Step.install,
+        step: Gk3Step.install,
         title: l.runTitle,
         subtitle: l.runSub,
         bottom: Row(children: [
           Btn(_showLog ? l.runHideLog : l.runShowLog, kind: BtnKind.secondary, icon: Icons.subject, onPressed: () => setState(() => _showLog = !_showLog)),
+          const Spacer(),
+          // 只在下载阶段有：盘还没动，停下来没有代价（写盘阶段停下就是半个盘 —— 不给这个按钮）
+          if (downloading) Btn(l.runCancel, kind: BtnKind.text, icon: Icons.close, onPressed: _cancel),
         ]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           const SizedBox(height: 20),
           Row(children: [
-            Expanded(child: Text(_step, style: tt.titleMedium)),
+            Expanded(child: Text(step, style: tt.titleMedium)),
             Text('$_pct%', style: tt.headlineMedium),
           ]),
           const SizedBox(height: 16),
           LinearProgressIndicator(value: _pct / 100, minHeight: 8),
+          if (rate != null) ...[
+            const SizedBox(height: 10),
+            Text(rate, style: tt.bodyLarge!.copyWith(color: context.cs.onSurfaceVariant)),
+          ],
           const SizedBox(height: 24),
           if (_showLog) Expanded(child: LogView(_log, controller: _scroll)),
         ]),
@@ -372,10 +436,12 @@ class DonePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.session, l = context.l, tt = Theme.of(context).textTheme;
+    // 免 U 盘安装（安装器跑在内置盘上）：没有要拔的介质（v1.0 计划 GUI-17）
+    final internalMedium = s.disks?.any((d) => d.medium && !d.external) ?? false;
     return PopScope(
       canPop: false,
       child: StepPage(
-      step: Gk3Step.install,
+        step: Gk3Step.install,
         title: l.doneTitle,
         bottom: Row(children: [const Spacer(), Btn(l.btnReboot, icon: Icons.restart_alt, autofocus: true, onPressed: s.backend.reboot)]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -386,7 +452,7 @@ class DonePage extends StatelessWidget {
             child: Icon(Icons.check, size: 56, color: context.gk.onSuccessContainer),
           ),
           const SizedBox(height: 24),
-          Text(l.doneBody, style: tt.bodyLarge),
+          Text(internalMedium ? l.doneBodyInternal : l.doneBody, style: tt.bodyLarge),
           if (s.rescue && s.rescueUsable) ...[const SizedBox(height: 16), Text(l.doneRescue, style: tt.bodyLarge)],
         ]),
       ),
@@ -395,28 +461,61 @@ class DonePage extends StatelessWidget {
 }
 
 /// 失败页分两种（v1.0 计划 GUI-3）：
-///   - 下载阶段失败（[downloadOnly]）：盘一个字节都没动 —— 给"重试"（/run 里下好的部分留着，gk3_net_fetch 接着续传）
-///     和"返回修改"（换网络 / 换版本）。原先这里也说"盘可能写了一半"、只有"打开终端"，用户只能长按电源键，
-///     /run 是 tmpfs，下好的几百 MiB 跟着一起没了。
+///   - 盘没动过（[untouched]：下载阶段失败 / 取消，或者 gk3_apply 在第一次写盘之前的检查里停下、ERR touched=no）：
+///     给"重试"（/run 里下好的部分留着，gk3_net_fetch 接着续传）和"返回修改"（换网络 / 换版本 / 换选项）。
 ///   - 写盘阶段失败：盘可能停在中间状态 —— 不许返回、不给重试，让用户先看日志（分区表备份的还原命令在里面）。
 /// 两种都能从侧栏重启 / 关机。
-class FailPage extends StatelessWidget {
-  const FailPage({super.key, required this.log, required this.code, this.downloadOnly = false});
+/// ★ 标题下面那句错误说明按 ERR 的代码查 l10n（ui/messages.dart）；后端的中文原话只在日志里（INST-10）。
+///   日志是后端原样的输出、部分是中文 —— 英文界面里默认收起，点了才看（bug 报告要它，所以不能不给）。
+class FailPage extends StatefulWidget {
+  const FailPage({
+    super.key,
+    required this.log,
+    required this.code,
+    this.err,
+    this.planErr,
+    this.untouched = false,
+    this.download = false,
+    this.cancelled = false,
+  });
   final List<String> log;
   final int code;
-  final bool downloadOnly;
+  final Gk3Record? err, planErr;
+  final bool untouched, download, cancelled;
+
+  @override
+  State<FailPage> createState() => _FailPageState();
+}
+
+class _FailPageState extends State<FailPage> {
+  bool? _showLog;
+
   @override
   Widget build(BuildContext context) {
     final l = context.l, tt = Theme.of(context).textTheme;
-    final err = log.lastWhere((x) => x.startsWith('!! '), orElse: () => l.errExit('$code'));
-    final backedUp = !downloadOnly && log.any((x) => x.contains('sgdisk --load-backup='));
+    final w = widget;
+    final String msg;
+    if (w.cancelled) {
+      msg = l.runCancelBody;
+    } else if (w.err != null) {
+      msg = errText(l, w.err!);
+    } else if (w.planErr != null) {
+      msg = planErrorText(context, Plan(CallResult([w.planErr!], const [], w.code)));
+    } else {
+      final raw = w.log.lastWhere((x) => x.startsWith('!! '), orElse: () => '');
+      msg = raw.isNotEmpty && l.localeName.startsWith('zh') ? raw.substring(3) : l.errNoCode('${w.code}');
+    }
+    final backedUp = !w.untouched && w.log.any((x) => x.contains('sgdisk --load-backup='));
+    final title = w.cancelled ? l.failCancelTitle : (w.download ? l.failDlTitle : (w.untouched ? l.failUntouchedTitle : l.failTitle));
+    final sub = w.download || w.cancelled ? l.failDlSub : (w.untouched ? l.failUntouchedSub : l.failSub);
+    final showLog = _showLog ?? l.localeName.startsWith('zh');
     return PopScope(
-      canPop: downloadOnly,
+      canPop: w.untouched,
       child: StepPage(
-      step: Gk3Step.install,
-        title: downloadOnly ? l.failDlTitle : l.failTitle,
-        subtitle: downloadOnly ? l.failDlSub : l.failSub,
-        bottom: downloadOnly
+        step: Gk3Step.install,
+        title: title,
+        subtitle: sub,
+        bottom: w.untouched
             ? Row(children: [
                 Btn(l.failBackEdit, kind: BtnKind.text, icon: Icons.arrow_back, onPressed: () => Navigator.pop(context)),
                 const SizedBox(width: 12),
@@ -430,12 +529,24 @@ class FailPage extends StatelessWidget {
                 Expanded(child: Text(l.shellHint, style: tt.bodySmall)),
               ]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text(err.startsWith('!! ') ? err.substring(3) : err, style: tt.titleMedium!.copyWith(color: context.cs.error)),
+          Text(msg, style: tt.titleMedium!.copyWith(color: w.cancelled ? context.cs.onSurface : context.cs.error)),
           if (backedUp) ...[const SizedBox(height: 8), Text(l.failBackup, style: tt.bodyMedium)],
           const SizedBox(height: 14),
-          Expanded(child: LogView(log)),
+          if (showLog) ...[
+            Text(l.failLogTitle, style: tt.labelLarge),
+            const SizedBox(height: 6),
+            Expanded(child: LogView(w.log)),
+          ] else
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Btn(l.failLogShow, kind: BtnKind.text, icon: Icons.subject, onPressed: () => setState(() => _showLog = true)),
+            ),
         ]),
       ),
     );
   }
 }
+
+/// 华为的一键恢复分区（出厂镜像）。认它的卷标 Onekey —— 出厂布局里 p6 的 LABEL（docs/hw-inventory.md 第 8 节）。
+/// ⬜ 同一套恢复机制是否还用到 WINPE（p5，1 GiB FAT）没有核实，所以只标这一个
+bool isOnekey(Part p) => p.fslabel.toLowerCase() == 'onekey';

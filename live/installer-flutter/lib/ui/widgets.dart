@@ -147,7 +147,7 @@ class _StepRail extends StatelessWidget {
           const SizedBox(height: 16),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text('HUAWEI MateBook E Go\n安装器 $kInstallerVersion', style: tt.bodySmall),
+            child: Text(l.railFooter(kInstallerVersion), style: tt.bodySmall),
           ),
         ],
       ),

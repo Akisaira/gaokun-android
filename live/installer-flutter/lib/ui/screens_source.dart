@@ -7,6 +7,7 @@ import '../app.dart';
 import '../backend/protocol.dart';
 import '../model/model.dart';
 import '../session.dart';
+import 'messages.dart';
 import 'screens_finish.dart';
 import 'soft_keyboard.dart';
 import 'theme.dart';
@@ -114,14 +115,15 @@ class _NetPageState extends State<NetPage> {
           child: s.scanning && aps == null
               ? Row(children: [const CircularProgressIndicator(), const SizedBox(width: 16), Text(l.netScanning, style: tt.bodyLarge)])
               : GridView(
-                  // 固定行高而不是宽高比：卡片里最多两行（标题 + 说明 / 不支持的原因）
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 12, crossAxisSpacing: 12, mainAxisExtent: 100),
+                  // 固定行高而不是宽高比：卡片里是标题 + 一行说明，或者标题 + 最多三行的不支持原因（英文的原因要折行；测试字体每个字都是方块、更宽，按它留够）
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 12, crossAxisSpacing: 12, mainAxisExtent: 140),
                   children: [
                     for (final ap in aps ?? const <Ap>[])
                       ChoiceCard(
                         title: ap.ssid,
-                        body: ap.supported ? (ap.secure ? null : l.netOpen) : null,
-                        reason: ap.supported ? null : l.netEnterprise,
+                        body: ap.supported ? (ap.auth == 'sae' ? l.netWpa3 : (ap.secure ? null : l.netOpen)) : null,
+                        // 连不了的（企业网络、WEP、OWE）标灰并写明原因 —— 原先 WEP / OWE 能点、输了密码再报"密码错"（GUI-9）
+                        reason: switch (ap.auth) { _ when ap.supported => null, 'wep' => l.netWep, 'owe' => l.netOwe, _ => l.netEnterprise },
                         selected: s.online && net?['ssid'] == ap.ssid,
                         trailing: SignalBars(ap.bars, secure: ap.secure),
                         onTap: () => _pick(ap),
@@ -195,7 +197,7 @@ class _PasswordPageState extends State<PasswordPage> {
     } else {
       setState(() {
         _busy = false;
-        _error = context.l.netFailed;
+        _error = r.err == null ? context.l.netFailed : errText(context.l, r.err!);
       });
     }
   }
@@ -308,7 +310,8 @@ class _HiddenNetPageState extends State<HiddenNetPage> {
     } else {
       setState(() {
         _busy = false;
-        _error = context.l.netHiddenFailed;
+        // 连不上（关联失败）对隐藏网络多半是名字打错了：用隐藏网络那句；别的原因按 ERR 说
+        _error = r.err == null || r.err!['code'] == 'wifi-assoc' ? context.l.netHiddenFailed : errText(context.l, r.err!);
       });
     }
   }
@@ -399,12 +402,12 @@ class _VariantPageState extends State<VariantPage> {
       subtitle: l.variantSub,
       onBack: () => Navigator.pop(context),
       onNext: s.variant == null ? null : () => go(context, const OptsPage()),
-      child: s.variantsError != null
+      child: s.variantsFail != null
           ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(l.variantFailed, style: tt.bodyLarge!.copyWith(color: context.cs.error)),
               // 后端说的具体原因（2026-09-25 真机：清单 404，原先只有一句"请检查网络连接"，把人往错的方向引）
               const SizedBox(height: 8),
-              Text(s.variantsError!, style: tt.bodyMedium),
+              Text(callErrorText(l, s.variantsFail!), style: tt.bodyMedium),
               const SizedBox(height: 16),
               Btn(l.btnRetry, kind: BtnKind.secondary, onPressed: s.fetchVariants),
             ])
@@ -416,8 +419,8 @@ class _VariantPageState extends State<VariantPage> {
                   itemBuilder: (_, i) {
                     final v = vs[i];
                     return ChoiceCard(
-                      title: v.name,
-                      body: '${v.desc.isEmpty && v.latest ? l.variantLatest : v.desc}\n${l.variantSize(fmtMib(v.sizeMib))}',
+                      title: v.nameFor(s.language),
+                      body: '${v.descFor(s.language).isEmpty && v.latest ? l.variantLatest : v.descFor(s.language)}\n${l.variantSize(fmtMib(v.sizeMib))}',
                       selected: identical(s.variant, v),
                       onTap: () => s.setVariant(v),
                     );

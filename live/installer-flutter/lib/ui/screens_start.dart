@@ -9,6 +9,7 @@ import '../model/model.dart';
 import '../session.dart';
 import 'screens_edit.dart';
 import 'screens_finish.dart';
+import 'messages.dart';
 import 'screens_source.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -37,6 +38,7 @@ class _WelcomePageState extends State<WelcomePage> {
       'uefi' => l.checkUefi,
       'root' => l.checkRoot,
       'tools' => l.checkTools,
+      'power' => l.checkPower,
       _ => id,
     };
   }
@@ -49,6 +51,7 @@ class _WelcomePageState extends State<WelcomePage> {
       'uefi' => l.checkUefiBad,
       'root' => l.checkRootBad,
       'tools' => l.checkToolsBad(c.missing.replaceAll(',', ', ')),
+      'power' => l.checkPowerBad(c.min),
       _ => null,
     };
   }
@@ -98,7 +101,11 @@ class _WelcomePageState extends State<WelcomePage> {
                     name: _checkName(c.id),
                     check: c,
                     // 后端的取值是给机器看的（disabled/enabled），界面上说人话
-                    shown: c.id == 'secureboot' ? switch (c.value) { 'disabled' => l.checkSecurebootOff, 'enabled' => l.checkSecurebootOn, _ => c.value } : c.value,
+                    shown: switch (c.id) {
+                      'secureboot' => switch (c.value) { 'disabled' => l.checkSecurebootOff, 'enabled' => l.checkSecurebootOn, _ => c.value },
+                      'power' => c.value.isEmpty ? '' : (c.ac ? l.checkPowerShownAc(c.value) : l.checkPowerShown(c.value)),
+                      _ => c.value,
+                    },
                     failText: _failText(c),
                     unknownText: l.checkUnknown,
                   ),
@@ -134,8 +141,8 @@ class _CheckRow extends StatelessWidget {
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              Text(name, style: tt.bodyLarge),
-              if (shown.isNotEmpty) ...[const SizedBox(width: 10), Text(shown, style: tt.bodyMedium)],
+              Flexible(child: Text(name, style: tt.bodyLarge, overflow: TextOverflow.ellipsis)),
+              if (shown.isNotEmpty) ...[const SizedBox(width: 10), Flexible(child: Text(shown, style: tt.bodyMedium, overflow: TextOverflow.ellipsis))],
             ]),
             if (check.state == CheckState.fail && failText != null) Text(failText!, style: tt.bodyMedium!.copyWith(color: context.cs.error)),
             if (check.state == CheckState.unknown) Text(unknownText, style: tt.bodySmall),
@@ -400,7 +407,7 @@ class _ShrinkPageState extends State<ShrinkPage> {
       setState(() {
         if (e is Gk3Progress) {
           _pct = e.percent;
-          _log.add('[${e.percent}%] ${e.text}');
+          _log.add('[${e.percent}%] ${progressText(context.l, e)}');
         } else if (e is Gk3Log) {
           _log.add(e.line);
         }
@@ -412,7 +419,7 @@ class _ShrinkPageState extends State<ShrinkPage> {
     } else {
       setState(() {
         _running = false;
-        _error = r.error ?? context.l.errExit('${r.exitCode}');
+        _error = callErrorText(context.l, r);
       });
     }
   }

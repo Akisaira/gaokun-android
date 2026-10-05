@@ -53,6 +53,29 @@ void main() {
       expect(d.isError, isTrue);
       expect(d.message, 'ESP 空间不够');
     });
+    // v1.0 计划 INST-10：后端给界面的只有代码
+    test('stderr：PROGRESS <代码> k=v（值百分号解码）；旧格式的一句话照旧当说明', () {
+      final p = parseStderrLine('PROGRESS 23 dl name=super.img.zst pct=31 speed=1843k left=0:07:12') as Gk3Progress;
+      expect(p.percent, 23);
+      expect(p.code, 'dl');
+      expect(p['name'], 'super.img.zst');
+      expect(p['left'], '0:07:12');
+      expect((parseStderrLine('PROGRESS 20 wifi-assoc ssid=My%20Net') as Gk3Progress)['ssid'], 'My Net');
+      expect((parseStderrLine('PROGRESS 100 done') as Gk3Progress).code, 'done');
+      final old = parseStderrLine('PROGRESS 31 写入 super（337 / 12288 MiB）') as Gk3Progress;
+      expect(old.code, isNull);
+      expect(old.text, '写入 super（337 / 12288 MiB）');
+      expect(p.at(9).percent, 9);
+      expect(p.at(9).code, 'dl');
+    });
+    test('stderr：ERR code=… 解析成记录（与 stdout 的记录同一套规则）', () {
+      final e = parseStderrLine('ERR code=esp-full need_mib=46 free_mib=12 touched=no') as Gk3Record;
+      expect(e.type, 'ERR');
+      expect(e['code'], 'esp-full');
+      expect(e.intOf('free_mib'), 12);
+      expect(e['touched'], 'no');
+      expect(parseStderrLine('ERRATA 不是记录'), isA<Gk3Log>());
+    });
   });
 
   group('fixture 回放（真后端录的）', () {

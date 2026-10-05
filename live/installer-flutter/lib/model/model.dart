@@ -105,8 +105,14 @@ class Check {
         state = switch (r['ok']) { 'yes' => CheckState.ok, 'no' => CheckState.fail, _ => CheckState.unknown },
         value = r['value'],
         why = r['why'],
-        missing = r['missing'];
+        missing = r['missing'],
+        min = r['min'],
+        ac = r.yes('ac');
   final String id, value, why, missing;
+
+  /// CHECK id=power 的门槛（百分比）与"接着电源"
+  final String min;
+  final bool ac;
   final CheckState state;
 }
 
@@ -209,7 +215,9 @@ class Ap {
   final bool secure, hidden;
   final String auth, ssidHex, ssid;
 
-  bool get supported => auth != 'eap';
+  /// 安装器连得上的：开放、WPA/WPA2（psk）、纯 WPA3（sae）。企业网络（eap）、WEP、OWE 连不了 —— 列表里标灰
+  /// 并写明原因，不再让人输了密码再报"密码错"（v1.0 计划 GUI-9）
+  bool get supported => const {'open', 'psk', 'sae'}.contains(auth);
 
   /// 信号格数 0–4（dBm 数字对用户没有意义 —— roadmap 欠账第 1 条）
   int get bars => signal >= -55 ? 4 : signal >= -65 ? 3 : signal >= -75 ? 2 : signal >= -85 ? 1 : 0;
@@ -223,8 +231,14 @@ class Variant {
         desc = r['desc'],
         base = r['base'],
         sizeMib = r.intOf('size_mib'),
-        latest = r.yes('latest');
+        latest = r.yes('latest'),
+        _rec = r;
   final String id, name, desc, base;
+  final Gk3Record _rec;
+
+  /// 按界面语言取 name_<语言> / desc_<语言>，清单里没有就用 name / desc（installer-lib.sh 的 gk3_net_manifest）
+  String nameFor(String lang) => _rec.fields['name_$lang'] ?? name;
+  String descFor(String lang) => _rec.fields['desc_$lang'] ?? desc;
   final int sizeMib;
 
   /// 从 OTA 清单推出来的"最新发布"（变体清单还没发布时，gk3__ota_variant）

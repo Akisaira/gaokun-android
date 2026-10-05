@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../app.dart';
 import '../backend/protocol.dart';
 import '../model/model.dart';
+import 'messages.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -85,7 +86,7 @@ class _DiskEditPageState extends State<DiskEditPage> {
         _msg = context.l.editOk(what);
         _selStart = null; // 分区号、边界都可能变了：让人重新选
       } else {
-        _err = context.l.editFailed(r.error ?? context.l.errExit('${r.exitCode}'));
+        _err = context.l.editFailed(callErrorText(context.l, r));
       }
     });
   }

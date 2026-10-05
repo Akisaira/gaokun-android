@@ -16,7 +16,13 @@
   "btnStart": "Get started",
   "btnQuit": "Quit to terminal",
   "shellFailed": "Could not switch to the terminal ({err}). Try pressing Ctrl+Alt+F2.",
-  "@shellFailed": {"placeholders": {"err": {"type": "String"}}},
+  "@shellFailed": {
+    "placeholders": {
+      "err": {
+        "type": "String"
+      }
+    }
+  },
   "btnBack": "Back",
   "btnNext": "Next",
   "btnReboot": "Restart now",
@@ -78,25 +84,73 @@
   "editFormatWarn": "All files on this partition will be erased.",
   "editResizeWarn": "The file system is checked first; no files are lost, but back up anything important.",
   "editOk": "Done: {what}",
-  "@editOk": {"placeholders": {"what": {"type": "String"}}},
+  "@editOk": {
+    "placeholders": {
+      "what": {
+        "type": "String"
+      }
+    }
+  },
   "editFailed": "Not done: {err}",
-  "@editFailed": {"placeholders": {"err": {"type": "String"}}},
+  "@editFailed": {
+    "placeholders": {
+      "err": {
+        "type": "String"
+      }
+    }
+  },
   "editDone": "Done",
   "modeReinstallTitle": "Reinstall Android",
   "modeReinstallWarn": "By default this erases everything on /data (you can choose to keep it on the next page).",
   "modeReinstallBody": "Keeps the current partition layout and rewrites the system (super, boot). Use it to repair the system or switch versions.",
   "errReinstallMissing": "The Android partitions on this disk are incomplete (missing: {names}), so it cannot be reinstalled.",
-  "@errReinstallMissing": {"placeholders": {"names": {"type": "String"}}},
+  "@errReinstallMissing": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
   "errReinstallDup": "Some partition names appear twice ({names}); it is unclear which one to write.",
-  "@errReinstallDup": {"placeholders": {"names": {"type": "String"}}},
+  "@errReinstallDup": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
   "errReinstallSmall": "Partition {name} is too small ({have}; at least {need} is needed).",
-  "@errReinstallSmall": {"placeholders": {"name": {"type": "String"}, "have": {"type": "String"}, "need": {"type": "String"}}},
+  "@errReinstallSmall": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "have": {
+        "type": "String"
+      },
+      "need": {
+        "type": "String"
+      }
+    }
+  },
   "optsKeepTitle": "Keep user data",
   "optsKeepBody": "Do not format /data and metadata. If you switch to an older version, kept data may prevent booting.",
   "optsDataWiped": "/data will be erased ({size})",
-  "@optsDataWiped": {"placeholders": {"size": {"type": "String"}}},
+  "@optsDataWiped": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
   "optsDataKept": "/data is kept ({size})",
-  "@optsDataKept": {"placeholders": {"size": {"type": "String"}}},
+  "@optsDataKept": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
   "optsRescueNoPart": "This disk has no rescue partition. Reinstalling does not change the partition table, so the rescue system cannot be installed this time.",
   "confirmReinstallHead": "These partitions will be rewritten:",
   "confirmReinstallRight": "The partition table is not changed",
@@ -160,7 +214,7 @@
   "optsTitle": "Quick settings",
   "optsSub": "We picked the recommended settings. If unsure, just press Next.",
   "optsRescueTitle": "Also install the rescue system",
-  "optsRescueBody": "Takes 1 GiB: a Linux that runs from RAM, with ssh and partitioning tools. When Android does not start, it is the only way to reach this device remotely. We strongly recommend keeping it.",
+  "optsRescueBody": "Takes 1 GiB: a small Linux with ssh and partitioning tools. Its system image (a squashfs) is mounted read-only from that partition, and changes made while it runs live in RAM and are gone after a restart. When Android does not start, it is the only way to reach this device remotely. We strongly recommend keeping it.",
   "optsRescueMissing": "This install medium carries no rescue system image, so it cannot be installed this time.",
   "optsData": "/data gets all remaining space: about {size}",
   "optsDataFixed": "/data: {size}",
@@ -221,5 +275,133 @@
   "failDlSub": "Your disk has not been touched. What was already downloaded is kept, and retrying continues from there; or go back and pick another network or version.",
   "failBackEdit": "Go back",
   "dataSmallWarn": "/data is only {size}: one large mobile game alone often needs 20–40 GiB. We suggest at least 32 GiB.",
-  "shrinkData": "/data will be about {size}"
+  "shrinkData": "/data will be about {size}",
+  "railFooter": "HUAWEI MateBook E Go\nInstaller {version}",
+  "checkPower": "Battery",
+  "checkPowerShown": "{pct}%",
+  "checkPowerShownAc": "{pct}% (charging)",
+  "checkPowerBad": "The battery is below {min}% and no charger is connected. Installing writes to the disk for several minutes, and running out of power half-way leaves a half-installed disk — plug in the charger first.",
+  "progCheck": "Checking the install files",
+  "progVerifySha": "Verifying checksums",
+  "progTestZst": "Test-decompressing super.img.zst",
+  "progPlan": "Working out the partition layout",
+  "progWriteGpt": "Writing the partition table",
+  "progFormat": "Formatting",
+  "progWriteSuper": "Writing super",
+  "progWriteSuperMib": "Writing super ({done} of {total})",
+  "progWriteBoot": "Writing boot_a / boot_b",
+  "progBootloader": "Installing the boot loader",
+  "progWriteRescue": "Writing the rescue system",
+  "progDone": "Done",
+  "progGptBackup": "Backing up the partition table",
+  "progShrinkTrial": "Trial run of the shrink",
+  "progShrinkNtfs": "Shrinking NTFS",
+  "progFsck": "Checking the file system",
+  "progShrinkExt": "Shrinking the ext file system",
+  "progGptEdit": "Updating the partition table",
+  "progVerify": "Double-checking",
+  "progWifiAssoc": "Connecting to {ssid}",
+  "progWifiAssocAny": "Connecting",
+  "progWifiDhcp": "Getting an IP address",
+  "progWifiOk": "Connected",
+  "progDlSums": "Getting the checksum list",
+  "progDlStart": "Starting to download {name}",
+  "progDl": "Downloading {name} ({pct}%)",
+  "progDlVerify": "Verifying {name}",
+  "progDlDone": "{name} downloaded",
+  "progDlReady": "The install files are ready",
+  "progPartDelete": "Deleting partition {part}",
+  "progPartFormat": "Formatting {part} as {fs}",
+  "progFormatAs": "Formatting as {fs}",
+  "progPartCreate": "Creating a partition ({size})",
+  "progGrowEntry": "Growing the partition entry",
+  "progGrowFs": "Growing the file system",
+  "progOther": "Working: {code}",
+  "runSpeed": "{speed}/s",
+  "runSpeedLeft": "{speed}/s · {left} left",
+  "etaUnderMinute": "under a minute",
+  "etaMinutes": "about {n} min",
+  "etaHours": "about {h} h {m} min",
+  "runCancel": "Cancel download",
+  "runCancelTitle": "Cancel the download?",
+  "runCancelBody": "Nothing has been written to the disk yet. What was already downloaded is kept, and retrying continues from there.",
+  "runCancelKeep": "Keep downloading",
+  "failCancelTitle": "Download cancelled",
+  "failUntouchedTitle": "Installation did not start",
+  "failUntouchedSub": "It stopped during the checks before anything was written: your disk has not been touched and your current system is intact. Go back and change something, or fix the problem below and try again.",
+  "failLogTitle": "Technical log (backend output as written, partly in Chinese)",
+  "failLogShow": "Show the technical log",
+  "doneBodyInternal": "After restarting you will be in Android. The partition the installer runs from stays on this disk, so you can come back to the installer from the boot menu.",
+  "optsRescueSameDisk": "The installer itself lives on this disk and stays in the boot menu (it can reinstall and open a terminal), so by default we do not add a separate rescue system. You can still turn it on.",
+  "confirmOnekey": "Huawei one-key recovery partition",
+  "confirmOnekeyWarn": "This includes the Huawei one-key recovery partition ({label}): once it is deleted, Huawei’s built-in one-key recovery can no longer restore this computer to its factory Windows.",
+  "netWep": "WEP is too old, not supported",
+  "netOwe": "Enhanced Open (OWE): not supported",
+  "netWpa3": "WPA3",
+  "netNoIp": "Connected, but did not get an IP address (is DHCP on the router answering?)",
+  "netNoAdapter": "No wireless adapter found (the Wi-Fi driver did not start). Open a terminal and check dmesg | grep ath11k.",
+  "errUsage": "Internal installer error (the backend was called with the wrong arguments)",
+  "errCmdFailed": "The command {cmd} failed",
+  "errReleaseNoBoot": "The install files have no boot.img",
+  "errReleaseNoSuper": "The install files have neither super.img.zst nor super.img",
+  "errSdbootMissing": "systemd-boot (systemd-bootaa64.efi) was not found",
+  "errToolMissing": "Missing tool: {tool}",
+  "errSha256Mismatch": "The sha256 of {file} does not match the release list: the download is incomplete or was altered",
+  "errZstCorrupt": "super.img.zst is incomplete (the decompression test failed); download it again",
+  "errBootimgUnpack": "boot.img could not be unpacked",
+  "errEspMissing": "The EFI partition to use was not found ({esp})",
+  "errEspNotFat": "{esp} is not FAT (it is {fs}), so it does not look like an EFI partition",
+  "errEspNotEspType": "The partition type of {esp} is not EFI System",
+  "errEspFull": "Not enough space on the EFI partition: {need} to write, only {free} free. Clean up the EFI partition in your current system first",
+  "errEspOtaRoom": "It fits on the EFI partition, but only {left} would be left afterwards, and later system updates would fail for lack of space. Clean up the EFI partition first",
+  "errEspMount": "The existing EFI partition {esp} could not be mounted; we will not install the boot loader onto a partition we cannot read",
+  "errWipeMedium": "The installer is running from this disk, so it cannot erase the whole disk",
+  "errWipeMounted": "Partitions on this disk are still mounted ({mounts})",
+  "errReinstallBusy": "Partitions to be rewritten are still mounted ({parts}). Is the installer running from one of them?",
+  "errNodeVanished": "{dev} disappeared while writing, so what was written is not on the disk",
+  "errEspWrite": "Writing to the EFI partition failed ({esp}): it is full, or the medium has an error",
+  "errEspUmount": "The EFI partition could not be unmounted ({esp}); what was written may not have reached the disk",
+  "errSuperWrite": "Writing super failed. Are the install files complete?",
+  "errSuperBadLp": "The super that was written is not a usable system image (no LP metadata)",
+  "errPartMissing": "Partition {name} was not found",
+  "errPartNodeTimeout": "{dev} did not appear within 10 seconds: the partition table was written, but the kernel did not pick it up",
+  "errNtfsMount": "{part} could not be mounted, so we will not resize it",
+  "errShrinkTooSmall": "The target {target} is too small; it must be at least {floor}",
+  "errShrinkNotSmaller": "The target size is not smaller than the current one; nothing to shrink",
+  "errPartUnknown": "Could not tell which disk {part} is on",
+  "errGptRead": "Could not read the partition table entry of {part}, so we will not change it",
+  "errNtfsDryrun": "The NTFS shrink trial run failed, so we did not go on",
+  "errNtfsShrink": "Shrinking NTFS failed. The partition table was not changed, so your data should be intact",
+  "errFsck": "The file system check reported errors ({rc}), so we will not touch it",
+  "errResize2fs": "Shrinking the ext file system failed. The partition table was not changed",
+  "errFsUnsupported": "This file system is not supported: {fs}",
+  "errGptRewrite": "Updating the partition table failed. It was backed up first; the log has the command that restores it",
+  "errPartuuidChanged": "The partition’s PARTUUID changed, so Windows may not boot",
+  "errShrinkSizeMismatch": "The partition is now {have}, not the {want} we asked for (the kernel did not see the new table?). The file system was shrunk and your data is intact; check again after a restart",
+  "errWpaStart": "The Wi-Fi service (wpa_supplicant) did not start",
+  "errWpaReject": "The Wi-Fi service rejected the settings for this network",
+  "errManifestUnavailable": "Could not get the list of versions (neither list could be downloaded)",
+  "errDlIncomplete": "{name} did not finish downloading. The {kept} already downloaded is kept, and retrying continues from there",
+  "errDlFailed": "Downloading {name} failed (curl exit code {rc})",
+  "errDlSha256": "{name} does not match the checksum list (incomplete or tampered with); it was deleted and retrying downloads it again from the start",
+  "errDlSums": "Could not get the checksum list",
+  "errDlSumsMissing": "The checksum list has no entry for {name}",
+  "errNotBlock": "{dev} is not a block device",
+  "errPartAttr": "The partition attribute bits were not restored",
+  "errKernelStale": "The kernel’s view of the partitions does not match the partition table on disk (a partition is in use?). Restart and try again",
+  "errMkfs": "Formatting {part} failed",
+  "errPartType": "It was formatted, but the partition type code could not be changed, so other systems may not recognise it",
+  "errCreateOverlap": "That range is not inside free space and would overlap another partition (the disk was not changed)",
+  "errCreateFailed": "Creating the partition failed",
+  "errCreateNode": "The device node of the new partition did not appear",
+  "errGrowSame": "The target size is the same as now",
+  "errGrowNoRoom": "Not enough free space right after it: it can grow to at most {max}",
+  "errNtfsCheck": "The NTFS check failed (not cleanly shut down? In Windows turn off Fast Startup and shut down normally); the disk was not changed",
+  "errGrowKernelStale": "The kernel does not see the new partition size yet: the entry was grown but the file system was not; restart and grow it again",
+  "errGrowNtfs": "Growing NTFS failed (the entry was grown, the file system kept its size, your data is intact)",
+  "errGrowResize2fs": "Growing the ext file system failed (the entry was grown, the file system kept its size, your data is intact)",
+  "errOther": "Something went wrong (code {code}); the log has the details",
+  "errNoCode": "Did not finish (exit code {code}); the log has the details",
+  "errVerifyRemount": "{dev} could not be mounted again after writing, so what was written could not be checked",
+  "errVerifyMismatch": "Files read back from {dev} do not match the originals (a write error?)"
 }

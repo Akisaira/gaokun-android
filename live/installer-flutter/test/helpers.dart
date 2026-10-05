@@ -11,12 +11,16 @@ import 'package:gk3_installer/backend/fixture_backend.dart';
 import 'package:gk3_installer/backend/protocol.dart';
 import 'package:gk3_installer/l10n/app_localizations.dart';
 import 'package:gk3_installer/session.dart';
+import 'package:gk3_installer/ui/widgets.dart';
 
 /// 包一层 FixtureBackend：记下每一次调用；可以让某个函数失败
 class Rec extends Gk3Backend {
-  Rec(this.inner, {this.failApply = false, this.shellError, this.failNetOnce = false, this.holdApply, this.holdNet});
+  Rec(this.inner, {this.failApply = false, this.failApplyUntouched = false, this.shellError, this.failNetOnce = false, this.holdApply, this.holdNet});
   final FixtureBackend inner;
   final bool failApply;
+
+  /// gk3_apply 在第一次写盘之前的检查里失败（ERR touched=no）
+  final bool failApplyUntouched;
 
   /// 第一次 gk3_net_release 失败（下载中断，盘没动），之后照常
   bool failNetOnce;
@@ -42,23 +46,33 @@ class Rec extends Gk3Backend {
     calls.add([fn, ...args]);
     if (fn == 'gk3_net_release' && failNetOnce) {
       failNetOnce = false;
-      yield const Gk3Progress(30, '下载 super.img.zst（31%）');
+      // 照新后端的样子（installer-lib.sh 的 gk3_net_fetch / gk3_fail）：进度与 ERR 都只有代码，中文只在 !! 与日志里
+      yield parseStderrLine('PROGRESS 30 dl name=super.img.zst pct=31 speed=1843k left=0:07:12');
       yield const Gk3Log('下载 super.img.zst 中断（curl 退出码 28），3 秒后接着下（第 5/5 次）');
+      yield parseStderrLine('ERR code=dl-incomplete name=super.img.zst rc=28 http=200 tries=5 kept_mib=377');
       yield const Gk3Log('!! 下载 super.img.zst 没完成（curl 退出码 28，试了 5 次）；已下的 377 MiB 留着，重试会接着下');
       yield const Gk3Exit(1);
       return;
     }
     if (fn == 'gk3_net_release' && holdNet != null) {
-      yield const Gk3Progress(30, '下载 super.img.zst（31%）');
+      yield parseStderrLine('PROGRESS 30 dl name=super.img.zst pct=31 speed=1843k left=0:07:12');
       await holdNet!.future;
     }
     if (fn == 'gk3_apply' && holdApply != null) {
-      yield const Gk3Progress(30, '写入 super');
+      yield parseStderrLine('PROGRESS 30 write-super');
       await holdApply!.future;
     }
+    if (fn == 'gk3_apply' && failApplyUntouched) {
+      yield parseStderrLine('PROGRESS 1 check');
+      yield parseStderrLine('ERR code=release-no-super touched=no');
+      yield const Gk3Log('!! 发布目录里既没有 super.img.zst 也没有 super.img');
+      yield const Gk3Exit(1);
+      return;
+    }
     if (fn == 'gk3_apply' && failApply) {
-      yield const Gk3Progress(5, '写分区表');
+      yield parseStderrLine('PROGRESS 5 write-gpt');
       yield const Gk3Log('分区表已备份到 /media/gk3/gaokun3/gpt-backup-nvme0n1-1.bin（还原：sgdisk --load-backup=/media/gk3/gaokun3/gpt-backup-nvme0n1-1.bin /dev/nvme0n1）');
+      yield parseStderrLine('ERR code=part-missing name=super disk=/dev/nvme0n1 touched=yes');
       yield const Gk3Log('!! 分区 super 没解析出来（/dev/nvme0n1 上找不到这个 PARTLABEL）');
       yield const Gk3Exit(1);
       return;
@@ -79,6 +93,7 @@ class Rec extends Gk3Backend {
 }
 
 final l = lookupL10n(const Locale('zh'));
+final en = lookupL10n(const Locale('en'));
 
 /// 直接同步读磁盘的资源包。
 /// ★ 不用 rootBundle：它缓存 loadString 的 Future，而资源读取在测试里是真实异步 I/O ——
@@ -96,8 +111,10 @@ class DiskBundle extends AssetBundle {
 Future<Rec> pumpApp(WidgetTester t, String scenario,
     {Map<String, String> overrides = const {},
     bool failApply = false,
+    bool failApplyUntouched = false,
     double speed = 0,
     String language = 'zh',
+    LangPrefs? prefs,
     String? shellError,
     bool failNetOnce = false,
     Completer<void>? holdApply,
@@ -106,8 +123,9 @@ Future<Rec> pumpApp(WidgetTester t, String scenario,
   t.view.devicePixelRatio = 1;
   addTearDown(t.view.reset);
   final rec = Rec(FixtureBackend(scenario, bundle: DiskBundle(), speed: speed, overrides: overrides),
-      failApply: failApply, shellError: shellError, failNetOnce: failNetOnce, holdApply: holdApply, holdNet: holdNet);
-  final session = Session(rec)..language = language;
+      failApply: failApply, failApplyUntouched: failApplyUntouched, shellError: shellError, failNetOnce: failNetOnce, holdApply: holdApply, holdNet: holdNet);
+  final session = Session(rec, prefs: prefs ?? LangPrefs.none);
+  if (prefs == null) session.language = language;
   await t.pumpWidget(InstallerApp(session: session));
   await settle(t);
   return rec;
@@ -143,9 +161,9 @@ Future<void> tap(WidgetTester t, Finder f) async {
   await settle(t);
 }
 
-Future<void> next(WidgetTester t) async {
+Future<void> next(WidgetTester t, [L10n? loc]) async {
   // "下一步"要等到它可点（方案还在算的时候是禁用的）
-  final f = find.ancestor(of: find.text(l.btnNext), matching: find.byWidgetPredicate((w) => w is ButtonStyleButton && w.onPressed != null));
+  final f = find.ancestor(of: find.text((loc ?? l).btnNext), matching: find.byWidgetPredicate((w) => w is ButtonStyleButton && w.onPressed != null));
   await tap(t, f);
 }
 
@@ -159,3 +177,33 @@ Future<void> hold(WidgetTester t, String idleText) async {
   await settle(t, 60);
 }
 
+
+/// CJK 字符（汉字、全角标点、CJK 符号）
+final cjk = RegExp(r'[\u3000-\u303F\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]');
+
+/// 屏幕上（日志区以外）所有文字里出现的 CJK。"中文"是语言切换按钮自己的名字（用目标语言写它的名字），不算。
+/// ★ 日志区（LogView）是后端原样的输出、部分是中文：失败页在英文界面里默认把它收起来（INST-10 的取舍，见 FailPage）
+List<String> cjkOnScreen(WidgetTester t) {
+  final inLog = find.descendant(of: find.byType(LogView), matching: find.byType(RichText)).evaluate().map((e) => e.widget).toSet();
+  final out = <String>[];
+  for (final e in find.byType(RichText).evaluate()) {
+    if (inLog.contains(e.widget)) continue;
+    final s = (e.widget as RichText).text.toPlainText();
+    if (s == '中文') continue;
+    if (cjk.hasMatch(s)) out.add(s);
+  }
+  return out;
+}
+
+/// 记在内存里的语言偏好（测 GUI-19：记住 / gk3.lang=）
+class MemPrefs extends LangPrefs {
+  MemPrefs({this.stored, this.boot});
+  String? stored;
+  final String? boot;
+  @override
+  String? saved() => stored;
+  @override
+  String? fromBoot() => boot;
+  @override
+  void save(String lang) => stored = lang;
+}

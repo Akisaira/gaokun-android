@@ -1,5 +1,6 @@
 // ShellBackend：参数走位置参数、事件分流、以及照抄到日志（2026-09-26 M4b：装完在介质上找不到 gk3_apply 的输出）。
 // 要 bash —— Mac 与 Linux 都有。
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -72,6 +73,30 @@ gk3_part_delete() { echo "PARTOP op=delete part=$1"; }
     expect(ShellBackend.writesDisk('gk3_apply') && ShellBackend.writesDisk('gk3_shrink') && ShellBackend.writesDisk('gk3_part_resize'), isTrue);
     expect(ShellBackend.writesDisk('gk3_shrink_scan') || ShellBackend.writesDisk('gk3_net_release'), isFalse);
   });
+
+  // GUI-5：下载可以取消 —— 取消订阅 = 杀掉后端进程（有 setsid 时整个进程组，连 curl 一起；macOS 上没有 setsid，只杀 bash）
+  test('取消 gk3_net_release 的订阅：后端进程被杀掉、日志里记一笔；别的函数取消订阅不杀', () async {
+    final pidf = File('${tmp.path}/pid');
+    File(lib.path).writeAsStringSync('gk3_net_release() { echo \$\$ > "${pidf.path}"; echo "PROGRESS 1 dl-sums" >&2; sleep 30; }\n');
+    final b = ShellBackend(lib.path, log: log);
+    final got = Completer<void>();
+    final sub = b.call('gk3_net_release', ['http://x/', '/tmp/x']).listen((e) {
+      if (e is Gk3Progress && !got.isCompleted) got.complete();
+    });
+    await got.future.timeout(const Duration(seconds: 10));
+    final pid = int.parse(pidf.readAsStringSync().trim());
+    await sub.cancel();
+    var alive = true;
+    for (var i = 0; i < 50 && alive; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      alive = (await Process.run('kill', ['-0', '$pid'])).exitCode == 0;
+    }
+    expect(alive, isFalse, reason: '取消之后后端（pid $pid）还活着');
+    await log.flush();
+    await log.close();
+    expect(logf.readAsStringSync(), contains('取消 gk3_net_release'));
+    expect(ShellBackend.cancellable('gk3_apply'), isFalse);
+  }, timeout: const Timeout(Duration(seconds: 30)));
 
   test('拿不到 inhibitor（logind 没在跑 / 没有 systemd-inhibit）：照样执行，日志里记一笔', () async {
     final b = ShellBackend(lib.path, log: log, inhibitor: ['${tmp.path}/no-such-inhibit']);

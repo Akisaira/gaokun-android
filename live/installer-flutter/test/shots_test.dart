@@ -11,6 +11,7 @@
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show Scrollable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gk3_installer/app.dart';
 
@@ -141,6 +142,7 @@ void main() {
     }
     await shot(t, '10-wifi-password');
     await tap(t, find.text(l.btnBack));
+    await t.scrollUntilVisible(find.text(l.netHidden), 200, scrollable: find.byType(Scrollable).last);
     await tap(t, find.text(l.netHidden));
     for (final k in 'lab-guest'.split('')) {
       await tap(t, find.text(k == '-' ? '123' : k));
@@ -151,6 +153,7 @@ void main() {
     }
     await shot(t, '10b-wifi-hidden');
     await tap(t, find.text(l.btnBack));
+    await t.scrollUntilVisible(find.text('宿舍网-5G'), -200, scrollable: find.byType(Scrollable).last);
     await tap(t, find.text('宿舍网-5G'));
     for (final k in 'hunter'.split('')) {
       await tap(t, find.text(k));
