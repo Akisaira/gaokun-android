@@ -79,7 +79,8 @@
 > * **不推仓库、不发版**是需要用户点头的两件事；其余（本地提交、构建、staging、设备实验）直接做。
 >
 > ### 现在设备上跑的是什么
-> ★★★ **2026-10-05 06:32 起：槽 `_b` = `1.0.0-dev.3`（戳 `1791151679`，批 2 新内核 #16 = 0072–0074 + 批 2 配置）**，验收见 TODO。`_a` = dev.2。
+> ★★★ **2026-10-05 09:5x 起：槽 `_b` = `1.0.0-dev.5`（戳 `1791163499`，内核 7.2.9 + 统一启动入口 S9），`persist.vendor.gaokun3.gk3boot=action` ⇒ 每次开机经 gk3boot 动作模式**（退回：设 `off` 重启一次）；`_a` = dev.4（7.2.9）。装 OTA 用 `GK3_TRUST_GK3BOOT=1 install-ota-local.sh --go`。验收见 TODO。
+> （06:32–09:5x）槽 `_b` = `1.0.0-dev.3`（戳 `1791151679`，批 2 新内核 #16 = 0072–0074 + 批 2 配置）**，验收见 TODO。`_a` = dev.2。
 > （04:43–06:32）槽 `_a` = `1.0.0-dev.2`（戳 `1791144960`，oneshot 启动、验收见 TODO）**；`_b` = `1.0.0-dev.1`（`1791138567`）。两版都是**发布构建**。⬜ 开机成功后 default 应已同步成 `_a`，下次开工先 `boot-oneshot.sh --list` 核对。
 > （03:10–04:43）槽 `_b` = 第一个 1.0 发布构建 `1.0.0-dev.1`（戳 `1791138567`），已 marked successful、ESP default = `_b`。**这是发布构建**：`ro.debuggable=0`、adb 要授权 —— 开发机靠预置的 `/data/misc/adb/adb_keys`（Mac + Windows）和持久化的 `persist.sys.usb.config=adb` / `persist.adb.tcp.port=5555` 照常 USB / TCP adb，`adb shell` 经 KSU 仍是 root（没有 `adb root` 也不需要）。验收记录见 TODO「1.0 批 0/1」一节。⚠️ USB adb 只走靠近电源键的口（port0）。
 > ★★★ **2026-10-04 14:00 起：槽 `_a` = 候选版 `1791053208`**（incremental `20261003184648`，`install-ota-local.sh` 装、oneshot 开机成功后 boot_control 把 **ESP default 同步成了 `_a`**、`_a` 已 marked successful）。`_b` **已不能回落**：ESP 上 `_b` 的条目与内核还是 SELinux 第七轮测试版 `1790702971`，但 VAB 合并后 super 里只剩 `*_a`（2026-10-04 实机 `lpdump` 无任何 `*_b`、`bootctl is-slot-bootable 1` = 0，#118 §2 早有记录）—— 选它只会白白失败一次、init reboot 回 `_a`；回退只在新版首次开机、合并开始之前有效，之后只能用安装器重装（1.0 计划 OTA-3）；v0.7.0-alpha `1790605865` 已被覆盖，载荷仍在 `out/v070-1790605865/`。

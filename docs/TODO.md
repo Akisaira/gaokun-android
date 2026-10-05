@@ -33,6 +33,11 @@
 
 ### ▶ 1.0 批 0/1 已合并、待构建与验证（2026-10-05）
 
+> **★★ 2026-10-05 09:5x 第五个 1.0 发布构建：`1.0.0-dev.5`，构建戳 `1791163499`，槽 `_b`**（`out/v1dev5-1791163499/`）= dev.4 + **统一启动入口 S9（Android 侧）**（`df1b32d`…`d15fa3e`，vendor 带 `gk3boot.efi` `0.2.0-e5.gd15fa3eca4b2` sha256 `6a403c81…`）。编译一次过（HAL C++ / Parts Java / sepolicy），release.sh 断言 vendor 里的入口与 prebuilt 逐字节相同。
+> * 上机把开关三档走了一遍：`off`（默认）→ HAL 只读挂 ESP、nothing written、`via=direct`；`observe` → 第 1 次直连开机后 HAL 部署 `EFI/gk3boot/<ver>/` + `gk3boot-android-{a,b}+3.conf`，第 2 次经入口起来并 **bless** `+2-1 → gk3boot-android-b.conf`；`action` → HAL 把条目重写成动作模式，下一次经入口 `streak=1`，开机完成后 **GK3 记录 boot_streak 1 → 0（写后读回 OK）** 并 bless。⇒ 入口 + Android 侧整条链真机闭环。
+> * ★ **开发机现在留在 `persist.vendor.gaokun3.gk3boot=action`**（日常使用即长测）：每次开机经 gk3boot 动作模式、开机完成后 bless + 清 streak。退回：`setprop persist.vendor.gaokun3.gk3boot off` 后重启一次（HAL 撤条目）。用 `install-ota-local.sh --go` 装 OTA 时要 `GK3_TRUST_GK3BOOT=1`。
+> * ⬜ 还没做：E8 真 OTA 回滚演练（装一个故意起不来的新槽，看 tries 用完自动回滚 + Parts 通知）、执行端 S7（fastboot）、BCB 分派与首跑迁移、1.0 的默认档位（用户定）。
+
 > **★ 2026-10-05 08:1x 第四个 1.0 发布构建上机：`1.0.0-dev.4`，构建戳 `1791156793`，槽 `_a`**（`out/v1dev4-1791156793/`）= dev.3 + **SEC-9 内核基线 v7.2-rc2 → v7.2.9 stable**（`a36cb8b`：构建机新树 `~/gk3-kernel-72y`，buildbot 层 19/20 重放、0007 被 stable 收；本仓 0020/0022/0055/0057 被收、0056 改写、新增 0075；`--verify` 绿、配置断言 161/2；内核 `a764d8df…`、dtb `c84f26f7…`；#16 备份 `out/prebuilt-boot-backup-k16/`）+ hung task 写回 120（`0030c79`）。
 > * 实测：`uname -r` = `7.2.9-gaokun3+`，37 秒起来；`hung_task_timeout_secs=120`（LIVE-8 这回真开了）；KSU root 照常；**iris `rc-accept.sh` 15/15、iris 错误行 0**（0056 改写 / 0075 新增无回归）；前后摄 ncam-smoke PASS、camss/smmu 错误 0。s2idle 循环 `android-ath11k-s2loop.sh 8 3`：**10 次真挂起全过**（pm_test 7 + 真 s2idle 3，Wi-Fi 每次 2 秒回、固件每次重载、错误行 0，suspend_stats success=10）；唯一 FAIL 是开机 2 分钟时第一轮连续 6 次 -EBUSY（挂起没进去，#128 §17 的计数陷阱，不是恢复失败）；设备 IP 这次变成 `.129`；⬜ DSP 崩溃恢复、指纹 TA 加载、DP 输出没测。
 
