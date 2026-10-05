@@ -9,7 +9,9 @@
 #
 # 分工：本文件只管"环境 + 界面"——挂文件系统、USB 角色与 gadget、不挂起、空闲关机、tty1 文本菜单、
 #   按键。fastboot 协议本身、清 BCB、擦数据都在 /bin/gk3-fastbootd（S7a，另一份代码）。
-#   两边的接口约定见 tools/gk3boot/README.md §13（退出码、子命令、环境变量、状态文件）。
+#   两边的接口约定见 tools/gk3boot/README.md §13.3（统一后的那一份：退出码、子命令、环境变量、状态文件）。
+#   ★ 分工原则：一块盘一个写者；本文件是 PID 1，管生命周期、USB gadget / UDC / role 与界面；
+#     守护进程管协议与盘写，不碰 UDC、不调 reboot()，用退出码告诉这里接下来做什么。
 #   gk3-fastbootd 不在 → 显示 "executor missing"，菜单照样能用（重启 / 关机 / 看日志）。
 #
 # ★ PID 1 不许退出：退出 = 内核 panic（panic=10 → 10 秒后重启）。所以不用 set -e，每一步自己判。
@@ -249,7 +251,9 @@ fbd_start() {
     fi
     rm -f "$RUN/fastbootd.rc" "$RUN/fastbootd.pid" "$RUN/fastbootd.status"
     # 包一层子 shell 记退出码：PID 1 的 ash 不保证及时回收，靠 kill -0 判活会被僵尸骗。
-    ( "$FBD" >> "$FBD_LOG" 2>&1 &
+    # --usb-nosetup：gadget / functionfs 是这里建的，守护进程只往 $GK3_FFS/ep0 写描述符（README §13.3）。
+    # 其余输入走上面 export 的 GK3_* 环境变量；gk3.esp / gk3.dispatch / gk3.fbtcp 它自己读 /proc/cmdline。
+    ( "$FBD" --usb-nosetup >> "$FBD_LOG" 2>&1 &
       echo $! > "$RUN/fastbootd.pid"
       wait $!
       echo $? > "$RUN/fastbootd.rc" ) &
@@ -280,10 +284,13 @@ fbd_stop() {
     log "fastbootd: stopped"
 }
 
-# 退出码约定（README §13）：
-#   0 = 重启进 Android（fastboot reboot）     10 = 关机
-#   11 = 重启 fastboot（reboot-bootloader / reboot-fastboot：软重新枚举）
-#   12 = 切到菜单（reboot-recovery）           其他 = 崩溃：自动重启它，60 秒内第 3 次就停下
+# 退出码约定（README §13.3，gk3-fastbootd 的 fbd.h FB_EXIT_*）：
+#   0 = 冷重启（fastboot reboot；或 gk3.dispatch=1 时的 reboot-bootloader / -fastboot / -recovery —— 守护进程已先
+#       写好 BCB，gk3boot 下次把机器送回这里；状态文件第一行写明是哪一种）
+#   10 = 关机
+#   11 = 原地重起 fastboot（分派关时的 reboot-bootloader / reboot-fastboot：软重新枚举）
+#   12 = 原地切到菜单（分派关时的 reboot-recovery）
+#   其他 = 崩溃：自动重启它，60 秒内第 3 次就停下
 fbd_poll() {
     local rc t
     case "$FBD_STATE" in starting|running) ;; *) return 0 ;; esac
@@ -299,7 +306,8 @@ fbd_poll() {
     FBD_STATE=stopped
     log "fastbootd: exited rc=$rc"
     case "$rc" in
-        0)  do_reboot "fastboot reboot" ;;
+        0)  t=; [ -f "$RUN/fastbootd.status" ] && t=$(head -n 1 "$RUN/fastbootd.status" 2>/dev/null)
+            do_reboot "${t:-fastboot reboot}" ;;
         10) do_poweroff "fastboot requested power off" ;;
         11) fbd_start "restarted by host (reboot-bootloader)" ;;
         12) FBD_NOTE="host asked for the menu (reboot-recovery)"; goto main ;;
@@ -379,7 +387,7 @@ reboot_to_android() {
 why_text() {
     case "$WHY" in
         bootloader)  echo "fastboot requested (adb reboot bootloader)" ;;
-        fastboot)    echo "fastboot requested (adb reboot fastboot)" ;;
+        fastboot)    echo "fastboot requested (adb reboot fastboot, or the boot menu entry)" ;;
         wipe)        echo "factory reset requested by Android" ;;
         prompt_wipe) echo "Android failed to start repeatedly (RescueParty)" ;;
         recovery)    echo "recovery requested - this device has no Android recovery, use this menu" ;;
@@ -585,6 +593,7 @@ do_wipe_confirmed() {
     else
         rc=$?
         MSG_TITLE="FACTORY RESET FAILED (code $rc)"
+        [ "$rc" = 4 ] && MSG_TITLE="FACTORY RESET REFUSED"
         MSG_BODY=${SUB_OUT:-"see Show log"}
         goto msg
         fbd_start
@@ -651,6 +660,9 @@ case "$WHY" in
         case "$rc" in
             0) do_reboot "user data erased (requested by Android)" ;;
             3) goto wipe_confirm ;;
+            4) MSG_TITLE="FACTORY RESET REFUSED"
+               MSG_BODY=${SUB_OUT:-"see Show log"}
+               goto msg ;;
             *) MSG_TITLE="FACTORY RESET NOT DONE (code $rc)"
                MSG_BODY=${SUB_OUT:-"see Show log"}
                goto msg ;;

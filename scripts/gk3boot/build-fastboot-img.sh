@@ -2,9 +2,9 @@
 # 宿主一键：在 arm64 Docker（本机 colima）里打执行端 initramfs fastboot.img（设计稿 boot-entry-design.md §5 S7b）。
 #
 #   bash scripts/gk3boot/build-fastboot-img.sh                     产物 tools/gk3boot/build/fastboot/fastboot.img
-#   GK3_FASTBOOTD=/path/gk3-fastbootd bash scripts/gk3boot/build-fastboot-img.sh
-#       带上协议守护进程（静态 aarch64）。不给时自动找 tools/gk3boot/build/fastbootd/gk3-fastbootd，
-#       也没有就打一份"只有界面"的（屏幕上显示 EXECUTOR MISSING）。
+#   缺省：协议守护进程 gk3-fastbootd 在容器里从 tools/gk3boot/fastbootd/ 用 musl 静态编进去（版本串 = git describe）
+#   GK3_FASTBOOTD=/path/gk3-fastbootd bash scripts/gk3boot/build-fastboot-img.sh   换成现成的静态 aarch64 二进制
+#   GK3_FASTBOOTD=none …                                                           只有界面（屏幕上 EXECUTOR MISSING）
 #   GK3_DEBIAN_MIRROR=http://mirrors.ustc.edu.cn/debian …         换源（只影响第一次建镜像）
 #
 # 可复现：SOURCE_DATE_EPOCH 取 HEAD 的提交时间（工作区有改动时也一样 —— 判"是不是同一份"看 sha256，别看时间）。
@@ -23,17 +23,20 @@ docker build -q -t "$IMG" ${GK3_DEBIAN_MIRROR:+--build-arg GK3_DEBIAN_MIRROR=$GK
     || { echo "✗ 镜像构建失败（网络？试 GK3_DEBIAN_MIRROR=…）" >&2; exit 1; }
 
 FBD=${GK3_FASTBOOTD:-}
-[ -z "$FBD" ] && [ -f "$ROOT/tools/gk3boot/build/fastbootd/gk3-fastbootd" ] && FBD=$ROOT/tools/gk3boot/build/fastbootd/gk3-fastbootd
 MNT=(); ARGS=()
-if [ -n "$FBD" ]; then
+if [ "$FBD" = none ]; then
+    ARGS=(--no-fastbootd)
+    echo "▶ 不带 gk3-fastbootd（只有界面）"
+elif [ -n "$FBD" ]; then
     [ -f "$FBD" ] || { echo "✗ $FBD 不存在" >&2; exit 2; }
     MNT=(-v "$(cd "$(dirname "$FBD")" && pwd)/$(basename "$FBD"):/fbd/gk3-fastbootd:ro")
     ARGS=(--fastbootd /fbd/gk3-fastbootd)
     echo "▶ 带上 gk3-fastbootd：$FBD"
 fi
 EPOCH=$(git -C "$ROOT" log -1 --format=%ct 2>/dev/null || echo 0)
+FBD_VER=$(git -C "$ROOT" describe --always --dirty --abbrev=12 2>/dev/null || echo unknown)
 
-docker run --rm --name "${GK3_DOCKER_PREFIX:-}fbi-build-$$" -v "$ROOT:/src" ${MNT[@]+"${MNT[@]}"} -e SOURCE_DATE_EPOCH="$EPOCH" -w /src "$IMG" \
+docker run --rm --name "${GK3_DOCKER_PREFIX:-}fbi-build-$$" -v "$ROOT:/src" ${MNT[@]+"${MNT[@]}"} -e SOURCE_DATE_EPOCH="$EPOCH" -e FBD_VER="$FBD_VER" -w /src "$IMG" \
     bash tools/gk3boot/initramfs/build.sh --out "$OUTREL" ${ARGS[@]+"${ARGS[@]}"}
 f=$ROOT/$OUTREL/fastboot.img
 [ -s "$f" ] || { echo "✗ 没有产物 $f" >&2; exit 1; }

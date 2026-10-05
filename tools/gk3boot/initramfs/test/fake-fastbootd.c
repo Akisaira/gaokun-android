@@ -1,4 +1,5 @@
-/* 测试用的假 gk3-fastbootd：只实现 /init 与 gk3-fastbootd 之间的【接口】（README §13），不实现 fastboot 协议。
+/* 测试用的假 gk3-fastbootd：只实现 /init 与 gk3-fastbootd 之间的【接口】（README §13.3），不实现 fastboot 协议。
+ * 常驻 = 不带子命令（/init 给 --usb-nosetup）；子命令 --wipe-data [--confirm] / --clear-bcb。
  * 由 scripts/gk3boot/test-initramfs.sh 编成静态 aarch64，放进测试 overlay 的 /bin/gk3-fastbootd。
  *
  * 行为由 /etc/gk3-fbi/stub.conf 控制（每个 QEMU 场景一份），key=value：
@@ -155,6 +156,12 @@ static int serve(void)
     code = atoi(tok);
     sleep((unsigned)atoi(get("serve_hold", "3")));
     say("serve #%d exiting with %d", n + 1, code);
+    /* 同真守护进程：退出前把要做的事写进状态文件（/init 退出码 0 时拿它当重启原因） */
+    snprintf(p, sizeof(p), "%s/fastbootd.status", run);
+    if (code == 0 && (f = fopen(p, "w"))) {
+        fprintf(f, "rebooting (host request)\n");
+        fclose(f);
+    }
     close(fd);
     return code;
 }
@@ -167,7 +174,7 @@ int main(int argc, char **argv)
         conf[r > 0 ? r : 0] = 0;
         close(fd);
     }
-    if (argc == 1)
+    if (argc == 1 || (argc == 2 && !strcmp(argv[1], "--usb-nosetup")))
         return serve();
     if (argc == 2 && !strcmp(argv[1], "--wipe-data")) {
         int rc = atoi(get("wipe_rc", "3"));

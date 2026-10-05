@@ -96,6 +96,10 @@ musl-gcc -std=c11 -Os -Wall -Wextra -Werror -static -isystem /opt/kh -s \
     -o "$W/fake-fastbootd" "$HERE/fake-fastbootd.c"
 echo "▶ 假 gk3-fastbootd：$(stat -c %s "$W/fake-fastbootd") 字节"
 
+# —— 2'. 不带守护进程的一份（missing 场景：发布镜像缺省带着真 gk3-fastbootd，overlay 删不掉文件）——
+bash "$FBI/build.sh" --out "$W/nofbd" --no-fastbootd > "$W/nofbd.log" 2>&1 || { cat "$W/nofbd.log"; exit 1; }
+echo "▶ 只有界面的 fastboot.img：$(stat -c %s "$W/nofbd/fastboot.img") 字节"
+
 # —— 3/4. 盘 + 场景 ——
-python3 "$HERE/qemu_fbi.py" --img "$IMG" --kernel "$CACHE/vmlinuz" --modules "$CACHE/modules" \
+python3 "$HERE/qemu_fbi.py" --img "$IMG" --img-nofbd "$W/nofbd/fastboot.img" --kernel "$CACHE/vmlinuz" --modules "$CACHE/modules" \
     --fake "$W/fake-fastbootd" --work "$W" "$@"

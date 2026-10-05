@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # 打执行端 initramfs fastboot.img（容器内跑；宿主上用 scripts/gk3boot/build-fastboot-img.sh）。
 #
-#   bash tools/gk3boot/initramfs/build.sh --out <目录> [--fastbootd <静态 aarch64 gk3-fastbootd>]
+#   bash tools/gk3boot/initramfs/build.sh --out <目录> [--fastbootd <静态 aarch64 gk3-fastbootd> | --no-fastbootd]
 #
 # 内容（docs/fastboot-design.md §4.2.2，按方案 Y 收窄）：静态 busybox + 我们的 /init + gk3-fbi（按键 / 只读状态，
-# 链接 libgk3core）+ Terminus 32x16 控制台字体 + 【有就带】gk3-fastbootd。不带模块（本机内核全内建）、
-# 不带固件、不带 python。
+# 链接 libgk3core）+ Terminus 32x16 控制台字体 + gk3-fastbootd（S7a 协议守护进程）。
+# gk3-fastbootd 缺省就在这里从 tools/gk3boot/fastbootd/ 用 musl 静态编（与 gk3-fbi 同一套工具链，比 glibc 静态小一半，
+# 版本串取环境变量 FBD_VER）；--fastbootd 换成外面给的二进制；--no-fastbootd 打一份只有界面的（EXECUTOR MISSING）。
+# 不带模块（本机内核全内建）、不带固件、不带 python。
 # 尺寸预算：设计稿 2–4 MiB（boot-entry-design.md §4.1 ESP 布局、§4.9.8 空间账）—— 超过 4 MiB 直接失败。
 # 可复现：mtime 固定为 SOURCE_DATE_EPOCH（缺省 0）、属主 0:0、按名字排序、gzip -n。同一份输入 → 同一个 sha256。
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 GK3=$(cd "$HERE/.." && pwd)
-OUT=; FBD=
+OUT=; FBD=; NO_FBD=0
 BUDGET=$((4 * 1024 * 1024))
 BB=/usr/bin/busybox
 FONT_SRC=/usr/share/consolefonts/Uni2-TerminusBold32x16.psf.gz
@@ -25,6 +27,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --out) OUT=$2; shift 2 ;;
         --fastbootd) FBD=$2; shift 2 ;;
+        --no-fastbootd) NO_FBD=1; shift ;;
         *) die "不认识的参数：$1" ;;
     esac
 done
@@ -74,6 +77,15 @@ install -m755 "$HERE/init" "$D/init"
 install -m755 "$B/gk3-fbi" "$D/bin/gk3-fbi"
 gzip -dc "$FONT_SRC" > "$D/usr/share/gk3/font.psf"
 [ "$(head -c 4 "$D/usr/share/gk3/font.psf" | od -An -tx1 | tr -d ' ')" = 72b54a86 ] || die "字体不是 PSF2"
+if [ -z "$FBD" ] && [ "$NO_FBD" = 0 ]; then
+    # 与 gk3-fbi 同一套 musl 工具链；-Wno-missing-field-initializers 同 tools/gk3boot/Makefile 的 FBD_FLAGS 外加
+    FCF="-std=gnu11 -Os -Wall -Wextra -Werror -Wno-unused-parameter -Wno-missing-field-initializers -ffunction-sections -fdata-sections"
+    musl-gcc $FCF -static -isystem /opt/kh -I"$GK3/core/include" -I"$GK3/fastbootd" \
+        -DGK3FB_VERSION="\"${FBD_VER:-unknown}\"" -Wl,--gc-sections -s \
+        -o "$B/gk3-fastbootd" "$GK3"/fastbootd/*.c "$GK3"/core/src/*.c -lpthread
+    FBD=$B/gk3-fastbootd
+    ok "gk3-fastbootd ${FBD_VER:-unknown}：$(stat -c %s "$FBD") 字节（musl 静态，从 tools/gk3boot/fastbootd 编）"
+fi
 if [ -n "$FBD" ]; then
     [ -f "$FBD" ] || die "--fastbootd $FBD 不存在"
     assert_static "$FBD"

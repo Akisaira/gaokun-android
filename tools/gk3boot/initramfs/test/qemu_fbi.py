@@ -75,7 +75,7 @@ def mkdisk(path, misc_bytes):
 
 # ---------------------------------------------------------------- overlay
 
-def overlay(work, name, a, hook_extra="", stub_conf=None, fake=True, gpu=False):
+def overlay(work, name, a, hook_extra="", stub_conf=None, fake=True, gpu=False, img=None):
     mods = [m.strip() for m in open(os.path.join(a.modules, "order")) if m.strip()]
     skip = set()
     if not gpu:
@@ -103,7 +103,7 @@ def overlay(work, name, a, hook_extra="", stub_conf=None, fake=True, gpu=False):
                  ("bin/gk3-fastbootd", 0o100755, open(a.fake, "rb").read(), 0, 0)]
     out = os.path.join(work, name + ".initrd")
     with open(out, "wb") as f:
-        f.write(open(a.img, "rb").read())
+        f.write(open(img or a.img, "rb").read())
         f.write(gzip.compress(fixture.cpio_newc(ents), mtime=0))
     return out
 
@@ -334,7 +334,8 @@ def sc_fastboot(a):
 def sc_missing(a):
     """why=recovery，镜像里没有 gk3-fastbootd：EXECUTOR MISSING、菜单照用；同一个 PARTUUID 出现在两块盘上 → 拒绝猜。
     选 Reboot to Android → 清 BCB 失败（没有执行端）也照样重启。"""
-    ini = overlay(a.work, "missing", a, fake=False, hook_extra="# nodummy")
+    # 发布的 fastboot.img 里带着真守护进程（build.sh 缺省就编进去）；"缺失"用 --no-fastbootd 打的那一份
+    ini = overlay(a.work, "missing", a, fake=False, hook_extra="# nodummy", img=a.img_nofbd)
     vm = VM(a, "missing", ini, "recovery", [a.disk, a.disk2])
     try:
         ready(vm)
@@ -503,7 +504,8 @@ def sc_reenum(a):
         vm.expect("[gk3-fbi] gadget: bound to UDC dummy_udc.0", 30)
         vm.expect("restarted by host (reboot-bootloader)", 30)
         vm.expect("fake-fastbootd: serve #2 exiting with 0", 30)
-        vm.expect("[gk3-fbi] reboot: fastboot reboot", 15)
+        # 退出码 0 时 /init 把状态文件第一行当重启原因（真守护进程退出前写 "rebooting (host request)"，假的照写）
+        vm.expect("[gk3-fbi] reboot: rebooting (host request)", 15)
         vm.expect("reboot: Restarting system", 120)
         vm.wait_exit()
         RESULTS.append("    退出码 11 → 重起守护进程 + 重绑 UDC（软重新枚举）；退出码 0 → 重启")
@@ -588,6 +590,7 @@ SCENARIOS = [("fastboot", sc_fastboot), ("missing", sc_missing), ("idle", sc_idl
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--img", required=True)
+    ap.add_argument("--img-nofbd", required=True, help="同一份源码 --no-fastbootd 打的镜像（missing 场景）")
     ap.add_argument("--kernel", required=True)
     ap.add_argument("--modules", required=True)
     ap.add_argument("--fake", required=True)
