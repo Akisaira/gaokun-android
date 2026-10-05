@@ -12,3 +12,30 @@ service vendor.boot-gaokun3 /vendor/bin/hw/android.hardware.boot-service.gaokun3
 #   设得了 vendor_gaokun3_prop（sepolicy/vendor_gaokun3_props.te 的 set_prop(vendor_init, …)）。
 on property:sys.boot_completed=1
     setprop vendor.gaokun3.boot.done 1
+
+# ★ 统一启动入口 S15（双系统，2026-10-05；docs/boot-entry-design.md §4.6.1 动作 7、§4.9.3、§4.9.4；⬜ 未编译、未上机）
+#
+# 1) Parts 的"重启到 Windows" / "默认启动系统"：Parts 是 system_app（coredomain），写不了 vendor 属性，
+#    只能设 system_prop 的 sys.gaokun3.bootreq（refs/lineage-sepolicy/private/system_app.te:43）。触发条件由 init 求值，
+#    动作在 vendor_init 里 setprop 我们的 vendor 属性（与 etc/histen.rc 同一个中转法）；HAL 的请求线程等 ring=1、
+#    把请求写进 misc 的 GK3 记录、回 vendor.gaokun3.bootentry.ack。只认三个字面值（不展开 ${…}：展开在 vendor_init
+#    里做，它读不了 system_prop）。Parts 每次先设 none 再设目标值，保证同一个请求连按两次也会再触发。
+on property:sys.gaokun3.bootreq=next_windows
+    setprop vendor.gaokun3.bootentry.request next_windows
+    setprop vendor.gaokun3.bootentry.ring 1
+
+on property:sys.gaokun3.bootreq=default_windows
+    setprop vendor.gaokun3.bootentry.request default_windows
+    setprop vendor.gaokun3.bootentry.ring 1
+
+on property:sys.gaokun3.bootreq=default_android
+    setprop vendor.gaokun3.bootentry.request default_android
+    setprop vendor.gaokun3.bootentry.ring 1
+
+# 2) Windows 为默认时，从 Android 关机 ⇒ 下次冷开机进 Windows（clean_poweroff 标记，入口消费）。
+#    init 收到 sys.powerctl 后先排 shutdown 触发器、再排真正关机的 shutdown_done（refs/lineage-system-core/init/reboot.cpp:984-992，crDroid 树 system/core/init/reboot.cpp:1185-1193（2026-10-05 构建机只读核对）），
+#    exec 让 init 等它退出。exec 的是 HAL 自己的二进制：经 init_daemon_domain 落到 hal_bootctl_default
+#    （misc 读写在核心 neverallow 的白名单里，refs/lineage-sepolicy/private/domain.te:1596-1612，crDroid 树 :1661-1677）。它只读 sys.powerctl 与
+#    misc 里的默认系统缓存、只写 misc，最多 5 秒（alarm）；判"是不是关机、默认是不是 Windows"都在它自己里面（重启时什么都不写）。
+on shutdown
+    exec - root root -- /vendor/bin/hw/android.hardware.boot-service.gaokun3 --gk3-mark-poweroff

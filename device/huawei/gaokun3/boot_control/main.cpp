@@ -13,6 +13,8 @@
 
 #include <unistd.h>
 
+#include <string>
+
 #include <android-base/logging.h>
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
@@ -40,8 +42,12 @@ using aidl::android::hardware::boot::IBootControl;
 //   下面 main() 里那句"槽位数必须是 2"的断言保留着，它现在校验的是
 //   真实分区被正确探测到。
 
-int main(int, char* argv[]) {
+int main(int argc, char* argv[]) {
     android::base::InitLogging(argv, android::base::KernelLogger);
+
+    // ★ S15（双系统）：rc 的 on shutdown 里 exec 同一个二进制做关机标记 —— 不注册服务、不起线程，做完就退
+    //   （为什么不是单独的 gk3-misc：见 Gk3Boot.cpp 顶部"关机标记"）。
+    if (argc > 1 && std::string(argv[1]) == "--gk3-mark-poweroff") return gaokun3::MarkPoweroffMain();
 
     ABinderProcess_setThreadPoolMaxThreadCount(0);
     std::shared_ptr<IBootControl> service = ndk::SharedRefBase::make<BootControl>();

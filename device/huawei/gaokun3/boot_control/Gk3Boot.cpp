@@ -65,8 +65,40 @@
  *   vendor.gaokun3.bootentry.version   对齐之后现役入口的版本（off 时为空）
  *   vendor.gaokun3.bootentry.error     出错时一句话（≤ 91 字节），没错为空
  *   vendor.gaokun3.bootentry.done      本次开机的令牌（时间戳-pid），最后写；Parts 按它去重
+ *   —— S15 双系统（设计稿 §4.6.1 动作 6、7，§4.9.3、§4.9.4）——
+ *   vendor.gaokun3.bootentry.windows   1 = ESP 上有 EFI/Microsoft/Boot/bootmgfw.efi（Parts 据此显示"重启到 Windows"和"默认系统"）
+ *   vendor.gaokun3.bootentry.default   GK3 记录里入口写下的默认系统缓存：windows / android / unknown
+ *   vendor.gaokun3.bootentry.default_pending  已请求、入口还没应用的 set_default：windows / android / 空
+ *   vendor.gaokun3.bootentry.menu      1 = "重启到引导菜单"（reboot,bootloader）真能到执行端：这次经入口、分派开着
+ *                                      （ro.boot.gk3boot.dispatch=1）、现役那一版的 fastboot.img 在 ESP 上
+ *   vendor.gaokun3.bootentry.ack       请求的回执 <请求>:<ok|error:原因>:<pid>-<序号>（见下面"请求"）
+ *   notify 另可有 intent_dropped / default_reset（入口作废了双系统意图 / 删了不合法的 LoaderEntryDefault）与
+ *   loader_replaced（有 Windows 且 EFI/BOOT/BOOTAA64.EFI 与 EFI/systemd/systemd-bootaa64.efi 不同 = Windows 换掉了
+ *   回落路径上的启动器；只通知、不修 —— 改它会让 BitLocker 要密钥，§4.9.6）
  *
- * ⬜ 未编译、未上机（2026-10-05）。
+ * ── 请求（S15，动作 7）────────────────────────────────────────────────────────
+ *   Parts（system_app，coredomain）写不了任何 vendor 属性（vendor_gaokun3_props.te 顶上那条 neverallow），所以走 init 中转：
+ *   Parts 设 sys.gaokun3.bootreq=next_windows|default_windows|default_android（system_prop）→ 本 HAL 的 rc 在 vendor_init 里
+ *   setprop vendor.gaokun3.bootentry.request <同值> + vendor.gaokun3.bootentry.ring 1 → 这里的请求线程等 ring=1、清 ring、
+ *   把请求写进 misc 的 GK3 记录（next=windows 或 set_default，写后读回）→ 设 ack。Parts 看到 ack 再发起重启（或提示"下次开机生效"）。
+ *   Android 不碰 efivarfs（U14 选 a）：真正改 LoaderEntryDefault / 写 OneShot 的是下一次开机的入口。
+ *   记录无效（入口没在动作模式下跑过）⇒ error:no-record：入口不在，意图也没人消费。
+ *
+ * ── 关机标记（S15，§4.9.3"冷开机进 Windows"）───────────────────────────────────
+ *   rc 的 on shutdown 里 exec 本二进制 --gk3-mark-poweroff（MarkPoweroffMain）：sys.powerctl 以 shutdown 开头、实际默认是
+ *   Windows（GK3 的缓存 / 未应用的 set_default）、而且这次是经动作模式的入口开的机（ro.boot.gk3boot.mode=action ——
+ *   只有那样入口才预置了 OneShot，下次冷开机才会先进入口去消费标记）⇒ 置 clean_poweroff。
+ *   设计稿写的是 gk3-misc mark-poweroff；实现成 HAL 二进制的一个模式，是因为写 misc 的域被核心 neverallow 限定在一张白名单里
+ *   （refs/lineage-sepolicy/private/domain.te:1596-1612，crDroid 树 :1661-1677，user 构建生效），hal_bootctl_server 在单子上、新建的 gk3_misc 域不在；
+ *   exec 本二进制经 init_daemon_domain（refs/lineage-sepolicy/vendor/hal_bootctl_default.te:5-6）落到 hal_bootctl_default，
+ *   misc 读写已有，只补了读 sys.powerctl（sepolicy/hal_bootctl_default.te）。同一个库函数 gk3_rec_mark_poweroff 也在
+ *   主机 gk3-misc mark-poweroff 里（离线演练 / QEMU 夹具对照）。时序：init 收到 sys.powerctl 后先排 shutdown 触发器、
+ *   再排 shutdown_done（真正关机），refs/lineage-system-core/init/reboot.cpp:984-992，crDroid 树 system/core/init/reboot.cpp:1185-1193（2026-10-05 构建机只读核对）；exec 会让 init 等它退出。
+ *   失败（misc 读写错、5 秒还没完）的后果只是"下次开机进 Android"，所以这里绝不阻塞关机：alarm(5) 自杀。
+ *   已知限制：从 Android 关机后，下次开机在 systemd-boot 菜单里手动改选 Windows，标记会留到下一次入口运行 ——
+ *   那时会多跳一次 Windows（入口分不出"经预置的 OneShot 进来"还是"菜单里手选进来"：两种 systemd-boot 都把 OneShot 删了）。
+ *
+ * ⬜ 未编译、未上机（2026-10-05；S15 部分同样）。
  *
  * Copyright 2026 The gaokun-android contributors
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -87,7 +119,9 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <thread>
@@ -121,6 +155,12 @@ constexpr char kMiscDev[] = "/dev/block/by-name/misc";
 constexpr char kActivePrefix[] = "gk3boot-android-";
 constexpr char kPrevPrefix[] = "gk3prev-android-";
 constexpr char kToolsEntry[] = "gk3boot-tools.conf";
+// S15：ESP 上 Windows 的启动管理器（systemd-boot 据它生成 auto-windows，refs/systemd-v257/src/boot/boot.c:2146-2148）
+constexpr char kBootmgfw[] = "/EFI/Microsoft/Boot/bootmgfw.efi";
+constexpr char kFallbackLoader[] = "/EFI/BOOT/BOOTAA64.EFI";
+constexpr char kSdBoot[] = "/EFI/systemd/systemd-bootaa64.efi";
+constexpr char kReqProp[] = "vendor.gaokun3.bootentry.request";
+constexpr char kRingProp[] = "vendor.gaokun3.bootentry.ring";
 // 写 fastboot.img 之前 ESP 上至少要剩 它的大小 + 这么多（.new 与旧文件并存的那一刻也算在"它的大小"里）
 constexpr uint64_t kFbReserve = 1 << 20;
 constexpr size_t kPropMax = 91;  // PROP_VALUE_MAX - 1
@@ -159,10 +199,73 @@ bool Interesting(uint16_t code) {
         case GK3_EV_REFUSED_MERGING:
         case GK3_EV_BOOTLOOP:
         case GK3_EV_NOSLOT:
+        case GK3_EV_DEFAULT_RESET:    // S15：LoaderEntryDefault 被入口删掉（= 默认回到 Android）
+        case GK3_EV_INTENT_DROPPED:   // S15："重启到 Windows" / 关机进 Windows / 设默认没执行
             return true;
-        default:  // migrated / bcb_ignored 只是记录（后者在分派开关关着时每份新 BCB 都有一条），不打扰用户
+        default:  // migrated / bcb_ignored / to_windows / default_set 只是记录（后两样是用户自己要的），不打扰用户
             return false;
     }
+}
+
+// 开机完成线程、请求线程、关机模式三处都读改写 misc 的 GK3 记录：同一进程里用这把锁串起来
+// （关机模式是另一个进程，与开机完成同时发生的概率可以不计；最坏是一方的改动被另一方覆盖，见文件头）。
+std::mutex& MiscMu() {
+    static std::mutex m;
+    return m;
+}
+
+// 读改写 misc+8 KiB 的 GK3 记录：edit 返回 true 才写（seal → 写 → flush → 逐块读回，再按字节读一遍与写的比对、过 CRC）。
+// *valid = 记录有效（无效时不调 edit、不写 —— 不替入口建记录）。返回 false = 出错（*err 有原因）。
+bool RecRmw(const std::function<bool(uint8_t*)>& edit, bool* valid, std::string* err) {
+    std::lock_guard<std::mutex> g(MiscMu());
+    *valid = false;
+    android::base::unique_fd fd(TEMP_FAILURE_RETRY(open(kMiscDev, O_RDWR | O_DIRECT | O_CLOEXEC)));
+    if (fd < 0) {
+        *err = std::string("open misc: ") + strerror(errno);
+        return false;
+    }
+    off_t size = lseek(fd.get(), 0, SEEK_END);
+    if (size < static_cast<off_t>(GK3_MISC_GK3_OFF + GK3_REC_SIZE)) {
+        *err = "misc too small";
+        return false;
+    }
+    int raw = fd.get();
+    gk3_blk dev = {&raw, kBlk, static_cast<uint64_t>(size) / kBlk, BlkRead, BlkWrite, BlkFlush};
+
+    void* scratch = nullptr;
+    if (posix_memalign(&scratch, kBlk, 2 * kBlk) != 0) {
+        *err = "posix_memalign failed";
+        return false;
+    }
+    std::unique_ptr<void, decltype(&free)> scratch_guard(scratch, &free);
+
+    uint8_t rec[GK3_REC_SIZE];
+    gk3_err e = gk3_blk_read_bytes(&dev, 0, dev.num_blocks, GK3_MISC_GK3_OFF, rec, sizeof(rec), scratch, 2 * kBlk);
+    if (e != GK3_OK) {
+        *err = std::string("read GK3 record: ") + gk3_strerror(e);
+        return false;
+    }
+    if (gk3_rec_validate(rec) != GK3_OK) {
+        // 无记录 = 入口没在动作模式下跑过（或者记录被断电写坏了 —— 入口下次会重建，§4.5）。不替它建。
+        LOG(INFO) << "gk3boot: no valid GK3 record at misc+8KiB (" << gk3_strerror(gk3_rec_validate(rec)) << ")";
+        return true;
+    }
+    *valid = true;
+    if (!edit(rec)) return true;  // 没有要改的：一个字节都不写
+    gk3_rec_seal(rec);
+    e = gk3_blk_write_bytes_verify(&dev, 0, dev.num_blocks, GK3_MISC_GK3_OFF, rec, sizeof(rec), scratch, 2 * kBlk);
+    if (e != GK3_OK) {
+        *err = std::string("write GK3 record: ") + gk3_strerror(e);
+        return false;
+    }
+    // 再按字节读一遍、过一遍 CRC（write_verify 比的是整块，这里确认读回来的是一份有效记录、就是写下去的那份）
+    uint8_t back[GK3_REC_SIZE];
+    e = gk3_blk_read_bytes(&dev, 0, dev.num_blocks, GK3_MISC_GK3_OFF, back, sizeof(back), scratch, 2 * kBlk);
+    if (e != GK3_OK || gk3_rec_validate(back) != GK3_OK || memcmp(back, rec, sizeof(rec)) != 0) {
+        *err = "GK3 record read-back mismatch";
+        return false;
+    }
+    return true;
 }
 
 struct RecResult {
@@ -170,81 +273,49 @@ struct RecResult {
     int streak = -1;                  // 清零之前的值
     std::vector<std::string> notify;  // 没通知过、值得通知的事件名（去重，从旧到新）
     std::string error;
+    gk3_os default_os = GK3_OS_UNKNOWN;    // S15：入口写下的默认系统缓存
+    gk3_setdef pending = GK3_SETDEF_NONE;  // S15：还没被入口应用的 set_default 请求
 };
+
+const char* OsName(gk3_os o) {
+    return o == GK3_OS_WINDOWS ? "windows" : o == GK3_OS_ANDROID ? "android" : "unknown";
+}
+const char* SetdefName(gk3_setdef d) {
+    return d == GK3_SETDEF_WINDOWS ? "windows" : d == GK3_SETDEF_ANDROID ? "android" : "";
+}
 
 RecResult ClearStreakAndTakeEvents() {
     RecResult r;
-    android::base::unique_fd fd(TEMP_FAILURE_RETRY(open(kMiscDev, O_RDWR | O_DIRECT | O_CLOEXEC)));
-    if (fd < 0) {
-        r.error = std::string("open misc: ") + strerror(errno);
-        return r;
-    }
-    off_t size = lseek(fd.get(), 0, SEEK_END);
-    if (size < static_cast<off_t>(GK3_MISC_GK3_OFF + GK3_REC_SIZE)) {
-        r.error = "misc too small";
-        return r;
-    }
-    int raw = fd.get();
-    gk3_blk dev = {&raw, kBlk, static_cast<uint64_t>(size) / kBlk, BlkRead, BlkWrite, BlkFlush};
-
-    void* scratch = nullptr;
-    if (posix_memalign(&scratch, kBlk, 2 * kBlk) != 0) {
-        r.error = "posix_memalign failed";
-        return r;
-    }
-    std::unique_ptr<void, decltype(&free)> scratch_guard(scratch, &free);
-
-    uint8_t rec[GK3_REC_SIZE];
-    gk3_err e = gk3_blk_read_bytes(&dev, 0, dev.num_blocks, GK3_MISC_GK3_OFF, rec, sizeof(rec), scratch,
-                                   2 * kBlk);
-    if (e != GK3_OK) {
-        r.error = std::string("read GK3 record: ") + gk3_strerror(e);
-        return r;
-    }
-    if (gk3_rec_validate(rec) != GK3_OK) {
-        // 无记录 = 入口没在动作模式下跑过（或者记录被断电写坏了 —— 入口下次会重建，§4.5）。不替它建。
-        LOG(INFO) << "gk3boot: no valid GK3 record at misc+8KiB (" << gk3_strerror(gk3_rec_validate(rec))
-                  << "), nothing to clear";
-        return r;
-    }
-    r.valid = true;
-    r.streak = gk3_rec_boot_streak(rec);
-
-    gk3_event ev[GK3_EV_N];
-    uint32_t n = std::min<uint32_t>(gk3_rec_events(rec, ev, GK3_EV_N), GK3_EV_N);
     uint32_t upto = 0;
     bool pending = false;
-    for (uint32_t i = 0; i < n; i++) {
-        if (ev[i].flags & GK3_EVF_NOTIFIED) continue;
-        pending = true;
-        upto = std::max(upto, ev[i].seq);
-        if (!Interesting(ev[i].code)) continue;
-        std::string name = gk3_ev_name(static_cast<gk3_ev_code>(ev[i].code));
-        if (std::find(r.notify.begin(), r.notify.end(), name) == r.notify.end()) r.notify.push_back(name);
-        LOG(INFO) << "gk3boot: event seq=" << ev[i].seq << " " << name << " slot=_"
-                  << static_cast<char>('a' + (ev[i].slot & 1)) << " aux=" << ev[i].aux;
-    }
-    if (r.streak == 0 && !pending) return r;  // 正常开机的常态：一个字节都不写
-
-    gk3_rec_set_boot_streak(rec, 0);
-    if (pending) gk3_rec_events_mark_notified(rec, upto);
-    gk3_rec_seal(rec);
-    e = gk3_blk_write_bytes_verify(&dev, 0, dev.num_blocks, GK3_MISC_GK3_OFF, rec, sizeof(rec), scratch,
-                                   2 * kBlk);
-    if (e != GK3_OK) {
-        r.error = std::string("write GK3 record: ") + gk3_strerror(e);
-        return r;
-    }
-    // 再按字节读一遍、过一遍 CRC（write_verify 比的是整块，这里确认读回来的是一份有效记录、streak 真的是 0）
-    uint8_t back[GK3_REC_SIZE];
-    e = gk3_blk_read_bytes(&dev, 0, dev.num_blocks, GK3_MISC_GK3_OFF, back, sizeof(back), scratch, 2 * kBlk);
-    if (e != GK3_OK || gk3_rec_validate(back) != GK3_OK || gk3_rec_boot_streak(back) != 0) {
-        r.error = "GK3 record read-back mismatch";
-        return r;
-    }
-    LOG(INFO) << "gk3boot: GK3 record: boot_streak " << r.streak << " -> 0"
-              << (pending ? ", events up to seq " + std::to_string(upto) + " marked notified" : "")
-              << " (written, read back OK)";
+    bool ok = RecRmw(
+            [&](uint8_t* rec) {
+                r.streak = gk3_rec_boot_streak(rec);
+                r.default_os = gk3_rec_default_os(rec);
+                r.pending = gk3_rec_set_default_req(rec);
+                gk3_event ev[GK3_EV_N];
+                uint32_t n = std::min<uint32_t>(gk3_rec_events(rec, ev, GK3_EV_N), GK3_EV_N);
+                for (uint32_t i = 0; i < n; i++) {
+                    if (ev[i].flags & GK3_EVF_NOTIFIED) continue;
+                    pending = true;
+                    upto = std::max(upto, ev[i].seq);
+                    if (!Interesting(ev[i].code)) continue;
+                    std::string name = gk3_ev_name(static_cast<gk3_ev_code>(ev[i].code));
+                    if (std::find(r.notify.begin(), r.notify.end(), name) == r.notify.end()) r.notify.push_back(name);
+                    LOG(INFO) << "gk3boot: event seq=" << ev[i].seq << " " << name << " slot=" << unsigned(ev[i].slot)
+                              << " aux=" << ev[i].aux;
+                }
+                if (r.streak == 0 && !pending) return false;  // 正常开机的常态：一个字节都不写
+                gk3_rec_set_boot_streak(rec, 0);
+                if (pending) gk3_rec_events_mark_notified(rec, upto);
+                return true;
+            },
+            &r.valid, &r.error);
+    if (ok && r.valid && (r.streak != 0 || pending))
+        LOG(INFO) << "gk3boot: GK3 record: boot_streak " << r.streak << " -> 0"
+                  << (pending ? ", events up to seq " + std::to_string(upto) + " marked notified" : "")
+                  << " (written, read back OK)";
+    if (!r.valid) r.notify.clear();
     return r;
 }
 
@@ -664,6 +735,9 @@ Mode ParseMode(const std::string& v) {
 struct EspResult {
     std::string via;  // gk3boot / gk3prev / direct
     bool bypassed = false;
+    bool windows = false;          // S15：ESP 上有 bootmgfw.efi
+    bool loader_replaced = false;  // S15：有 Windows 且回落路径上的 BOOTAA64.EFI 不再是 systemd-boot
+    bool executor = false;         // S15：对齐之后现役那一版（action）的 fastboot.img 在 ESP 上
     std::string mode;  // 对齐之后：off / observe / action / unknown
     std::string version;
     std::string error;
@@ -849,6 +923,18 @@ EspResult OnePass(Pass* p, const std::string& entry, Mode mode) {
 
     if (!entry.empty()) Bless(p, entry);
     Reconcile(p, mode, &r);
+    // S15（动作 6）：有没有 Windows、Windows 有没有换掉回落路径上的启动器、"重启到引导菜单"有没有执行端可去。
+    // 都只读；dry 那一遍看的是对齐之前的盘，所以有改动时以第二遍（真写之后）为准（DoEsp 返回的就是那一遍）。
+    const std::string root = kEspRoot;
+    r.windows = access((root + kBootmgfw).c_str(), F_OK) == 0;
+    if (r.windows) {
+        std::string a, b;
+        if (android::base::ReadFileToString(root + kFallbackLoader, &a) &&
+            android::base::ReadFileToString(root + kSdBoot, &b) && !b.empty())
+            r.loader_replaced = a != b;
+    }
+    r.executor = r.mode == "action" && !r.version.empty() &&
+                 access((Gk3Dir() + "/" + r.version + "/fastboot.img").c_str(), F_OK) == 0;
     return r;
 }
 
@@ -890,6 +976,12 @@ void Worker() {
     if (!rec.valid && event == "fallback") notify.push_back(event);
 
     EspResult esp = DoEsp(entry, mode);
+    if (esp.windows && esp.loader_replaced) {
+        // 动作 6：只通知、不修（§4.9.6）。经入口进 Android 时这不会发生（回落路径就是入口的来路），U 盘 / live 进来时才有用
+        LOG(WARNING) << "gk3boot: " << kFallbackLoader << " differs from " << kSdBoot
+                     << " (Windows replaced the fallback loader?); NOT repairing";
+        notify.push_back("loader_replaced");
+    }
 
     std::string err = rec.error;
     if (!esp.error.empty()) err += (err.empty() ? "" : "; ") + esp.error;
@@ -902,14 +994,97 @@ void Worker() {
     Out("streak", rec.streak < 0 ? "" : std::to_string(rec.streak));
     Out("mode", esp.mode);
     Out("version", esp.version);
+    // S15
+    Out("windows", esp.windows ? "1" : "0");
+    Out("default", rec.valid ? OsName(rec.default_os) : "unknown");
+    Out("default_pending", rec.valid ? SetdefName(rec.pending) : "");
+    const bool dispatch = GetProperty("ro.boot.gk3boot.dispatch", "") == "1";
+    Out("menu", dispatch && esp.via == "gk3boot" && esp.executor ? "1" : "0");
     Out("error", err);
     Out("done", std::to_string(time(nullptr)) + "-" + std::to_string(getpid()));
+}
+
+// ──────────────────────────────────────────────────────────────── S15：请求（动作 7）与关机标记
+
+bool EspHasWindows(std::string* err) {
+    MountedEsp esp(true);
+    if (!esp.ok()) {
+        *err = "esp";
+        return false;
+    }
+    return access((std::string(kEspRoot) + kBootmgfw).c_str(), F_OK) == 0;
+}
+
+std::string HandleRequest(const std::string& req) {
+    gk3_setdef sd = GK3_SETDEF_NONE;
+    if (req == "default_windows") sd = GK3_SETDEF_WINDOWS;
+    else if (req == "default_android") sd = GK3_SETDEF_ANDROID;
+    else if (req != "next_windows") return "error:unknown-request";
+    if (sd != GK3_SETDEF_ANDROID) {
+        std::string e;
+        bool win = EspHasWindows(&e);
+        if (!e.empty()) return "error:" + e;
+        if (!win) return "error:no-windows";
+    }
+    bool valid = false;
+    std::string err;
+    bool ok = RecRmw(
+            [&](uint8_t* rec) {
+                if (sd == GK3_SETDEF_NONE)
+                    gk3_rec_set_next(rec, GK3_NEXT_WINDOWS, 0);
+                else
+                    gk3_rec_put_set_default_req(rec, sd);
+                return true;
+            },
+            &valid, &err);
+    if (!ok) {
+        LOG(ERROR) << "gk3boot: request " << req << ": " << err;
+        return "error:misc";
+    }
+    if (!valid) return "error:no-record";
+    LOG(INFO) << "gk3boot: request " << req << " written to the GK3 record (read back OK); the loader acts on it "
+              << "at the next boot";
+    if (sd != GK3_SETDEF_NONE) Out("default_pending", SetdefName(sd));
+    return "ok";
+}
+
+void RequestWorker() {
+    unsigned n = 0;
+    for (;;) {
+        android::base::WaitForProperty(kRingProp, "1");
+        SetProperty(kRingProp, "0");
+        const std::string req = GetProperty(kReqProp, "");
+        const std::string res = HandleRequest(req);
+        Out("ack", req + ":" + res + ":" + std::to_string(getpid()) + "-" + std::to_string(++n));
+    }
 }
 
 }  // namespace
 
 void StartBootCompletedWorker() {
     std::thread(Worker).detach();
+    std::thread(RequestWorker).detach();  // S15：Parts 的"重启到 Windows" / "默认系统"
+}
+
+int MarkPoweroffMain() {
+    alarm(5);  // 绝不拖住关机：5 秒没完就让 SIGALRM 结束自己（init 的 exec 在等我们）
+    const std::string pc = GetProperty("sys.powerctl", "");
+    const std::string mode = GetProperty("ro.boot.gk3boot.mode", "");
+    if (mode != "action") {
+        LOG(INFO) << "gk3boot: mark-poweroff: this boot did not come through the loader in action mode (mode="
+                  << (mode.empty() ? "<none>" : mode) << "); nothing to mark";
+        return 0;
+    }
+    bool valid = false, marked = false;
+    std::string err;
+    bool ok = RecRmw([&](uint8_t* rec) { return marked = gk3_rec_mark_poweroff(rec, pc.c_str()); }, &valid, &err);
+    if (!ok)
+        LOG(ERROR) << "gk3boot: mark-poweroff: " << err << " (next power-on boots Android)";
+    else
+        LOG(INFO) << "gk3boot: mark-poweroff: sys.powerctl=" << pc << ": "
+                  << (!valid ? "no GK3 record" : marked ? "clean_poweroff set (next power-on goes to Windows)"
+                                                        : "not marked (not a shutdown, or the default is not Windows)");
+    return 0;
 }
 
 }  // namespace gaokun3

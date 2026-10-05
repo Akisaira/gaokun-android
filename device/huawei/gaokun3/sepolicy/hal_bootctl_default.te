@@ -53,3 +53,12 @@ allow hal_bootctl_default vfat:dir { create rmdir getattr };
 #   （refs/lineage-sepolicy/private/domain.te:191-192）。
 # ro.boot.gk3boot.*：bootloader_prop，所有域都能读（private/domain.te:481）。
 # vendor.gaokun3.* 的读写见 sepolicy/vendor_gaokun3_props.te。
+
+# ── 2026-10-05：S15 双系统（boot_control/Gk3Boot.cpp 的"关机标记"）──────────────────────────────
+# rc 的 on shutdown 里 exec 本 HAL 二进制 --gk3-mark-poweroff（经 init_daemon_domain 落在本域），它要读 sys.powerctl
+# 判"是关机还是重启"。powerctl_prop 是 core_property_type，但在"非 coredomain 不许读核心属性"那条 neverallow 的豁免里
+# （refs/lineage-sepolicy/private/property.te:395-412 的 -powerctl_prop；crDroid 树 system/sepolicy/private/property.te:404，2026-10-05 构建机只读核对）。⬜ 未编译（只有编译器能证明没撞别的 neverallow）。
+# 其余不用补：misc 读写（AOSP vendor/hal_bootctl_default.te:15-16）、ro.boot.gk3boot.*（bootloader_prop，所有域可读）、
+# vendor.gaokun3.bootentry.{request,ring,ack,…} 的读写（vendor_gaokun3_props.te 的 get_prop / set_prop）、
+# ESP 上 EFI/Microsoft/Boot/bootmgfw.efi 等的 access / 读（上面 vfat:dir search/read/open、vfat:file read/getattr 已有）。
+get_prop(hal_bootctl_default, powerctl_prop)

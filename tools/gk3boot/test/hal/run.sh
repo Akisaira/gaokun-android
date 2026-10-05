@@ -14,6 +14,9 @@
 # vendor 不带时删同版本目录里陈旧的那份）与非默认条目 gk3boot-tools.conf（只在 action + 执行端就位时部署、
 # 跟着现役换版本、observe / off 时删、指着旧目录时改回来）。ESP 剩余空间用 shim.h 的 GK3T_ESP_FREE_KB 假装。
 #
+# S24–S30（S15 双系统）：windows / loader_replaced / default / default_pending / menu 的导出（只读）、请求线程
+# （next_windows / default_windows / default_android，ring → ack，没有 Windows / 没有记录 / ESP 挂不上 / 不认识的请求）、
+# 关机标记 --gk3-mark-poweroff（重启、非动作模式、直连、默认 Android、未应用的 set_default、没有记录）、新事件进 notify。
 # ⚠️ 测的是逻辑，不是 Android：SELinux、真 vfat（大小写、rename 覆盖）、O_DIRECT 对齐、属性服务都要上机看。
 set -eu
 G=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)        # tools/gk3boot
@@ -62,7 +65,8 @@ vfb() {   # vfb <KB> [填充字符]：给 vendor 加一份执行端 fastboot.img
     { printf '\037\213\010'; head -c $(($1 * 1024)) /dev/zero | tr '\0' "${2:-f}"; } > "$T/vendor/boot/gk3boot/fastboot.img"
 }
 run() {   # run <mode> <entry> [event]
-    { echo "persist.vendor.gaokun3.gk3boot=$1"; [ -n "$2" ] && echo "ro.boot.gk3boot.entry=$2"; [ -n "${3:-}" ] && echo "ro.boot.gk3boot.event=$3"; } > "$T/props"
+    { echo "persist.vendor.gaokun3.gk3boot=$1"; [ -n "$2" ] && echo "ro.boot.gk3boot.entry=$2"; [ -n "${3:-}" ] && echo "ro.boot.gk3boot.event=$3"
+      [ -n "${XPROPS:-}" ] && printf '%s\n' $XPROPS; } > "$T/props"
     OUT=$(GK3T_PROPS="$T/props" "$D" run 2>"$T/log"); echo "$OUT" | sed 's/^/    /'
 }
 p() { echo "$OUT" | sed -n "s/^bootentry\.$1=//p"; }
@@ -234,6 +238,91 @@ fresh V6; vfb 100 i; run action ""
 chk "前提：tools 已部署" '[ -f "$TE/gk3boot-tools.conf" ]'
 run off ""
 chk "没有任何 gk3 条目、EFI/gk3boot/V6 没了" '[ -z "$(ls_e)" ] && [ ! -e "$T/esp/EFI/gk3boot/V6" ]'
+
+# ── S15 双系统：动作 6（windows / loader_replaced / default / menu 导出）、动作 7（请求线程）、关机标记 ──
+WIN=$T/esp/EFI/Microsoft/Boot
+winesp() {   # ESP 上放 Windows 的启动管理器；回落路径与 systemd-boot 同一份字节（= 安装器装好的样子）
+    mkdir -p "$WIN" "$T/esp/EFI/systemd"; printf 'MZwindows' > "$WIN/bootmgfw.efi"
+    printf 'MZsdboot' > "$T/esp/EFI/BOOT/BOOTAA64.EFI"; cp "$T/esp/EFI/BOOT/BOOTAA64.EFI" "$T/esp/EFI/systemd/systemd-bootaa64.efi"
+}
+req() { OUT=$(GK3T_PROPS="$T/props" "$D" request "$1" 2>>"$T/log"); echo "$OUT" | sed 's/^/    /'; }
+ack() { echo "$OUT" | sed -n 's/^ack=//p'; }
+dumpm() { "$D" dump "$T/misc.img" | head -1; }
+
+echo "═ S24 有 Windows、默认 Windows（入口写的缓存）⇒ windows=1 default=windows；没有 Windows ⇒ windows=0；纯 Android 开机仍零写入"
+fresh V1; "$D" mkmisc "$T/misc.img" 0; "$D" recset "$T/misc.img" default_os=2; run action ""; mv "$TE/gk3boot-android-a+3.conf" "$TE/gk3boot-android-a.conf"
+winesp; S0=$(snap); M0=$(md5q "$T/misc.img"); run action gk3boot-android-a.conf
+chk "windows=1 default=windows default_pending 空 menu=0（分派关）" '[ "$(p windows)" = 1 ] && [ "$(p default)" = windows ] && [ -z "$(p default_pending)" ] && [ "$(p menu)" = 0 ]'
+chk "notify 不含 loader_replaced（回落路径就是 systemd-boot）" '! echo "$(p notify)" | grep -q loader_replaced'
+chk "只读挂、ESP 与 misc 都没变（动作 6 只读）" '[ "$(mounts)" = "ro=1 rw=0" ] && [ "$(snap)" = "$S0" ] && [ "$(md5q "$T/misc.img")" = "$M0" ]'
+rm -rf "$T/esp/EFI/Microsoft"; run action gk3boot-android-a.conf
+chk "删掉 Windows ⇒ windows=0" '[ "$(p windows)" = 0 ]'
+
+echo "═ S25 有 Windows 且 BOOTAA64.EFI 被换成别的（Windows 修复 / 更新）⇒ notify 带 loader_replaced、只通知不修"
+winesp; printf 'MZbootmgfw-copy' > "$T/esp/EFI/BOOT/BOOTAA64.EFI"; S0=$(snap); run action gk3boot-android-a.conf
+chk "notify 含 loader_replaced" 'echo "$(p notify)" | grep -q loader_replaced'
+chk "ESP 一字未改（不修）" '[ "$(snap)" = "$S0" ] && [ "$(mounts)" = "ro=1 rw=0" ]'
+cp "$T/esp/EFI/systemd/systemd-bootaa64.efi" "$T/esp/EFI/BOOT/BOOTAA64.EFI"
+
+echo "═ S26 menu：经入口开机 + ro.boot.gk3boot.dispatch=1 + 现役那一版的 fastboot.img 在 ESP 上 ⇒ menu=1；缺一样就 0"
+fresh V7; vfb 50 m; run action ""; mv "$TE/gk3boot-android-a+3.conf" "$TE/gk3boot-android-a.conf"
+XPROPS="ro.boot.gk3boot.dispatch=1" run action gk3boot-android-a.conf
+chk "dispatch=1 + via=gk3boot + 执行端在 ⇒ menu=1" '[ "$(p menu)" = 1 ] && [ "$(p via)" = gk3boot ]'
+run action gk3boot-android-a.conf
+chk "分派关 ⇒ menu=0" '[ "$(p menu)" = 0 ]'
+XPROPS="ro.boot.gk3boot.dispatch=1" run action ""
+chk "直连开机（没经过入口）⇒ menu=0" '[ "$(p menu)" = 0 ]'
+rm "$T/esp/EFI/gk3boot/V7/fastboot.img"; rm "$T/vendor/boot/gk3boot/fastboot.img"
+XPROPS="ro.boot.gk3boot.dispatch=1" run action gk3boot-android-a.conf
+chk "没有执行端 ⇒ menu=0" '[ "$(p menu)" = 0 ]'
+
+echo "═ S27 请求 next_windows：有 Windows + 有记录 ⇒ 写 next=windows、ack ok；没有 Windows / 没有记录 ⇒ 报错、不写"
+fresh V1; winesp; "$D" mkmisc "$T/misc.img" 0; : > "$T/props"; req next_windows
+chk "ack = next_windows:ok:…、ring 清回 0" 'ack | grep -q "^next_windows:ok:" && [ "$(echo "$OUT" | sed -n "s/^ring=//p")" = 0 ]'
+chk "misc：next=3（windows），streak / 事件不动" 'dumpm | grep -q "streak=0 next=3 set_default=0"'
+rm -rf "$T/esp/EFI/Microsoft"; "$D" mkmisc "$T/misc.img" 0; M0=$(md5q "$T/misc.img"); req next_windows
+chk "没有 Windows ⇒ error:no-windows、misc 不变" 'ack | grep -q "^next_windows:error:no-windows:" && [ "$(md5q "$T/misc.img")" = "$M0" ]'
+winesp; "$D" nomisc "$T/misc.img"; M0=$(md5q "$T/misc.img"); req next_windows
+chk "没有 GK3 记录（入口没在动作模式下跑过）⇒ error:no-record、不建记录" 'ack | grep -q "^next_windows:error:no-record:" && [ "$(md5q "$T/misc.img")" = "$M0" ]'
+req bogus
+chk "不认识的请求 ⇒ error:unknown-request" 'ack | grep -q "^bogus:error:unknown-request:"'
+export GK3T_NOMOUNT=1; "$D" mkmisc "$T/misc.img" 0; req next_windows; unset GK3T_NOMOUNT
+chk "ESP 挂不上 ⇒ error:esp" 'ack | grep -q "^next_windows:error:esp:"'
+
+echo "═ S28 请求 default_windows / default_android ⇒ 写 set_default、default_pending 跟着变；入口没应用之前再改 = 覆盖"
+fresh V1; winesp; "$D" mkmisc "$T/misc.img" 0; req default_windows
+chk "ack ok、set_default=1、default_pending=windows" 'ack | grep -q "^default_windows:ok:" && dumpm | grep -q "set_default=1" && [ "$(echo "$OUT" | sed -n "s/^default_pending=//p")" = windows ]'
+rm -rf "$T/esp/EFI/Microsoft"; req default_android
+chk "改回 Android 不要求 Windows 在：ack ok、set_default=2" 'ack | grep -q "^default_android:ok:" && dumpm | grep -q "set_default=2"'
+run action ""
+chk "开机完成时导出 default_pending=android（入口还没应用）" '[ "$(p default_pending)" = android ]'
+
+echo "═ S29 关机标记（rc 的 on shutdown → --gk3-mark-poweroff）"
+po() {   # po <sys.powerctl> <ro.boot.gk3boot.mode>
+    printf 'sys.powerctl=%s\nro.boot.gk3boot.mode=%s\n' "$1" "$2" > "$T/props"
+    OUT=$(GK3T_PROPS="$T/props" "$D" poweroff 2>>"$T/log")
+}
+fresh V1; "$D" mkmisc "$T/misc.img" 0; "$D" recset "$T/misc.img" default_os=2
+po reboot action
+chk "重启 ⇒ 不写、返回 0" '[ "$OUT" = rc=0 ] && dumpm | grep -q "clean_poweroff=0"'
+po shutdown,userrequested observe
+chk "这次不是经动作模式的入口开的机（没有预置 OneShot）⇒ 不写" 'dumpm | grep -q "clean_poweroff=0"'
+po shutdown,userrequested ""
+chk "直连开机 ⇒ 不写" 'dumpm | grep -q "clean_poweroff=0"'
+po shutdown,userrequested action
+chk "关机 + 动作模式 + 默认 Windows ⇒ clean_poweroff=1、rc=0" '[ "$OUT" = rc=0 ] && dumpm | grep -q "clean_poweroff=1"'
+"$D" mkmisc "$T/misc.img" 0; "$D" recset "$T/misc.img" default_os=1; po shutdown action
+chk "默认 Android ⇒ 不写" 'dumpm | grep -q "clean_poweroff=0"'
+"$D" recset "$T/misc.img" default_os=1 set_default=1; po shutdown action
+chk "缓存 Android 但已请求 Windows（入口下次先应用）⇒ 写" 'dumpm | grep -q "clean_poweroff=1"'
+"$D" nomisc "$T/misc.img"; M0=$(md5q "$T/misc.img"); po shutdown action
+chk "没有记录 ⇒ 不建、rc=0" '[ "$OUT" = rc=0 ] && [ "$(md5q "$T/misc.img")" = "$M0" ]'
+
+echo "═ S30 入口记的 intent_dropped / default_reset 进 notify；to_windows / default_set 不打扰"
+fresh V1; "$D" mkmisc "$T/misc.img" 0 to_windows default_set intent_dropped default_reset; run observe ""
+chk "notify = intent_dropped,default_reset" '[ "$(p notify)" = "intent_dropped,default_reset" ]'
+"$D" dump "$T/misc.img" > "$T/dump"
+chk "四条全部置已通知" '! grep -q "notified=0" "$T/dump"'
 
 echo "═ ASan/UBSan 报告"
 chk "日志里没有 sanitizer 报错" '! grep -q "ERROR: AddressSanitizer\|runtime error" "$T/log"'

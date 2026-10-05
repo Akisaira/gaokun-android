@@ -3,6 +3,9 @@
 //   driver nomisc <file>                                  造一份全零 misc（无 GK3 记录）
 //   driver dump <file>                                    打印 GK3 记录
 //   driver run                                            起线程、设触发属性、等 done，打印导出的属性
+//   driver recset <file> key=val ...                      S15：改记录 default_os= set_default= next= poweroff=0|1
+//   driver request <req>                                  S15：像 rc 那样设 request + ring=1，等 ack 并打印
+//   driver poweroff                                       S15：MarkPoweroffMain()（属性来自 GK3T_PROPS）
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,7 +25,7 @@
 extern std::atomic<int> g_rw_mounts, g_ro_mounts;
 
 static gk3_ev_code Code(const char* n) {
-    for (int c = 0; c <= GK3_EV_BCB_IGNORED; c++)
+    for (int c = 0; c <= GK3_EV_DEFAULT_SET; c++)
         if (!strcmp(gk3_ev_name((gk3_ev_code)c), n)) return (gk3_ev_code)c;
     fprintf(stderr, "unknown event %s\n", n);
     exit(2);
@@ -56,7 +59,9 @@ int main(int argc, char** argv) {
         FILE* f = fopen(argv[2], "rb"); fread(m, 1, sizeof m, f); fclose(f);
         uint8_t* rec = m + GK3_MISC_GK3_OFF;
         if (gk3_rec_validate(rec) != GK3_OK) { printf("record: invalid\n"); return 0; }
-        printf("record: valid streak=%u\n", gk3_rec_boot_streak(rec));
+        printf("record: valid streak=%u next=%u set_default=%u default_os=%u clean_poweroff=%d\n",
+               gk3_rec_boot_streak(rec), (unsigned)gk3_rec_next(rec, nullptr), (unsigned)gk3_rec_set_default_req(rec),
+               (unsigned)gk3_rec_default_os(rec), gk3_rec_clean_poweroff(rec) ? 1 : 0);
         gk3_event ev[GK3_EV_N];
         uint32_t n = gk3_rec_events(rec, ev, GK3_EV_N);
         for (uint32_t i = 0; i < n; i++)
@@ -66,13 +71,52 @@ int main(int argc, char** argv) {
         printf("tail bytes 10240..12287 preserved: %s\n", tail_ok ? "yes" : "NO");
         return 0;
     }
+    if (argc >= 3 && !strcmp(argv[1], "recset")) {
+        static uint8_t m[65536];
+        FILE* f = fopen(argv[2], "rb"); fread(m, 1, sizeof m, f); fclose(f);
+        uint8_t* rec = m + GK3_MISC_GK3_OFF;
+        for (int i = 3; i < argc; i++) {
+            const char* eq = strchr(argv[i], '=');
+            if (!eq) return 2;
+            int v = atoi(eq + 1);
+            std::string k(argv[i], eq - argv[i]);
+            if (k == "default_os") gk3_rec_put_default_os(rec, (gk3_os)v);
+            else if (k == "set_default") gk3_rec_put_set_default_req(rec, (gk3_setdef)v);
+            else if (k == "next") gk3_rec_set_next(rec, (gk3_next_kind)v, 0);
+            else if (k == "poweroff") gk3_rec_set_flag(rec, GK3_REC_F_CLEAN_POWEROFF, v != 0);
+            else return 2;
+        }
+        gk3_rec_seal(rec);
+        f = fopen(argv[2], "wb"); fwrite(m, 1, sizeof m, f); fclose(f);
+        return 0;
+    }
+    if (argc >= 3 && !strcmp(argv[1], "request")) {
+        gaokun3::StartBootCompletedWorker();
+        const std::string before = android::base::GetProperty("vendor.gaokun3.bootentry.ack", "");
+        // = android.hardware.boot-service.gaokun3.rc 的 on property:sys.gaokun3.bootreq=… 那两行
+        android::base::SetProperty("vendor.gaokun3.bootentry.request", argv[2]);
+        android::base::SetProperty("vendor.gaokun3.bootentry.ring", "1");
+        for (int i = 0; i < 500 && android::base::GetProperty("vendor.gaokun3.bootentry.ack", "") == before; i++)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        printf("ack=%s\n", android::base::GetProperty("vendor.gaokun3.bootentry.ack", "<none>").c_str());
+        printf("ring=%s\n", android::base::GetProperty("vendor.gaokun3.bootentry.ring", "").c_str());
+        printf("default_pending=%s\n", android::base::GetProperty("vendor.gaokun3.bootentry.default_pending", "<unset>").c_str());
+        return 0;
+    }
+    if (argc >= 2 && !strcmp(argv[1], "poweroff")) {
+        int rc = gaokun3::MarkPoweroffMain();
+        alarm(0);
+        printf("rc=%d\n", rc);
+        return 0;
+    }
     if (argc >= 2 && !strcmp(argv[1], "run")) {
         gaokun3::StartBootCompletedWorker();
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
         android::base::SetProperty("vendor.gaokun3.boot.done", "1");
         for (int i = 0; i < 500 && android::base::GetProperty("vendor.gaokun3.bootentry.done", "").empty(); i++)
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        for (const char* k : {"via", "event", "notify", "bypassed", "streak", "mode", "version", "error", "done"})
+        for (const char* k : {"via", "event", "notify", "bypassed", "streak", "mode", "version", "error", "done",
+                              "windows", "default", "default_pending", "menu"})
             printf("bootentry.%s=%s\n", k,
                    android::base::GetProperty(std::string("vendor.gaokun3.bootentry.") + k, "<unset>").c_str());
         printf("mounts: ro=%d rw=%d\n", g_ro_mounts.load(), g_rw_mounts.load());
