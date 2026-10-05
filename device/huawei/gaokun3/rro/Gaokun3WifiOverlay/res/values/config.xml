@@ -42,4 +42,23 @@
          wifi 命名空间 94 项，多半是 GMS 同步下来的，来源未核实）。那一道要另想办法（docs/v1.0-plan.md 的 NET-1）。
     -->
     <bool name="config_wifiSwPnoEnabled" translatable="false">true</bool>
+
+    <!--
+      MAC 地址（v1.0 NET-4 / D14：持久模式 + 稳定的设备 MAC）。资源出处：packages/modules/Wifi/service/
+      ServiceWifiResources/res/values/config.xml，均在 overlayable.xml 的 "WifiCustomization"（:18-20，policy 含 vendor）里。
+
+      ① 随机化总开关，默认 false（config.xml:373；overlayable.xml:129）。WifiGlobals.isConnectedMacRandomizationEnabled
+         （WifiGlobals.java:258-261）只看它；它为 false 时 ClientModeImpl 连接前根本不碰 MAC（:8345-8360），
+         每个网络上的"隐私"设置一律无效、Settings 也不显示（WifiConfigController2.java:341），wlan0 用的就是固件每次开机
+         随机给的 00:03:7f:12:xx:xx —— B20"每次开机都换"的真正原因。打开后改 MAC 走 HAL 的 setMacAddress
+         （iface down → SIOCSIFHWADDR → up，hardware/interfaces/wifi/aidl/default/wifi_iface_util.cpp:53-80）。
+         2026-10-04 用 force-overlay-config-value 在本机临时打开过，三次都连上（TODO B20 / #14 那一行）。
+         新网络默认"按网络固定的随机 MAC"靠 tree-fix [20]（crDroid 把默认写死成每次连接都换，没有资源能改）。
+      ② config_wifiSaveFactoryMacToWifiConfigStore 默认 true（config.xml:370；overlayable.xml:128）：框架把第一次拿到的
+         出厂 MAC 永久存进 WifiSettingsConfigStore（ClientModeImpl.java:8065-8095）。老机器存的是当年那个固件随机地址，
+         tree-fix [19] 从 soc0 序列号派生的稳定地址就永远用不上 ⇒ 关掉，每次都问 HAL（HAL 那边本来就稳定）。
+      ⬜ 未编译、未上机。判据见 scripts/crdroid-tree-fixes.py 的 [19] / [20]。
+    -->
+    <bool name="config_wifi_connected_mac_randomization_supported" translatable="false">true</bool>
+    <bool name="config_wifiSaveFactoryMacToWifiConfigStore" translatable="false">false</bool>
 </resources>

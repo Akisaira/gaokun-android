@@ -559,6 +559,144 @@ def patch_wifi_sw_pno_gate(tree: pathlib.Path) -> str:
     return "已去掉软件 PNO 的 DeviceConfig 门（只看 config_wifiSwPnoEnabled）"
 
 
+def patch_wifi_stable_factory_mac(tree: pathlib.Path) -> str:
+    """—— 修补 19：Wi-Fi HAL 的"出厂 MAC"改成由 SoC 序列号派生的稳定本地管理地址 ——
+
+    v1.0 NET-4（2026-10-05，构建机 crDroid 树核实）。本机 WCN6855 板子上没烧 MAC：固件每次开机给一个
+    00:03:7f:12:xx:xx（只有后两字节随机，见 CLAUDE.md 的路由器静态租约），ath11k 拿它当 perm_addr。
+    框架拿"出厂 MAC"的链路：ClientModeImpl.retrieveFactoryMacAddressAndStoreIfNecessary（:8065-8095）
+      → WifiNative.getStaFactoryMacAddress（:2609-2610）→ WifiVendorHal.getStaFactoryMacAddress（:989-993）
+      → HAL IWifiStaIface.getFactoryMacAddress → WifiIfaceUtil::getFactoryMacAddress
+        （hardware/interfaces/wifi/aidl/default/wifi_iface_util.cpp:49-51）
+      → InterfaceTool::GetFactoryMacAddress = ETHTOOL_GPERMADDR（frameworks/opt/net/wifi/libwifi_system_iface/
+        interface_tool.cpp:144-165），读的是 netdev 的 perm_addr。
+    ⇒ 开机脚本里 `ip link set wlan0 address …` 改不到这一层（只改 dev_addr，不改 perm_addr）：
+       用户选"使用设备 MAC"时框架会在连接前把 MAC 设回 HAL 给的出厂值（ClientModeImpl.setCurrentMacToFactoryMac，
+       :4420-4436）。所以改在 HAL 这一层：WifiIfaceUtil::getFactoryMacAddress 先读
+       /sys/devices/soc0/serial_number（qcom socinfo），对 "gaokun3-wifi-mac:<接口名>:<序列号>" 做 FNV-1a 64，
+       取低 6 字节、置本地管理位、清组播位；读不到序列号就照旧返回 perm_addr。
+       接口名进哈希 ⇒ wlan0 / wlan1（热点）各有一个固定地址、互不相同。
+    SELinux：hal_wifi 已能读所有 sysfs 类型（system/sepolicy/private/hal_wifi.te:11 r_dir_file(hal_wifi, sysfs_type)），不用加规则。
+    配套：rro/Gaokun3WifiOverlay 把 config_wifiSaveFactoryMacToWifiConfigStore 设成 false —— 默认 true 时框架把
+      【第一次】拿到的出厂 MAC 存进 WifiSettingsConfigStore 永久复用（ClientModeImpl.java:8068-8085），
+      老机器存的是当年那个固件随机地址，派生地址就永远用不上。
+    ⚠️ 序列号是 32 位的，派生地址能被穷举反推出序列号 —— 它不是秘密，只是别直接把序列号写进 MAC。
+    上机判据：两次重启后 `cmd wifi status` / Settings「关于」里的 Wi-Fi MAC 相同、首字节第 2 位为 1；
+      某个网络选"使用设备 MAC"后 `ip link show wlan0` 的地址等于它；`cat /sys/devices/soc0/serial_number` 非空。
+    """
+    p = tree / "hardware/interfaces/wifi/aidl/default/wifi_iface_util.cpp"
+    if not p.exists():
+        return f"⚠️ 找不到 {p}，上游可能挪了文件"
+    s = io.open(p, encoding="utf-8").read()
+    marker = "gaokun3 tree-fix [19]"
+    if marker in s:
+        return "已改（幂等，无需改动）"
+    inc = "#include <android-base/macros.h>\n"
+    ns_anchor = ("constexpr uint8_t kMacAddressLocallyAssignedMask = 0x02;\n")
+    fn = re.compile(r"(std::array<uint8_t, 6> WifiIfaceUtil::getFactoryMacAddress\(const std::string& iface_name\) \{\n)"
+                    r"(\s*return iface_tool_\.lock\(\)->GetFactoryMacAddress\(iface_name\.c_str\(\)\);\n\})")
+    if s.count(inc) != 1 or s.count(ns_anchor) != 1 or len(fn.findall(s)) != 1:
+        return "⚠️ wifi_iface_util.cpp 的锚点（include / 掩码常量 / getFactoryMacAddress）不唯一或不在，上游可能改了写法"
+    s = s.replace(inc, inc + "#include <android-base/file.h>\n#include <android-base/strings.h>\n", 1)
+    helper = (
+        "\n// " + marker + ": stable locally-administered \"factory\" MAC derived from the SoC serial\n"
+        "// (board has no programmed MAC; firmware hands out 00:03:7f:12:xx:xx, random every boot).\n"
+        "// See gaokun-android scripts/crdroid-tree-fixes.py.\n"
+        "bool gaokun3StableMac(const std::string& iface_name, std::array<uint8_t, 6>* mac) {\n"
+        "    std::string serial;\n"
+        "    if (!::android::base::ReadFileToString(\"/sys/devices/soc0/serial_number\", &serial)) {\n"
+        "        return false;\n"
+        "    }\n"
+        "    serial = ::android::base::Trim(serial);\n"
+        "    if (serial.empty() || serial == \"0\") return false;\n"
+        "    const std::string key = \"gaokun3-wifi-mac:\" + iface_name + \":\" + serial;\n"
+        "    uint64_t h = 0xcbf29ce484222325ULL;  // FNV-1a 64\n"
+        "    for (unsigned char c : key) {\n"
+        "        h ^= c;\n"
+        "        h *= 0x100000001b3ULL;\n"
+        "    }\n"
+        "    for (size_t i = 0; i < mac->size(); i++) {\n"
+        "        (*mac)[i] = static_cast<uint8_t>(h >> (8 * i));\n"
+        "    }\n"
+        "    (*mac)[0] &= ~kMacAddressMulticastMask;\n"
+        "    (*mac)[0] |= kMacAddressLocallyAssignedMask;\n"
+        "    return true;\n"
+        "}\n")
+    s = s.replace(ns_anchor, ns_anchor + helper, 1)
+    s = fn.sub(lambda m: (m.group(1)
+                          + "    std::array<uint8_t, 6> stable_mac;  // " + marker + "\n"
+                          + "    if (gaokun3StableMac(iface_name, &stable_mac)) return stable_mac;\n"
+                          + m.group(2)), s, count=1)
+    io.open(p, "w", encoding="utf-8", newline="").write(s)
+    return "HAL 出厂 MAC 改为由 soc0/serial_number 派生（读不到就退回 perm_addr）"
+
+
+def patch_wifi_mac_randomization_default(tree: pathlib.Path) -> str:
+    """—— 修补 20：新网络的 MAC 随机化默认值从"每次连接都换"（ALWAYS）改回 AOSP 的 AUTO（按网络固定）——
+
+    v1.0 NET-4 / D14（用户 2026-10-04 定：持久模式 + 稳定的设备 MAC）。2026-10-05 构建机核实：
+      * 这个默认值【没有资源可改】：crDroid 带的 GrapheneOS 补丁把字段默认写死成 RANDOMIZATION_ALWAYS（=100）——
+        packages/modules/Wifi 提交 06bc263807：framework/java/android/net/wifi/WifiConfiguration.java:1964、
+        service/java/com/android/server/wifi/WifiConfigurationUtil.java:284（比较基准随之改成 ALWAYS）；
+        frameworks/opt/net/wifi 提交 3bf65d873：WifiTrackerLib StandardWifiEntry.getPrivacy() 无配置时返回
+        PRIVACY_RANDOMIZATION_ALWAYS（:611）。
+      * Settings 的连接对话框对新网络不设隐私下拉框的初值（WifiConfigController2.java:401-404 只给已保存的网络设），
+        于是停在第 0 项 = PRIVACY_PREF_INDEX_PER_CONNECTION_RANDOMIZED_MAC（WifiConfigController.java:155），
+        保存时写成 ALWAYS（WifiConfigController2.java:895-897 → WifiPrivacyPreferenceController2.java:132）。
+    ⇒ 四处一起改回 AOSP 原值（字段默认与比较基准必须成对改，否则普通 App 的 addNetwork 会因"改了随机化设置"
+       被 WifiConfigManager.java:1650-1665 拒掉）：字段默认 AUTO、比较基准 AUTO、无配置时 PRIVACY_RANDOMIZED_MAC、
+       对话框对新网络预选"按网络随机"。用户仍可在网络详情里选"每次连接都换"（ALWAYS 的逻辑一行没删）。
+    ⓘ AUTO 的实际行为 = 按网络固定的随机 MAC（WifiConfigManager.shouldUseNonPersistentRandomization:553-588：
+       只有开放网络 + config_wifiAllowNonPersistentMacRandomizationOnOpenSsids（默认 false）或 SSID 在白名单里才换），
+       地址由 keystore 里的 MacRandSecret 密钥对 SSID 做 HMAC（MacAddressUtil），与出厂 MAC 无关。
+    ⚠️ 只管新加的网络。老用户已保存的网络存的是 ALWAYS（此前随机化总开关 config_wifi_connected_mac_randomization_supported
+       是 false，隐私选项根本不显示 —— WifiConfigController2.java:341、WifiPrivacyPreferenceController2.java:60-62），
+       这一版打开总开关后它们会【第一次真的每次连接都换 MAC】。没做自动迁移：存储里分不出"用户选的 ALWAYS"和
+       "默认的 ALWAYS"（randomizedMacLastModifiedTimeMs 不落盘，XmlUtil 里没有这个标签）。要写进发版说明。
+    上机判据：新连一个 WPA2 网络 → 详情里隐私显示"使用随机 MAC"（按网络）；断开重连 / 重启两次，
+      `ip link show wlan0` 的地址不变且与出厂 MAC 不同；`cmd wifi list-networks` 后 dumpsys 里该网络
+      macRandomizationSetting = 3（AUTO）。
+    """
+    edits = [
+        ("packages/modules/Wifi/framework/java/android/net/wifi/WifiConfiguration.java",
+         re.compile(r"public int macRandomizationSetting = RANDOMIZATION_ALWAYS;"),
+         lambda m: ("public int macRandomizationSetting = RANDOMIZATION_AUTO;"
+                    "  // MARK: AOSP default (was ALWAYS)")),
+        ("packages/modules/Wifi/service/java/com/android/server/wifi/WifiConfigurationUtil.java",
+         re.compile(r"return newConfig\.macRandomizationSetting != WifiConfiguration\.RANDOMIZATION_ALWAYS;"),
+         lambda m: ("return newConfig.macRandomizationSetting != WifiConfiguration.RANDOMIZATION_AUTO;"
+                    "  // MARK: must match the field default")),
+        ("frameworks/opt/net/wifi/libs/WifiTrackerLib/src/com/android/wifitrackerlib/StandardWifiEntry.java",
+         re.compile(r"(\}\s*else\s*\{\s*)return PRIVACY_RANDOMIZATION_ALWAYS;(\s*\})"),
+         lambda m: (m.group(1) + "return PRIVACY_RANDOMIZED_MAC;  // MARK: AOSP default (was ALWAYS)"
+                    + m.group(2))),
+        ("packages/apps/Settings/src/com/android/settings/wifi/WifiConfigController2.java",
+         re.compile(r"(\n(\s*)mPrivacySettingsSpinner\.setAdapter\(getSpinnerAdapter\(R\.array\.wifi_privacy_entries_ext\)\);\n)"),
+         lambda m: (m.group(1) + m.group(2)
+                    + "// MARK: new networks default to per-network randomized MAC; saved ones are set below\n"
+                    + m.group(2) + "mPrivacySettingsSpinner.setSelection(WifiPrivacyPreferenceController2\n"
+                    + m.group(2) + "        .translateWifiEntryPrivacyToPrefValue(WifiEntry.PRIVACY_RANDOMIZED_MAC));\n")),
+    ]
+    marker = "gaokun3 tree-fix [20]"
+    todo = []
+    for rel, pat, rep in edits:
+        p = tree / rel
+        if not p.exists():
+            return f"⚠️ 找不到 {rel}，上游可能挪了文件"
+        s = io.open(p, encoding="utf-8").read()
+        if marker in s:
+            continue
+        if len(pat.findall(s)) != 1:
+            return f"⚠️ {p.name} 的锚点出现 {len(pat.findall(s))} 次（应为 1），上游可能改了写法；四处都没动"
+        todo.append((p, pat.sub(lambda m: rep(m).replace("MARK", marker), s, count=1)))
+    if not todo:
+        return "已改（幂等，无需改动）"
+    # 先全部核对锚点、再统一写：避免只改了一半（字段默认与比较基准不成对会让 App 的 addNetwork 被拒）
+    for p, s in todo:
+        io.open(p, "w", encoding="utf-8", newline="").write(s)
+    return f"MAC 随机化默认改回 AUTO（改了 {len(todo)} 个文件）"
+
+
 def main():
     tree = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else pathlib.Path.home() / "crdroid").expanduser()
     if not (tree / "build/envsetup.sh").exists():
@@ -618,6 +756,9 @@ def main():
         "0069-audio-aidl-primary-playback-paced-by-alsa.patch"))
     # v1.0 NET-1 / TODO V3：软件 PNO 的第二道门（DeviceConfig wifi/software_pno_enabled，GMS 下发 false）
     step(" [18] Wi-Fi 软件 PNO 不受 DeviceConfig 覆盖（息屏断网后能自己回连）: ", patch_wifi_sw_pno_gate(tree))
+    # v1.0 NET-4：稳定的设备 MAC（HAL 出厂 MAC 由 soc0 序列号派生）+ 新网络默认按网络固定的随机 MAC
+    step(" [19] Wi-Fi HAL 出厂 MAC 由 SoC 序列号派生（稳定的设备 MAC）: ", patch_wifi_stable_factory_mac(tree))
+    step(" [20] Wi-Fi 新网络 MAC 随机化默认改回 AUTO（按网络固定）: ", patch_wifi_mac_randomization_default(tree))
     if failed:
         print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))
         sys.exit(1)
