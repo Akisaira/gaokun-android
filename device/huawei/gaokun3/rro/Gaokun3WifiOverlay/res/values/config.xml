@@ -61,4 +61,31 @@
     -->
     <bool name="config_wifi_connected_mac_randomization_supported" translatable="false">true</bool>
     <bool name="config_wifiSaveFactoryMacToWifiConfigStore" translatable="false">false</bool>
+
+    <!--
+      热点 5 GHz / WPA3 / 国家码（v1.0 NET-7）。出处同上（config.xml 行号 / overlayable.xml 行号）。
+      ① config_wifi5ghzSupport 默认 false（:31 / :24）：热点能不能选 5 GHz 是它与 config_wifiSoftap5ghzSupported（默认 true，
+         :345）的"与"（util/ApConfigUtil.java:1377-1380 isSoftApBandSupported）⇒ 默认下热点只有 2.4 GHz。
+         STA 不受影响（WifiServiceImpl.java:5820-5825 为 false 时退回看驱动报的频段）。WCN6855 / ath11k 支持 5 GHz AP。
+      ② config_wifi_softap_sae_supported 默认 false（:315 / :111；读取 ApConfigUtil.java:1323-1332）⇒ 热点安全类型里没有 WPA3。
+         hostapd 本身带 SAE 编译（external/wpa_supplicant_8/hostapd/Android.bp:458 -DCONFIG_SAE，android.config:248）。
+         ⚠️ 与 STA 侧的 SAE 关联问题（issue #2 / #11）无关：那是本机去连别人的 WPA3 AP；这里是别人来连本机的热点。
+      ③ 国家码一直是 null：本机没有基带，框架的国家码来源只剩驱动上报、扫描结果和 ro.boot.wificountrycode（都没有）——
+         WifiCountryCode.pickCountryCode（WifiCountryCode.java:653-669）。没有国家码，5 GHz 热点起不来。
+         a. config_wifiDriverSupportedNl80211RegChangedEvent 默认 false（:1018 / :287）。为 false 时框架（T 及以后）
+            不认驱动主动上报的 NL80211_CMD_(WIPHY_)REG_CHANGE（WifiCountryCode.java:180-189），只认自己 set 成功的。
+            ath11k 是 REGULATORY_WIPHY_SELF_MANAGED（ath11k reg.c:1021 @7.2.9），固件 11d / 用户提示后经
+            regulatory_set_wiphy_regd（reg.c:286）发 WIPHY_REG_CHANGE；wificond 收这两种事件
+            （system/connectivity/wificond/net/netlink_manager.cpp:563-564）⇒ 置 true。
+         b. config_wifiUpdateCountryCodeFromScanResultGeneric 默认 false（:1282 / :340）：没有基带时从扫描到的 AP 的
+            country IE 推国家码（WifiCountryCode.java:465-469 与 findCountryCodeFromScanResults）。作 a 的兜底：
+            a 依赖固件 11d 有没有真报，未验证。⚠️ 资源注释提到这在某些地区需要监管预审（FCC 594280），社区 ROM 照常启用。
+      ⓘ 没开 ACS（config_wifi_softap_acs_supported，:312）：与 STA 并发时 ACS 要离信道扫描，先不碰。
+      ⬜ 未编译、未上机。判据：`cmd wifi get-country-code` 非 null；热点设置里能选 5 GHz 和 WPA3；
+         另一台手机连上 5 GHz / WPA3 热点能上网（配合 NET-2 的 STA+AP）。
+    -->
+    <bool name="config_wifi5ghzSupport" translatable="false">true</bool>
+    <bool name="config_wifi_softap_sae_supported" translatable="false">true</bool>
+    <bool name="config_wifiDriverSupportedNl80211RegChangedEvent" translatable="false">true</bool>
+    <bool name="config_wifiUpdateCountryCodeFromScanResultGeneric" translatable="false">true</bool>
 </resources>
