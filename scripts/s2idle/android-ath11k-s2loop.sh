@@ -54,8 +54,14 @@ run() {  # $1=mode $2=label
   dmesg > $D/dmesg-$2.txt; logcat -d -b main,system -t 400 > $D/logcat-$2.txt 2>/dev/null
   say "   wlan0=[$(ip -4 addr show wlan0 | awk '/inet/{print $2}')] supplicant=[$(pidof wpa_supplicant)] link=[$(cat /sys/class/net/wlan0/operstate 2>/dev/null)]"; sync
 }
-i=1; while [ $i -le $N ]; do run platform "pmtest-$i"; i=$((i+1)); done
-i=1; while [ $i -le $NR ]; do run none "real-$i"; i=$((i+1)); done
+# ★ 节拍（2026-10-05 dev.7 实测）：Android Wi-Fi 框架对自动重连有限速 —— 连续约 5 次 connectToNetwork 之后
+#   约 6 分钟一次都不发（logcat 里 SupplicantStaIfaceHalAidlImpl: connectToNetwork 停发），于是第 6 轮起
+#   "wifi=FAIL"，而内核侧（挂起 rc、固件重载、errlines）全好 —— 是测试节拍太密，不是回归。
+#   每轮至少隔 PACE 秒（默认 75，≈4 分钟 ≤ 3–4 次重连）；PACE=0 退回旧行为（只测内核侧时更快）。
+PACE=${PACE:-75}
+paced() { t0=$(cut -d. -f1 /proc/uptime); run "$1" "$2"; t1=$(cut -d. -f1 /proc/uptime); [ $((t1 - t0)) -lt $PACE ] && sleep $((PACE - (t1 - t0))); }
+i=1; while [ $i -le $N ]; do paced platform "pmtest-$i"; i=$((i+1)); done
+i=1; while [ $i -le $NR ]; do paced none "real-$i"; i=$((i+1)); done
 say "buddyinfo DMA: $(grep DMA /proc/buddyinfo | grep -v DMA32)"
 say "suspend_stats: success=$(cat /sys/kernel/debug/suspend_stats 2>/dev/null | grep -m1 success)"
 finish
