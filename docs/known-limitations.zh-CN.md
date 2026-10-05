@@ -9,7 +9,7 @@
 -->
 # 已知限制与不支持的功能
 
-[**English → known-limitations.md**](known-limitations.md) · [常见问题](FAQ.zh-CN.md) · [安装](INSTALL.md)
+[**English → known-limitations.md**](known-limitations.md) · [常见问题](FAQ.zh-CN.md) · [安装](INSTALL.zh-CN.md)
 
 这个 ROM 是在一台**没有任何厂商 Android 支持**的机器上从零搭起来的。下面这些是装之前应当知道的事：
 有些是我们有意做的取舍，有些是还没做出来，有些在这台机器上做不到。
@@ -235,7 +235,7 @@
 * **现象**：Play 商店提示"设备未经 Play 保护机制认证"，有些 App 装不上。依赖 Play Integrity 的 App（例如 Google 钱包、
   部分海外银行）用不了。
 * **原因**：这个 ROM 不在 Google 的认证设备名单上。Play Integrity 还要求上锁的启动链和 Google 签名的系统，这一条在本机永远满足不了。
-* **替代办法**：按 [INSTALL.md 的"This device isn't Play Protect certified"](INSTALL.md#this-device-isnt-play-protect-certified)
+* **替代办法**：按 [安装指南的"此设备未经 Play 保护机制认证"](INSTALL.zh-CN.md#此设备未经-play-保护机制认证)
   把设备登记一次，Play 商店就能正常用。Play Integrity 没有办法解决。
 
 ### 系统里带的是 Google 应用，国内用不上，也没有国内应用商店

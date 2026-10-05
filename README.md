@@ -137,7 +137,8 @@ DRM machine can hit it.
 ## Installing
 
 Take the latest [**Release**](https://github.com/vahiru/gaokun-android/releases)
-and follow [`docs/INSTALL.md`](docs/INSTALL.md) (English). Any BIOS version
+and follow [`docs/INSTALL.md`](docs/INSTALL.md) (English; 中文:
+[`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md)). Any BIOS version
 works; Secure Boot must be off. There are two installers:
 
 | | Graphical installer (preview) | Command-line installer |

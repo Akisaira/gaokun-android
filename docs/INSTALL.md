@@ -1,5 +1,7 @@
 # Installing
 
+[**中文 → INSTALL.zh-CN.md**](INSTALL.zh-CN.md) · [FAQ](FAQ.md) · [Known limitations](known-limitations.md)
+
 There are two ways in, and both end up running the same installer backend:
 
 * **The graphical installer — preview** (first released with v0.7.0-alpha).

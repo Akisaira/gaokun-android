@@ -115,7 +115,7 @@ v0.4.0-alpha 起一直带着（[#58](docs/stage4-findings.md)、[#62](docs/stage
 ## 安装
 
 从 [**Releases**](https://github.com/vahiru/gaokun-android/releases) 取最新版，按
-[`docs/INSTALL.md`](docs/INSTALL.md)（英文）操作。任何 BIOS 版本都行；必须关闭
+[`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md)操作（英文版 [`docs/INSTALL.md`](docs/INSTALL.md)）。任何 BIOS 版本都行；必须关闭
 Secure Boot。安装器有两个：
 
 | | 图形安装器（预览） | 命令行安装器 |
@@ -145,14 +145,14 @@ Secure Boot。安装器有两个：
 发布页不带这个镜像，所以用通用 live U 盘装出来的只有 Android。
 
 > 本页以前写的是"约 25 GiB 的 Ubuntu 救援分区、默认启动项"。那一套 2026-09-24
-> 已经撤掉，见 [`docs/INSTALL.md`](docs/INSTALL.md#about-the-rescue-system)。
+> 已经撤掉，见 [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md#关于救援系统)。
 
 **SSH 登录救援系统**要用你自己的公钥，安装之前先放到安装器 U 盘上 —— 发布的镜像里不带任何人的公钥。
-见 [`docs/INSTALL.md`](docs/INSTALL.md#about-the-rescue-system)。
+见 [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md#关于救援系统)。
 
 **国内下载：** GitHub 的下载服务器慢或者连不上时，系统镜像（`boot.img`、`super.img.zst`、
 `install-artifacts.sha256`）有镜像站：`https://ota.072172.xyz/install/<build>/<文件名>`，
-`<build>` 是该版 OTA 包去掉 `.zip` 的文件名 —— 见 [`docs/INSTALL.md`](docs/INSTALL.md#downloads)。
+`<build>` 是该版 OTA 包去掉 `.zip` 的文件名 —— 见 [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md#下载)。
 图形安装器自己就是从这个镜像站下载的；安装器本身的文件目前只在 GitHub 上。
 
 **更新：** v0.2.x 起都在设置里更新 —— 系统内的更新程序装进非活动槽位，下次重启生效。
@@ -173,7 +173,7 @@ Secure Boot。安装器有两个：
 * **没有可用的 recovery**，所以设置里的"清除所有数据"不起作用。要清空设备，用图形
   安装器的"重新安装 Android"。
 * **Google。** 发布镜像带着 Google 应用（MindTheGapps），没有不带的版本。登记之前
-  Play 商店会说设备未经认证（[INSTALL 第 4 节](docs/INSTALL.md#this-device-isnt-play-protect-certified)），
+  Play 商店会说设备未经认证（[INSTALL 的这一节](docs/INSTALL.zh-CN.md#此设备未经-play-保护机制认证)），
   Play Integrity 过不了。没有 Widevine，Netflix 这类付费流媒体放不了。没有 GPS，
   网络定位靠 Google 服务。没有预装中文输入法。
 * **不支持：** 指纹（进行中）、手写笔、TPM、USB 传文件（MTP）、U 盘、USB 音频、
