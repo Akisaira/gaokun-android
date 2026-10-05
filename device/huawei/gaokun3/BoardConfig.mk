@@ -131,9 +131,15 @@ BOARD_KERNEL_CMDLINE := \
     console=tty0 \
     clk_ignore_unused pd_ignore_unused arm64.nopauth efi=noruntime \
     fbcon=rotate:1 usbhid.quirks=0x12d1:0x10b8:0x20000000 \
-    himax_hx83121a_spi.disable_pressure=0
+    himax_hx83121a_spi.disable_pressure=0 \
+    snd_usb_audio.index=-2,-2,-2,-2
 # ↑ 触摸报 ABS_MT_TOUCH_MAJOR/PRESSURE（#116 实测：轴建起、真值上报正常，Android 侧无异常）。
 #   这是 0444 模块参数，只能走 cmdline。配套 gaokun3-touch-mode.sh 里 pressure_enabled=1。
+# ↑ snd_usb_audio.index（v1.0 AV-4，⬜ 未上机）：USB 声卡永远不占 card0。内置声卡要等 ADSP 起来才注册，
+#   开机前就插着的 USB 声卡会先拿到 card0，而 primary 音频模块、audio-route.sh、策略里的 CARD_0_* 全写死 card0。
+#   负值是卡槽位掩码（构建机 ~/gk3-kernel-72y sound/core/init.c get_slot_from_bitmask()），-2 = 除 0 以外任意；
+#   数组下标是第几个 USB 声卡（sound/usb/card.c:972-978 → :763 snd_card_new(index[idx])），四个够用。
+#   也是 0444 模块参数（card.c:81），内置驱动只能走 cmdline。模块名是 snd-usb-audio（sound/usb/Makefile:32）。
 
 # ------------------------------------------------------------ 分区布局
 # 动态分区（super）而不是分立分区：AOSP 16 默认如此，构建直接产出

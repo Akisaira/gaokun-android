@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright (C) 2015 The Android Open Source Project
+
+     Licensed under the Apache License, Version 2.0 (the "License");
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at
+
+          http://www.apache.org/licenses/LICENSE-2.0
+
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an "AS IS" BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License.
+-->
+
+<!-- USB 音频（v1.0 AV-4，2026-10-05，⬜ 未编译、未上机）。
+
+     ★ 改自 frameworks/av/services/audiopolicy/config/usb_audio_policy_configuration.xml（crDroid 16.0），
+       只删了 USB_ACCESSORY 那一对（"usb_accessory output" / "USB Host Out"）：那是"本机当 USB 配件、
+       由对端主机放音"的 AOA 音频，本机用不上；AIDL 示例 HAL 自己的 USB 配置
+       （hardware/interfaces/audio/aidl/default/Configuration.cpp:409-468 getUsbConfiguration()）也只有下面这四个设备口、两个混音口。
+       ⚠️ 那个函数在本机【不起作用】—— HAL 的模块配置来自本 XML（AudioPolicyConfigXmlConverter.cpp:179-196），
+       那里只是拿来对照"AIDL 年代的 USB 模块长什么样"。
+
+     怎么接起来的（构建机 ~/crdroid 只读核实）：
+       * 模块名 "usb" → Module::Type::USB → ModuleUsb（audio/aidl/default/Module.cpp:121-122、136-137），
+         服务名 IModule/usb（main.cpp:54）。VINTF 声明在 device/huawei/gaokun3/manifest.xml ——
+         APEX 自带的 android.hardware.audio.service-aidl.xml 把 usb 那段注释掉了（:22 "Uncomment when these modules present in the configuration"）。
+       * 设备口与混音口都【不写 profile】= 动态：插上之后 ModuleUsb::populateConnectedDevicePort()
+         （usb/ModuleUsb.cpp:90-97 → ModuleAlsa）按 ALSA 实际能力填，混音口再按设备口填
+         （Module.cpp:740-791 注释里的"情形 1，USB / HDMI"）。
+       * 谁来报插拔：system_server 的 UsbAlsaManager（frameworks/base/services/usb/…/UsbAlsaManager.java:300 usbDeviceAdded()）
+         扫 /proc/asound/cards 找到卡号，以 "card=<n>;device=<m>" 为地址调 setWiredDeviceConnectionState
+         （UsbAlsaDevice.java:309-312）。要 UsbService 在跑 —— issue #13 起声明了 android.hardware.usb.host。
+       * 地址不是 CARD_x_DEV_y 那套（那是 primary 模块的 StreamPrimary 用的），USB 模块按 card/device 开 PCM，
+         所以这里【不需要】也【不能】写 address（与耳机同一道守卫，见 primary_audio_policy_configuration.xml）。
+
+     ⚠️ 声卡编号：内置声卡要等 ADSP 起来才注册（bin/audio-route.sh 等 controlC0），开机前就插着的 USB 声卡
+        （尤其插在只能当 host 的 port1 上，内核早期就枚举）会抢走 card0 ⇒ 内置声卡变 card1，而 primary 模块、
+        audio-route.sh、策略里的 CARD_0_* 全写死 card0 ⇒ 整机没声音。所以 BoardConfig.mk 的 cmdline 加了
+        snd_usb_audio.index=-2,…：负值是允许的卡槽位掩码（sound/core/init.c get_slot_from_bitmask()），
+        -2 = 除 0 以外任意 ⇒ USB 声卡永远不占 card0，内置声卡（ASoC 用 SNDRV_DEFAULT_IDX1 = 任意空位，
+        sound/soc/soc-core.c:2034）总能拿到 0。
+     ⚠️ A6：port0（靠电源键的口）切成 host 之后、待机唤醒再插拔会坏到只能重启 ⇒ 上机测 USB 声卡先用 port1。 -->
+<module name="usb" halVersion="2.0">
+    <mixPorts>
+        <mixPort name="usb_device output" role="source"/>
+        <mixPort name="usb_device input" role="sink"/>
+    </mixPorts>
+    <devicePorts>
+        <devicePort tagName="USB Device Out" type="AUDIO_DEVICE_OUT_USB_DEVICE" role="sink"/>
+        <devicePort tagName="USB Headset Out" type="AUDIO_DEVICE_OUT_USB_HEADSET" role="sink"/>
+        <devicePort tagName="USB Device In" type="AUDIO_DEVICE_IN_USB_DEVICE" role="source"/>
+        <devicePort tagName="USB Headset In" type="AUDIO_DEVICE_IN_USB_HEADSET" role="source"/>
+    </devicePorts>
+    <routes>
+        <route type="mix" sink="USB Device Out"
+               sources="usb_device output"/>
+        <route type="mix" sink="USB Headset Out"
+               sources="usb_device output"/>
+        <route type="mix" sink="usb_device input"
+               sources="USB Device In,USB Headset In"/>
+    </routes>
+</module>

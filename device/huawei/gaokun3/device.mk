@@ -174,7 +174,11 @@ PRODUCT_COPY_FILES += \
     frameworks/av/services/audiopolicy/config/r_submix_audio_policy_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/r_submix_audio_policy_configuration.xml \
     frameworks/av/services/audiopolicy/config/bluetooth_with_le_audio_policy_configuration_7_0.xml:$(TARGET_COPY_OUT_VENDOR)/etc/bluetooth_with_le_audio_policy_configuration_7_0.xml \
     frameworks/av/services/audiopolicy/config/audio_policy_volumes.xml:$(TARGET_COPY_OUT_VENDOR)/etc/audio_policy_volumes.xml \
-    frameworks/av/services/audiopolicy/config/default_volume_tables.xml:$(TARGET_COPY_OUT_VENDOR)/etc/default_volume_tables.xml
+    frameworks/av/services/audiopolicy/config/default_volume_tables.xml:$(TARGET_COPY_OUT_VENDOR)/etc/default_volume_tables.xml \
+    $(LOCAL_PATH)/audio/usb_audio_policy_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/usb_audio_policy_configuration.xml
+# ↑ usb 那份是我们自己的（v1.0 AV-4），不用 frameworks/av 的同名文件：那份是 HIDL 年代的，多一个
+#   USB_ACCESSORY 端口（Android 当配件时的音频，AIDL 示例 HAL 的 getUsbConfiguration() 里也没有它）。理由在文件头。
+#   IModule/usb 的 VINTF 声明在 manifest.xml（APEX 自带的那份把它注释掉了）。
 
 # ------------------------------------------------------------------ 固件
 # [measured] 全部来自 Stage 0 的 dmesg 固件加载路径。

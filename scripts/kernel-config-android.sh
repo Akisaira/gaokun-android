@@ -176,6 +176,17 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
     --enable EXFAT_FS --enable LEDS_CLASS --enable INPUT_LEDS \
     --enable QCOM_GPI_DMA --enable I2C_CHARDEV --enable RESET_QCOM_PDC
 
+# ★ v1.0 AV-4：USB 声卡（snd-usb-audio）。buildbot 的 gaokun3_defconfig 里是 =m（:317），
+#   发布内核里是 =y 只是因为旧 .config 带下来的（v0.7.1 的 config 4373 行）—— 和上面 cgroup 那 5 项
+#   "现有机器没出问题纯属侥幸"同一类：从 defconfig 起一棵新树就会静默变成 =m，USB 声卡不出现。
+#   所以显式 =y 并进下面的 MUST_Y。Kconfig（构建机 ~/gk3-kernel-72y sound/usb/Kconfig）：
+#     SND_USB        :4  menuconfig bool，depends on USB，default y
+#     SND_USB_AUDIO  :13 tristate，select SND_HWDEP / SND_RAWMIDI / SND_PCM
+#   刻意【不开】的：SND_USB_AUDIO_MIDI_V2（:28，用不上）、SND_USB_AUDIO_QMI（:191，DSP 侧 USB 音频
+#   offload，要 SND_SOC_USB + USB_XHCI_SIDEBAND，ADSP 拓扑里也没有这条路）。
+#   card0 留给内置声卡靠 cmdline 的 snd_usb_audio.index（BoardConfig.mk），不在这里。
+./scripts/config --file "$OUT/.config" --enable SND_USB --enable SND_USB_AUDIO
+
 # ★ 蓝牙栈起不来的真凶（与 HAL 无关）：RT cgroup 带宽管制。
 #   实测报错：
 #     bluetooth: message_loop_thread.cc:291 EnableRealTimeScheduling:
@@ -496,7 +507,7 @@ BT BT_QCA BT_HCIUART BT_HCIUART_QCA BT_RFCOMM BT_HIDP UHID
 PINCTRL_LPASS_LPI PINCTRL_SC8280XP_LPASS_LPI SC_LPASSCC_8280XP
 SND_SOC_SC8280XP SND_SOC_WSA883X SND_SOC_WCD938X SOUNDWIRE_QCOM
 SND_SOC_LPASS_RX_MACRO SND_SOC_LPASS_TX_MACRO SND_SOC_LPASS_VA_MACRO
-SND_SOC_LPASS_WSA_MACRO SND_SOC_QDSP6 QCOM_PD_MAPPER
+SND_SOC_LPASS_WSA_MACRO SND_SOC_QDSP6 QCOM_PD_MAPPER SND_USB SND_USB_AUDIO
 FUSE_FS IIO QCOM_SPMI_ADC5 QCOM_FASTRPC
 CPUSETS_V1 MEMCG_V1 UCLAMP_TASK UCLAMP_TASK_GROUP EFI_ZBOOT EFI_STUB EFI_GENERIC_STUB
 MEDIA_SUPPORT MEDIA_PLATFORM_SUPPORT VIDEO_DEV V4L_MEM2MEM_DRIVERS

@@ -32,4 +32,20 @@
   ─────────────────────────────────────────────────────────────────────
 -->
 <manifest version="1.0" type="device" target-level="202504">
+    <!-- v1.0 AV-4 USB 音频（2026-10-05，⬜ 未编译、未上机）：IModule/usb 由音频 APEX 里的
+         android.hardware.audio.service-aidl.example 注册（audio/usb_audio_policy_configuration.xml
+         里有 module name="usb" 时，main.cpp 的 createModule() 才会建它并 addService）。
+         APEX 自带的 VINTF 片段（hardware/interfaces/audio/aidl/default/android.hardware.audio.service-aidl.xml:22）
+         把 usb 实例注释掉了，没声明的 VINTF 稳定服务 servicemanager 不让注册，audioserver 也列不到它。
+         · 为什么写在这里而不是改 APEX 那份：少一条 AOSP 补丁；同一个 HAL 名、不同实例分两处声明不冲突
+           （system/libvintf/HalManifest.cpp:104-165 只拒绝重复的 FqInstance）。
+         · 框架矩阵里有这个实例（hardware/interfaces/compatibility_matrices/compatibility_matrix.202504.xml:14），
+           service_contexts 也有（refs/lineage-sepolicy/private/service_contexts:16 → hal_audio_service）。
+         · 版本与 APEX 声明的 default / r_submix / bluetooth 一致（4）。
+         ⚠️ 若 check_vintf 报错，退路：删掉这一段、改成补丁去掉 APEX 那份里的注释。 -->
+    <hal format="aidl">
+        <name>android.hardware.audio.core</name>
+        <version>4</version>
+        <fqname>IModule/usb</fqname>
+    </hal>
 </manifest>
