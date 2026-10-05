@@ -309,11 +309,12 @@ uint8_t gk3_vab_effective(const gk3_vab *v, unsigned current_slot);
  *   0    magic "GK3R"（u32 0x52334B47）
  *   4    version u16 = 1
  *   6    size u16 = 2048
- *   8    flags u32：bit0 已迁移
+ *   8    flags u32：bit0 已迁移；bit1 回落中；bit2 clean_poweroff（S15：Windows 为默认时从 Android 关机，
+ *        下次冷开机由入口转去 Windows，§4.9.3）
  *   12   dispatch_ver u32：迁移时的"分派版本"（§4.10）
  *   16   seq u32：事件序号计数
  *   20   boot_streak u8：连续未完成启动（入口 +1，开机完成清零）
- *   21   next_kind u8：一次性意图 0=none 1=sdboot-menu 2=slot
+ *   21   next_kind u8：一次性意图 0=none 1=sdboot-menu 2=slot 3=windows（S15）
  *   22   next_slot u8
  *   23   dispatch_why u8（gk3_bcb_kind）
  *   24   dispatch_slot u8
@@ -325,7 +326,11 @@ uint8_t gk3_vab_effective(const gk3_vab *v, unsigned current_slot);
  *   48   migrated_digest[20]：迁移时被清掉的 BCB 的 SHA-1
  *   68   migrated_command[32]：原文
  *   100  migrated_recovery[256]：原文（截断）
- *   356  reserved[...]
+ *   356  bcb_seen u32（见 gk3_rec_bcb_seen）
+ *   360  set_default u8（S15）：一次性"设默认系统"请求 0=无 1=windows 2=android（HAL 应 Parts 请求写，入口消费后清零）
+ *   361  default_os u8（S15）：默认系统的缓存 0=未知 1=android 2=windows（入口读 LoaderEntryDefault 后写，
+ *        只在值变化时变；HAL 的 mark-poweroff 与 Parts 的显示读它 —— Android 不挂 efivarfs，§4.5）
+ *   362  reserved[...]（全零；v1 的老读者不看这些字节，老写者整份原样带过 ⇒ 扩字段不升版本）
  *   1024 events[GK3_EV_N]，每条 16 字节：seq u32 / code u16 / slot u8 / flags u8（bit0 已通知）/ aux u32 / reserved u32
  *   2044 crc32 u32 = CRC32(前 2044 字节)
  */
@@ -339,12 +344,33 @@ typedef enum {
     GK3_EV_WIPE_FAILED, GK3_EV_REFUSED_MERGING, GK3_EV_BOOTLOOP, GK3_EV_NOSLOT,
     GK3_EV_MIGRATED,
     GK3_EV_BCB_IGNORED,     /* 分派开关关着时看到一份新的非空 BCB：只记录、不消费（aux = gk3_bcb_kind） */
+    /* —— S15 双系统（§4.9.3、§4.9.4）—— */
+    GK3_EV_DEFAULT_RESET,   /* 10 LoaderEntryDefault 不是合法值（不是 Windows 条目 id），入口删掉了它（= 默认 Android） */
+    GK3_EV_INTENT_DROPPED,  /* 11 双系统意图作废：aux = gk3_intent（哪一个），slot = gk3_drop_why（为什么） */
+    GK3_EV_TO_WINDOWS,      /* 12 入口转去了 Windows：aux = gk3_intent（next=windows 还是 clean_poweroff） */
+    GK3_EV_DEFAULT_SET,     /* 13 应 set_default 请求改了默认系统：aux = gk3_os（改成了什么），slot = 0 成功 / 1 写变量失败 */
 } gk3_ev_code;
 
-typedef enum { GK3_NEXT_NONE = 0, GK3_NEXT_SDBOOT_MENU = 1, GK3_NEXT_SLOT = 2 } gk3_next_kind;
+typedef enum {
+    GK3_NEXT_NONE = 0, GK3_NEXT_SDBOOT_MENU = 1, GK3_NEXT_SLOT = 2,
+    GK3_NEXT_WINDOWS = 3,   /* S15：下一次开机去 Windows 一次（Parts "重启到 Windows"，§4.9.4） */
+} gk3_next_kind;
+
+/* S15：一次性"设默认系统"请求（偏移 360）与默认系统缓存（偏移 361） */
+typedef enum { GK3_SETDEF_NONE = 0, GK3_SETDEF_WINDOWS = 1, GK3_SETDEF_ANDROID = 2 } gk3_setdef;
+typedef enum { GK3_OS_UNKNOWN = 0, GK3_OS_ANDROID = 1, GK3_OS_WINDOWS = 2 } gk3_os;
+/* 事件 INTENT_DROPPED / TO_WINDOWS 的 aux */
+typedef enum { GK3_INTENT_NEXT_WINDOWS = 1, GK3_INTENT_CLEAN_POWEROFF = 2, GK3_INTENT_SET_DEFAULT = 3 } gk3_intent;
+/* 事件 INTENT_DROPPED 的 slot 字段：为什么作废 */
+typedef enum {
+    GK3_DROP_ANDROID_PENDING = 1,   /* Android 有待办（BCB 要执行、新槽 tries 计数中、上次没开机完成、要进执行端、next=slot/sdboot-menu…） */
+    GK3_DROP_NO_WINDOWS = 2,        /* ESP 上没有 \EFI\Microsoft\Boot\bootmgfw.efi */
+    GK3_DROP_VAR_FAILED = 3,        /* 写 LoaderEntryOneShot 失败（入口改为启动 Android） */
+} gk3_drop_why;
 
 #define GK3_REC_F_MIGRATED    0x1u
 #define GK3_REC_F_IN_FALLBACK 0x2u  /* 上一次是回落启动：回落只在"进入"的那一次记事件、写 ESP 日志 */
+#define GK3_REC_F_CLEAN_POWEROFF 0x4u /* S15：Windows 为默认时从 Android 关机（vendor rc 的 on shutdown 写，入口消费） */
 #define GK3_EVF_NOTIFIED      0x1u
 
 typedef struct {
@@ -381,6 +407,19 @@ uint8_t gk3_rec_inc_boot_streak(uint8_t *rec);
 
 gk3_next_kind gk3_rec_next(const uint8_t *rec, uint8_t *slot);
 void gk3_rec_set_next(uint8_t *rec, gk3_next_kind k, uint8_t slot);
+
+/* S15：set_default 请求 / 默认系统缓存（不认识的值读成 NONE / UNKNOWN）。只改调用方的缓冲区，不重算 CRC。 */
+gk3_setdef gk3_rec_set_default_req(const uint8_t *rec);
+void gk3_rec_put_set_default_req(uint8_t *rec, gk3_setdef v);
+gk3_os gk3_rec_default_os(const uint8_t *rec);
+void gk3_rec_put_default_os(uint8_t *rec, gk3_os v);
+bool gk3_rec_clean_poweroff(const uint8_t *rec);
+/* "现在实际上默认是不是 Windows"：有 set_default 请求就按请求（入口下次运行时先应用它，§4.9.3 b），否则看缓存。
+ * HAL 的 mark-poweroff 与 Parts 的显示都用这一条规则。 */
+bool gk3_rec_effective_default_windows(const uint8_t *rec);
+/* mark-poweroff（§4.9.3"冷开机进 Windows"）：sys.powerctl 以 "shutdown" 开头、且实际默认是 Windows ⇒ 置
+ * clean_poweroff 并返回 true（调用方 seal + 写回）；否则什么都不改、返回 false。rec 必须是有效记录。 */
+bool gk3_rec_mark_poweroff(uint8_t *rec, const char *powerctl);
 
 /* 分派计数：同一份 BCB（摘要相同）就 +1 并返回新值，不同就重置为 1。 */
 uint8_t gk3_rec_dispatch_enter(uint8_t *rec, gk3_bcb_kind why, uint8_t slot, const uint8_t digest[20]);
@@ -430,6 +469,53 @@ uint32_t gk3_rec_events(const uint8_t *rec, gk3_event *out, uint32_t max);
 void gk3_rec_events_mark_notified(uint8_t *rec, uint32_t upto_seq);
 const char *gk3_ev_name(gk3_ev_code c);
 
+/* ------------------------------------------------------------------ 双系统（S15，§4.9.3 / §4.9.4），只决定、不写盘 */
+
+/* LoaderEntryDefault 的值分三类（§4.9.3"两条禁令"）：
+ *   ABSENT   不存在 = 默认 Android（合法）
+ *   WINDOWS  Windows 条目的 id：systemd-boot 自动生成的 "auto-windows"（boot.c:2147），或安装器自写的 type1 条目
+ *            "gk3-windows.conf"（U22；type1 的 id = 文件名、转小写，boot.c:1362、:1540-1541）—— 合法
+ *   OTHER    其他一切（Android 条目的精确 id、@saved、live / 救援、通配…）—— 不合法，入口删掉
+ * 比较不分大小写（systemd-boot 读入时转小写，boot.c:1645）。value 为 NULL = 不存在。 */
+typedef enum { GK3_DEFVAR_ABSENT = 0, GK3_DEFVAR_WINDOWS, GK3_DEFVAR_OTHER } gk3_defvar;
+gk3_defvar gk3_defvar_classify(const char *value);
+
+typedef enum { GK3_DEFACT_NONE = 0, GK3_DEFACT_DELETE, GK3_DEFACT_SET_WINDOWS } gk3_defact;
+
+typedef struct {
+    gk3_defact action;          /* 入口要对 LoaderEntryDefault 做什么 */
+    bool default_windows;       /* action 成功之后：默认是不是 Windows（= 变量是 Windows id 且 bootmgfw 在） */
+    bool default_windows_before;/* action 失败时保持的值（= 入口进来时的样子） */
+    bool reset;                 /* 删的是不合法的值（记了 DEFAULT_RESET） */
+    gk3_setdef applied;         /* 这次消费掉的 set_default 请求（NONE = 没有） */
+    bool dropped;               /* set_default=windows 但没有 Windows：作废（记了 INTENT_DROPPED） */
+} gk3_def_plan;
+
+/* §4.9.3 判定顺序的 a、b 两步：先把不合法的值删掉，再应用 set_default 请求（请求清零、记事件）。
+ * windows_present = ESP 上有 \EFI\Microsoft\Boot\bootmgfw.efi。rec 必须是有效记录；只改 rec 缓冲区（不碰缓存 ——
+ * 变量写没写成只有调用方知道，调用方之后用 gk3_rec_put_default_os 记结果）。 */
+void gk3_dual_plan_default(uint8_t *rec, gk3_defvar var, bool windows_present, gk3_def_plan *out);
+
+typedef enum {
+    GK3_DUAL_ANDROID = 0,       /* 照常启动 Android（或执行端） */
+    GK3_DUAL_WINDOWS,           /* 写 OneShot = Windows 条目 → 复位（标记已在 rec 里清掉，调用方先写 rec 再写变量） */
+    GK3_DUAL_SDBOOT_MENU,       /* next=sdboot-menu：清掉后返回 EFI_SUCCESS，systemd-boot 停在不倒计时的菜单上（boot.c:2971-2976） */
+} gk3_dual_kind;
+
+typedef struct {
+    gk3_dual_kind kind;
+    gk3_intent why;             /* kind == WINDOWS：哪个意图（next=windows 优先） */
+    bool preset_oneshot;        /* kind == ANDROID 且默认是 Windows：交接前预置 LoaderEntryOneShot（§4.9.3"预置 OneShot"） */
+    uint8_t dropped;            /* 作废了哪些意图：bit0 next=windows、bit1 clean_poweroff（各记了一条 INTENT_DROPPED） */
+} gk3_dual_boot;
+
+/* §4.9.3 判定顺序的 c、d、e 三步（加上 §4.4.4 的 next=sdboot-menu）。android_pending 由调用方算（BCB 这一版会执行、
+ * 选中的槽在扣 tries、上次没开机完成、这次要进执行端、强制槽……）；next=slot:x 在这里也算待办。
+ * 消费掉的标记（next=windows / sdboot-menu、clean_poweroff）一律在 rec 里清掉 —— 去 Windows 之前先清（写盘），
+ * 最坏多一次复位、不会循环。clean_poweroff 而默认不是 Windows：静默清掉。只改 rec 缓冲区。 */
+void gk3_dual_plan_boot(uint8_t *rec, bool default_windows, bool windows_present, bool android_pending,
+                        gk3_dual_boot *out);
+
 /* ------------------------------------------------------------------ boot.img v0–v2 */
 
 #define GK3_BOOT_MAGIC "ANDROID!"
@@ -469,6 +555,8 @@ typedef struct {
     const char *entry;          /* androidboot.gk3boot.entry（自己条目的文件名），NULL 不加 */
     const char *mode;           /* androidboot.gk3boot.mode=observe|action（E4/E5 的观察模式要能从 Android 侧认出来），NULL 不加 */
     const char *streak;         /* androidboot.gk3boot.streak=<GK3 连续未完成启动计数>（动作模式），NULL 不加 */
+    const char *dispatch;       /* androidboot.gk3boot.dispatch=1：动作模式且 BCB 分派开着（S15：HAL 据此决定 Parts 的
+                                 * "重启到引导菜单"有没有用 —— 分派关时 reboot,bootloader 写的 BCB 只记录不执行）；NULL 不加 */
 } gk3_android_args;
 
 /* Android 交接用：base 里已有的同名键先删掉（避免重复），再按顺序追加。值里只允许

@@ -66,5 +66,6 @@ void test_cmdline(void);
 void test_blk(void);
 void test_fuzz(void);
 void test_realmisc(void);
+void test_dual(void);
 
 #endif

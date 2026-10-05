@@ -25,12 +25,15 @@
 #define O_MIG_REC 100
 #define MIG_REC_LEN 256
 #define O_BCB_SEEN 356
+#define O_SET_DEFAULT 360   /* S15 */
+#define O_DEFAULT_OS 361    /* S15 */
 #define O_EVENTS 1024
 #define EV_SIZE 16
 #define O_CRC (GK3_REC_SIZE - 4)
 
 _Static_assert(O_MIG_REC + MIG_REC_LEN <= O_BCB_SEEN, "GK3 记录字段重叠");
-_Static_assert(O_BCB_SEEN + 4 <= O_EVENTS, "GK3 记录字段重叠");
+_Static_assert(O_BCB_SEEN + 4 <= O_SET_DEFAULT, "GK3 记录字段重叠");
+_Static_assert(O_DEFAULT_OS + 1 <= O_EVENTS, "GK3 记录字段重叠");
 _Static_assert(O_EVENTS + GK3_EV_N * EV_SIZE <= O_CRC, "事件环越界");
 
 gk3_err gk3_rec_validate(const uint8_t rec[GK3_REC_SIZE])
@@ -113,7 +116,7 @@ gk3_next_kind gk3_rec_next(const uint8_t *rec, uint8_t *slot)
     uint8_t k = rec[O_NEXT_KIND];
     if (slot)
         *slot = rec[O_NEXT_SLOT];
-    if (k > GK3_NEXT_SLOT || (k == GK3_NEXT_SLOT && rec[O_NEXT_SLOT] > 1))
+    if (k > GK3_NEXT_WINDOWS || (k == GK3_NEXT_SLOT && rec[O_NEXT_SLOT] > 1))
         return GK3_NEXT_NONE;            /* 不认识的意图当没有 */
     return (gk3_next_kind)k;
 }
@@ -122,6 +125,48 @@ void gk3_rec_set_next(uint8_t *rec, gk3_next_kind k, uint8_t slot)
 {
     rec[O_NEXT_KIND] = (uint8_t)k;
     rec[O_NEXT_SLOT] = k == GK3_NEXT_SLOT ? slot : 0;
+}
+
+gk3_setdef gk3_rec_set_default_req(const uint8_t *rec)
+{
+    uint8_t v = rec[O_SET_DEFAULT];
+    return v <= GK3_SETDEF_ANDROID ? (gk3_setdef)v : GK3_SETDEF_NONE;   /* 不认识的请求当没有 */
+}
+void gk3_rec_put_set_default_req(uint8_t *rec, gk3_setdef v) { rec[O_SET_DEFAULT] = (uint8_t)v; }
+gk3_os gk3_rec_default_os(const uint8_t *rec)
+{
+    uint8_t v = rec[O_DEFAULT_OS];
+    return v <= GK3_OS_WINDOWS ? (gk3_os)v : GK3_OS_UNKNOWN;
+}
+void gk3_rec_put_default_os(uint8_t *rec, gk3_os v) { rec[O_DEFAULT_OS] = (uint8_t)v; }
+bool gk3_rec_clean_poweroff(const uint8_t *rec) { return gk3_rec_flags(rec) & GK3_REC_F_CLEAN_POWEROFF; }
+
+bool gk3_rec_effective_default_windows(const uint8_t *rec)
+{
+    switch (gk3_rec_set_default_req(rec)) {
+    case GK3_SETDEF_WINDOWS: return true;
+    case GK3_SETDEF_ANDROID: return false;
+    case GK3_SETDEF_NONE: break;
+    }
+    return gk3_rec_default_os(rec) == GK3_OS_WINDOWS;
+}
+
+bool gk3_rec_mark_poweroff(uint8_t *rec, const char *powerctl)
+{
+    /* sys.powerctl 的取值：shutdown[,原因] / reboot[,目标]（refs/lineage-system-core/init/reboot.cpp:885-898）。
+     * 只认 "shutdown" 或 "shutdown,…"：thermal 关机也算（之后冷开机照样该进默认系统） */
+    static const char k[] = "shutdown";
+    if (!powerctl)
+        return false;
+    for (size_t i = 0; i < sizeof(k) - 1; i++)
+        if (powerctl[i] != k[i])
+            return false;
+    if (powerctl[sizeof(k) - 1] != 0 && powerctl[sizeof(k) - 1] != ',')
+        return false;
+    if (!gk3_rec_effective_default_windows(rec))
+        return false;
+    gk3_rec_set_flag(rec, GK3_REC_F_CLEAN_POWEROFF, true);
+    return true;
 }
 
 uint8_t gk3_rec_dispatch_enter(uint8_t *rec, gk3_bcb_kind why, uint8_t slot, const uint8_t digest[20])
@@ -214,6 +259,10 @@ const char *gk3_ev_name(gk3_ev_code c)
     case GK3_EV_NOSLOT: return "noslot";
     case GK3_EV_MIGRATED: return "migrated";
     case GK3_EV_BCB_IGNORED: return "bcb_ignored";
+    case GK3_EV_DEFAULT_RESET: return "default_reset";
+    case GK3_EV_INTENT_DROPPED: return "intent_dropped";
+    case GK3_EV_TO_WINDOWS: return "to_windows";
+    case GK3_EV_DEFAULT_SET: return "default_set";
     }
     return "?";
 }

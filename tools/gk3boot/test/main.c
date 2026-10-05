@@ -90,6 +90,7 @@ int main(int argc, char **argv)
         {"实机 misc", test_realmisc},
         {"gk3 记录", test_gk3rec},
         {"BCB 分派决定", test_dispatch},
+        {"双系统决定（S15）", test_dual},
         {"boot.img", test_bootimg},
         {"cmdline", test_cmdline},
         {"块设备读改写", test_blk},

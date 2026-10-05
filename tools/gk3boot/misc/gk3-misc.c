@@ -4,6 +4,14 @@
  *   gk3-misc select  <misc 镜像> [hint a|b]     入口在这份 misc 上会怎么选（只算，不写）
  *   gk3-misc gpt     <盘头镜像（LBA 0–33）> [块大小]
  *   gk3-misc bootimg <boot.img>                 解析头、复算 SHA1(id)、打印 cmdline
+ *
+ * S15（双系统）的三个【写】子命令，只改镜像文件里 misc+8 KiB 的 GK3 记录（记录无效时报错、不建）——
+ * 开发时在 dd 出来的镜像上模拟 Android 侧，QEMU 夹具与上机前的离线演练用：
+ *   gk3-misc mark-poweroff <misc 镜像> <sys.powerctl 的值>   = vendor rc on shutdown 那一步（设计稿 §4.9.3）
+ *   gk3-misc set-next      <misc 镜像> windows|sdboot-menu|none
+ *   gk3-misc set-default   <misc 镜像> windows|android|none
+ * 设备上 on shutdown 跑的不是这个 CLI，而是 boot HAL 二进制的 --gk3-mark-poweroff（同一个库函数
+ * gk3_rec_mark_poweroff；理由见 device/huawei/gaokun3/boot_control/Gk3Boot.cpp 顶部）。
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,6 +95,11 @@ static int dump(const unsigned char *m, size_t n)
         gk3_rec_migrated_command(r, cmd);
         printf("GK3      有效  migrated=%u boot_streak=%u next=%u/%u dispatch_count=%u migrated_command=\"%s\"\n",
                gk3_rec_migrated(r), gk3_rec_boot_streak(r), nk, ns, gk3_rec_dispatch_count(r), cmd);
+        {
+            static const char *const os[] = {"unknown", "android", "windows"}, *const sd[] = {"none", "windows", "android"};
+            printf("         双系统：default_os=%s set_default=%s clean_poweroff=%u\n", os[gk3_rec_default_os(r)],
+                   sd[gk3_rec_set_default_req(r)], gk3_rec_clean_poweroff(r));
+        }
         for (uint32_t i = 0; i < k && i < GK3_EV_N; i++)
             printf("         #%u %s slot=%u aux=%u%s\n", ev[i].seq, gk3_ev_name((gk3_ev_code)ev[i].code), ev[i].slot,
                    ev[i].aux, ev[i].flags & GK3_EVF_NOTIFIED ? "（已通知）" : "");
@@ -176,12 +189,56 @@ static int bootimg(const unsigned char *d, size_t n)
     return e ? 1 : 0;
 }
 
+/* S15：改镜像里的 GK3 记录（只写 8 KiB 处那 2 KiB，其余字节不碰） */
+static int edit(const char *path, unsigned char *m, size_t n, const char *cmd, const char *arg)
+{
+    unsigned char *r = m + GK3_MISC_GK3_OFF;
+    FILE *f;
+    if (n < GK3_MISC_GK3_OFF + GK3_REC_SIZE || gk3_rec_validate(r) != GK3_OK) {
+        fprintf(stderr, "%s：8 KiB 处没有有效的 GK3 记录（入口还没在动作模式下跑过？）—— 不建\n", path);
+        return 1;
+    }
+    if (!strcmp(cmd, "mark-poweroff")) {
+        if (!gk3_rec_mark_poweroff(r, arg)) {
+            printf("不写：sys.powerctl=\"%s\"，实际默认%s Windows\n", arg,
+                   gk3_rec_effective_default_windows(r) ? "是" : "不是");
+            return 0;
+        }
+    } else if (!strcmp(cmd, "set-next")) {
+        if (!strcmp(arg, "windows"))
+            gk3_rec_set_next(r, GK3_NEXT_WINDOWS, 0);
+        else if (!strcmp(arg, "sdboot-menu"))
+            gk3_rec_set_next(r, GK3_NEXT_SDBOOT_MENU, 0);
+        else if (!strcmp(arg, "none"))
+            gk3_rec_set_next(r, GK3_NEXT_NONE, 0);
+        else
+            return fprintf(stderr, "set-next windows|sdboot-menu|none\n"), 2;
+    } else {
+        if (!strcmp(arg, "windows"))
+            gk3_rec_put_set_default_req(r, GK3_SETDEF_WINDOWS);
+        else if (!strcmp(arg, "android"))
+            gk3_rec_put_set_default_req(r, GK3_SETDEF_ANDROID);
+        else if (!strcmp(arg, "none"))
+            gk3_rec_put_set_default_req(r, GK3_SETDEF_NONE);
+        else
+            return fprintf(stderr, "set-default windows|android|none\n"), 2;
+    }
+    gk3_rec_seal(r);
+    if (!(f = fopen(path, "r+b")) || fseek(f, GK3_MISC_GK3_OFF, SEEK_SET) ||
+        fwrite(r, 1, GK3_REC_SIZE, f) != GK3_REC_SIZE || fclose(f)) {
+        perror(path);
+        return 1;
+    }
+    printf("已写：%s %s\n", cmd, arg);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     size_t n;
     unsigned char *d;
     if (argc < 3) {
-        fprintf(stderr, "用法：gk3-misc dump|select|gpt|bootimg <文件> [参数]\n");
+        fprintf(stderr, "用法：gk3-misc dump|select|gpt|bootimg|mark-poweroff|set-next|set-default <文件> [参数]\n");
         return 2;
     }
     d = slurp(argv[2], &n);
@@ -193,6 +250,11 @@ int main(int argc, char **argv)
         return gpt(d, n, argc > 3 ? (unsigned)atoi(argv[3]) : 512);
     if (!strcmp(argv[1], "bootimg"))
         return bootimg(d, n);
+    if (!strcmp(argv[1], "mark-poweroff") || !strcmp(argv[1], "set-next") || !strcmp(argv[1], "set-default")) {
+        if (argc < 4)
+            return fprintf(stderr, "用法：gk3-misc %s <misc 镜像> <值>\n", argv[1]), 2;
+        return edit(argv[2], d, n, argv[1], argv[3]);
+    }
     fprintf(stderr, "不认识的子命令 %s\n", argv[1]);
     return 2;
 }

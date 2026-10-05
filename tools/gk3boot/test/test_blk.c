@@ -76,7 +76,7 @@ void test_fuzz(void)
         (void)gk3_rec_events(buf + 8192, ev, GK3_EV_N);
         (void)gk3_rec_next(buf + 8192, NULL);
         {
-            gk3_android_args a = {(unsigned)(r & 1), NULL, NULL, NULL, NULL, NULL};
+            gk3_android_args a = {(unsigned)(r & 1), NULL, NULL, NULL, NULL, NULL, NULL};
             buf[600] = 0;
             (void)gk3_cmdline_android((const char *)buf + 1, &a, out, sizeof(out));
         }
