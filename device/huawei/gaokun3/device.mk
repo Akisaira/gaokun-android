@@ -1050,3 +1050,12 @@ PRODUCT_SYSTEM_EXT_PROPERTIES += \
 #   `/system_ext/etc/build.prop` 里有这一行。
 PRODUCT_SYSTEM_EXT_PROPERTIES += \
     persist.sys.timezone=Asia/Shanghai
+
+# ═══════════ 中文输入法 fcitx5-android（v1.0 DISP-3 / D10）：默认关 ═══════════
+# 模块定义在 prebuilt-apps/fcitx5/Android.mk（APK 不入库、放进去才有这个模块；选型与许可证见那个文件顶部）。
+# ⬜ 等用户确认 APK 来源（GitHub release 还是 F-Droid，两者签名不同，决定以后从哪更新）、并上机验过实体键盘的
+#   中英切换，再在构建时设 GAOKUN3_WITH_FCITX5 := true。APK 不在时别打开：PRODUCT_PACKAGES 里的名字找不到模块会让构建失败。
+ifeq ($(GAOKUN3_WITH_FCITX5),true)
+PRODUCT_PACKAGES += \
+    Fcitx5Android
+endif
