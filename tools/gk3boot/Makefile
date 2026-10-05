@@ -6,7 +6,10 @@
 #   make gk3-misc        主机版只读 CLI（dump misc / gpt / boot.img）
 #   make hal-test        boot_control HAL 开机完成线程（device/…/boot_control/Gk3Boot.cpp）的主机场景测试（test/hal/run.sh）
 #   make postinstall-test OTA postinstall 的选直连条目 + 入口部署一节，mksh/dash/ksh 各跑一遍（test/postinstall/run.sh；先 hal-test 才有交叉核对）
-#   make check           以上全部
+#   make fastbootd       执行端 gk3-fastbootd 的主机版（ASan + UBSan；macOS 上也能编，只是没有 USB / 挂载 ESP）
+#   make fastbootd-static  Linux 上静态链接、-O2 的发布形态（scripts/gk3boot/test-fastbootd.sh 在 arm64 容器里编这个）
+#   make fbd-unit        执行端里不碰盘的部分（sparse / LP / SHA-256）的主机单测
+#   make check           以上全部（fastbootd-static 除外）
 #
 # 可覆盖：REFS=<refs 目录>  BOOTIMG=<完整 boot.img，用来复算整份 SHA1(id)>
 
@@ -24,7 +27,7 @@ HOSTFLAGS:= -std=c11 -O1 -g $(WARN) -Werror -Icore/include $(SAN)
 
 TEST_SRC := $(wildcard test/*.c)
 
-.PHONY: all test upstream freestanding check clean hal-test postinstall-test
+.PHONY: all test upstream freestanding check clean hal-test postinstall-test fastbootd fastbootd-static fbd-unit
 all: check
 
 $(B):
@@ -82,7 +85,31 @@ $(B)/gk3-misc: misc/gk3-misc.c $(CORE_SRC) core/include/gk3core.h | $(B)
 
 gk3-misc: $(B)/gk3-misc
 
-check: test upstream freestanding gk3-misc
+# —— 执行端 gk3-fastbootd（S7a） ——
+FBD_SRC  := $(wildcard fastbootd/*.c)
+FBD_HDR  := fastbootd/fbd.h core/include/gk3core.h
+FBD_VER  ?= $(shell git describe --always --dirty --abbrev=12 2>/dev/null || echo unknown)
+FBD_FLAGS:= -std=gnu11 $(WARN) -Werror -Wno-missing-prototypes -Icore/include -Ifastbootd -DGK3FB_VERSION='"$(FBD_VER)"'
+
+$(B)/gk3-fastbootd: $(FBD_SRC) $(CORE_SRC) $(FBD_HDR) | $(B)
+	$(CC) $(FBD_FLAGS) -O1 -g $(SAN) -o $@ $(FBD_SRC) $(CORE_SRC) -lpthread
+
+fastbootd: $(B)/gk3-fastbootd
+
+# 发布形态：静态、去符号。只在 Linux 上（glibc / musl）编得出来。
+$(B)/gk3-fastbootd.static: $(FBD_SRC) $(CORE_SRC) $(FBD_HDR) | $(B)
+	$(CC) $(FBD_FLAGS) -O2 -static -o $@ $(FBD_SRC) $(CORE_SRC) -lpthread
+	strip $@
+
+fastbootd-static: $(B)/gk3-fastbootd.static
+
+$(B)/test_fbd: test/fbd/test_fbd.c fastbootd/sparse.c fastbootd/lp.c $(CORE_SRC) $(FBD_HDR) | $(B)
+	$(CC) $(FBD_FLAGS) -O1 -g $(SAN) -Itest -o $@ test/fbd/test_fbd.c fastbootd/sparse.c fastbootd/lp.c $(CORE_SRC)
+
+fbd-unit: $(B)/test_fbd
+	./$(B)/test_fbd
+
+check: test upstream freestanding gk3-misc fastbootd fbd-unit
 
 hal-test:
 	bash test/hal/run.sh
