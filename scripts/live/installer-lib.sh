@@ -2152,7 +2152,7 @@ gk3_job_start() {
         "$sr" --quiet --collect --unit="$unit" --service-type=exec --description="gaokun3 installer: $1" \
               --working-directory="$PWD" "${env[@]}" \
               ${pre[@]+"${pre[@]}"} "$(command -v bash)" -c "$GK3__JOB_BODY" gk3-job "$d" "$GK3_LIBDIR/installer-lib.sh" "$@" >&2 \
-            || { echo "systemd-run 起不来 $unit" > "$d/start-error"; gk3_die "systemd-run 起不来写盘单元（$unit）"; return 1; }
+            || { echo "systemd-run 起不来 $unit" > "$d/start-error"; gk3_die "systemd-run 起不来写盘单元（${unit}）"; return 1; }
     else
         mode=setsid
         echo "⚠️ 不是 systemd 系统（或没有 systemd-run）：写盘进程只用 setsid 脱离 —— 界面所在的 cgroup 被整个杀掉时它仍会被连带" >&2

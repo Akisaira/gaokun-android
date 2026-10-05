@@ -207,7 +207,7 @@ TL=$(PATH=$PB gk3_preflight 2>/dev/null | grep '^CHECK id=tools ')
 [ "$TL" = "CHECK id=tools ok=no missing=sgdisk,partprobe,blkid,lsblk pkgs=gdisk,parted,util-linux" ] \
     && ok "缺 sgdisk / partprobe / blkid / lsblk：$TL" || bad "预检的包名不对：$TL"
 TL=$(gk3_preflight 2>/dev/null | grep '^CHECK id=tools ')
-[ "$TL" = "CHECK id=tools ok=yes" ] && ok "工具齐全：$TL（没有 pkgs= 字段）" || bad "工具齐全时预检不对：$TL"
+[ "$TL" = "CHECK id=tools ok=yes" ] && ok "工具齐全：${TL}（没有 pkgs= 字段）" || bad "工具齐全时预检不对：$TL"
 
 # ── A. 命令行版，整盘 ───────────────────────────────────────────────────────
 echo "═══ A. install-gaokun3.sh 整盘安装 ═══"
@@ -735,7 +735,7 @@ GOT=$(gk3_job_run gk3_release_info "$REL" 2>"$W/j1.err"); rc=$?
 gk3_apply --disk /dev/nonexistent >/dev/null 2>"$W/j2a.err"; rc0=$?
 gk3_job_run gk3_apply --disk /dev/nonexistent >/dev/null 2>"$W/j2.err"; rc=$?
 [ "$rc" = "$rc0" ] && [ "$rc" != 0 ] && grep -q "$(grep '^!!' "$W/j2a.err" | head -1)" "$W/j2.err" \
-    && ok "失败的调用：退出码（${rc}）与 !! 那行与直接调用相同" || bad "失败的调用转发得不对（rc=$rc，直接调用 rc=${rc0}）"
+    && ok "失败的调用：退出码（${rc}）与 !! 那行与直接调用相同" || bad "失败的调用转发得不对（rc=${rc}，直接调用 rc=${rc0}）"
 # 界面崩了：跟读的那个进程被 kill -9，job 照样跑完；重新起来的界面按 id 接着跟，从头拿到全部输出与退出码
 ( gk3_job_run bash -c 'echo "REC a=1"; echo "PROGRESS 10 写一半" >&2; sleep 3; echo "REC b=2"; exit 3' >"$W/j3.out" 2>"$W/j3.err" ) & FP=$!
 sleep 1.5; kill -9 $FP 2>/dev/null; wait $FP 2>/dev/null
