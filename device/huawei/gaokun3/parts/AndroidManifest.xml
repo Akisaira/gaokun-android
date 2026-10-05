@@ -7,6 +7,9 @@
     + category meta-data），系统设置会自动把这一项收进「系统」页，
     【不需要】动 packages/apps/Settings，也不需要 LineageParts
     （实测这个 ROM 里根本没装 org.lineageos.lineageparts）。
+    ⚠️ 2026-10-05 复核：这句与现在的构建对不上 —— vendor/lineage/config/common.mk:156 把 LineageParts 列进
+    PRODUCT_PACKAGES，构建机 out/target/product/gaokun3/system_ext/priv-app/LineageParts/ 也在（10-04 的构建）。
+    PWR-14 的充电上限入口就是它的「电池 → 充电控制」⇒ ⬜ 上机 `pm list packages org.lineageos.lineageparts` 核对一次。
     好处是每次跟 ROM 升级不会冲突，全部代码留在设备树里。
 
   ★ 主题用 SettingsLib 的 Theme.SubSettingsBase：Activity 继承 CollapsingToolbarBaseActivity，
