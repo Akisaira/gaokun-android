@@ -9,7 +9,8 @@
 **S7a 执行端 `gk3-fastbootd` 协议核心**（fastboot 协议 + FunctionFS / TCP 传输 + 白名单写盘 + ESP 同步 + set_active，离线全绿、未上机，§13）；
 **S7b 执行端 initramfs** `fastboot.img`（/init + 文本菜单 + USB gadget，§14，QEMU 11/11，未上机）；两边的接口已统一（§13.3）；
 **S7c gk3boot 拉起执行端**（BCB 分派 / 首跑迁移 / bootloop / tools 条目，同一个 boot_x 的内核 + ESP 上的 fastboot.img，§15，
-QEMU 端到端全绿，未上机，分派开关缺省仍关）。
+QEMU 端到端全绿，未上机，分派开关缺省仍关）；**S15 双系统里入口与 Android 侧的部分**（默认系统、互相重启、关机进 Windows，§16，
+QEMU 25/25 + HAL 94/94，未编译 ROM、未上机，**没有任何双系统真机样本**）。
 
 ## 1. 结构
 
@@ -27,6 +28,7 @@ tools/gk3boot/
 │     ├─ vab.c              misc_virtual_ab_message 只读解析 + SNAPSHOTTED/source_slot 规则
 │     ├─ gk3rec.c           GK3 记录（misc 8 KiB，§4.5）：迁移、分派计数、bootloop 计数、一次性意图、事件环
 │     ├─ dispatch.c         BCB 分派的决定（§4.3.4 的表 + §4.10 迁移；只决定、不写盘）
+│     ├─ dual.c             双系统的决定（S15：LoaderEntryDefault 分类、set_default、next=windows / sdboot-menu、clean_poweroff；§16）
 │     ├─ bootimg.c          boot.img v0–v2 头解析 + SHA1(id) 复算
 │     └─ cmdline.c          Android 交接 cmdline（§4.3.1）、执行端 cmdline（§4.4.1）、ASCII→UCS-2
 ├─ misc/gk3-misc.c          只读 CLI：dump / select / gpt / bootimg（安装器要的 init 子命令留给 S10）
@@ -151,11 +153,11 @@ boot_b 没有 —— 谁写的不知道（不是我们的安装器会做的事�
 |---|---|
 | 0 | magic `"GK3R"`（u32 `0x52334B47`） |
 | 4 / 6 | version u16 = 1 / size u16 = 2048 |
-| 8 | flags u32（bit0 = 已迁移；bit1 = 上一次是回落启动 —— 回落只在"进入"那一次记事件、写日志，§11） |
+| 8 | flags u32（bit0 = 已迁移；bit1 = 上一次是回落启动 —— 回落只在"进入"那一次记事件、写日志，§11；bit2 = clean_poweroff（S15，§16）） |
 | 12 | dispatch_ver u32（迁移时的"分派版本"，§4.10） |
 | 16 | seq u32（事件序号） |
 | 20 | boot_streak u8（连续未完成启动，饱和在 255） |
-| 21 / 22 | next_kind u8（0 无 / 1 sdboot-menu / 2 slot）/ next_slot u8 |
+| 21 / 22 | next_kind u8（0 无 / 1 sdboot-menu / 2 slot / 3 windows（S15））/ next_slot u8 |
 | 23 / 24 / 25 | dispatch_why u8（`gk3_bcb_kind`）/ dispatch_slot u8 / dispatch_count u8（同一份 BCB 连续进入次数） |
 | 26 | ev_head u8（事件环下一个写入位置，< 32） |
 | 27 | ok_streak u8：**已确认的槽**连续未完成启动（S7c 的 bootloop 判据，§15.1；HAL 不读） |
@@ -164,7 +166,9 @@ boot_b 没有 —— 谁写的不知道（不是我们的安装器会做的事�
 | 68 | migrated_command[32]：原文 |
 | 100 | migrated_recovery[256]：原文（截到 255 字节） |
 | 356 | bcb_seen u32：分派开关关着时上一次"看到但没消费"的 BCB 的 CRC32（0 = 没有；算出来恰为 0 时记 1），同一份 BCB 只记一次（§11） |
-| 1024 | 事件环 32 条 × 16 字节：seq u32 / code u16 / slot u8 / flags u8（bit0 已通知）/ aux u32 / reserved u32。code：1 fallback（slot = 启动的槽，aux = 不可启动的 active 槽）、2 boot_corrupt、3 bcb_dropped、4 wipe_failed、5 refused_merging、6 bootloop、7 noslot、8 migrated、9 bcb_ignored（aux = `gk3_bcb_kind`） |
+| 360 | set_default u8（S15）：一次性"设默认系统"请求 0 无 / 1 windows / 2 android（HAL 写、入口消费后清零） |
+| 361 | default_os u8（S15）：默认系统缓存 0 未知 / 1 android / 2 windows（入口写；HAL / mark-poweroff 读） |
+| 1024 | 事件环 32 条 × 16 字节：seq u32 / code u16 / slot u8 / flags u8（bit0 已通知）/ aux u32 / reserved u32。code：1 fallback（slot = 启动的槽，aux = 不可启动的 active 槽）、2 boot_corrupt、3 bcb_dropped、4 wipe_failed、5 refused_merging、6 bootloop、7 noslot、8 migrated、9 bcb_ignored（aux = `gk3_bcb_kind`）；S15：10 default_reset、11 intent_dropped（aux = 意图 1 next=windows / 2 clean_poweroff / 3 set_default，slot = 原因 1 Android 待办 / 2 没有 Windows / 3 写变量失败）、12 to_windows（aux = 意图）、13 default_set（aux = 改成的 os，slot 0 成功） |
 | 2044 | crc32（前 2044 字节，小端） |
 
 ## 6. 实现里做了、设计稿没写死的决定
@@ -1507,3 +1511,135 @@ HAL 66/66、postinstall 115/115。
    ⇒ 二次确认（默认 Cancel）。
 3. `fastboot -w`（主机端 partition-type 报 raw ⇒ "not automatically formatting"）。
 4. "合并中拒绝"只在 QEMU / 容器里测（§13.4 容器组），不在真机造合并状态。
+
+## 16. S15：双系统里入口与 Android 侧的部分（2026-10-05，QEMU 25/25、HAL 94/94，⬜ ROM 未编译、未上机、**没有双系统真机样本**）
+
+设计稿：`docs/boot-entry-design.md` §4.9.3（默认系统、判定顺序 a–e、预置 OneShot、冷开机进 Windows）、§4.9.4（互相重启，U14 选 a）、
+§4.4.4（`next=sdboot-menu`）、§4.6.1 动作 6 / 7、§4.12 写盘范围。安装器与 Windows 脚本 / 伴随工具（S10、S12）**不在这一轮**。
+
+### 16.1 谁写什么
+
+| 东西 | 写者 | 读者 / 消费者 |
+|---|---|---|
+| GK3 `set_default`（@360） | HAL 请求线程（Parts "开机默认进入"） | 入口：写 / 删 `LoaderEntryDefault`，清零 |
+| GK3 `default_os`（@361） | 入口（每次动作模式开机，按处理完之后的结果） | HAL（导出 `default`）、`--gk3-mark-poweroff` |
+| GK3 `next_kind=3`（windows） | HAL 请求线程（Parts "重启到 Windows"） | 入口：没有 Android 待办 ⇒ 去 Windows 一次；有 ⇒ 作废 |
+| GK3 `next_kind=1`（sdboot-menu） | （执行端 "Other systems" 的退化出口 —— **还没有写者**） | 入口：清掉、`return EFI_SUCCESS` |
+| GK3 flags bit2 `clean_poweroff` | `on shutdown` 的 `--gk3-mark-poweroff` | 入口：默认 Windows 且没有待办 ⇒ 去 Windows |
+| `LoaderEntryDefault` | 入口（应用 set_default / 删不合法值）；安装器、Windows 脚本、菜单 `d` 键（不归这一轮） | systemd-boot |
+| `LoaderEntryOneShot` | 入口：去 Windows 时 = Windows 条目；默认 Windows 时交接前 = `*-android-<x>.conf` | systemd-boot（读后即删） |
+
+**向后兼容**：新字段都在 v1 的保留区（356 之后、事件环之前），版本号不变。S15 之前的入口 / HAL / 执行端读改写都是整份 2 KiB
+原样带过（`rec_prepare` / `ClearStreakAndTakeEvents` / `fastbootd/sub.c:54`），不会抹掉新字段；它们读到 `next_kind=3` 当"没有"
+（`gk3_rec_next` 一直是"不认识的意图当没有"）。不认识的 `set_default` / `default_os` 值同样读成"没有 / 未知"。逐字节 golden（含 CRC，
+期望值用 Python zlib 独立算）在 `test/test_dual.c` 开头。
+
+### 16.2 入口（`efi/boot/gk3boot.c` 的"双系统"一节；规则在 `core/src/dual.c`）
+
+只在**动作模式**下写；观察模式只打一行 `would (action): dual: …`。纯 Android（变量不存在、记录里没有意图）的正常路径只多一次
+`GetVariable(LoaderEntryDefault)`，写盘量不变。
+
+```
+rec_prepare
+→ a/b dual_defaults：LoaderEntryDefault 分类（不存在 / auto-windows 或 gk3-windows.conf / 其他）
+      其他 ⇒ 删（default_reset，写一份 ESP 日志）；set_default=windows ⇒ 写 Windows 条目 id（有 gk3-windows.conf 用它，否则 auto-windows；
+      没有 bootmgfw.efi ⇒ 作废）；set_default=android ⇒ 删；"默认是 Windows" = 变量是 Windows id 且 bootmgfw.efi 在；缓存写进 default_os
+→ next=sdboot-menu ⇒ 清掉、写 misc、屏幕一行、撤看门狗、return EFI_SUCCESS（systemd-boot 停在不倒计时的菜单，boot.c:2971-2976）
+→ （原有）gk3.action / BCB 分派 / noslot / merging / bootloop → 进执行端：意图作废（= 待办），默认 Windows 时同样预置 OneShot
+→ （原有）noslot / merging 无执行端 ⇒ fail-open
+→ c/d/e：待办 = 这份 BCB 这一版会执行（分派开且 plan=executor）、gk3.slot、BCAB 无效、选中的槽在扣 tries、boot_streak>0（上次没开机完成）、
+      next=slot:x。next=windows 或（clean_poweroff 且默认 Windows）：有待办 ⇒ 作废（intent_dropped）；没有 bootmgfw ⇒ 作废；
+      否则 ⇒ 写 misc（标记已清，读回）→ OneShot=Windows 条目（读回）→ ResetSystem(Cold)；不扣 tries、不加 streak、不预置
+→ （原有）扣 tries、rec_android；默认 Windows ⇒ 交接前 OneShot=*-android-<这次的槽>.conf
+```
+
+与设计稿不同的三处（理由都写在代码注释里）：
+1. **复位用 Cold，不是 Warm**：Cold 是 fail-open 已在本机固件上验过的那条路（E6）；NV 变量在复位前已落盘，两者对 systemd-boot 没区别。
+2. **预置 OneShot 的槽字母取这次要启动的槽**，不是 hint：两者只在入口计数全用完、落到直连条目时有差别，那时落到正在跑的槽更稳。
+3. **分派关时 BCB 不算待办**：分派关的入口只记录不执行 BCB，算待办的话一份留着的 BCB 会永远挡住"重启到 Windows"。
+
+正常路径（去 Windows、预置、应用 set_default）**不写 ESP 日志**：每次切系统都留一份会慢慢吃掉共用 ESP（U17）。写失败、删不合法的默认值
+才算异常。另：分派开（动作模式）时 cmdline 多一项 `androidboot.gk3boot.dispatch=1`，HAL 据此判"重启到引导菜单"有没有用。
+
+### 16.3 Android 侧
+
+- **HAL**（`device/huawei/gaokun3/boot_control/Gk3Boot.cpp` 顶部有全文）：开机完成时导出 `vendor.gaokun3.bootentry.{windows,default,
+  default_pending,menu}`，`notify` 里另有 `intent_dropped` / `default_reset` / `loader_replaced`（有 Windows 且 `EFI/BOOT/BOOTAA64.EFI` ≠
+  `EFI/systemd/systemd-bootaa64.efi`；只通知不修）。`menu=1` = 这次经入口、`ro.boot.gk3boot.dispatch=1`、现役那一版的 `fastboot.img` 在 ESP 上。
+- **请求**：Parts（system_app）写不了 vendor 属性 ⇒ 设 `sys.gaokun3.bootreq=<next_windows|default_windows|default_android>`（system_prop）
+  → HAL 的 rc 在 vendor_init 里 `setprop vendor.gaokun3.bootentry.request` + `.ring 1` → 请求线程写 GK3 记录 → `.ack=<请求>:<ok|error:…>:<pid>-<n>`。
+  错误：`no-windows`、`no-record`（入口没在动作模式下跑过）、`esp`、`misc`、`unknown-request`。
+- **关机标记**：rc `on shutdown` → `exec - root root -- /vendor/bin/hw/android.hardware.boot-service.gaokun3 --gk3-mark-poweroff`。
+  设计稿写的是 `gk3-misc mark-poweroff`；改成 HAL 二进制的一个模式，因为写 misc 的域被核心 neverallow 限定在白名单里
+  （refs/lineage-sepolicy/private/domain.te:1596-1612，crDroid 树 :1661-1677，user 构建生效），新建 gk3_misc 域会撞，hal_bootctl_server 在单子上。
+  同一个库函数 `gk3_rec_mark_poweroff` 也在主机版 `gk3-misc mark-poweroff`（离线演练）。条件：`sys.powerctl` 是 `shutdown` 或 `shutdown,…`、
+  `ro.boot.gk3boot.mode=action`（只有那样入口才预置了 OneShot）、实际默认是 Windows（未应用的 set_default 优先于缓存）。`alarm(5)`，绝不拖住关机。
+  时序：init 先排 `shutdown` 触发器再排 `shutdown_done`（refs/lineage-system-core/init/reboot.cpp:984-992，crDroid 树 :1185-1193，构建机只读核对），
+  `exec` 不在 subcontext 里跑（crDroid `builtins.cpp:1294`）、init 等它退出。
+- **sepolicy**：只补 `get_prop(hal_bootctl_default, powerctl_prop)`（`sepolicy/hal_bootctl_default.te`；powerctl_prop 在"非 coredomain 不许读核心属性"
+  那条 neverallow 的豁免里，crDroid 树 `system/sepolicy/private/property.te:404`）。⬜ 未编译 —— 只有编译器能证明没撞别的 neverallow。
+- **Parts**：新页「启动选项」`BootOptionsActivity`（注入系统页，manifest 缺省停用，`BootEntryNotifier` 按 `windows` / `menu` 启用）：
+  重启到 Windows（确认 → 请求 → 等回执 → `PowerManager.reboot(null)`）、开机默认进入（ListPreference，"下次开机生效"）、
+  重启到引导菜单（`PowerManager.reboot("bootloader")` = 标准 `reboot,bootloader`）。字符串在单独的 `res/values*/strings_boot_options.xml`。
+
+### 16.4 测试（2026-10-05）
+
+```sh
+make -C tools/gk3boot test           # libgk3core 466/466（新增"双系统决定（S15）"54 条）
+make -C tools/gk3boot hal-test       # 94/94（新增 S24–S30）
+make -C tools/gk3boot postinstall-test   # 115/115（未改）
+GK3_DOCKER_PREFIX=s15- bash scripts/gk3boot/test-executor.sh all    # 25/25
+```
+
+`test-executor.sh all` 汇总（macOS 27 + colima，QEMU 10.0.13，测试内核 Debian 6.12.111；gk3boot 在 `410489c` 之上带未提交改动构建，
+sha256 `edb42b59…`；fastboot.img `05d1fac9…`）：
+
+```
+real linux-a linux-b force-a strictnx espfull badsha miscerr action-normal action-tries failopen-oneshot bcb-present vab-merging
+bcb-dispatch migrate exec-missing dual-preset dual-next dual-pending dual-setdef dual-sdmenu exec-bootloader exec-wipe exec-bootloop exec-tools
+= 全部 PASS
+```
+
+| 场景 | 走过的路 | 断言要点 |
+|---|---|---|
+| dual-preset | `LoaderEntryDefault=auto-windows`；#1 OneShot 选 gk3boot → Android；#2 不动变量（= Android 里重启）；#3 `misc-set --streak 0 --poweroff`（= 开机完成后关机）；#4 再冷开机 | #1/#2 起到 Linux、OneShot 被预置成 `*-android-a.conf`、default_os=2；#2 没进 Windows；#3 串口 `GK3-FAKE-WINDOWS booted entry="auto-windows"`、没有 Linux、Windows 只起一次、OneShot 已删、事件 `to_windows:-:2`、clean_poweroff 清掉、streak 不动、无 ESP 日志；#4 直接 Windows、misc 一个字节不变 |
+| dual-next | 默认 Android、`next=windows` | #1 Windows（`to_windows:-:1`、next 清零、不碰 BCAB）；#2 回 Android、不预置 |
+| dual-pending | `next=windows` + `_b` 15/6 未成功 | 作废 `intent_dropped:1:1`、照常启动 `_b`、tries 6→5、没进 Windows |
+| dual-setdef | `LoaderEntryDefault=gk3boot-android-a.conf`（不合法）+ `set_default=windows` + `gk3-windows.conf` | #1 删 → 改写成 `gk3-windows.conf`（读回）、`note: … not a Windows entry id`、预置；#2 `set_default=android` → 变量删、不预置；#3 冷开机经 loader.conf 回入口 |
+| dual-sdmenu | `next=sdboot-menu` + clean_poweroff | 屏幕一行后回菜单、之后 20 秒什么都没启动、菜单重画且没有 "Boot in N s."、`intent_dropped:1:2`、streak 不加 |
+
+（dual-sdmenu 第一次跑挂过一条"入口只跑了一次"：串口里 `qemu_run.py` 自己打的 `# STOPPED … after '<那一行>'` 也被数进去了 ——
+断言的问题，改成排除那一行并加上"重画、无倒计时"的检查后通过。）
+
+没重跑的：`make upstream`（本机 refs/ 里没有 aosp-hardware-interfaces，SKIP；本轮没改 BCAB）、gk3-fastbootd 容器 252 条（执行端没改；
+exec-* 四个端到端照样过了）。
+
+### 16.5 没做 / 未验证 / 上机判据
+
+**这一轮不做**：安装器的双系统专项（确认页选默认系统、`timeout 5`、`gk3-windows.conf` + `auto-entries no`、BitLocker / 休眠检查、文案）、
+Windows 脚本 / 伴随工具（"重启到 Android"、`-SetDefault`、`-RepairBoot`）、电源菜单里的"重启到 Windows"（设计稿 §4.9.4 要先在 crDroid 树里找扩展点）、
+`next=slot:x` 的消费（只当待办）、执行端 "Other systems" 写 `next=sdboot-menu`。
+
+**已知限制**：从 Android 关机后，下次开机若在 systemd-boot 菜单里手动改选 Windows，`clean_poweroff` 会留到下一次入口运行，那时多跳一次 Windows
+（入口分不出"经预置 OneShot 进来"还是"菜单里手选进来"：两种 systemd-boot 都把 OneShot 删了，`LoaderTimeMenuUSec` 双系统下每次都有）。
+Parts 的页脚写了这一条。
+
+**只在 QEMU（AAVMF）上验过、要上机的**：入口在华为固件上 `SetVariable` 删 / 写 `LoaderEntryDefault`、连写两次 OneShot（预置之后被 fail-open 覆盖）、
+`return EFI_SUCCESS` 回菜单（华为的 BootFail 计数 F9 不该因 SUCCESS 增加 —— 未核）、`gk3_file_exists` 在共用 ESP（Windows 建的 FAT32）上。
+开发机是纯 Android，**其中不依赖 Windows 的部分可以在开发机上做**（用户在场、征得同意、动作模式入口）：
+1. 不合法默认：`boot-oneshot.sh` 的写法手写 `LoaderEntryDefault=gk3boot-android-<x>.conf` → 重启 → ESP 日志 `note: dual: … deleted`，变量没了。
+2. sdboot-menu：`dd` 出 misc → 主机 `gk3-misc set-next m.bin sdboot-menu` → 写回 8 KiB 处那 2 KiB → 重启 → 停在 systemd-boot 菜单、不倒计时。
+3. 预置与关机标记（用假 Windows）：ESP 上放 `EFI/Microsoft/Boot/bootmgfw.efi` = `build/efi/gk3-fake-windows.efi`（只打一行就关机），
+   `gk3-misc set-default m.bin windows` 写回 → 重启：入口把 `LoaderEntryDefault` 写成 `auto-windows` 并预置 OneShot → Android →
+   `adb reboot` 仍回 Android（`ro.boot.gk3boot.entry` 是 gk3boot 条目）→ 关机 → 开机：屏幕上闪过假 Windows 的一行后关机（= 进了 Windows）。
+   撤回：开机菜单里选 Android → `setprop sys.gaokun3.bootreq default_android` → 重启 → 删假文件。
+   ⚠️ 这一步会让开机默认进一个只会关机的假程序，**必须有人在场、接着键盘盖能在 systemd-boot 菜单里选**（双系统才有的 5 秒菜单这台机器上没有，
+   菜单要按键唤出，见设计稿 U3 / E3）。
+4. HAL：`getprop | grep bootentry` 看 `windows / default / menu`；`setprop sys.gaokun3.bootreq none; setprop sys.gaokun3.bootreq default_android`
+   → `bootentry.ack` 有 `ok`；`dumpsys`/`logcat -b kernel | grep gk3boot` 有 "request … written"；关机后 `gk3-misc dump` 看 clean_poweroff（默认 Android 时应为 0）。
+5. enforcing 下 `on shutdown` 的 exec 有没有 denial（`hal_bootctl_default` 读 `powerctl_prop`、init exec 本二进制）。
+
+**只能等群友真机（D5 / D6）或 Parallels（D4）的**：真 Windows 的 `bootmgfw.efi` 经 systemd-boot 起来、"从 Android 关机 → 冷开机进 Windows"整条、
+Windows 更新的多次重启与本机默认系统的关系、BitLocker 在入口多一次复位之后要不要密钥（入口不在 Windows 的镜像链里，按 §4.9.7 推断不影响）、
+共用 ESP 上 `gk3-windows.conf` 与 `auto-windows` 的 PCR4 是否相同、Parts 页在有真 Windows 的机器上的显示。判据：`gk3-misc dump` 里的事件
+（`to_windows` / `intent_dropped` / `default_set`）+ `LoaderEntryDefault` / `LoaderEntryOneShot` 的值（live 里 `efivar`，或 Windows 侧伴随工具）+ 用户目视。

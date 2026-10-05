@@ -455,7 +455,7 @@ gk3boot 用和 Android 同一套交接代码引导：
   - 动作 4：把 GK3 事件环和 `ro.boot.gk3boot.event` 导出成 `vendor.gaokun3.bootentry.*` 属性，供 Parts 通知；读完置已通知位。
   - 动作 5：`ro.boot.gk3boot` 为空 ⇒ 这次没经过入口（入口计数用完回落了，或者用户在菜单里对直连条目按 `d` 设了 `LoaderEntryDefault`，`boot.c:1788-1824`），设 `vendor.gaokun3.bootentry.bypassed=1` 并通知。通知里写明恢复办法：在菜单里高亮"Android"按 `d`，下次 gk3boot 会把这个精确 id 清掉（§4.9.3）。
   - 动作 6（只在 ESP 上有 `EFI/Microsoft/Boot/bootmgfw.efi` 时）：导出 `vendor.gaokun3.bootentry.windows=1`，Parts 据此决定显示"重启到 Windows"和"默认启动系统"；再比对 `EFI/BOOT/BOOTAA64.EFI` 和 `EFI/systemd/systemd-bootaa64.efi`，不同就通知"Windows 替换了启动器"。**只通知，不修**：改 `BOOTAA64` 会让 BitLocker 要密钥（§4.9.6）。
-  - 动作 7（运行期，不限于开机完成）：Parts 设 `vendor.gaokun3.bootentry.request=next_windows|default_windows|default_android` 时，HAL 把它写成 GK3 一次性意图，回读后设 ack 属性，再由 Parts 发起重启（或提示"下次开机生效"）。
+  - 动作 7（运行期，不限于开机完成）：Parts 设 `vendor.gaokun3.bootentry.request=next_windows|default_windows|default_android` 时，HAL 把它写成 GK3 一次性意图，回读后设 ack 属性，再由 Parts 发起重启（或提示"下次开机生效"）。**S15 实现修正**：Parts 是 system_app（coredomain），写不了任何 vendor 属性（`sepolicy/vendor_gaokun3_props.te` 顶上那次编译失败）⇒ Parts 设 `sys.gaokun3.bootreq`（system_prop），HAL 的 rc 在 vendor_init 里转成 `request` + `ring`，HAL 回 `vendor.gaokun3.bootentry.ack`（与 `etc/histen.rc` 同一个中转法；README §16.3）。
 - **1.x**：EspSlot 退役，回到上游 `android.hardware.boot-service.default`（`hardware-interfaces boot/aidl/default/Android.bp:37-61`）。前提是直连回落条目不再依赖 default 字母，live / 救援自带内核。
 
 #### 4.6.2 OTA postinstall
@@ -471,7 +471,7 @@ gk3boot 用和 Android 同一套交接代码引导：
 
 **零改动**：init、uncrypt、RescueParty 按上游标准写 BCB。C′ 的 `gk3-bootintent`、efivarfs 类型、genfscon、`--boot` 重新路由**全部不需要**。
 
-**双系统例外**（§4.9.3）：Windows 为默认时，vendor rc 的 `on shutdown` 要 `exec` 一次 `gk3-misc mark-poweroff`。它只读 `sys.powerctl` 和 GK3 里的默认系统缓存（§4.5），只写 misc 的 GK3 记录，**不碰 efivarfs**。Android 为默认时直接退出。它失败的后果只是"下次开机进 Android"。
+**双系统例外**（§4.9.3）：Windows 为默认时，vendor rc 的 `on shutdown` 要 `exec` 一次 `gk3-misc mark-poweroff`（**S15 实现**：exec 的是 boot HAL 自己的二进制 `--gk3-mark-poweroff`，落在 hal_bootctl_default 域 —— 写 misc 的域被核心 neverallow 限定在白名单里，refs/lineage-sepolicy/private/domain.te:1596-1612、crDroid 树 :1661-1677；另补读 `powerctl_prop`；还要求这次经动作模式的入口开机）。它只读 `sys.powerctl` 和 GK3 里的默认系统缓存（§4.5），只写 misc 的 GK3 记录，**不碰 efivarfs**。Android 为默认时直接退出。它失败的后果只是"下次开机进 Android"。
 
 #### 4.6.4 cmdline / bootconfig
 
@@ -636,7 +636,7 @@ gk3boot 用和 Android 同一套交接代码引导：
 - 下次上电，预置的 OneShot 让 gk3boot 运行，按下面"gk3boot 的判定顺序"第 d 步转去 Windows。
 - 代价：从 Android 关机后的那一次冷开机要多走一次 POST。
 - 标记没写上（钩子失败、长按电源键强制关机）⇒ 这次进 Android。这是安全的失败方向。
-- 这个钩子只写 misc，不经 uefisecapp，所以 C′ R2 那种卡在 D 状态的风险不适用；时序沿用 C′ 已核对的 `on shutdown` exec（`reboot.cpp:986-992`）。要在 E7 一并实测。
+- 这个钩子只写 misc，不经 uefisecapp，所以 C′ R2 那种卡在 D 状态的风险不适用；时序沿用 C′ 已核对的 `on shutdown` exec（`reboot.cpp:986-992`；2026-10-05 复核：refs/lineage-system-core `init/reboot.cpp:984-992`，crDroid 树 `system/core/init/reboot.cpp:1185-1193` —— 先排 `shutdown` 触发器、再排真正关机的 `shutdown_done`；`exec` 不在 subcontext 里跑，crDroid `builtins.cpp:1294`）。要在 E7 一并实测。
 
 | 场景 | Android 为默认 | Windows 为默认 |
 |---|---|---|
@@ -1048,7 +1048,7 @@ UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起
 | S10 | **安装器**：清单、条目、misc 初始化、收紧停用匹配、`gk3_esp_info`、test-apply 用例；release.sh 附件和断言 | M | 安装器重建 | — |
 | S11 | **开发脚本**：install-ota-local 第 4 步、boot-oneshot 认识计数、misc-dump | S | 本机 | **2026-10-05 已做**：`install-ota-local.sh` 在 ESP 上有入口条目时，第 4 步 `set-active-boot-slot <旧槽>` 撤回 BCAB（读回核对）→ default 掰回 → OneShot 新槽**直连条目** → 提示验收后再 `set-active` 新槽（`GK3_TRUST_GK3BOOT=1` 保留旧行为）；撤回不坏事的依据在构建机树上核过：libsnapshot 只按开机后缀判 Target（`snapshot.cpp:326-334`）、合并只等当前槽 successful（`cleanup_previous_update_action.cc:231-238`）、合并完把另一槽标不可启动（`:360-362`）。`boot-oneshot.sh` 去计数后写 OneShot、存在性同时认 `<id>+*.conf`（真机回读通过）、`--list` 带 misc 解码；新增 `scripts/misc-dump.sh`（exec-out 拉 64 KiB + 主机版 `gk3-misc dump`，真机跑通）。⬜ 新第 4 步要等下一次真装 OTA 才验 |
 | S12 | **Windows 伴随工具**（U23）：入口路径约束回归、安装到 `%ProgramFiles%\gaokun3` 与开始菜单、SYSTEM 计划任务、开机自检 / 规范化 / BIOS 提醒、`-RepairBoot [-Check]`、"重启到 Android"、`-SetDefault`、`-SuspendBitLocker`、`-RemoveAndroid`（含 GK3LIVE 与相邻断言）、快速启动一律关、U24 关休眠、GK3LIVE 去盘符、U 盘介质带一份；U25 的 Windows 侧预置（D4 之后）；D5/D6 之后决定默认路径是否改为 `-UseFallbackPath` | M（1–1.5 周） | Parallels 克隆机（D4） | — |
-| S15 | **双系统其余部件**（§4.9）：gk3boot 的默认系统检测、预置 OneShot、`next=windows` / `set_default` / `clean_poweroff`（并入 S6）；HAL 动作 6/7、`gk3-misc mark-poweroff` 与 `on shutdown`、Parts 的两个入口（并入 S9）；安装器双系统专项与文案（并入 S10）；INSTALL / FAQ 的双系统一章（并入 S13） | M | 同上各步；D1–D3 在第 1–2 周随 E2/E3 做 | — |
+| S15 | **双系统其余部件**（§4.9）：gk3boot 的默认系统检测、预置 OneShot、`next=windows` / `set_default` / `clean_poweroff`（并入 S6）；HAL 动作 6/7、`gk3-misc mark-poweroff` 与 `on shutdown`、Parts 的两个入口（并入 S9）；安装器双系统专项与文案（并入 S10）；INSTALL / FAQ 的双系统一章（并入 S13） | M | 同上各步；D1–D3 在第 1–2 周随 E2/E3 做 | **2026-10-05 入口与 Android 侧做了（QEMU 25/25、HAL 94/94、libgk3core 466/466；ROM 未编译、未上机，没有双系统真机样本）**：GK3 记录 v1 在保留区扩 `set_default` / `default_os` / `clean_poweroff` / `next=windows`（向后兼容，逐字节 golden）；入口的 a–e 判定 + `next=sdboot-menu` 回菜单 + 预置 OneShot；HAL 导出 `windows/default/default_pending/menu`、`loader_replaced` 通知、请求线程；`on shutdown` 关机标记；Parts「启动选项」页（重启到 Windows / 开机默认进入 / 重启到引导菜单）。与本文不同的取舍：复位用 Cold 不用 Warm、预置的槽字母取这次要启动的槽、分派关时 BCB 不算"Android 待办"、关机标记由 HAL 二进制的 `--gk3-mark-poweroff` 做而不是单独的 gk3-misc（misc 的 neverallow 白名单）、Parts 请求经 `sys.gaokun3.bootreq` → rc 中转（coredomain 写不了 vendor 属性）。已知限制：从 Android 关机后在菜单里手选 Windows，标记会留到下一次入口运行、多跳一次 Windows。安装器 / Windows 侧（S10 / S12）、电源菜单入口、`next=slot:x` 消费、执行端写 `next=sdboot-menu` 都没做。见 `tools/gk3boot/README.md` §16（含开发机上能做的部分与只能等 D4–D6 的部分） |
 | S13 | **文档与发布物**：INSTALL（中英）"启动入口与 fastboot"一章（进入方式、port0 是哪个物理口、计数回落、准备 U 盘、不认证、不是安全擦除、英文界面对照）、FAQ、flash-all.sh/.bat、发版说明 | S | E3、E6 结果；用户目视确认 port0 | — |
 | S14 | **上机验收** E2–E11 | L | 用户在场 6–8 次 | 案卷 |
 
