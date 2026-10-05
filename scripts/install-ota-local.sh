@@ -76,18 +76,24 @@ fi
 DEF=$(S 'mkdir -p /mnt/gaokun3_ota_install; mount -t vfat /dev/block/by-name/esp /mnt/gaokun3_ota_install 2>/dev/null; grep ^default /mnt/gaokun3_ota_install/loader/loader.conf' | tr -d '\r')
 ok "ESP 的 $DEF"
 
-# ★ 2026-10-05（统一启动入口 S9）：ESP 上有 gk3boot 条目时，第 4 步的安全网【不起作用】——
+# ★ 2026-10-05（统一启动入口 S9 → S11）：ESP 上有 gk3boot 条目时，单靠第 4 步把 default 掰回旧槽【不起作用】——
 #   loader.conf 的 default 通配先命中 gk3boot-android-<x>，而 gk3boot 按 misc 的 BCAB 选槽、不看 default 的字母；
-#   update_engine 已经把 misc 的 active 切到新槽，所以重启就是进新槽（动作模式下新槽 tries 6 次没起来才自动回旧槽，
-#   观察模式不扣 tries、不会自己回来）。设计稿 §4.15 的改法（set-active 撤回 + OneShot 直连验收 + 验收后再 set-active）
-#   是 S11 的事，这里先拦住：确认有人在场、接受"靠入口回滚"时设 GK3_TRUST_GK3BOOT=1 再 --go。
+#   update_engine 已经把 misc 的 active 切到新槽，所以重启就是进新槽。
+#   ⇒ S11（设计稿 §4.15）：第 4 步改成 ①`bootctl set-active-boot-slot <旧槽>` 把 BCAB 撤回旧槽 ②OneShot 指向新槽的
+#   【直连条目】（绕过入口）去验收 ③验收通过后再显式 set-active 到新槽。新槽起不来：OneShot 已消费 → 入口按 BCAB 回旧槽。
+#   为什么撤回不会坏事（构建机 crDroid 树核过）：libsnapshot 只按"开机的槽后缀 ≠ 更新源槽"判定 Target
+#   （system/core/fs_mgr/libsnapshot/snapshot.cpp:326-334），update_engine 的合并只等当前槽 marked successful
+#   （system/update_engine/aosp/cleanup_previous_update_action.cc:231-238），都不看 BCAB 的 active；
+#   合并完成后它把另一槽标成不可启动（同文件 :360-362）⇒ 即使忘了第 ③ 步，入口也只剩新槽可选。
+#   合并进行中重启：入口读 VAB 的 merge_status、强制进目标槽（tools/gk3boot QEMU 场景 vab-merging）。
+#   想沿用"直接进新槽、靠入口 tries 回滚"（E8 验过，但硬挂死要人按电源键）：设 GK3_TRUST_GK3BOOT=1。
 GK3E=$(S 'ls /mnt/gaokun3_ota_install/loader/entries/ 2>/dev/null | grep -E "^gk3(boot|prev)-android-"' | tr -d '\r')
 if [ -n "$GK3E" ]; then
     echo "⚠️ ESP 上有统一启动入口的条目：$(echo $GK3E)"
-    echo "   第 4 步把 default 掰回旧槽对它无效 —— 重启会直接进新槽（见脚本注释）"
-    if [ "$MODE" = "--go" ] && [ "${GK3_TRUST_GK3BOOT:-0}" != 1 ]; then
-        S 'umount /mnt/gaokun3_ota_install 2>/dev/null'
-        die "有人在场、接受靠入口的 tries 回滚时设 GK3_TRUST_GK3BOOT=1；或者先 setprop persist.vendor.gaokun3.gk3boot off 并重启一次（开机完成时撤掉入口）"
+    if [ "${GK3_TRUST_GK3BOOT:-0}" = 1 ]; then
+        echo "   GK3_TRUST_GK3BOOT=1：不撤回 active，重启直接进新槽（动作模式 tries 用完才回旧槽；观察模式不会自己回来）"
+    else
+        echo "   第 4 步会把 BCAB 撤回当前槽、OneShot 走新槽的直连条目验收（S11）"
     fi
 fi
 
@@ -168,8 +174,29 @@ S "ls /mnt/gaokun3_ota_install/loader/entries/ | grep -qE '^[0-9a-f]{32}-android
 ok "glob '$GLOB' 在 ESP 上匹配得到直连条目"
 S "sed -i 's|^default .*|default ${GLOB}|' /mnt/gaokun3_ota_install/loader/loader.conf; sync; grep ^default /mnt/gaokun3_ota_install/loader/loader.conf" 2>&1 | tr -d '\r'
 echo
-if [ -n "$GK3E" ]; then
-    echo "⚠️ 统一启动入口在：上面这行 default 只管入口计数用完之后的直连回落；正常重启由 gk3boot 按 misc 进新槽。"
+if [ -n "$GK3E" ] && [ "${GK3_TRUST_GK3BOOT:-0}" != 1 ]; then
+    case "$CUR" in _a) CUR_I=0; NEW_I=1 ;; _b) CUR_I=1; NEW_I=0 ;; esac
+    # S11 ①：BCAB 撤回当前槽（libboot_control 的 SetActiveBootSlot：当前槽 prio 15，新槽降到 14、tries 不动）
+    S bootctl set-active-boot-slot $CUR_I >/dev/null 2>&1
+    GOT=$(S bootctl get-active-boot-slot 2>/dev/null | tr -d '\r' | tail -1)
+    [ "$GOT" = "$CUR_I" ] || die "set-active-boot-slot $CUR_I 之后 get-active-boot-slot 读到 '$GOT' —— 停手，别重启"
+    ok "BCAB 的 active 已撤回 ${CUR}（入口下一次按 misc 选槽会进 ${CUR}）"
+    # set-active 会让 HAL 再改一次 default：重新掰回当前槽（它本来就该指向当前槽）
+    S "sed -i 's|^default .*|default ${GLOB}|' /mnt/gaokun3_ota_install/loader/loader.conf; sync"
+    # S11 ②：OneShot 指向新槽的直连条目
+    MID=$(S 'ls /mnt/gaokun3_ota_install | grep -E "^[0-9a-f]{32}$" | head -1' | tr -d '\r')
+    NEWE="${MID}-android-${TGT}.conf"
+    S "[ -f /mnt/gaokun3_ota_install/loader/entries/$NEWE ]" || die "ESP 上没有新槽的直连条目 $NEWE"
+    S 'sync; umount /mnt/gaokun3_ota_install 2>/dev/null'
+    SER="$SER" bash "$(dirname "$0")/boot-oneshot.sh" "$NEWE" || die "OneShot 没写成"
+    echo
+    echo "⬜ 剩下的手工两步（故意不自动做）："
+    echo "   1) 征得同意后 adb reboot（只这一次走 ${NEWE}，绕过入口）；新槽起不来 ⇒ 下一次入口按 BCAB 回 $CUR"
+    echo "   2) 验收通过后：adb shell bootctl set-active-boot-slot ${NEW_I}（之后入口才会把 _${TGT} 当默认）"
+    echo "      忘了也不致命：VAB 合并完成后 update_engine 会把 $CUR 标成不可启动，入口只剩 _$TGT 可选"
+    exit 0
+elif [ -n "$GK3E" ]; then
+    echo "⚠️ GK3_TRUST_GK3BOOT=1：上面这行 default 只管入口计数用完之后的直连回落；正常重启由 gk3boot 按 misc 进新槽。"
     echo "   有人在场再 adb reboot；新槽起不来时动作模式会在 tries 用完后自动回 ${CUR}，观察模式要手动在菜单里选直连条目。"
 fi
 echo "⬜ 剩下的手工两步（故意不自动做）："

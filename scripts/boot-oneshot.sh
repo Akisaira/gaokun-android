@@ -35,22 +35,30 @@ case "${1:---list}" in
     S "mkdir -p $ESP; mount -t vfat /dev/block/by-name/esp $ESP 2>/dev/null
        ls $ESP/loader/entries/; echo; grep ^default $ESP/loader/loader.conf
        umount $ESP 2>/dev/null; rmdir $ESP 2>/dev/null" | tr -d '\r'
+    echo "  （名字带 +N[-M] 的是 systemd-boot 的启动计数条目；OneShot / default 匹配的是去掉计数之后的名字）"
     echo "── 当前 EFI 变量 ──"
     # 跳过前 4 字节属性，UTF-16LE 转 ASCII
     for v in LoaderEntryOneShot LoaderEntrySelected LoaderEntryDefault; do
         printf "  %-20s %s\n" "$v" \
           "$(S "[ -f $EFI/$v-$GUID ] && dd if=$EFI/$v-$GUID bs=1 skip=4 2>/dev/null | tr -d '\\0'" | tr -d '\r')"
     done
+    echo "── misc（gk3-misc 解码，只读）──"
+    SER="$SER" bash "$(dirname "$0")/misc-dump.sh" 2>&1 | sed 's/^/  /'
     ;;
 --clear)
     S "chattr -i $EFI/$VAR 2>/dev/null; rm -f $EFI/$VAR" >/dev/null 2>&1
     S "[ -f $EFI/$VAR ]" && die "没清掉" || echo "✓ oneshot 已清除"
     ;;
 *)
-    ENTRY="$1"
+    # ★ S11（统一启动入口设计稿 §4.15）：systemd-boot 的启动计数条目文件名是 <id>+LEFT[-DONE].conf，
+    #   而 OneShot 匹配的是去掉计数之后的 <id>.conf ⇒ 传进来的名字先去掉计数，存在性检查同时认两种文件名。
+    ENTRY=$(printf '%s' "$1" | sed -E 's/\+[0-9]+(-[0-9]+)?\.conf$/.conf/')
+    [ "$ENTRY" != "$1" ] && echo "  （去掉启动计数：${1} → ${ENTRY}）"
+    BASE=${ENTRY%.conf}
     S "mkdir -p $ESP; mount -t vfat /dev/block/by-name/esp $ESP 2>/dev/null
-       [ -f $ESP/loader/entries/$ENTRY ]; R=\$?; umount $ESP 2>/dev/null; rmdir $ESP 2>/dev/null; exit \$R" \
-        || die "ESP 上没有条目 '$ENTRY' —— 先用 --list 看确切文件名"
+       R=1; for f in $ESP/loader/entries/$BASE.conf $ESP/loader/entries/$BASE+*.conf; do [ -f \"\$f\" ] && R=0; done
+       umount $ESP 2>/dev/null; rmdir $ESP 2>/dev/null; exit \$R" \
+        || die "ESP 上没有条目 '${ENTRY}'（也没有带计数的 ${BASE}+*.conf）—— 先用 --list 看确切文件名"
     # 属性 0x07 小端 + UTF-16LE + 双 NUL
     S "chattr -i $EFI/$VAR 2>/dev/null
        printf '\\x07\\x00\\x00\\x00' > /data/local/tmp/.oneshot.bin
