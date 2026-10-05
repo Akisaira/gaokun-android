@@ -63,8 +63,9 @@ rsync -a --delete \
       --include 'firmware/README.md' --include 'hexagonrpcd-root/README.md' --include 'prebuilt-boot/README.md' \
       --exclude 'adb_keys' --exclude 'firmware/**' --exclude 'hexagonrpcd-root/**' --exclude 'prebuilt-boot/**' \
       --exclude 'effects/prebuilt/**' \
+      --exclude '/gk3core/' \
       -e "$SSH" "$SRC/" "$DST/"
-ok "device/ 已同步（不动 adb_keys / firmware / hexagonrpcd-root / prebuilt-boot / effects/prebuilt）"
+ok "device/ 已同步（不动 adb_keys / firmware / hexagonrpcd-root / prebuilt-boot / effects/prebuilt / gk3core）"
 
 echo "═══ 2. prebuilt-boot 单独同步，【不带 --delete】═══"
 if [ -f "$SRC/prebuilt-boot/vmlinuz.efi" ]; then
@@ -82,6 +83,19 @@ if [ -f "$SRC/effects/prebuilt/lib64/soundfx/libhw_histen_processing.so" ]; then
 else
     echo "· 本机没有 Histen 引擎，保留构建机上的那份（若有）"
 fi
+
+echo "═══ 2c. libgk3core（tools/gk3boot/core）→ 构建机的 device/huawei/gaokun3/gk3core ═══"
+# ★ 2026-10-05（统一启动入口 S9）：boot_control HAL 链接 libgk3core（读写 misc 的 GK3 记录），而它的源码与
+#   Android.bp 在本仓的 tools/gk3boot/core/ —— 构建机的 crDroid 树里没有 tools/，Soong 看不见。
+#   所以整目录拷进设备树的 gk3core/（本仓 checkout 里【没有】这个目录，第 1 步也把它排除在 --delete 之外）。
+#   这里用 --delete：gk3core/ 在构建机上只是 tools/gk3boot/core 的镜像，删掉的源文件也要跟着删。
+CORE=$REPO/tools/gk3boot/core
+[ -f "$CORE/Android.bp" ] && [ -f "$CORE/include/gk3core.h" ] || die "$CORE 不全（缺 Android.bp 或 include/gk3core.h）"
+rsync -a --delete --exclude '._*' --exclude '.DS_Store' -e "$SSH" "$CORE/" "$DST/gk3core/"
+CL=$(cd "$CORE" && find . -type f ! -name '._*' ! -name .DS_Store | LC_ALL=C sort | xargs md5 -r | awk '{print $1"  "$2}')
+CR=$($SSH "vahiru@$HOST" 'cd ~/crdroid/device/huawei/gaokun3/gk3core && find . -type f | LC_ALL=C sort | xargs md5sum')
+[ "$CL" = "$CR" ] || { echo "本机："; echo "$CL"; echo "构建机："; echo "$CR"; die "构建机的 gk3core/ ≠ tools/gk3boot/core/"; }
+ok "gk3core/ 与 tools/gk3boot/core/ 逐字节一致（$(echo "$CL" | wc -l | tr -d ' ') 个文件）"
 
 echo "═══ 3. 断言：构建机上不入库的构建输入都在 ═══"
 # adb_keys 的下限：开发构建要 >500 字节（一把 RSA 公钥约 720），发布构建不要求（0）。
