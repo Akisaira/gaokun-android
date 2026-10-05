@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  默认备份通道 = Seedvault（v1.0 BKUP-5 / D13）。
+
+  值是传输的【名字】（BackupTransport.name()），不是组件名：
+    packages/apps/Seedvault/app/src/main/java/com/stevesoltys/seedvault/transport/ConfigurableBackupTransport.kt
+      :6   package com.stevesoltys.seedvault.transport
+      :27  val TRANSPORT_ID: String = ConfigurableBackupTransport::class.java.name
+      :54  override fun name(): String { return TRANSPORT_ID }
+  Seedvault 本身已在镜像里：vendor/lineage/config/common_mobile_full.mk:12 列进 PRODUCT_PACKAGES（它的 Android.bp
+  是 system_ext_specific），传输白名单 allowlist_com.stevesoltys.seedvault.xml 也随它装
+  （10-04 构建产物 system_ext/etc/sysconfig/ 里有）。
+
+  ⚠️ 只在 /data 第一次建设置库时生效（frameworks/base/packages/SettingsProvider/src/com/android/providers/settings/
+     DatabaseHelper.java:2266-2272：loadSecure35Settings 把 def_backup_transport 写进 Settings.Secure.BACKUP_TRANSPORT）。
+     已装的机器 OTA 后不变；要换：adb shell bmgr transport com.stevesoltys.seedvault.transport.ConfigurableBackupTransport
+     （frameworks/base/cmds/bmgr/cmds/bmgr/src/com/android/commands/bmgr/Bmgr.java:183）。
+  ⚠️ def_backup_enabled 仍是 AOSP 的 false（SettingsProvider res/values/defaults.xml:57）：Seedvault 要用户自己选存储位置、
+     记下恢复码才开始备份。开机向导里登录 Google、同意备份到 Google 时，GMS 可能把传输改回它自己 —— 那是用户的选择（⬜ 未验证）。
+-->
+<resources>
+    <string name="def_backup_transport" translatable="false">com.stevesoltys.seedvault.transport.ConfigurableBackupTransport</string>
+</resources>

@@ -1,0 +1,27 @@
+// SettingsProvider 的默认值 overlay：默认备份通道改成 Seedvault（v1.0 BKUP-5 / D13，2026-10-05 用户定）。
+//
+// ⚠️★ 为什么不能写进 overlay/frameworks/base/packages/SettingsProvider/res/values/defaults.xml（构建期静态 overlay）：
+//   MindTheGapps 带了一个静态 RRO 改同一个资源 ——
+//     vendor/gapps/overlay/GmsSettingsProviderOverlay/res/values/defaults.xml:3
+//       def_backup_transport = com.google.android.gms/.backup.BackupTransportService
+//     （它的 Android.bp: product_specific；AndroidManifest: isStatic="true" priority="1337"；
+//       由 vendor/gapps/common/common-vendor.mk:41 装进来）
+//   运行时 RRO 盖在 APK 编进去的资源之上，构建期 overlay 怎么改都会被它盖掉。
+//   （vendor/lineage/overlay/common/…/SettingsProvider/res/values/defaults.xml:22 写的也是 GMS 那个值。）
+// ⇒ 必须也是 RRO，而且排在它后面。静态 RRO 的先后由 OverlayConfig 按【分区】一段一段排，同一分区里才比 priority
+//   （frameworks/base/core/java/com/android/internal/content/om/OverlayConfig.java:116-128、:167-219；
+//    getPriority() 返回的就是这个先后 configIndex，:404-407）。分区顺序 system < vendor < odm < oem < product < system_ext
+//   （frameworks/base/core/java/android/content/pm/PackagePartitions.java:68-88）⇒ 放 system_ext，
+//   不管 GMS 那个 priority 是多少都排在它后面、盖得住它。
+//   ⬜ 前提：设备上没有 /product/overlay/partition_order.xml 改分区顺序（OverlayConfig.java:76；10-04 的构建产物里没有）。
+//   SettingsProvider 没声明 <overlayable>（它的 res/values 下 grep 零命中），预装的 RRO 可以改它任何资源
+//   （frameworks/base/cmds/idmap2/libidmap2/ResourceMapping.cpp:55-73）—— GMS 那个能生效也是这个道理。
+// ⬜ 未编译、未上机。判据：全新 /data 开机后 `settings get secure backup_transport` =
+//   com.stevesoltys.seedvault.transport.ConfigurableBackupTransport；`cmd overlay list com.android.providers.settings`
+//   里本包排在 com.mtg.gmssettingsprovideroverlay 后面且是 [x]。
+runtime_resource_overlay {
+    name: "Gaokun3SettingsProviderOverlay",
+    resource_dirs: ["res"],
+    system_ext_specific: true,
+    sdk_version: "current",
+}

@@ -604,6 +604,13 @@ PRODUCT_COPY_FILES += \
 # 所以是 overlay/packages/apps/Updater/app/src/main/res/…
 DEVICE_PACKAGE_OVERLAYS += device/huawei/gaokun3/overlay
 
+# ★ 默认备份通道 = Seedvault（v1.0 BKUP-5 / D13，2026-10-05 用户定）。⚠️ 不能写进上面那个构建期 overlay：
+#   MindTheGapps 的静态 RRO GmsSettingsProviderOverlay 在运行时把 def_backup_transport 盖回 GMS ⇒
+#   我们也用静态 RRO、放 system_ext 排在它后面。理由与出处见 rro/Gaokun3SettingsProviderOverlay/Android.bp。
+#   只影响全新 /data。⬜ 未编译、未上机。
+PRODUCT_PACKAGES += \
+    Gaokun3SettingsProviderOverlay
+
 # ★ 用户态 CPU 温控已退役（M6，2026-08-20）——改由 patches/0009 在 DTS 里根治。
 #
 # 原先这里装 bin/thermal-guard.sh + etc/thermalguard.rc，因为主线
