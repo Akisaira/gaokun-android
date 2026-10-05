@@ -92,13 +92,22 @@ PRODUCT_PACKAGES += \
 # system_server 的 HAL 阶梯（每级都是实测 FATAL 后确认的）：
 #   BatteryService     ← IHealth（"instance default isn't available"）
 #   HintManagerService ← IPower（SupportInfo.headroom NPE）
-# thermal/memtrack/lights/vibrator 为预防性（cuttlefish 同款 example）。
+# thermal/memtrack/lights 为预防性（cuttlefish 同款 example）。
+# ★ v1.0 HW-6（2026-10-05）：vibrator example 删掉了 —— 本机没有马达（键盘 / 触摸都没有 EV_FF），
+#   假 HAL 只会让框架以为有振动器（设置里出现"振动和触感"、App 调振动"成功"却没反应）。没有它不会 NPE（构建机核过）：
+#   · VINTF：FCM 202504 里 vibrator 两条（hardware/interfaces/compatibility_matrices/compatibility_matrix.202504.xml:655-670）
+#     没有 optional 属性，而 libvintf 的矩阵解析根本不读这个属性（system/libvintf/parse_xml.cpp 里 grep "optional" 零命中，
+#     MatrixHal 只解析 format / exclusive-to / updatable-via-apex）⇒ 框架矩阵里的 HAL 设备不提供就是不提供，不是违例；
+#   · 框架：VintfHalVibratorManager.java:53-75 两个服务都没声明就返回空的 LegacyHalVibratorManager
+#     （"Vibrator manager service will proceed without vibrator hardware."）；旧路径 NativeHalVibratorManager 的
+#     mVibratorIds 缺省 new int[0]、getVibratorIds() 为 null 时不覆盖（VibratorManagerService.java:2179、:2194-2201）；
+#   · native：VibratorHalController.cpp:42-61 / VibratorManagerHalController.cpp:33-50 先 AServiceManager_isDeclared，
+#     没声明就退回 Legacy / nullptr，不会 waitForService 卡住。
 PRODUCT_PACKAGES += \
     android.hardware.health-service.example \
     android.hardware.power-service.example \
     android.hardware.memtrack-service.example \
-    android.hardware.lights-service.example \
-    android.hardware.vibrator-service.example
+    android.hardware.lights-service.example
 
 # 音频 HAL（AIDL 示例实现，null 音频）—— audioserver 没有 HAL 会 NPE
 # 崩溃循环，而 system_server 主线程在 AudioService 构造时【同步阻塞】
