@@ -34,7 +34,7 @@
 ### ▶ 1.0 批 0/1 已合并、待构建与验证（2026-10-05）
 
 > **★ 2026-10-05 08:1x 第四个 1.0 发布构建上机：`1.0.0-dev.4`，构建戳 `1791156793`，槽 `_a`**（`out/v1dev4-1791156793/`）= dev.3 + **SEC-9 内核基线 v7.2-rc2 → v7.2.9 stable**（`a36cb8b`：构建机新树 `~/gk3-kernel-72y`，buildbot 层 19/20 重放、0007 被 stable 收；本仓 0020/0022/0055/0057 被收、0056 改写、新增 0075；`--verify` 绿、配置断言 161/2；内核 `a764d8df…`、dtb `c84f26f7…`；#16 备份 `out/prebuilt-boot-backup-k16/`）+ hung task 写回 120（`0030c79`）。
-> * 实测：`uname -r` = `7.2.9-gaokun3+`，37 秒起来；`hung_task_timeout_secs=120`（LIVE-8 这回真开了）；KSU root 照常；**iris `rc-accept.sh` 15/15、iris 错误行 0**（0056 改写 / 0075 新增无回归）；前后摄 ncam-smoke PASS、camss/smmu 错误 0。⬜ s2idle 循环（stable 新加 GPIO143/151 PDC 唤醒映射）进行中；⬜ DSP 崩溃恢复、指纹 TA 加载、DP 输出没测。
+> * 实测：`uname -r` = `7.2.9-gaokun3+`，37 秒起来；`hung_task_timeout_secs=120`（LIVE-8 这回真开了）；KSU root 照常；**iris `rc-accept.sh` 15/15、iris 错误行 0**（0056 改写 / 0075 新增无回归）；前后摄 ncam-smoke PASS、camss/smmu 错误 0。s2idle 循环 `android-ath11k-s2loop.sh 8 3`：**10 次真挂起全过**（pm_test 7 + 真 s2idle 3，Wi-Fi 每次 2 秒回、固件每次重载、错误行 0，suspend_stats success=10）；唯一 FAIL 是开机 2 分钟时第一轮连续 6 次 -EBUSY（挂起没进去，#128 §17 的计数陷阱，不是恢复失败）；设备 IP 这次变成 `.129`；⬜ DSP 崩溃恢复、指纹 TA 加载、DP 输出没测。
 
 > **★★ 2026-10-05 统一启动入口两道门槛在真机上过了（无人值守）**：E3 `gk3probe.efi` 06:14（缓冲区 LoadImage + StartImage 在华为固件可用、高通 USB device 协议在，日志 `docs/hw/gk3probe-e3-20261005.txt`）；**E4 `gk3boot.efi` 观察模式 07:13 从 `boot_b` 分区直接起到 1.0.0-dev.3 开机完成**（入口 189 ms、misc 未动、efi_pstore/efivars/KASLR 照常，日志 `docs/hw/gk3boot-e4-20261005.txt`）⇒ 方案 Y 的 H2 路线成立。代码：tools/gk3boot/（S2–S5），设计稿 §6 E3/E4 结果行。⬜ 下一步：fail-open 改"写 OneShot 再复位" → E5（观察模式做默认、带 +3 计数）→ 动作模式（扣 tries / BCB 分派）→ 执行端 S7。
 
