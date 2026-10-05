@@ -1031,3 +1031,22 @@ PRODUCT_COPY_FILES += \
 #   写在 PRODUCT_VENDOR_PROPERTIES 里 enforcing 下会被 init 静默丢掉（理由同本文件开头 adb 那段）。
 PRODUCT_SYSTEM_EXT_PROPERTIES += \
     persist.sys.gaokun3.touch_mode=game
+
+# ═══════════ 默认时区 Asia/Shanghai（v1.0 D15 / OTA-13 / NET-6，2026-10-05 用户定）═══════════
+#
+# 原来全新装机默认 GMT：属性没设，本机没有基带、开机向导也没走通自动检测。
+# * 属性名：persist.sys.timezone（框架读它：frameworks/base/services/core/java/com/android/server/timezonedetector/
+#   EnvironmentImpl.java:39），上下文 timezone_prop（system/sepolicy/private/property_contexts:1050，
+#   public/property.te:263 system_public_prop）。
+# * 为什么是 system_ext 而不是 PRODUCT_VENDOR_PROPERTIES：init 加载 /vendor 下的 build.prop 时按 vendor_init 的身份
+#   逐条 CheckPermissions（system/core/init/property_service.cpp:727-741 选 kVendorContext、:806-818 不许就丢），
+#   而 timezone_prop 的 set 只给了 system_server / system_app / surfaceflinger（private/*.te），vendor_init 没有
+#   ⇒ 写在 vendor 里 enforcing 下会被静默丢掉。system_ext 用 init 的身份加载（同上面 touch_mode 那条）。
+# * 对已装机器的影响：/data 里持久化过的值在 build.prop 之后加载、覆盖它（property_service.cpp:1562-1571
+#   LoadPersistentProperties → InitPropertySet）⇒ 用户自己选过时区的机器不变；★ 但【从没设过时区】的机器
+#   （一直显示 GMT 的那些）OTA 之后会变成 Asia/Shanghai —— 写进 1.0 发版说明。
+# * 自动时区开着、并且有别的来源（GMS 的位置时区等）给出建议时，检测结果照样会覆盖它，这是预期行为。
+# ⬜ 未编译、未上机。判据：全新 /data 开机 `getprop persist.sys.timezone` = Asia/Shanghai、状态栏时间是北京时间；
+#   `/system_ext/etc/build.prop` 里有这一行。
+PRODUCT_SYSTEM_EXT_PROPERTIES += \
+    persist.sys.timezone=Asia/Shanghai
