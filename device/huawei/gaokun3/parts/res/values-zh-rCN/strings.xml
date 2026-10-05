@@ -22,4 +22,15 @@
     <string name="usb_port_broken_text">靠近电源键的 USB-C 口在待机之后失灵了。重启后 USB 数据与待机都会恢复；重启之前平板不会进入待机，会一直耗电。</string>
     <string name="usb_port_reversed_title">数据线连接方向反了</string>
     <string name="usb_port_reversed_text">平板正在给对方供电，没有建立数据连接。如果连的是电脑（USB 调试、传文件），请拔下数据线重新插入。</string>
+    <!-- 统一启动入口（gk3boot）的通知（2026-10-05，S9；BootEntryNotifier）。 -->
+    <string name="boot_entry_channel">启动入口</string>
+    <string name="boot_entry_channel_desc">启动入口（gk3boot）的提示，例如更新失败后自动退回旧版本</string>
+    <string name="boot_entry_fallback_title">已自动退回旧版本</string>
+    <string name="boot_entry_fallback_text">上次更新后的系统没能启动，启动入口已自动退回旧版本（当前运行的是槽 %1$s）。可以重新检查更新再试；如果反复出现，请反馈。</string>
+    <string name="boot_entry_bcb_dropped_title">一次未执行的请求已取消</string>
+    <string name="boot_entry_bcb_dropped_text">装上启动入口时，有一个还没来得及执行的恢复出厂或进入恢复模式的请求，它已被取消、没有执行。如果仍然需要，请重新操作一次。</string>
+    <string name="boot_entry_other_title">启动入口记录了异常</string>
+    <string name="boot_entry_other_text">这次开机之前，启动入口记录了：%1$s。系统已正常启动；如果反复出现，请反馈。</string>
+    <string name="boot_entry_bypassed_title">这次开机绕过了启动入口</string>
+    <string name="boot_entry_bypassed_text">启动入口（gk3boot）已经装好，但这次是从直连启动项开机的：可能是入口连续几次没能启动、被自动跳过，也可能是在开机菜单里手动选了直连项。这次开机期间，系统更新失败不会自动回滚。如果每次开机都出现，请反馈。</string>
 </resources>

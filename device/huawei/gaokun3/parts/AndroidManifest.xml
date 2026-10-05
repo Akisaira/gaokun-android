@@ -19,7 +19,7 @@
     package="com.huawei.gaokun3.parts"
     android:sharedUserId="android.uid.system">
 
-    <!-- v1.0 PWR-4 / USB-1：开机拉起 UsbPortNotifier、发 USB-C 口的提示通知。
+    <!-- v1.0 PWR-4 / USB-1：开机拉起 UsbPortNotifier、发 USB-C 口的提示通知（2026-10-05 起还有 BootEntryNotifier）。
          POST_NOTIFICATIONS 对 system uid 本来就放行（见 UsbPortNotifier.java 顶部），照样声明，免得哪天检查方式变了。 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -113,15 +113,28 @@
         <!-- USB-C 口（port0）的两条提示（v1.0 PWR-4 / USB-1）：读 usbrole 设的
              vendor.gaokun3.usbrole.broken / .reversed，亮屏时每 3 秒看一次。
              两个都写全限定类名（理由同上面的 activity）；不导出 —— 只有本应用自己（与系统同一个 uid）会启动它。 -->
+        <!-- directBootAware：锁屏解锁之前（LOCKED_BOOT_COMPLETED）就要能跑，见 BootReceiver 顶部（2026-10-05）。 -->
         <service
             android:name="com.huawei.gaokun3.parts.UsbPortNotifier"
+            android:directBootAware="true"
             android:exported="false" />
 
-        <!-- BOOT_COMPLETED 是系统（uid 1000）发的受保护广播；本应用也是 uid 1000，不导出照样收得到。 -->
+        <!-- 统一启动入口的通知（2026-10-05，S9）：读 boot_control HAL 设的 vendor.gaokun3.bootentry.*，
+             入口回落到旧槽（fallback）/ 绕过入口开机（bypassed）等。只在开机后跑一次，见类顶部。 -->
+        <service
+            android:name="com.huawei.gaokun3.parts.BootEntryNotifier"
+            android:directBootAware="true"
+            android:exported="false" />
+
+        <!-- BOOT_COMPLETED / LOCKED_BOOT_COMPLETED 都是系统（uid 1000）发的受保护广播；本应用也是 uid 1000，不导出照样收得到。
+             ★ 2026-10-05 起 directBootAware 并收 LOCKED_BOOT_COMPLETED：有锁屏密码时，BOOT_COMPLETED 要等第一次
+               解锁才发，解锁之前两个通知服务都起不来（TODO 里记过）。两个动作都要权限 RECEIVE_BOOT_COMPLETED（上面已声明）。 -->
         <receiver
             android:name="com.huawei.gaokun3.parts.BootReceiver"
+            android:directBootAware="true"
             android:exported="false">
             <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
