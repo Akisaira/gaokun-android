@@ -139,6 +139,18 @@ on post-fs-data
 # vendor 挂载后（post-fs-data）手动补一次 bind。见 docs/stage4-findings.md #28
 on post-fs-data
     write /sys/bus/pci/drivers/ath11k_pci/bind "0006:01:00.0"
+    start gaokun3_wlanap
+
+# v1.0 NET-2：给热点预建 wlan1（STA+AP 并发；libwifi-hal-emu 自己不建接口，原因见脚本头注释）。
+# 脚本等 wlan0 出现（上面那次 bind 之后固件加载要几秒）再 `iw dev wlan0 interface add wlan1`，幂等。
+# 建接口是 nl80211 NEW_INTERFACE，要 CAP_NET_ADMIN；不用 root。
+service gaokun3_wlanap /vendor/bin/gaokun3-wlan-ap.sh
+    user wifi
+    # inet：if_nametoindex 要开 AF_INET 套接字（主线内核没有 PARANOID_NETWORK，给上无害）
+    group wifi net_admin inet
+    capabilities NET_ADMIN
+    oneshot
+    disabled
 
 # remoteproc 兜底：ramdisk 里已带固件，早期 probe 正常就已 running；
 # 万一没起来（固件路径变动等），这里补一刀。ADSP 不起来就没有声卡。

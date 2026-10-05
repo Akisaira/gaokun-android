@@ -281,3 +281,24 @@ userdebug_or_eng(`
   allow gaokun3_smmustall self:global_capability_class_set sys_rawio;
   allow gaokun3_smmustall gaokun3_devmem_device:chr_file { open read write map };
 ')
+
+# ── gaokun3-wlan-ap.sh：开机给热点预建 wlan1（v1.0 NET-2，2026-10-05）────────────
+# ⚠️ 先写后验：按源码推出来的，还没上过机、没经过 enforcing 普查。
+#   * shebang /vendor/bin/sh + toybox（等待循环里的 sleep / cat）—— 同上面七个脚本域。
+#   * 执行 /vendor/bin/iw（iw_vendor）：核心策略没给它标签（只标了 /system/bin/iw，
+#     private/file_contexts:291）⇒ 是 vendor_file，在本域里直接执行（不转域）。
+#   * iw 走 nl80211（generic netlink）发 NEW_INTERFACE，内核要 CAP_NET_ADMIN（rc 里 capabilities NET_ADMIN）。
+#   * iw 解析 "dev wlan0" 用 if_nametoindex：bionic 开一个 AF_INET/SOCK_DGRAM 套接字做 ioctl SIOCGIFINDEX
+#     （bionic/libc/bionic/net_if.cpp:66-69；宏在 system/sepolicy/public/ioctl_defines:1892）。
+#   * 读 /sys/class/net/wlan{0,1}（符号链接指到 pcie 那支的 net/ 目录，genfs_contexts 已标 sysfs_net）。
+type gaokun3_wlanap, domain;
+type gaokun3_wlanap_exec, exec_type, vendor_file_type, file_type;
+init_daemon_domain(gaokun3_wlanap)
+allow gaokun3_wlanap vendor_shell_exec:file rx_file_perms;
+allow gaokun3_wlanap vendor_toolbox_exec:file rx_file_perms;
+allow gaokun3_wlanap vendor_file:file rx_file_perms;
+allow gaokun3_wlanap self:global_capability_class_set net_admin;
+allow gaokun3_wlanap self:netlink_generic_socket create_socket_perms_no_ioctl;
+allow gaokun3_wlanap self:udp_socket { create ioctl };
+allowxperm gaokun3_wlanap self:udp_socket ioctl SIOCGIFINDEX;
+r_dir_file(gaokun3_wlanap, sysfs_net)

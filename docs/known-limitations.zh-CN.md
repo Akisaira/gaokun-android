@@ -307,7 +307,10 @@
 
 ### 打开 Wi-Fi 热点时，平板自己会断开 Wi-Fi
 <!-- NET-2（批 2）。v0.7.1 发版说明里"芯片只能二选一"的说法不准确：iw 显示驱动支持 STA+AP，是软件配置没开。
-     发版说明已加勘误（docs/relnotes/v0.7.1-alpha.md 的 Wi-Fi 一节）。 -->
+     发版说明已加勘误（docs/relnotes/v0.7.1-alpha.md 的 Wi-Fi 一节）。
+     2026-10-05 源码核实：ath11k 给 WCN6855 hw2.1 报的接口组合里 STA 与 AP 同组（ath11k mac.c:10327-10356、
+     core.c:525-529/:572 @7.2.9）。修法已写（BoardConfig 的 WIFI_HAL_INTERFACE_COMBINATIONS + gaokun3-wlan-ap.sh 预建 wlan1），
+     未编译、未上机；哪一版过了"热点与 Wi-Fi 同时开"的验收就删掉这一条。 -->
 * **现象**：打开热点后，平板自己的 Wi-Fi 连接会断开。机器没有基带，所以热点没有网络可分享。
 * **原因**：目前的软件配置不支持同时开 Wi-Fi 和热点，不是芯片的限制。
 * **替代办法**：暂时没有。请让别的设备直接连路由器。

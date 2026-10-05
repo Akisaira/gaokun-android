@@ -265,6 +265,23 @@ BOARD_WPA_SUPPLICANT_DRIVER := NL80211
 BOARD_WLAN_DEVICE := emulator
 BOARD_HOSTAPD_DRIVER := NL80211
 
+# v1.0 NET-2：STA+AP 并发（开热点不再断 Wi-Fi，热点能共享 Wi-Fi 的上行）。
+#   不设这个变量时 Wi-Fi HAL 用"单接口、双模式"的老默认：STA 模式（STA + P2P）与 AP 模式二选一，
+#   开热点要先拆掉 STA（hardware/interfaces/wifi/aidl/default/wifi_feature_flags.cpp:92-106）。
+#   这里写的正是 WIFI_HIDL_FEATURE_DUAL_INTERFACE 展开出来的两组（同文件 :86-89）：
+#     (1 STA + 1 AP) 或 (1 STA + 1 P2P) —— P2P 那组与老默认相同，不改 P2P 的现状。
+#   变量名与格式：build/make/core/board_config_wifi.mk:60-61 → soong 变量 wifi.hal_interface_combinations
+#     → hardware/interfaces/wifi/aidl/default/Android.bp:61-62 的 -DWIFI_HAL_INTERFACE_COMBINATIONS=%s；
+#     写法照树里现成的 device/google/cuttlefish/shared/BoardConfig.mk:332（逗号在变量展开里，不会被 $(call) 拆开）。
+#   驱动侧：ath11k 给 WCN6855 hw2.1 报的接口组合里 STA 与 AP 在同一组（drivers/net/wireless/ath/ath11k/
+#     mac.c:10327-10356 @7.2.9：组合 0 = 单信道、≤16 个接口；support_dual_stations 时还有组合 1 = 双信道、≤4 个；
+#     core.c:525-529 interface_modes 含 AP、:572 support_dual_stations = true）⇒ 芯片 / 驱动本来就支持 STA+AP。
+#   ⚠️ 光有这一行不够：libwifi-hal-emu 没实现 wifi_virtual_interface_create，HAL 要求第二个接口（wlan1）
+#     事先存在 —— 见 bin/gaokun3-wlan-ap.sh 与 init.gaokun3.rc 里的 gaokun3_wlanap。
+#   上机前可以先不重编验证：setprop persist.vendor.debug.wifi.hal.preset_interface_combination_idx 1
+#     （wifi_feature_flags.cpp:142-158，"STA + AP Concurrency"）再重启 Wi-Fi HAL —— 前提同样是 wlan1 已在。
+WIFI_HAL_INTERFACE_COMBINATIONS := {{{STA}, 1}, {{AP}, 1}}, {{{STA}, 1}, {{P2P}, 1}}
+
 # 固件 blob（qcadsp/qccdsp/qcslpi/zap shader 的 .mbn）本身就是 ELF 格式，
 # 而 AOSP 会拒绝 PRODUCT_COPY_FILES 里目标路径含 bin/lib/lib64 的 ELF 文件。
 # ramdisk 副本必须落在 /lib/firmware（内核的固件回落搜索路径），只能开这个

@@ -314,7 +314,11 @@ These are bugs, not trade-offs, and they will be removed from this list once fix
   weak source, watch the percentage rather than the charging icon, and save your work before it runs low.
 
 ### Turning on the Wi-Fi hotspot disconnects the tablet from Wi-Fi
-<!-- NET-2 (batch 2). The v0.7.1 notes blamed the chip; iw shows the driver supports STA+AP, the software config does not. -->
+<!-- NET-2 (batch 2). The v0.7.1 notes blamed the chip; iw shows the driver supports STA+AP, the software config does not.
+     2026-10-05 confirmed in source: ath11k advertises STA and AP in one interface combination for WCN6855 hw2.1
+     (ath11k mac.c:10327-10356, core.c:525-529/:572 @7.2.9). Fix written (BoardConfig WIFI_HAL_INTERFACE_COMBINATIONS +
+     wlan1 pre-created by gaokun3-wlan-ap.sh), not built or tested yet. Delete this entry once a release passes the
+     "hotspot + Wi-Fi at the same time" check. -->
 * **What you see**: when you turn on the hotspot, the tablet drops its own Wi-Fi connection. With no modem, the hotspot
   then has no connection to share.
 * **Why**: the current software configuration cannot run Wi-Fi and the hotspot at the same time. This is not a limit

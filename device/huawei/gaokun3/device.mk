@@ -353,12 +353,20 @@ PRODUCT_PACKAGES += \
 #   VINTF 片段走 `required: android.hardware.wifi.hostapd.xml`（vintf_fragments 那行在上游是注释掉的）。
 #   BOARD_HOSTAPD_DRIVER := NL80211 早在 BoardConfig.mk:266；SELinux 域 hal_wifi_hostapd_default
 #   由 system/sepolicy/vendor/hal_wifi_hostapd_default.te + vendor/file_contexts:139 自带。
-#   Wi-Fi HAL 没设 WIFI_HAL_INTERFACE_COMBINATIONS ⇒ 默认组合里 AP 是单独一个芯片模式
-#   （hardware/interfaces/wifi/aidl/default/wifi_feature_flags.cpp:97-104）：开热点时 STA 会断开。
-#   ⬜ 未上机：AP 接口能不能经 libwifi-hal-emu 建出来要等下次镜像实测（ath11k 本身支持 AP，见 issue 里的 iw 输出）。
+#   ✅ v1.0 NET-2（2026-10-05）：BoardConfig.mk 设了 WIFI_HAL_INTERFACE_COMBINATIONS（STA+AP），
+#   热点接口 wlan1 由下面的 gaokun3-wlan-ap.sh 开机预建（libwifi-hal-emu 没有建接口的实现）。⬜ 未编译、未上机。
 PRODUCT_PACKAGES += \
     hostapd \
     hostapd_cli
+
+# NET-2：预建 wlan1 要用 iw。模块 iw_vendor（external/iw/Android.bp:116-121，vendor: true，stem "iw"）
+#   ⇒ /vendor/bin/iw；系统那份 iw（:110）是 /system/bin/iw，vendor 域不能执行。
+#   /vendor/bin/iw 核心策略没给标签（只有 /system/bin/iw = iw_exec，system/sepolicy/private/file_contexts:291）
+#   ⇒ 落 vendor_file，gaokun3_wlanap 域按 vendor_file 执行（sepolicy/gaokun3_scripts.te）。
+PRODUCT_PACKAGES += \
+    iw_vendor
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/bin/gaokun3-wlan-ap.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-wlan-ap.sh
 
 # ★ Wi-Fi 的 TCP 缓冲区上限调大（rro/Gaokun3WifiOverlay，#119）：国内到海外 CDN 的 RTT
 #   约 300 ms，AOSP 默认 2 MB 的接收上限把单连接卡在 ~3.5 MB/s；8 MB 实测 ~9.5 MB/s。
