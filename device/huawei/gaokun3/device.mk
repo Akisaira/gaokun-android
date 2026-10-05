@@ -800,12 +800,23 @@ PRODUCT_COPY_FILES += \
 #   两样（gk3boot.efi + version）必须同时在，缺一样就都不装（只有二进制、没有版本串的入口没法部署）。
 #   构建机上由 sync-device-tree.sh 第 2d / 3c 步同步并断言；release.sh 断言 vendor 里那份与 prebuilt 逐字节相同。
 #   ⚠️ .efi 是 PE 不是 ELF，不撞 BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES 那条检查。
+# ★ 执行端 initramfs fastboot.img（gzip cpio，scripts/gk3boot/build-fastboot-img.sh 产出；设计稿 §4.1、§4.3.5）：
+#   在 gk3boot.efi + version 都在的前提下，有就一起装进 /vendor/boot/gk3boot/fastboot.img；没有照样能编，只是没有
+#   执行端（gk3boot 找不到执行端会照常启动 Android，HAL / postinstall 也不部署 gk3boot-tools.conf）。
+#   它与 gk3boot.efi 同一个 version、部署到同一个 EFI/gk3boot/<version>/ —— 换了任一个都要换版本串。
+#   PRODUCT_COPY_FILES 只拦 apk、VINTF xml 与 ELF（refs/aosp-build/core/Makefile:103-139），gzip 数据都不是。SELinux：/vendor/boot/ 没有专门的 file_contexts 行，整棵 /vendor
+#   落到 vendor_file（refs/lineage-sepolicy/private/file_contexts:423），新文件不用补规则。
 GAOKUN3_GK3BOOT_EFI := $(LOCAL_PATH)/prebuilt-gk3boot/gk3boot.efi
 GAOKUN3_GK3BOOT_VER := $(LOCAL_PATH)/prebuilt-gk3boot/version
+GAOKUN3_GK3BOOT_FB  := $(LOCAL_PATH)/prebuilt-gk3boot/fastboot.img
 ifneq ($(and $(wildcard $(GAOKUN3_GK3BOOT_EFI)),$(wildcard $(GAOKUN3_GK3BOOT_VER))),)
 PRODUCT_COPY_FILES += \
     $(GAOKUN3_GK3BOOT_EFI):$(TARGET_COPY_OUT_VENDOR)/boot/gk3boot/gk3boot.efi \
     $(GAOKUN3_GK3BOOT_VER):$(TARGET_COPY_OUT_VENDOR)/boot/gk3boot/version
+ifneq ($(wildcard $(GAOKUN3_GK3BOOT_FB)),)
+PRODUCT_COPY_FILES += \
+    $(GAOKUN3_GK3BOOT_FB):$(TARGET_COPY_OUT_VENDOR)/boot/gk3boot/fastboot.img
+endif
 endif
 
 # ═══════════ 硬件视频编解码：Android 这一半（external/v4l2_codec2）═══════════

@@ -99,12 +99,14 @@ CR=$($SSH "vahiru@$HOST" 'cd ~/crdroid/device/huawei/gaokun3/gk3core && find . -
 [ "$CL" = "$CR" ] || { echo "本机："; echo "$CL"; echo "构建机："; echo "$CR"; die "构建机的 gk3core/ ≠ tools/gk3boot/core/"; }
 ok "gk3core/ 与 tools/gk3boot/core/ 逐字节一致（$(echo "$CL" | wc -l | tr -d ' ') 个文件）"
 
-echo "═══ 2d. prebuilt-gk3boot（统一启动入口 gk3boot.efi + version）单独同步，【不带 --delete】═══"
+echo "═══ 2d. prebuilt-gk3boot（统一启动入口 gk3boot.efi + version [+ 执行端 fastboot.img]）单独同步，【不带 --delete】═══"
 # ★ 2026-10-05（S9）：与 prebuilt-boot 同一个规矩 —— 二进制不入库，本机有就带过去，没有就保留构建机上的那份；
 #   device.mk 对它用 wildcard（缺了构建照样通过、ROM 里只是没有入口 = 又一种"静默消失"）⇒ 第 3c 步断言。
+#   执行端 fastboot.img 在同一个目录里，整目录 rsync 一并带过去（不带 --delete：本机这次没放它时，构建机上
+#   旧的那份会留着 —— 第 3c 步把它的 sha256 打出来，与 version 对不上的旧执行端要人看一眼）。
 if [ -f "$SRC/prebuilt-gk3boot/gk3boot.efi" ]; then
     rsync -a --exclude '._*' --exclude '.DS_Store' -e "$SSH" "$SRC/prebuilt-gk3boot/" "$DST/prebuilt-gk3boot/"
-    ok "prebuilt-gk3boot 已同步（版本 $(cat "$SRC/prebuilt-gk3boot/version" 2>/dev/null || echo '<缺 version>')，sha256 $(shasum -a 256 "$SRC/prebuilt-gk3boot/gk3boot.efi" | cut -c1-16)）"
+    ok "prebuilt-gk3boot 已同步（版本 $(cat "$SRC/prebuilt-gk3boot/version" 2>/dev/null || echo '<缺 version>')，sha256 $(shasum -a 256 "$SRC/prebuilt-gk3boot/gk3boot.efi" | cut -c1-16)，执行端 $( [ -f "$SRC/prebuilt-gk3boot/fastboot.img" ] && shasum -a 256 "$SRC/prebuilt-gk3boot/fastboot.img" | cut -c1-16 || echo '本机没有')）"
 else
     echo "· 本机没有 prebuilt-gk3boot/gk3boot.efi，保留构建机上的那份（若有）"
 fi
@@ -158,6 +160,21 @@ else
     case "$GV" in *.dirty*) die "prebuilt-gk3boot/version 带 .dirty（${GV}）—— 那一版对不上任何提交，别发" ;; esac
     [ "$GE" = "gk3boot-$GV " ] || die "prebuilt-gk3boot：version='$GV'，二进制里嵌的是 '${GE% }' —— 换了二进制没换版本串？"
     ok "gk3boot.efi 在：版本 ${GV}（与二进制一致），sha256 $GS"
+    # 执行端 fastboot.img（可选）：在就必须是 gzip、≤ 4 MiB（设计稿 §4.1 的预算）、gzip -t 通过；不在只打一行。
+    #   它没有自己的版本串 —— 与 gk3boot.efi 共用 version，换了它也要换 version（prebuilt-gk3boot/README.md）。
+    FB=$($SSH "vahiru@$HOST" 'cd ~/crdroid/device/huawei/gaokun3/prebuilt-gk3boot 2>/dev/null && [ -f fastboot.img ] || exit 0
+      m=$(head -c 2 fastboot.img | od -An -tx1 | tr -d " \n")
+      t=bad; gzip -t fastboot.img 2>/dev/null && t=ok
+      echo "$(stat -c %s fastboot.img)|$m|$t|$(sha256sum fastboot.img | cut -d" " -f1)"' || true)
+    if [ -z "$FB" ]; then
+        echo "· prebuilt-gk3boot 里没有 fastboot.img —— 这一版不带执行端（gk3boot 照常启动 Android，菜单里没有 fastboot 项）"
+    else
+        FBS=${FB%%|*}; rest=${FB#*|}; FBM=${rest%%|*}; rest=${rest#*|}; FBT=${rest%%|*}; FBH=${rest#*|}
+        [ "$FBM" = 1f8b ] || die "prebuilt-gk3boot/fastboot.img 不是 gzip（开头 $FBM）—— 放错文件了？见 prebuilt-gk3boot/README.md"
+        [ "$FBS" -le 4194304 ] || die "prebuilt-gk3boot/fastboot.img ${FBS} 字节，超过 4 MiB 预算（ESP 上要容得下三版，设计稿 §4.1）"
+        [ "$FBT" = ok ] || die "prebuilt-gk3boot/fastboot.img 没过 gzip -t —— 截断了？（传输完要核字节数与 sha256）"
+        ok "fastboot.img 在：${FBS} 字节，gzip -t 通过，sha256 $FBH（与 gk3boot.efi 同属版本 ${GV}）"
+    fi
 fi
 
 echo "═══ 4. 受版本控制的文件逐一 md5 ═══"

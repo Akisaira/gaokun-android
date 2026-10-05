@@ -404,6 +404,18 @@ if [ -f "$GKP/gk3boot.efi" ]; then
             || die "vendor 里的 gk3boot/$f 与 prebuilt-gk3boot/$f 不同 —— out/ 不是用这份入口编的"
     done
     ok "vendor 里的统一启动入口 = prebuilt-gk3boot（版本 $(head -1 "$GKV/version")，sha256 $(sha256sum "$GKV/gk3boot.efi" | cut -c1-16)）"
+    # 执行端 fastboot.img（可选，与 gk3boot.efi 同一个 version）：同一个规矩 —— prebuilt 有就必须逐字节进了 vendor；
+    #   prebuilt 没有而 vendor 有，说明 out/ 里留着更早那次构建的执行端（PRODUCT_COPY_FILES 删了一项不会删 out/ 里的旧文件）。
+    if [ -f "$GKP/fastboot.img" ]; then
+        [ -f "$GKV/fastboot.img" ] || die "prebuilt-gk3boot/fastboot.img 在，而 \$OUT/vendor/boot/gk3boot/fastboot.img 不在 —— vendor 镜像没带上执行端（device.mk 的 wildcard？）"
+        [ "$(sha256sum "$GKP/fastboot.img" | cut -d' ' -f1)" = "$(sha256sum "$GKV/fastboot.img" | cut -d' ' -f1)" ] \
+            || die "vendor 里的 gk3boot/fastboot.img 与 prebuilt-gk3boot/fastboot.img 不同 —— out/ 不是用这份执行端编的"
+        ok "vendor 里的执行端 fastboot.img = prebuilt-gk3boot（$(stat -c %s "$GKV/fastboot.img") 字节，sha256 $(sha256sum "$GKV/fastboot.img" | cut -c1-16)）"
+    elif [ -f "$GKV/fastboot.img" ]; then
+        echo "· prebuilt-gk3boot 里没有 fastboot.img，但 vendor 里有一份 —— 来自更早的构建？核对后再发（它会以版本 $(head -1 "$GKV/version") 的执行端身份部署）"
+    else
+        echo "· 这一版 vendor 不带执行端 fastboot.img（入口照常；菜单里没有 fastboot 项）"
+    fi
 elif [ -f "$GKV/gk3boot.efi" ]; then
     echo "· prebuilt-gk3boot 不在，但 vendor 里有 gk3boot $(head -1 "$GKV/version" 2>/dev/null) —— 来自更早的构建？核对后再发"
 else
