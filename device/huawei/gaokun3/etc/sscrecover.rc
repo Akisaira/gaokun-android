@@ -1,0 +1,35 @@
+# SLPI 崩溃 / 自愈之后的传感器恢复（v1.0 DISP-14 / HW-1，TODO B21）。做什么、为什么见 bin/gaokun3-ssc-recover.sh 顶部。
+#
+# ⚠️ 服务名 vendor.hexagonrpcd-sdsp 来自上游 external/hexagonrpc/data/hexagonrpcd-sdsp.rc:1（class core，非 oneshot ⇒
+#    退出后 init 自动重启并置 init.svc.…=restarting，system/core/init/service.cpp:412）；
+#    vendor.sensors-gaokun3 来自 sensors-hal/sensors-gaokun3.rc。
+# ⚠️ 这是 vendor rc：属性触发器要 vendor_init 读得到那个属性，否则整个动作被丢（sepolicy/vendor_init.te 顶部）。
+#    init.svc.vendor.* 是 vendor_default_prop（system/sepolicy/private/property_contexts:273），非 coredomain 都能读
+#    （private/domain.te:508）；vendor.gaokun3.* 是 vendor_gaokun3_prop（sepolicy/property_contexts:31），
+#    vendor_init 有 set_prop（vendor_gaokun3_props.te）⇒ 也能读；sys.boot_completed 同 boot HAL 的 rc。
+
+service gaokun3_sscrecover /vendor/bin/gaokun3-ssc-recover.sh
+    user root
+    group root system
+    oneshot
+    disabled
+
+# 触发 1：hexagonrpcd 意外退出（SLPI 崩溃 / 自愈时 fastrpc 会话断开就会这样，#121 §3）。
+#   只在开机完成之后：开机期间的事由 HAL 的看门狗兜（触发 2），免得和正常的冷启动沉降抢。
+on property:sys.boot_completed=1 && property:init.svc.vendor.hexagonrpcd-sdsp=restarting
+    start gaokun3_sscrecover
+
+# 触发 2：传感器 HAL 的看门狗请求（sensors-hal/SscHub.cpp RequestRecovery，值每次都不同）。
+on property:vendor.gaokun3.sscrecover.req=*
+    start gaokun3_sscrecover
+
+# 脚本请求的三个步骤（停 / 起服务由 init 做，脚本的域不需要 ctl.* 写权限）
+on property:vendor.gaokun3.sscrecover.step=stop
+    stop vendor.sensors-gaokun3
+    stop vendor.hexagonrpcd-sdsp
+
+on property:vendor.gaokun3.sscrecover.step=start-rpc
+    start vendor.hexagonrpcd-sdsp
+
+on property:vendor.gaokun3.sscrecover.step=start-hal
+    start vendor.sensors-gaokun3

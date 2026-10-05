@@ -769,6 +769,12 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     android.hardware.sensors-service.gaokun3
 
+# SLPI 崩溃 / 自愈之后自动收拾传感器链（v1.0 DISP-14 / HW-1，TODO B21）：hexagonrpcd 意外退出或 HAL 看门狗
+# 请求时，停 HAL → 重启 hexagonrpcd → 起 HAL（#121 §3 手工实测有效的那一套）。脚本顶部有完整说明。⬜ 未编译、未上机。
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/bin/gaokun3-ssc-recover.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-ssc-recover.sh \
+    $(LOCAL_PATH)/etc/sscrecover.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/sscrecover.rc
+
 # VFS 根 → /vendor/etc/hexagonrpcd-root/（路径由上游 rc 的 -R 决定，别改名）
 # ★ 空 registry 是整套的关键：DSP 找不到覆盖值就用默认值（=全部传感器启用）。
 #   它 0 字节且专有目录被 gitignore，所以单独放在 etc/ 受版本控制，

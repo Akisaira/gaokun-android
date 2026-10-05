@@ -64,10 +64,25 @@ SH3001 Accelerometer: last 50 events
 读线程在**同一个 client** 上 `EnableContinuous` / `Disable` 对应那一路，**不重建会话**
 （上一节的教训）。两路都停用后：读掉在途上报（0.5 秒）、缓存作废（再次使能、新数据到之前
 报 `UNRELIABLE`）、在条件变量上睡到下次 activate。
-★ **空转看门狗（15 秒重新使能 / 60 秒重建会话）只在流该开着时计时** —— 否则停用后它会
-自己把流打开、再去重建会话，正好制造 churn。
-代价：会话若在停用期间坏了（例如 SLPI 自愈，B21），要等下次 activate 后看门狗才发现。
+★ **空转看门狗（15 秒重新使能 / 60 秒请求收拾）只在流该开着时计时** —— 否则停用后它会
+自己把流打开、再去请求收拾，正好制造 churn。
 ⚠️ "同一个 client 上反复 Disable/Enable" 此前**从没实测过**，上机要专门验。
+
+## SLPI 崩溃 / 自愈之后（v1.0 DISP-14 / HW-1，TODO B21，⬜ 待上机）
+
+SLPI 自愈后 SEE 要 hexagonrpcd **在 SLPI 起来之后再重启一次**才注册传感器（#118 §4 / #121 §3），
+进程里怎么重建会话都救不回来 —— 而重建本身就是上面那种 churn。所以：
+
+* **HAL 不再自己重建会话**。原来的两处（"等了 60 秒仍没有任何传感器注册，重建会话"、
+  "60 秒没有读数，重建 SSC 会话"）都改成 `RequestRecovery()`：设 `vendor.gaokun3.sscrecover.req`，
+  自己留在同一个 client 上接着等（找传感器放慢到 10 秒一次）。
+* **收拾由 init 做**：`etc/sscrecover.rc` → `bin/gaokun3-ssc-recover.sh`，按 #121 §3 手工实测有效的顺序
+  停本 HAL → 停 hexagonrpcd（`pidof` 清残留，**不用 `pkill -f`**）→ 起 hexagonrpcd → 起本 HAL。
+  触发有两条：HAL 的请求；以及 **hexagonrpcd 意外退出**（`init.svc.vendor.hexagonrpcd-sdsp=restarting`，
+  开机完成之后）—— 后者不依赖 HAL，息屏没有订阅者时 SLPI 崩了也会收拾。
+  每次开机最多 5 次、两次至少隔 120 秒；做 SLPI 实验时 `setprop persist.vendor.gaokun3.sscrecover 0` 关掉。
+* **不报旧值**：缓存样本 2 秒没刷新就当作没有，报 `UNRELIABLE`（原来流断了以后一直报断流前的最后一个值）。
+* 绝不碰 `ambient_light`（#37 / #121）——收拾脚本不开任何 SSC 会话。
 
 ## 本机能提供什么
 

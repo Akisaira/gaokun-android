@@ -13,6 +13,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -48,6 +49,12 @@ class SscHub {
     SscHub() = default;
     void EnsureStarted();
     void ReaderLoop();
+    // 请 init 把整条传感器链收拾一遍（etc/sscrecover.rc → bin/gaokun3-ssc-recover.sh：
+    // 停本 HAL → 重启 hexagonrpcd → 起本 HAL）。v1.0 DISP-14 / HW-1（B21）：会话坏了
+    // 不再在进程里重建（那正是 README 里警告的 churn），交给外面按 #121 §3 的办法重来。
+    void RequestRecovery(const char* why);
+    // 缓存里的样本超过这么久没刷新就当作没有（B21：SLPI 崩了以后 HAL 不能一直报旧值）
+    static Sample Fresh(const Sample& s, std::chrono::steady_clock::time_point at);
 
     std::once_flag started_;
     std::thread thread_;
@@ -55,10 +62,12 @@ class SscHub {
 
     std::mutex m_;
     std::condition_variable cv_;   // want_* 变了就叫醒空闲中的读线程
-    bool want_accel_ = false;      // 以下四个都由 m_ 保护
+    bool want_accel_ = false;      // 以下六个都由 m_ 保护
     bool want_gyro_ = false;
     Sample accel_;
     Sample gyro_;
+    std::chrono::steady_clock::time_point accel_at_;   // 上一次写进 accel_ / gyro_ 的时刻
+    std::chrono::steady_clock::time_point gyro_at_;
 };
 
 }  // namespace gaokun3

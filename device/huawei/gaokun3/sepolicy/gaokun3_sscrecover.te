@@ -1,0 +1,36 @@
+# gaokun3-ssc-recover.sh：SLPI 崩溃 / 自愈之后把传感器链收拾回来（v1.0 DISP-14 / HW-1，TODO B21）。
+# 脚本与触发见 bin/gaokun3-ssc-recover.sh、etc/sscrecover.rc。
+# ⚠️ 先写后验：按脚本逐行推出来的，⬜ 未编译、未上机、没经过 enforcing 普查。
+type gaokun3_sscrecover, domain;
+type gaokun3_sscrecover_exec, exec_type, vendor_file_type, file_type;
+init_daemon_domain(gaokun3_sscrecover)
+
+# shebang /vendor/bin/sh + toybox（cat / sleep / getprop / setprop / pidof / kill / log），同 gaokun3_scripts.te 的各脚本域
+allow gaokun3_sscrecover vendor_shell_exec:file rx_file_perms;
+allow gaokun3_sscrecover vendor_toolbox_exec:file rx_file_perms;
+
+# /sys/class/remoteproc/remoteproc*/{name,state}：实机标签 sysfs（gaokun3_scripts.te 里 rprockick 那条的注释）。只读。
+allow gaokun3_sscrecover sysfs:dir r_dir_perms;
+allow gaokun3_sscrecover sysfs:file r_file_perms;
+
+# /proc/uptime（限频用）：proc_uptime（system/sepolicy/private/genfs_contexts:111）
+allow gaokun3_sscrecover proc_uptime:file r_file_perms;
+
+# 读写 vendor.gaokun3.sscrecover.*、读 persist.vendor.gaokun3.sscrecover（vendor_gaokun3_prop，sepolicy/property_contexts:26/:31）。
+# 本域不是 coredomain，private/property.te 里拦 coredomain 写 vendor 属性的那条 neverallow 管不到它。
+# init.svc.vendor.*（vendor_default_prop）的读权限核心策略已给非 coredomain（private/domain.te:508），不用写。
+set_prop(gaokun3_sscrecover, vendor_gaokun3_prop)
+
+# 清残留的 hexagonrpcd：pidof 读 /proc/<pid>/{stat,cmdline,exe}，kill 发 SIGTERM / SIGKILL。
+# root 给 uid system 的进程发信号要 CAP_KILL。
+r_dir_file(gaokun3_sscrecover, hexagonrpcd)
+allow gaokun3_sscrecover hexagonrpcd:process { signal sigkill };
+allow gaokun3_sscrecover self:global_capability_class_set kill;
+# pidof 会把 /proc 下每个进程都看一眼；别的进程看不到也无所谓，不让它刷 denial（dontaudit 不受 neverallow 约束）
+dontaudit gaokun3_sscrecover domain:dir { getattr search };
+dontaudit gaokun3_sscrecover domain:file { getattr open read };
+dontaudit gaokun3_sscrecover domain:lnk_file { getattr read };
+
+# 传感器 HAL 的看门狗设 vendor.gaokun3.sscrecover.req（sensors-hal/SscHub.cpp RequestRecovery）。
+# hal_sensors_default 不是 coredomain，同上那条 neverallow 不触发。
+set_prop(hal_sensors_default, vendor_gaokun3_prop)
