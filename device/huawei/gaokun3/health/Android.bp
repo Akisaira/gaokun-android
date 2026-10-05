@@ -1,0 +1,37 @@
+//
+// EC 充电上限：vendor.lineage.health 的 IChargingControl（v1.0 PWR-14 / LIVE-9）。
+// 为什么自己写而不是用 hardware/lineage/interfaces/health/aidl/default（soong_config 配路径即可），
+// 见 ChargingControl.cpp 顶部：EC 还要一个使能位与一个延时，通用实现只会写两个阈值。
+//
+// ★ 与 lineage 自带的 vendor.lineage.health-service.default 不冲突：那个模块本树从没装过
+//   （构建机 out/target/product/gaokun3/vendor/bin/hw/ 里只有 android.hardware.health-service.example），
+//   而它会同时注册 IFastCharge，这里不需要 —— 所以不用 overrides。
+// ⬜ 未编译。
+//
+cc_binary {
+    name: "vendor.lineage.health-service.gaokun3",
+    relative_install_path: "hw",
+    vendor: true,
+
+    srcs: [
+        "ChargingControl.cpp",
+        "service.cpp",
+    ],
+
+    init_rc: ["vendor.lineage.health-service.gaokun3.rc"],
+    vintf_fragment_modules: ["vendor.lineage.health-service.gaokun3.xml"],
+
+    // 依赖照 lineage 的 vendor.lineage.health-service.default（hardware/lineage/interfaces/health/aidl/default/Android.bp:114-118）。
+    shared_libs: [
+        "libbase",
+        "libbinder_ndk",
+        "vendor.lineage.health-V2-ndk",
+    ],
+    cflags: ["-Wall", "-Werror"],
+}
+
+vintf_fragment {
+    name: "vendor.lineage.health-service.gaokun3.xml",
+    src: "vendor.lineage.health-service.gaokun3.xml",
+    vendor: true,
+}

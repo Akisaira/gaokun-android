@@ -1,0 +1,17 @@
+# EC 充电上限（v1.0 PWR-14，health/ChargingControl.cpp）：vendor.lineage.health-service.gaokun3 跑在
+# LineageOS 的 hal_lineage_health_default 域（类型与 HAL 规则在构建树
+# device/lineage/sepolicy/common/vendor/hal_lineage_health_default.te:1-7，本仓 file_contexts 给我们的二进制打它的 exec 标签）。
+#
+# 它要读写 /sys/class/power_supply/gaokun-ec-battery/ 下的四个节点：
+#   charge_control_start_threshold / charge_control_end_threshold / battery_adaptive_charge / smart_charge_delay。
+# 真实 inode 在 .../huawei_gaokun_ec.psy.0/power_supply/... 下，已被 sepolicy/genfs_contexts:17 标成 sysfs_batteryinfo。
+# 路径上的 /sys/class/power_supply（sysfs）与 gaokun-ec-battery 这个链接：核心策略已给所有域
+#   sysfs:lnk_file { getattr read } 与 sysfs:dir search（refs/lineage-sepolicy/private/domain.te:197、:255）。
+#
+# neverallow 核对：对 sysfs_batteryinfo 的限制只针对 coredomain 的 open/read（private/domain.te:1555-1573，full_treble_only），
+# 本域是 vendor 域（不是 coredomain）；private/domain.te 里对 sysfs_type 的写限制只管 dir 的 add_name/create 等
+# （:1508-1511）与 sysfs_usermodehelper（:691），都不涉及这里的 file 写。
+# lineage 自己的 qcom 版只给了 sysfs_battery_supply / sysfs_usb_supply（device/lineage/sepolicy/qcom/vendor/
+# hal_lineage_health_default.te:1-2），那两个类型是 qcom 树里的，本机不用。⬜ 未编译。
+allow hal_lineage_health_default sysfs_batteryinfo:dir search;
+allow hal_lineage_health_default sysfs_batteryinfo:file rw_file_perms;

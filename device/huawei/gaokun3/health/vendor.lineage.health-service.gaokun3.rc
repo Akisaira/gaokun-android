@@ -1,0 +1,19 @@
+# EC 充电上限（v1.0 PWR-14）：vendor.lineage.health 的 IChargingControl。说明见 ChargingControl.cpp 顶部。
+# 跑 system:system（同 lineage 的 vendor.lineage.health-service.default.rc），不跑 root。
+service vendor.lineage_health-gaokun3 /vendor/bin/hw/vendor.lineage.health-service.gaokun3
+    class hal
+    user system
+    group system
+
+# 这四个节点是 power_supply / DEVICE_ATTR_RW 的 0644 root:root，system 写不了 ⇒ 交给 system。
+# ⚠️ 路径经过 /sys/class/power_supply/gaokun-ec-battery 这个符号链接：init 的 chown 是 lchown
+#    （crDroid system/core/init/builtins.cpp:1000），只是【最后一段】不跟随链接 —— 最后一段是普通文件，没问题；
+#    中间的链接照常解析（同 init.gaokun3.rc 里 /sys/class/backlight/ae96000.dsi.0/brightness 的写法）。
+# ★ SELinux：这些文件是 sysfs_batteryinfo（sepolicy/genfs_contexts 的 huawei_gaokun_ec.psy.0/power_supply 前缀），
+#   vendor_init 对 fs_type 文件有 open/read/setattr（refs/lineage-sepolicy/private/vendor_init.te:188-201）⇒ chown/chmod 现成。
+# EC 驱动是 =y（Android 不加载模块），on boot 时电池早就注册了；节点不在时 chown 静默跳过（ErrnoErrorIgnoreEnoent，:1001）。
+on boot
+    chown system system /sys/class/power_supply/gaokun-ec-battery/charge_control_start_threshold
+    chown system system /sys/class/power_supply/gaokun-ec-battery/charge_control_end_threshold
+    chown system system /sys/class/power_supply/gaokun-ec-battery/battery_adaptive_charge
+    chown system system /sys/class/power_supply/gaokun-ec-battery/smart_charge_delay

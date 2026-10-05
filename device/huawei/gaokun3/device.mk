@@ -927,6 +927,15 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     android.hardware.light-service.gaokun3
 
+# ═══════════ EC 充电上限（v1.0 PWR-14 / LIVE-9）═══════════
+#
+# vendor.lineage.health 的 IChargingControl（只报 LIMIT 模式）。用户入口是 LineageOS 现成的
+# 「设置 → 电池 → 充电控制」（LineageParts；Settings 的 power_usage_summary.xml 里 requiresService="lineagehealth"，
+# 框架那边的 org.lineageos.health 特性 xml 由 vendor/lineage/config/lineage_sdk_common.mk:5 无条件装）。
+# 为什么自己写、EC 的四个节点、写 EC 的时机：health/ChargingControl.cpp 顶部。⬜ 未编译、未上机；上机前要用户同意（D17）。
+PRODUCT_PACKAGES += \
+    vendor.lineage.health-service.gaokun3
+
 # ═══════════ 磁吸键盘开关 ═══════════
 #
 # 后端：属性 persist.sys.gaokun3.keyboard → init 触发器 → 脚本写内核的

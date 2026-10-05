@@ -1,0 +1,10 @@
+<manifest version="1.0" type="device">
+    <!-- 版本 2 = vendor.lineage.health-V2-ndk（hardware/lineage/interfaces/health/aidl/Android.bp 的 frozen 版本 1、2）；
+         框架矩阵要求 1-2、optional（hardware/lineage/interfaces/compatibility_matrices/compatibility_matrix.lineage.xml:16-25，
+         装在 /product/etc/vintf/）。只声明 IChargingControl：IFastCharge 不实现。 -->
+    <hal format="aidl">
+        <name>vendor.lineage.health</name>
+        <version>2</version>
+        <fqname>IChargingControl/default</fqname>
+    </hal>
+</manifest>

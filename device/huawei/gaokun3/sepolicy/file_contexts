@@ -73,6 +73,11 @@
 # AOSP 的 hal_camera_default 域已放行 video_device / camera_device / dmabuf heap / gpu_device；
 # 本仓 hal_camera_default.te 补 libcamera 特有的几条（sysfs 枚举、闪光灯 LED、日志目录）。
 /vendor/bin/hw/android\.hardware\.camera\.provider-service\.gaokun3   u:object_r:hal_camera_default_exec:s0
+# EC 充电上限（v1.0 PWR-14，health/）—— 复用 LineageOS 的 hal_lineage_health_default 域：类型、hal_server_domain、
+# init_daemon_domain、servicemanager 的 binder_call 都在构建树 device/lineage/sepolicy/common/vendor/hal_lineage_health_default.te:1-7
+# （已编进本机 vendor_sepolicy.cil，构建机 out/ 里实查）；lineage 自己的条目只标它那个名字（common/vendor/file_contexts:10）。
+# 本仓只补 sysfs 那一条，见 sepolicy/hal_lineage_health_default.te。⬜ 未编译。
+/vendor/bin/hw/vendor\.lineage\.health-service\.gaokun3     u:object_r:hal_lineage_health_default_exec:s0
 
 # ── 我们自己的服务脚本：各给一个域 ───────────────────────────────────────
 #
