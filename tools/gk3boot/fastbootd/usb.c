@@ -70,6 +70,12 @@ struct desc_v1 {
     struct func_desc fs, hs;
 } __attribute__((packed));
 
+/* 与上游 usb_client.cpp 的结构体逐字节同形：FS/HS 接口 9 + 端点 7×2；SS 再加两个 6 字节 companion */
+_Static_assert(sizeof(struct func_desc) == 23, "func_desc");
+_Static_assert(sizeof(struct ss_func_desc) == 35, "ss_func_desc");
+_Static_assert(sizeof(struct desc_v2) == 12 + 12 + 23 + 23 + 35, "desc_v2");
+_Static_assert(sizeof(struct desc_v1) == 16 + 23 + 23, "desc_v1");
+
 #define STR_IFACE "fastbootd"
 static struct {
     struct usb_functionfs_strings_head header;

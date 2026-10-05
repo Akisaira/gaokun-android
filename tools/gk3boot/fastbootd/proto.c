@@ -159,6 +159,24 @@ static void do_download(fb_ctx *c, const char *arg)
     fb_okay(c, "%s", "");
 }
 
+void fb_cmd_lock(bool on)
+{
+    if (on)
+        pthread_mutex_lock(&cmd_lock);
+    else
+        pthread_mutex_unlock(&cmd_lock);
+}
+
+void fb_session_end(void)
+{
+    /* 会话结束就丢掉 download 缓冲：下一个主机进程的 flash 不能用上一个进程留下的数据 */
+    pthread_mutex_lock(&cmd_lock);
+    free(G.dl);
+    G.dl = NULL;
+    G.dl_len = 0;
+    pthread_mutex_unlock(&cmd_lock);
+}
+
 int fb_serve(fb_transport *t)
 {
     char cmd[FB_CMD_MAX + 1];

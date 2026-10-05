@@ -107,7 +107,7 @@ $(B)/test_fbd: test/fbd/test_fbd.c fastbootd/sparse.c fastbootd/lp.c $(CORE_SRC)
 	$(CC) $(FBD_FLAGS) -O1 -g $(SAN) -Itest -o $@ test/fbd/test_fbd.c fastbootd/sparse.c fastbootd/lp.c $(CORE_SRC)
 
 fbd-unit: $(B)/test_fbd
-	./$(B)/test_fbd
+	$(B)/test_fbd
 
 check: test upstream freestanding gk3-misc fastbootd fbd-unit
 

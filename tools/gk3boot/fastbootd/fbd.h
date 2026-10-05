@@ -73,7 +73,7 @@ typedef struct {
 
 typedef struct {
     bool ok;                        /* 目标盘唯一、六个名字各恰好一个 —— false 时拒绝一切写入 */
-    char err[200];                  /* !ok 时的原因 */
+    char err[400];                  /* !ok 时的原因 */
     char path[256];                 /* 整盘节点（或测试用的镜像文件） */
     char sysname[64];               /* /sys/block 下的名字（镜像文件时为空） */
     char model[64];
@@ -105,7 +105,7 @@ int fb_disk_recheck(fb_disk *d, char *why, size_t why_len);
 /* 白名单内读写。off/len 是分区内偏移；越界一律拒绝（返回 -1，errno=ERANGE）。 */
 int fb_part_read(fb_disk *d, int pi, uint64_t off, void *buf, size_t len);
 int fb_part_write(fb_disk *d, int pi, uint64_t off, const void *buf, size_t len);
-/* 落盘 + 丢掉页缓存，使随后的读真的从介质来（读回核对用）。 */
+/* 落盘 + 丢掉页缓存，使随后的读真的从介质来（读回核对用）。pi < 0 = 整块盘。 */
 int fb_disk_sync_drop(fb_disk *d, int pi, uint64_t off, uint64_t len);
 /* 尽力 discard（BLKDISCARD / 打洞）；不支持返回 1，失败 -1，成功 0。 */
 int fb_part_discard(fb_disk *d, int pi, uint64_t off, uint64_t len);
@@ -225,6 +225,10 @@ void fb_info_cb(void *c, const char *msg);   /* 给 esp.c 等的 INFO 回调 */
 
 /* 一个会话：读命令、执行、回应，直到断开。返回 1 = 要求重启（已回 OKAY）。 */
 int fb_serve(fb_transport *t);
+/* 命令锁：重启前也要拿着它，免得另一个传输的会话正写到一半就被 reboot() 打断 */
+void fb_cmd_lock(bool on);
+/* 会话结束：丢掉 download 缓冲 */
+void fb_session_end(void);
 /* 执行一条命令（proto.c 调） */
 void fb_dispatch(fb_ctx *c, char *cmd);
 /* getvar（vars.c） */

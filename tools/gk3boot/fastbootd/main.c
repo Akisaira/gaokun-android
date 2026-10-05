@@ -69,9 +69,13 @@ static void *serve_thread(void *arg)
         fb_log("%s: host connected", t->name);
         r = fb_serve(t);
         t->close_session(t);
+        fb_session_end();
         fb_log("%s: session closed", t->name);
-        if (r == 1)
+        if (r == 1) {
+            fb_cmd_lock(true);
             fb_do_reboot(fb_pending_reboot);
+            fb_cmd_lock(false);     /* 只有 --test-reboot 才会走到这里 */
+        }
     }
     return NULL;
 }

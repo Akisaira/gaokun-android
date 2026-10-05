@@ -270,6 +270,10 @@ __attribute__((unused)) static bool in_filter(const char *filter, const char *pa
 }
 
 /* 把一块候选盘（已打开）试一遍；符合就把它装进 d（只在 d->fd < 0 时装）。返回 1 = 符合。 */
+/* 拒绝原因：有合法 GPT 的盘的原因比"根本没有 GPT"的盘更有用（扫描时会看到虚拟机 / U 盘之类的无关盘），
+ * 所以前者一旦出现就不再被后者覆盖。 */
+static bool why_has_gpt;
+
 static int try_disk(fb_disk *d, const char *path, const char *sysname, const fb_disk_opts *o, char *why, size_t why_len,
                     int *n_match)
 {
@@ -282,17 +286,22 @@ static int try_disk(fb_disk *d, const char *path, const char *sysname, const fb_
 
     memset(&tmp, 0, sizeof(tmp));
     if (open_dev(path, &fd, &is_blk, &bs, &nb, false)) {
-        snprintf(why, why_len, "%s: cannot open (%s)", path, strerror(errno));
+        if (!why_has_gpt)
+            snprintf(why, why_len, "%s: cannot open (%s)", path, strerror(errno));
         return 0;
     }
     if (read_gpt(fd, bs, nb, &tmp, err, sizeof(err), &hc, &tc)) {
-        snprintf(why, why_len, "%s: %s", path, err);
+        bool has_gpt = strncmp(err, "no valid primary GPT", 20) != 0 && strncmp(err, "cannot read", 11) != 0;
+        if (has_gpt || !why_has_gpt)
+            snprintf(why, why_len, "%s: %s", path, err);
+        why_has_gpt |= has_gpt;
         close(fd);
         return 0;
     }
     close(fd);
     if (o->want_misc_uuid && o->want_misc_uuid[0] && strcasecmp(tmp.p[FB_P_MISC].partuuid, o->want_misc_uuid)) {
         snprintf(why, why_len, "%s: misc PARTUUID %s != gk3.disk", path, tmp.p[FB_P_MISC].partuuid);
+        why_has_gpt = true;
         return 0;
     }
     (*n_match)++;
@@ -317,6 +326,7 @@ void fb_disk_open(fb_disk *d, const fb_disk_opts *o)
     char why[300] = "";
     int n_match = 0;
 
+    why_has_gpt = false;
     memset(d, 0, sizeof(*d));
     d->fd = -1;
     if (o->disk_override) {
@@ -367,9 +377,9 @@ void fb_disk_open(fb_disk *d, const fb_disk_opts *o)
         closedir(dir);
 #endif
         if (n_match == 0) {
-            snprintf(d->err, sizeof(d->err), "no disk carries a unique misc/boot_a/boot_b/super/userdata/metadata set%s%s%s",
+            snprintf(d->err, sizeof(d->err), "no target disk%s%s: %s",
                      o->want_misc_uuid ? " with misc PARTUUID " : "", o->want_misc_uuid ? o->want_misc_uuid : "",
-                     why[0] ? "" : "");
+                     why[0] ? why : "no candidate disks");
             return;
         }
         if (n_match > 1) {
@@ -418,6 +428,8 @@ int fb_disk_recheck(fb_disk *d, char *why, size_t why_len)
         snprintf(why, why_len, "%s", d->err);
         return -1;
     }
+    /* 先丢掉缓存：要比对的是介质上此刻的表，不是我们启动时读进页缓存的那份 */
+    fb_disk_sync_drop(d, -1, 0, 0);
     if (read_gpt(d->fd, d->bs, d->nblocks, NULL, err, sizeof(err), &hc, &tc)) {
         snprintf(why, why_len, "GPT re-check failed: %s", err);
         return -1;
@@ -499,7 +511,8 @@ int fb_disk_sync_drop(fb_disk *d, int pi, uint64_t off, uint64_t len)
         if (ioctl(d->fd, BLKFLSBUF, 0))
             return -1;
     } else {
-        posix_fadvise(d->fd, (off_t)(d->p[pi].off + off), (off_t)len, POSIX_FADV_DONTNEED);
+        /* pi < 0：整个文件 */
+        posix_fadvise(d->fd, pi < 0 ? 0 : (off_t)(d->p[pi].off + off), pi < 0 ? 0 : (off_t)len, POSIX_FADV_DONTNEED);
     }
 #else
     (void)pi; (void)off; (void)len;
