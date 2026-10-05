@@ -97,7 +97,7 @@ What it can do:
 
 | On the install-mode page | What happens | Tested on hardware |
 |---|---|---|
-| **Keep the current system** (dual boot) | Android goes into free space; nothing that exists is touched. Windows stays in the boot menu | ⬜ not yet (only on test disks) |
+| **Keep the current system** (dual boot) | Android goes into free space; existing partitions are not changed. A boot loader is added to the EFI partition (the original fallback loader is backed up as `.before-gaokun3`), and a boot menu shows for 5 seconds at every start. Windows stays in the boot menu | ⬜ not yet (only on test disks) |
 | **Erase the whole disk** | Everything on the disk is replaced by the layout in [Advanced](#what-you-end-up-with) | ⬜ not yet (only on test disks) |
 | **Reinstall Android** (Android already on the disk) | Rewrites Android in its existing partitions; wipes data by default, or keeps it (*Keep user data*) | ✅ keeping data, same version, from the medium and over the network. ⬜ wiping data |
 | **Adjust the disk** | Delete / shrink / grow / create / format partitions, one confirmed step at a time | ⬜ not yet (only on test disks) |
@@ -112,7 +112,8 @@ into its own 1 GiB partition, as a non-default boot entry — see
 Power Options → *Choose what the power buttons do*) and shut down with *Shut
 down*, not *Hibernate*. A hibernated Windows volume must not be resized — the
 installer checks for this and refuses — and Windows cannot mount it safely
-afterwards either.
+afterwards either. In dual boot and reinstall, the installer also refuses to
+write the shared EFI partition while Windows is hibernated.
 
 **BitLocker / device encryption, in this order** (the Windows script below
 walks you through it the same way): first make sure you have the recovery key
@@ -124,7 +125,9 @@ off, or the changed boot path afterwards, is what can make Windows ask for the
 recovery key, so it must not come first. (The script also checks that the
 machine booted in UEFI mode before it suspends anything.) ⬜ Whether two
 restarts are enough on this tablet, and how BitLocker re-seals afterwards,
-has not been checked on hardware.
+has not been checked on hardware. If the Windows drive is BitLocker-encrypted
+and the installer has to replace `EFI\BOOT\BOOTAA64.EFI`, the confirmation
+page asks you to tick *I have my BitLocker recovery key* before it starts.
 
 ### From Windows, no USB stick
 
@@ -549,6 +552,13 @@ a log-only mode that never changes anything in `misc`.
 **Dual boot.** gk3boot leaves Windows alone. Choosing Windows as the default
 system and "restart into Windows" from Android are implemented, but **they have
 not been tested on a real dual-boot machine yet**.
+The installer's confirmation page asks which system starts by default
+(Android is preselected). If you pick Windows, the first two starts after the
+install still go into Android; from then on, a cold start goes into Windows.
+Change it later in Android under Settings → System → Boot options. An EFI
+partition smaller than 200 MiB (the 100 MiB kind a Windows reinstall creates)
+is not supported; the installer keeps at least 32 MiB free on it for Windows
+updates and the firmware.
 
 ## Erasing your data (factory reset)
 

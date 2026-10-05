@@ -93,7 +93,7 @@ https://ota.072172.xyz/install/crDroidAndroid-16.0-20261003-gaokun3-v12.11/insta
 
 | 安装模式页上的选项 | 会发生什么 | 真机上测过 |
 |---|---|---|
-| **保留现有系统**（Keep the current system，双系统） | Android 装进空闲空间，已有的东西一概不动。开机菜单里仍然有 Windows | ⬜ 还没有（只在测试盘上） |
+| **保留现有系统**（Keep the current system，双系统） | 只在空闲空间里建分区，不改现有分区；会在 EFI 分区里放入启动器（原来的回落启动器备份为 `.before-gaokun3`），每次开机显示 5 秒的选择菜单。开机菜单里仍然有 Windows | ⬜ 还没有（只在测试盘上） |
 | **清除整个磁盘**（Erase the whole disk） | 盘上的一切换成[进阶](#装完之后的分区布局)一节里的分区布局 | ⬜ 还没有（只在测试盘上） |
 | **重新安装 Android**（Reinstall Android；盘上已经有 Android） | 在现有分区里重写 Android；默认清除数据，也可以保留（*保留用户数据*） | ✅ 保留数据、同版本，从介质和经网络各一次。⬜ 清除数据 |
 | **调整磁盘**（Adjust the disk） | 删除 / 缩小 / 扩大 / 新建 / 格式化分区，每一步单独确认 | ⬜ 还没有（只在测试盘上） |
@@ -106,6 +106,7 @@ https://ota.072172.xyz/install/crDroidAndroid-16.0-20261003-gaokun3-v12.11/insta
 *Choose what the power buttons do*，中文版大致是"控制面板 → 电源选项 → 选择电源按钮的功能"），
 并且用 *Shut down*（关机）关机，不要用 *Hibernate*（休眠）。处于休眠状态的 Windows 分区不能调整大小 ——
 安装器会检查并拒绝 —— 而且之后 Windows 自己也没法安全地挂载它。
+双系统和重新安装时，Windows 处于休眠状态，安装器同样拒绝写共用的 EFI 分区。
 
 **BitLocker / 设备加密，按这个顺序来**（下面的 Windows 脚本也按同样的顺序带你走）：先确认你拿得到恢复密钥
 （<https://aka.ms/myrecoverykey>）；然后把系统盘上的 BitLocker 暂停两次重启 —— 脚本会问你，并替你运行
@@ -113,6 +114,7 @@ https://ota.072172.xyz/install/crDroidAndroid-16.0-20261003-gaokun3-v12.11/insta
 让 Windows 索要恢复密钥的，正是关 Secure Boot 这一步、或者之后改变了的启动路径，所以它不能放在最前面。
 （脚本在暂停任何东西之前，还会先检查机器是不是以 UEFI 模式启动的。）⬜ 在这款平板上暂停两次重启够不够、
 之后 BitLocker 怎么重新封存，还没在真机上核对过。
+Windows 盘是 BitLocker 加密的，并且这次安装要换掉 `EFI\BOOT\BOOTAA64.EFI` 时，确认页要先勾选「我已经拿到了 BitLocker 恢复密钥」才能开始。
 
 ### 从 Windows 启动，不用 U 盘
 
@@ -402,6 +404,9 @@ Windows 和救援系统也仍然归它管；gk3boot 只是它默认启动的那�
 
 **双系统。** gk3boot 不碰 Windows。把 Windows 设成默认系统、从 Android 里"重启到 Windows"，这两样已经实现，
 但**还没在真正的双系统机器上测过**。
+安装器的确认页会让你选开机默认进入哪个系统（预选 Android）。选 Windows 的话，装完前两次开机仍进 Android；
+之后冷开机才默认进 Windows。以后在 Android 的「设置 → 系统 → 启动选项」里改。
+小于 200 MiB 的 EFI 分区（重装 Windows 时建的那种 100 MiB）不支持；安装器会在上面给 Windows 更新和固件至少留 32 MiB。
 
 ## 清除数据（恢复出厂）
 
