@@ -225,8 +225,8 @@ needs `gdisk dosfstools e2fsprogs zstd python3 systemd-boot-efi`). But no
 generic distribution image (Ubuntu, Debian, …) has been shown to boot on this
 machine — this is a device-tree-only Snapdragon, not an ACPI PC — so you are on
 your own getting there. You also get no rescue system that way, unless you put
-`rescue.squashfs` and `initramfs.img` into the release directory; releases do
-not ship them.
+`rescue.squashfs` and `initramfs.img` into the release directory (see
+[About the rescue system](#about-the-rescue-system) for where to get them).
 
 ### What you end up with
 
@@ -250,10 +250,14 @@ installer included, so it can also reinstall Android. It sits as a compressed
 image (squashfs) on its own 1 GiB partition and is mounted from there
 read-only, sharing the kernel with Android; whatever you change while it runs
 lives in RAM and is gone at the next boot. It goes in only when the installer
-has the image: the installer USB stick carries it (the graphical installer
-offers it as *Also install the rescue system*); from a checkout you need
-`rescue.squashfs` and `initramfs.img` in the release directory. ⬜ Whether an
-install started from Windows gets one has not been checked.
+has the image: the installer USB stick carries it, and so does the `GK3LIVE`
+partition the Windows package creates (the graphical installer offers it as
+*Also install the rescue system*; ⬜ the Windows path has only been checked in
+offline tests). For the command-line installer, put `rescue.squashfs` and
+`initramfs.img` into the release directory — they are attached to the
+release next to the graphical installer from its next release on (⬜ not
+published yet), or take them from a USB stick image (`gaokun3/rescue.squashfs`,
+`gaokun3/initramfs.img` on its FAT partition).
 
 **Logging in over the network** needs your SSH public key — the published
 image carries nobody's. Put it on the installer stick as
@@ -285,20 +289,34 @@ comes up. It is never the default entry.
 
 To get back to Android from the rescue system, a plain `reboot` is enough: the
 rescue entry is never the default, so the menu falls through to Android after
-15 seconds. To skip the menu, or to pick a particular slot, set a one-time
-entry. The entry IDs begin with a machine-ID that you will not know by heart —
-and it is not the rescue system's own (`/etc/machine-id`), which is generated
-anew on every boot — so look the ID up first:
+15 seconds. To skip the menu, or to start a particular slot, use the helper
+that comes with the rescue system:
 
 ```sh
-bootctl list                   # find the entry whose ID ends in -android-a.conf (or -android-b.conf)
-bootctl set-oneshot <that full ID> && reboot
+gk3-boot-android b --reboot    # next boot only: slot b's entry, then reboot now
+gk3-boot-android a             # same for slot a, without rebooting
+gk3-boot-android --list        # what is on the ESP, and what is set
+gk3-boot-android --clear       # undo
 ```
 
-⬜ Not yet tried in the rescue system — including whether its image carries
-`bootctl` at all, and whether `bootctl list` finds the ESP without mounting it
-first. A small helper that does the lookup for you (`gk3-boot-android a|b`) is
-planned ([`v1.0-plan.md`](v1.0-plan.md), INST-12).
+It finds the ESP itself, picks the entry `<machine-ID>-android-<slot>.conf`
+(the machine-ID in that name is the installed system's, not the rescue
+system's own, which is generated anew on every boot) and sets it as
+systemd-boot's one-time entry (`LoaderEntryOneShot`); after that one boot the
+menu's default applies again. It refuses if the slot has no such entry, has
+more than one, or the kernel that entry points to is missing from the ESP.
+The image has no `bootctl`, so the `bootctl set-oneshot` recipe found
+elsewhere does not apply here.
+
+⬜ Not yet tried in the rescue system on the tablet (only in offline tests):
+in particular whether writing EFI variables works there — it does from
+Android, with the same kernel.
+
+There are **two** rescue entries, one using slot a's kernel and one using
+slot b's: if an update leaves one slot's kernel unbootable, the other entry
+still starts the rescue system. Both use the same rescue image; the second
+one takes no extra space on the ESP. Machines installed before this change
+get the second entry with their next update to slot b.
 
 ## Firmware
 

@@ -234,6 +234,10 @@ need_cmd chvt
 for f in gk3-ssh-keys gk3-wifi gk3-diag; do
     if in_ch "[ -x /usr/lib/gaokun3/$f ]"; then ok "/usr/lib/gaokun3/$f 可执行"; else echo "   ✗ /usr/lib/gaokun3/$f 不可执行"; BAD=1; fi
 done
+# 救援里"进 Android 的某个槽"的助手（v1.0 计划 INST-12；INSTALL 的 About the rescue system 让人用它）。
+# 它写 EFI 变量要 chattr（e2fsprogs）；镜像里没有 bootctl，它不靠 bootctl
+if in_ch '[ -x /usr/bin/gk3-boot-android ]'; then ok "/usr/bin/gk3-boot-android 可执行"; else echo "   ✗ /usr/bin/gk3-boot-android 不在或不可执行"; BAD=1; fi
+need_cmd chattr
 if [ "$PROFILE" = live ] && in_ch 'ls /etc/ssh/ssh_host_*_key'; then echo "   ✗ live 镜像里有主机私钥"; BAD=1; fi
 # ★ ath11k 固件：没有它 wlan0 根本不出现，而"没网"在这台机器上等于"救援失效"
 for f in amss.bin board-2.bin m3.bin; do need_glob "/usr/lib/firmware/ath11k/WCN6855/hw2.0/$f*"; need_glob "/usr/lib/firmware/ath11k/WCN6855/hw2.1/$f*"; done
