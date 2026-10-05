@@ -5,6 +5,11 @@ gk3_preflight                                                                  p
 gk3_wifi_scan                                                                  wifi_scan.txt   # 录（真 gk3-wpa-scan.py，合成的 scan_results）
 gk3_wifi_connect *                                                             wifi_connect-ok.txt   # 手写（容器里没有 wlan0）
 gk3_net_status                                                                 net_status-off.txt   # 手写
+#  esp_info-bitlocker.txt：Windows 卷是 BitLocker、BOOTAA64 还是 Windows 的（确认页要勾恢复密钥，U16）
+#  esp_info-hibernated.txt：Windows 在休眠（双系统 / 重新安装禁用，U18）
+#  esp_info-small.txt：100 MiB 的 ESP（双系统明确不装，U17）
+#  apply-note.txt：windows-free 录的那次 apply + 一条 NOTE code=loadervar-stuck（EFI 变量删不掉，完成页要说）
+#  ↑ 这四份是从录到的输出改字段得来的（半手写，gen-fixtures.sh 里写着怎么改），后端判据见 test-apply.sh 的 K 组
 gk3_job_status                                                                 job_status-none.txt   # 手写（没有在跑的写盘任务）
 #  job_status-running.txt / job_follow-apply.txt：界面重新起来时 apply 还在跑（测试用 overrides 选它们）
 gk3_log_targets                                                                log_targets.txt   # 录（假 U 盘挂在 /media/gk3）

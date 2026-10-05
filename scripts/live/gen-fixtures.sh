@@ -390,6 +390,19 @@ O NET if=wlan0 ip=none ssid=none online=no
 X 0
 EOF
 printf '%-78s %s\n' "gk3_net_status" "net_status-off.txt   # 手写" >> "$C/index.txt"
+# 半手写（S15 双系统，只给测试按文件名用 overrides）：从 windows-free 录到的那一行 ESP 记录改几个字段 —— 这些状态要一整块
+# 带 BitLocker 卷 / 休眠的 Windows 盘才造得出来，后端的判据在 scripts/live/test-apply.sh 的 K 组里真测过；这里只给界面用
+WESP=$(grep '^O ESP ' "$OUT/windows-free/esp_info.txt")
+esp_var() { printf '%s\nX 0\n' "$(printf '%s' "$WESP" | sed "$@")"; }
+esp_var -e 's/ bootaa64=[a-z]*/ bootaa64=other/' -e 's/ bitlocker=no/ bitlocker=yes/' -e 's/ hibernated=[a-z]*/ hibernated=unknown/' > "$C/esp_info-bitlocker.txt"
+esp_var -e 's/ hibernated=[a-z]*/ hibernated=yes/' > "$C/esp_info-hibernated.txt"
+esp_var -e 's/ size_mib=[0-9]*/ size_mib=100/' -e 's/ free_mib=[0-9]*/ free_mib=70/' -e 's/ small=no/ small=yes/' > "$C/esp_info-small.txt"
+{ grep -v '^X ' "$OUT/windows-free/apply-along.txt"; echo 'O NOTE code=loadervar-stuck name=LoaderEntryDefault value=auto-windows'; echo 'X 0'; } > "$C/apply-note.txt"
+{ echo "#  esp_info-bitlocker.txt：Windows 卷是 BitLocker、BOOTAA64 还是 Windows 的（确认页要勾恢复密钥，U16）"
+  echo "#  esp_info-hibernated.txt：Windows 在休眠（双系统 / 重新安装禁用，U18）"
+  echo "#  esp_info-small.txt：100 MiB 的 ESP（双系统明确不装，U17）"
+  echo "#  apply-note.txt：windows-free 录的那次 apply + 一条 NOTE code=loadervar-stuck（EFI 变量删不掉，完成页要说）"
+  echo "#  ↑ 这四份是从录到的输出改字段得来的（半手写，gen-fixtures.sh 里写着怎么改），后端判据见 test-apply.sh 的 K 组"; } >> "$C/index.txt"
 # GUI-11：写盘任务。没有在跑的（默认）；"界面崩过又起来、apply 还在跑"那种给测试按文件名用。
 # 手写：容器里起不了 systemd 单元；格式照 gk3_job_status / gk3_job_start 的输出写。跟读的内容就是 blank 场景录的那次 apply
 printf 'X 0\n' > "$C/job_status-none.txt"

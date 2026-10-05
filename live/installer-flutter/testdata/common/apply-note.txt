@@ -146,4 +146,5 @@ E 警告：没有 ssh 公钥可带给救援系统 —— 只能在机器旁登�
 E + umount /tmp/tmp.hX6jkHgw0F
 E /dev/nvme0n1p13：1 个文件从介质读回核对一致
 E PROGRESS 100 done
+O NOTE code=loadervar-stuck name=LoaderEntryDefault value=auto-windows
 X 0

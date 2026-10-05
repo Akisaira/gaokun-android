@@ -38,6 +38,17 @@ class AlongEspSmall extends Along {
   final int freeMib, needMib;
 }
 
+/// 100 MiB 那种 EFI 分区（用户自己重装 Windows 建的）：1.0 明确不装（U17，ERR esp-too-small）
+class AlongEspTooSmall extends Along {
+  const AlongEspTooSmall(this.sizeMib);
+  final int sizeMib;
+}
+
+/// Windows 在休眠 / 快速启动：不许往共用的 EFI 分区写（U18，ERR esp-windows-hibernated）
+class AlongHibernated extends Along {
+  const AlongHibernated();
+}
+
 class AlongInstalled extends Along {
   const AlongInstalled(this.names);
 
@@ -200,6 +211,8 @@ class Session extends ChangeNotifier {
     reinstall = null;
     espInfo = null;
     shrinkables = null;
+    defaultOs = 'android';
+    bitlockerKeyOk = false;
     assessing = true;
     _changed();
     along = await _assessAlong(d);
@@ -220,6 +233,9 @@ class Session extends ChangeNotifier {
     final er = (await backend.run('gk3_esp_info', [esp.path])).first('ESP');
     if (er != null) espInfo = EspInfo(er);
     final info = espInfo;
+    // 顺序：分区本身太小（清理也没用）> 在休眠（回 Windows 关机就好）> 空闲不够（清理）
+    if (info != null && info.small && !info.ours) return AlongEspTooSmall(info.sizeMib);
+    if (info != null && info.winHibernated) return const AlongHibernated();
     if (info != null && !info.roomy && !info.ours) return AlongEspSmall(info.freeMib, info.needMib);
     final f = d.largestFree;
     // 没有空闲区也问一次（空区间）：让 gk3_plan 自己报"至少要多少"
@@ -342,6 +358,39 @@ class Session extends ChangeNotifier {
     userdataMib = mib;
     await computePlan();
   }
+
+  // ── 双系统（S15，docs/boot-entry-design.md §4.9）──────────────────────────
+  /// 这次装完是不是双系统：ESP 上有 Windows 的启动管理器，而且是装在它旁边 / 在它旁边重新安装
+  bool get dual {
+    final w = espInfo?.windows ?? false;
+    return switch (mode) {
+      Mode.alongside => along is AlongOk && w,
+      Mode.reinstall => w,
+      _ => false,
+    };
+  }
+
+  /// 冷开机默认进哪个系统（U12）：预选 Android —— 依赖最少（不写任何变量），而且第一次开机本来就要进 Android
+  /// 走开机向导。选 Windows 时后端把它写成 GK3 的 set_default 请求，由统一启动入口第一次运行时生效
+  String defaultOs = 'android';
+  void setDefaultOs(String v) {
+    defaultOs = v;
+    _changed();
+  }
+
+  /// U16：BitLocker + 这次要换 BOOTAA64 ⇒ 确认页上必须勾"已拿到恢复密钥"才能开始
+  bool get needBitlockerKey => dual && (espInfo?.needsBitlockerKey ?? false);
+  bool bitlockerKeyOk = false;
+  void setBitlockerKeyOk(bool v) {
+    bitlockerKeyOk = v;
+    _changed();
+  }
+
+  /// 走的是 Windows 脚本那条路（安装器从内置盘上的 GK3LIVE 跑）：脚本已经先暂停过 BitLocker（§4.9.7 规则 6 的两种文案）
+  bool get viaWindowsScript => disks?.any((d) => d.medium && !d.external) ?? false;
+
+  /// 安装期间后端给的提醒（stdout 上的 NOTE 记录，例如 EFI 变量删不掉）—— 完成页逐条说
+  final notes = <Gk3Record>[];
 
   // ── 来源 ────────────────────────────────────────────────────────────────
   Source source = Source.usb;
@@ -471,8 +520,15 @@ class Session extends ChangeNotifier {
     _writing++;
     _changed();
     try {
-      final args = ['--release', rel, ..._planArgs()];
+      final args = [
+        '--release', rel, ..._planArgs(),
+        // 只给 gk3_apply、不给 gk3_plan（它不认识这两个参数）
+        if (dual) ...['--default-os', defaultOs],
+        if (needBitlockerKey && bitlockerKeyOk) ...['--bitlocker-key', 'yes'],
+      ];
+      notes.clear();
       await for (final e in backend.call('gk3_apply', args)) {
+        if (e is Gk3Record && e.type == 'NOTE') notes.add(e);
         yield (net && e is Gk3Progress) ? e.at(40 + e.percent * 60 ~/ 100) : e;
       }
     } finally {

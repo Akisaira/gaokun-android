@@ -890,4 +890,124 @@ void main() {
     await see(t, find.text(l.checkToolsBadPkgs('sgdisk, partprobe', 'gdisk parted')));
     await see(t, find.text(l.checkBlocked));
   });
+
+  // ── 双系统专项（S15，docs/boot-entry-design.md §4.9）──────────────────────────────────────────────
+  /// U 盘双系统一路走到确认页（windows-free，或 overrides 换掉 gk3_esp_info）
+  Future<Rec> toConfirm(WidgetTester t, {String scenario = 'windows-free', Map<String, String> overrides = const {}}) async {
+    final rec = await pumpApp(t, scenario, overrides: overrides);
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await tap(t, find.text(l.modeAlongTitle));
+    await next(t);
+    await next(t); // 来源
+    await next(t); // 选项
+    await see(t, find.text(l.confirmTitle));
+    return rec;
+  }
+
+  testWidgets('双系统确认页：默认系统预选 Android、大字写明冷开机进哪个、菜单 5 秒；不选就带 --default-os android（U12 / U13）', (t) async {
+    final rec = await toConfirm(t);
+    await see(t, find.text(l.confirmDefaultTitle));
+    await see(t, find.text(l.confirmDefaultLead));
+    await see(t, find.text(l.confirmMenu5));
+    expect(find.text(l.confirmDefaultWindowsWhen), findsNothing);
+    expect(find.text(l.confirmBitlockerHead), findsNothing); // 不是 BitLocker：不出勾选框
+    await hold(t, l.confirmHoldIdle);
+    await see(t, find.text(l.doneTitle));
+    await see(t, find.text(l.doneDualAndroid));
+    final a = rec.last('gk3_apply')!.join(' ');
+    expect(a, contains('--default-os android'));
+    expect(a, isNot(contains('--bitlocker-key')));
+    // gk3_plan 不认识这两个参数：只发给 gk3_apply
+    expect(rec.calls.where((c) => c.first == 'gk3_plan').any((c) => c.contains('--default-os')), isFalse);
+  });
+
+  testWidgets('双系统选 Windows 为默认：说清"前两次开机进 Android"，apply 带 --default-os windows，完成页照着说（U12）', (t) async {
+    final rec = await toConfirm(t);
+    await tap(t, find.text(l.confirmDefaultWindows));
+    await see(t, find.text(l.confirmDefaultWindowsWhen));
+    await hold(t, l.confirmHoldIdle);
+    await see(t, find.text(l.doneTitle));
+    await see(t, find.text(l.doneDualWindows));
+    expect(rec.last('gk3_apply')!.join(' '), contains('--default-os windows'));
+  });
+
+  testWidgets('BitLocker + 要换 BOOTAA64（从 U 盘来）：不勾"已拿到恢复密钥"按住也开始不了；勾了才装、带 --bitlocker-key yes（U16）', (t) async {
+    final rec = await toConfirm(t, overrides: {'gk3_esp_info': 'esp_info-bitlocker.txt'});
+    await see(t, find.text(l.confirmBitlockerHead));
+    await see(t, find.text(l.confirmBitlockerUsb));
+    expect(find.text(l.confirmBitlockerScript), findsNothing);
+    await hold(t, l.confirmHoldIdle);
+    expect(find.text(l.doneTitle), findsNothing);
+    expect(rec.last('gk3_apply'), isNull);
+    // 勾选框在列表下方：先滚到它、等布局完再点（tap() 里的 ensureVisible 之后不等一帧，会点空）
+    await t.ensureVisible(find.byType(Checkbox));
+    await settle(t);
+    await t.tap(find.byType(Checkbox));
+    await settle(t);
+    expect(t.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value, isTrue);
+    await hold(t, l.confirmHoldIdle);
+    await see(t, find.text(l.doneTitle));
+    expect(rec.last('gk3_apply')!.join(' '), contains('--bitlocker-key yes'));
+  });
+
+  testWidgets('BitLocker、走的是 Windows 工具那条路（安装器在内置盘上）：文案换成"工具已暂停 BitLocker"（§4.9.7 规则 6）', (t) async {
+    await toConfirm(t, scenario: 'windows-live', overrides: {'gk3_esp_info': 'esp_info-bitlocker.txt'});
+    await see(t, find.text(l.confirmBitlockerScript));
+    expect(find.text(l.confirmBitlockerUsb), findsNothing);
+  });
+
+  testWidgets('Windows 在休眠：双系统禁用并写明"回 Windows 关快速启动、用关机退出"（U18）', (t) async {
+    await pumpApp(t, 'windows-free', overrides: {'gk3_esp_info': 'esp_info-hibernated.txt'});
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await see(t, find.text(l.modeWhyHibernated));
+    expect(find.text(l.modeAlongOk), findsNothing);
+    await tap(t, find.text(l.modeAlongTitle));
+    expect(find.ancestor(of: find.text(l.btnNext), matching: find.byWidgetPredicate((w) => w is ButtonStyleButton && w.onPressed != null)), findsNothing);
+  });
+
+  testWidgets('100 MiB 的 EFI 分区：双系统明确禁用，说"这个版本不支持"而不是"请清理"（U17）', (t) async {
+    await pumpApp(t, 'windows-free', overrides: {'gk3_esp_info': 'esp_info-small.txt'});
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await see(t, find.text(l.modeWhyEspTooSmall('100')));
+    expect(find.text(l.modeWhyEspSmall('70', '150')), findsNothing);
+  });
+
+  testWidgets('后端说 EFI 变量删不掉（NOTE loadervar-stuck）：完成页用红字说怎么在开机菜单里清除', (t) async {
+    await toConfirm(t, overrides: {'gk3_apply': 'apply-note.txt'});
+    await hold(t, l.confirmHoldIdle);
+    await see(t, find.text(l.doneTitle));
+    await see(t, find.text(l.doneNoteLoaderVar('auto-windows')));
+  });
+
+  testWidgets('纯 Android（整盘）：确认页与完成页都没有默认系统那一节', (t) async {
+    await pumpApp(t, 'blank');
+    await tap(t, find.text(l.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await tap(t, find.text(l.modeWipeTitle));
+    await next(t);
+    await next(t);
+    await next(t);
+    await see(t, find.text(l.confirmTitle));
+    expect(find.text(l.confirmDefaultTitle), findsNothing);
+  });
+
+  testWidgets('英文界面的双系统确认页（BitLocker）没有 CJK', (t) async {
+    await pumpApp(t, 'windows-free', language: 'en', overrides: {'gk3_esp_info': 'esp_info-bitlocker.txt'});
+    await tap(t, find.text(en.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t, en);
+    await tap(t, find.text(en.modeAlongTitle));
+    await next(t, en);
+    await next(t, en);
+    await next(t, en);
+    await see(t, find.text(en.confirmBitlockerHead));
+    expect(cjkOnScreen(t), isEmpty);
+  });
 }

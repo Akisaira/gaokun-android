@@ -119,6 +119,13 @@ String errText(L10n l, Gk3Record e) {
     'esp-full' => l.errEspFull(_mib(f('need_mib')), _mib(f('free_mib'))),
     'esp-ota-room' => l.errEspOtaRoom(_mib(f('left_mib'))),
     'esp-mount' => l.errEspMount(f('esp')),
+    // S10 / S15（双系统，docs/boot-entry-design.md §4.7、§4.9）
+    'default-os-no-windows' => l.errDefaultOsNoWindows,
+    'esp-windows-hibernated' => l.errEspWindowsHibernated(f('part')),
+    'bitlocker-key-unconfirmed' => l.errBitlockerKeyUnconfirmed,
+    'esp-too-small' => l.errEspTooSmall(f('size_mib')),
+    'esp-win-reserve' => l.errEspWinReserve(_mib(f('left_mib')), _mib(f('need_mib'))),
+    'misc-init' => l.errMiscInit(f('dev')),
     'wipe-medium' => l.errWipeMedium,
     'wipe-mounted' => l.errWipeMounted(f('mounts').trim()),
     'reinstall-busy' => l.errReinstallBusy(f('parts')),

@@ -87,7 +87,7 @@
   "modeWipeWarn": "此磁盘上的所有内容都将被删除，包括其他操作系统。",
   "modeWipeBody": "这将为你提供最干净的分区布局，Android 将获得全部空间。如果这台电脑只用来运行 Android，我们建议选择此项。",
   "modeAlongTitle": "保留现有系统",
-  "modeAlongOk": "我们只会使用可用空间，不会对你现有的分区进行任何更改。",
+  "modeAlongOk": "只在空闲空间里建分区，不改你现有的分区；会在 EFI 分区里放入启动器（原来的文件先备份），以后开机会出现选择菜单。",
   "modeAlongInfo": "可用空间：{free}\n我们将重用你现有的 EFI 分区：{esp}",
   "@modeAlongInfo": {
     "placeholders": {
@@ -377,7 +377,7 @@
       }
     }
   },
-  "confirmAlongHead": "你现有的分区不会受到任何影响。我们只会使用可用空间。",
+  "confirmAlongHead": "你现有的分区不会被改动：我们只在空闲空间里建分区，并在 EFI 分区里放入启动器（原文件已备份）。",
   "confirmAlongBody": "我们将创建 {size} 的 Android 分区，并在你的 EFI 分区 {esp} 中添加启动项。",
   "@confirmAlongBody": {
     "placeholders": {
@@ -1124,5 +1124,73 @@
       }
     }
   },
-  "errLogsMkdir": "在那里建不了目录（满了？）"
+  "errLogsMkdir": "在那里建不了目录（满了？）",
+  "modeWhyEspTooSmall": "你现有的 EFI 分区只有 {size} MiB（重装 Windows 时建的那种）。它放不下 Android 的启动文件，也没法再给 Windows 更新留余量 —— 这个版本不支持这种布局，以后的版本会改用单独的分区。",
+  "@modeWhyEspTooSmall": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "modeWhyHibernated": "Windows 处于休眠或“快速启动”状态。这时往两个系统共用的 EFI 分区里写东西，Windows 醒来时可能把它写坏。请回到 Windows，关掉快速启动，用“关机”退出后再来。",
+  "confirmDefaultTitle": "开机默认进入哪个系统",
+  "confirmDefaultLead": "关机后再按电源键开机，进这里选的系统；在 Android 里重启，总是回到 Android。平时主要用 Windows 就选 Windows。以后可以在 Android 的「设置 → 系统 → 启动选项」里改。",
+  "confirmDefaultAndroid": "Android",
+  "confirmDefaultAndroidBody": "开机直接进 Android；要进 Windows 就在开机菜单里选。",
+  "confirmDefaultWindows": "Windows",
+  "confirmDefaultWindowsBody": "开机进 Windows；要进 Android 就在开机菜单里选，或者在 Windows 里重启到 Android。",
+  "confirmDefaultWindowsWhen": "装好之后前两次开机都会进 Android（第一次用来完成设置）；从那以后，关机再开机就默认进 Windows。",
+  "confirmMenu5": "有两个系统时，每次开机会显示 5 秒钟的选择菜单。",
+  "confirmBitlockerHead": "Windows 的磁盘用 BitLocker 加密了",
+  "confirmBitlockerScript": "安装会换掉开机时最先运行的启动器。Windows 工具已经先暂停了 BitLocker，接下来 2 次重启不会要恢复密钥；万一要了，到 aka.ms/myrecoverykey 按屏幕上显示的密钥 ID 找。",
+  "confirmBitlockerUsb": "安装会换掉开机时最先运行的启动器。下一次进 Windows 很可能要输入 48 位的恢复密钥：屏幕上会显示密钥 ID，到 aka.ms/myrecoverykey 按 ID 找。没有密钥就进不了 Windows —— 先确认拿得到再继续。",
+  "confirmBitlockerCheck": "我已经拿到了 BitLocker 恢复密钥",
+  "doneDualAndroid": "开机默认进 Android，开机菜单里可以选 Windows。要改成默认进 Windows：Android 的「设置 → 系统 → 启动选项」。",
+  "doneDualWindows": "接下来两次开机会先进 Android（第一次完成设置）；之后关机再开机就默认进 Windows。在 Android 的「设置 → 系统 → 启动选项」里可以改回来。",
+  "doneNoteLoaderVar": "注意：固件里的默认启动项（{value}）没能清除，开机可能仍先进它。请在开机菜单里高亮当前默认的那一项，按一次 d 键清除。",
+  "@doneNoteLoaderVar": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "errDefaultOsNoWindows": "这块盘上没有 Windows 的启动管理器，不能把 Windows 设成默认系统",
+  "errEspWindowsHibernated": "Windows 处于休眠或“快速启动”状态（{part}）：这时写共用的 EFI 分区可能把它写坏。回 Windows 关掉快速启动、用“关机”退出，再试",
+  "@errEspWindowsHibernated": {
+    "placeholders": {
+      "part": {
+        "type": "String"
+      }
+    }
+  },
+  "errBitlockerKeyUnconfirmed": "Windows 的磁盘是 BitLocker 加密的，安装要换掉开机启动器，下次进 Windows 可能要恢复密钥。请在确认页勾选“已经拿到恢复密钥”",
+  "errEspTooSmall": "EFI 分区只有 {size} MiB，这个版本装不下（以后的版本会改用单独的分区）",
+  "@errEspTooSmall": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "errEspWinReserve": "装完、再留出以后系统更新要的空间，EFI 分区只剩 {left}，不够给 Windows 更新和固件留的 {need}。请先在 Windows 里清理 EFI 分区（不要删 Persisted_Capsules.bin、EFI\\Microsoft、EFI\\UpdateCapsule）",
+  "@errEspWinReserve": {
+    "placeholders": {
+      "left": {
+        "type": "String"
+      },
+      "need": {
+        "type": "String"
+      }
+    }
+  },
+  "errMiscInit": "初始化 misc 分区（{dev}）失败",
+  "@errMiscInit": {
+    "placeholders": {
+      "dev": {
+        "type": "String"
+      }
+    }
+  }
 }

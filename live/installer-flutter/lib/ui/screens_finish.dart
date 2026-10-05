@@ -208,6 +208,8 @@ class ConfirmPage extends StatelessWidget {
           child: HoldToConfirm(
             idle: l.confirmHoldIdle,
             busy: (x) => l.confirmHoldBusy('$x'),
+            // U16：BitLocker + 要换 BOOTAA64 时，不勾"已拿到恢复密钥"就开始不了
+            enabled: !s.needBitlockerKey || s.bitlockerKeyOk,
             onConfirmed: () => go(context, const RunPage(), replace: true),
           ),
         ),
@@ -269,6 +271,7 @@ class ConfirmPage extends StatelessWidget {
               Text(l.confirmAlongBody(fmtMib(p.totalNewMib), a is AlongOk ? a.esp.path : '?'), style: tt.bodyLarge),
               if (a is AlongOk && a.windows) ...[const SizedBox(height: 6), Text(l.confirmWindowsKept, style: tt.bodyLarge)],
             ],
+            if (s.dual) ...[const SizedBox(height: 22), const DualOptions()],
           ]),
         ),
         const SizedBox(width: 36),
@@ -293,6 +296,61 @@ class ConfirmPage extends StatelessWidget {
         ),
       ]),
     );
+  }
+}
+
+/// 双系统的两件事（S15，docs/boot-entry-design.md §4.9.3、§4.9.7）：开机默认进哪个系统（U12）、BitLocker 恢复密钥（U16）。
+/// ★ 默认系统用大字写清楚"冷开机进这里选的、之后在哪里改"（设计稿 §8.2 #60：预选 Android，但以 Windows 为主的人要看得见）
+class DualOptions extends StatelessWidget {
+  const DualOptions({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.session, l = context.l, tt = Theme.of(context).textTheme;
+    final win = s.defaultOs == 'windows';
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(l.confirmDefaultTitle, style: tt.titleLarge),
+      const SizedBox(height: 6),
+      Text(l.confirmDefaultLead, style: tt.titleMedium),
+      const SizedBox(height: 12),
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
+          child: ChoiceCard(
+            icon: Icons.android,
+            title: l.confirmDefaultAndroid,
+            body: l.confirmDefaultAndroidBody,
+            selected: !win,
+            onTap: () => s.setDefaultOs('android'),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: ChoiceCard(
+            icon: Icons.desktop_windows,
+            title: l.confirmDefaultWindows,
+            body: l.confirmDefaultWindowsBody,
+            selected: win,
+            onTap: () => s.setDefaultOs('windows'),
+          ),
+        ),
+      ]),
+      if (win) ...[const SizedBox(height: 8), Text(l.confirmDefaultWindowsWhen, style: tt.bodyLarge)],
+      const SizedBox(height: 8),
+      Text(l.confirmMenu5, style: tt.bodyMedium),
+      if (s.needBitlockerKey) ...[
+        const SizedBox(height: 18),
+        Text(l.confirmBitlockerHead, style: tt.titleMedium!.copyWith(color: context.cs.error)),
+        const SizedBox(height: 6),
+        Text(s.viaWindowsScript ? l.confirmBitlockerScript : l.confirmBitlockerUsb, style: tt.bodyLarge),
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          value: s.bitlockerKeyOk,
+          onChanged: (v) => s.setBitlockerKeyOk(v ?? false),
+          title: Text(l.confirmBitlockerCheck, style: tt.bodyLarge),
+        ),
+      ],
+    ]);
   }
 }
 
@@ -461,6 +519,13 @@ class DonePage extends StatelessWidget {
           ),
           const SizedBox(height: 24),
           Text(internalMedium ? l.doneBodyInternal : l.doneBody, style: tt.bodyLarge),
+          // 双系统：开机默认进哪个、什么时候生效、在哪里改（设计稿 §4.7"完成页按所选的默认系统说明"）
+          if (s.dual) ...[const SizedBox(height: 16), Text(s.defaultOs == 'windows' ? l.doneDualWindows : l.doneDualAndroid, style: tt.bodyLarge)],
+          // 后端的提醒：EFI 变量 LoaderEntryDefault 删不掉 —— 开机仍会先进它指的那一项
+          for (final n in s.notes.where((n) => n['code'] == 'loadervar-stuck')) ...[
+            const SizedBox(height: 16),
+            Text(l.doneNoteLoaderVar(n['value']), style: tt.bodyLarge!.copyWith(color: context.cs.error)),
+          ],
           if (s.rescue && s.rescueUsable) ...[const SizedBox(height: 16), Text(l.doneRescue, style: tt.bodyLarge)],
         ]),
       ),

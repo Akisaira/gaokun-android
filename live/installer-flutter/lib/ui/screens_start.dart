@@ -250,6 +250,8 @@ class _ModePageState extends State<ModePage> {
       null || AlongOk() => null,
       AlongNoEsp() => l.modeWhyNoEsp,
       AlongEspSmall(:final freeMib, :final needMib) => l.modeWhyEspSmall('$freeMib', '$needMib'),
+      AlongEspTooSmall(:final sizeMib) => l.modeWhyEspTooSmall('$sizeMib'),
+      AlongHibernated() => l.modeWhyHibernated,
       AlongInstalled(:final names) => names.isEmpty ? l.modeWhyEspOurs : l.modeWhyInstalled(names.replaceAll(',', ', ')),
       AlongNoRoom(:final haveMib, :final needMib) => haveMib == 0
           ? l.modeWhyNoFree(needMib == null ? '?' : fmtMib(needMib))
@@ -311,7 +313,8 @@ class _ModePageState extends State<ModePage> {
             title: l.modeReinstallTitle,
             warn: l.modeReinstallWarn,
             body: l.modeReinstallBody,
-            reason: r.ok ? null : planErrorText(context, r),
+            // U18：Windows 在休眠时重新安装同样要写共用的 EFI 分区 —— 一样拦住
+            reason: !r.ok ? planErrorText(context, r) : (s.espInfo?.winHibernated ?? false) ? l.modeWhyHibernated : null,
             selected: _pick == _Pick.reinstall,
             onTap: () => setState(() => _pick = _Pick.reinstall),
           ),

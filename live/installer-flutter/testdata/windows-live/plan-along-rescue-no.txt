@@ -1,3 +1,4 @@
+D 64
 O PLAN op=useesp path=/dev/nvme0n1p1 need_mib=150
 O PLAN op=mkpart disk=/dev/nvme0n1 num=0 name=misc start=798885888 end=798894079 size_mib=4 type=8300
 O PLAN op=mkpart disk=/dev/nvme0n1 num=0 name=metadata start=798894080 end=798959615 size_mib=32 type=8300

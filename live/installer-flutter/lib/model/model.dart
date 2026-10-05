@@ -128,11 +128,35 @@ class EspInfo {
         needMib = r.intOf('need_mib', 150),
         windows = r.yes('windows'),
         ours = r.yes('gaokun3'),
-        mountable = r.yes('mountable');
+        mountable = r.yes('mountable'),
+        small = r.yes('small'),
+        bootaa64 = r['bootaa64'],
+        bitlocker = r.yes('bitlocker'),
+        hibernated = r['hibernated'],
+        loaderDefault = r['loader_default'];
   final String part;
   final int sizeMib, freeMib, needMib;
   final bool windows, ours, mountable;
+
+  /// 2026-10-05（S10 / S15）起后端多报的几项；旧 fixture / 旧后端没有 ⇒ 空串 / false（照旧的行为）
+  /// small：分区比 GK3_ESP_MIN_SIZE_MIB 小（100 MiB 那种），双系统明确不装（U17）
+  final bool small, bitlocker;
+
+  /// none / sdboot / other：EFI/BOOT/BOOTAA64.EFI 与 live 自带的 systemd-boot 比
+  final String bootaa64;
+
+  /// yes / no / unknown：同一块盘上的 Windows 卷在不在休眠（U18）
+  final String hibernated;
+
+  /// EFI 变量 LoaderEntryDefault 的值；none = 没设
+  final String loaderDefault;
   bool get roomy => mountable && freeMib >= needMib;
+
+  /// Windows 卷在休眠：不许写共用的 ESP（双系统、重新安装都不行，U18）
+  bool get winHibernated => windows && hibernated == 'yes';
+
+  /// 安装会换掉 BOOTAA64、而 Windows 卷是 BitLocker：要用户确认拿到了恢复密钥（U16）
+  bool get needsBitlockerKey => windows && bitlocker && bootaa64 != 'sdboot';
 }
 
 class Shrinkable {
