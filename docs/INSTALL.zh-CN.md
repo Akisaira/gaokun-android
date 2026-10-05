@@ -120,7 +120,7 @@ https://ota.072172.xyz/install/crDroidAndroid-16.0-20261003-gaokun3-v12.11/insta
    它会检查型号、UEFI 和 Secure Boot，然后要你输入 `YES` 才会动硬盘。
 2. 它让 Windows 把 **D:** 只缩小安装器自己需要的那一点（约 0.5–2 GB），建一个装着安装器的小 FAT32 分区
    `GK3LIVE`，加一个启动项，并且只把**下一次**开机设成进安装器。给 Android 的空间稍后在安装器里选。
-   有两种例外它会问你：如果快速启动开着，它会提出替你关掉（安装器拒绝缩小被 Windows 留在休眠状态的分区）；
+   有两种例外它会问你：如果快速启动开着，它会提出替你关掉 —— 现在每条路径都会关，因为双系统下它必须保持关闭 —— （安装器拒绝缩小被 Windows 留在休眠状态的分区）；
    如果 D: 用 BitLocker / 设备加密加密了 —— 安装器缩不了它 —— 它会提出现在就把给 Android 的空间腾出来。
    参数：`-AndroidGiB 64`（现在就给 Android 腾出这么多）、`-ShrinkDrive C`、`-Wifi none`。
 3. 重启。在安装器里选 **缩小现有分区腾出空间**（Shrink an existing partition to make room；选 D:），
@@ -137,6 +137,12 @@ https://ota.072172.xyz/install/crDroidAndroid-16.0-20261003-gaokun3-v12.11/insta
 
 ⚠️ 这个脚本在 Windows 11 ARM 虚拟机里完整跑通过，还没在 MateBook E Go 上跑过
 （"只划安装器自己的空间"这个默认行为、加密时的那个问题和快速启动那一步，目前只在单元测试里跑过）。
+
+**Windows 伴随工具（预览，1.0 起）。** 脚本最后一步还会把自己装到 `%ProgramFiles%\gaokun3`，
+在开始菜单建一个 *gaokun3* 文件夹（重启到 Android、默认启动 Android / Windows、修复 Android 启动、
+检查启动状态、只暂停 BitLocker、删除 Android），并在每次 Windows 启动时检查：Windows 换掉了启动程序就提醒你。
+是从 U 盘装的？在 Windows 里运行 U 盘上的 `gaokun3-windows\gaokun3-setup.cmd`。
+⬜ 它还没在真 Windows 上跑过；这台机器上 Windows 能不能写启动变量（重启到 Android、默认系统都靠它）也还没验证。
 
 ### 从 U 盘启动
 
