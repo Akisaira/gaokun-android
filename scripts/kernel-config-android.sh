@@ -435,9 +435,9 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 
 # ★ LIVE-12：ANON_VMA_NAME（mm/Kconfig:1365）—— scudo / ART 靠它给匿名映射起名，
 #   没有它 dumpsys meminfo 的 Java / Native 堆全是 0、全算进 Unknown。LRU_GEN 改回收行为，不在这里顺手开。
-# ★ LIVE-13：LOG_BUF_SHIFT（init/Kconfig:804，范围 12–25）17 → 19，内核环形缓冲 128 KiB → 512 KiB。
-# ★ PERF-11 / PWR-13：THERMAL_STATISTICS（drivers/thermal/Kconfig:29）—— cooling_device*/stats，
-#   降频历史可查。
+# ★ LIVE-13：LOG_BUF_SHIFT（init/Kconfig:804，范围 12–25；7.2.9 树 ~/gk3-kernel-72y 里是 :807）17 → 19，内核环形缓冲 128 KiB → 512 KiB。
+# ★ PERF-11 / PWR-13：THERMAL_STATISTICS（drivers/thermal/Kconfig:29，7.2.9 同）—— cooling_device*/stats，
+#   降频历史可查。（以上与下面 APP-17 的四个符号 2026-10-05 在 7.2.9 树上重 grep 过；该树的 .config 四项 + 这两项都已是期望值。）
 # ★ APP-17：ARMv8 废弃指令模拟（arch/arm64/Kconfig：ARMV8_DEPRECATED:1826 SWP_EMULATION:1840
 #   CP15_BARRIER_EMULATION:1863 SETEND_EMULATION:1879）。AOSP kernel/configs
 #   b/android-6.12/android-base-conditional.xml:43-72 对 arm64 要求这四项 =y。
