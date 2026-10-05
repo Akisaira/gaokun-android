@@ -15,6 +15,10 @@
 #   C. 反例，都必须【在动盘之前】拒绝：截断的 .zst、sha256 不符、在已装过的盘上再装一次；
 #      以及 dry-run 一个字节都不写
 #   D. 探测输出里 PARTLABEL 的空格按协议编码（"Basic data partition" 不能变成 "Basic"）
+#   K. 双系统专项（S10 / S15，docs/boot-entry-design.md §4.7、§4.9）：Windows 休眠拒绝写 ESP（U18）、BitLocker + 换 BOOTAA64
+#      要确认恢复密钥（U16）、默认系统写进 GK3 的 set_default（U12）、timeout 5（U13）、32 MiB 余量（U17）、
+#      重新安装删掉统一启动入口的条目、BOOTAA64 字节相同就不重写、LoaderEntryDefault 被删掉
+#   每一次装完都核对 misc 的前 64 KiB 与 Python 独立算的初始状态逐字节相同（gk3-misc init，S10）
 #
 # ⚠️ 故意不开 pipefail：判据都显式取退出码（scripts/verify-root.sh:8-11）。
 set -u
@@ -30,6 +34,32 @@ bad() { echo "  ✗ $*"; FAIL=$((FAIL+1)); }
 check() { local what=$1; shift; if "$@" >/dev/null 2>&1; then ok "$what"; else bad "$what"; fi; }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 sha_head() { head -c "$2" "$1" | sha256sum | cut -d' ' -f1; }
+# 装完之后 misc 应有的前 64 KiB（gk3-misc init --slot a --default <$1>，期望值独立算；同 tools/gk3boot/test/misc/run.sh）
+misc_want() {   # $1=none|windows|android $2=输出文件
+    python3 - "$1" "$2" <<'PY'
+import hashlib, struct, sys, zlib
+setdef = {"none": 0, "windows": 1, "android": 2}[sys.argv[1]]
+m = bytearray(65536)
+bc = bytearray(32); bc[0:2] = b"_a"; struct.pack_into("<I", bc, 4, 0x42414342); bc[8] = 1
+struct.pack_into("<H", bc, 9, 2); struct.pack_into("<H", bc, 12, 15 | (6 << 4))
+struct.pack_into("<I", bc, 28, zlib.crc32(bytes(bc[0:28])) & 0xffffffff); m[2048:2080] = bc
+r = bytearray(2048); struct.pack_into("<IHHIII", r, 0, 0x52334B47, 1, 2048, 1, 1, 1); r[26] = 1
+r[48:68] = hashlib.sha1(bytes(2048)).digest(); r[360] = setdef
+struct.pack_into("<IHBBII", r, 1024, 1, 8, 0xff, 0, 1, 0)
+struct.pack_into("<I", r, 2044, zlib.crc32(bytes(r[0:2044])) & 0xffffffff); m[8192:10240] = r
+open(sys.argv[2], "wb").write(m)
+PY
+}
+# efw <目录> <名字> <值>：在假 efivarfs 里放一个 systemd-boot 变量（属性 0x07 + UTF-16LE + 双字节 NUL，同 gk3-boot-android）
+efw() {
+    local i v=$3
+    { printf '\007\000\000\000'; for ((i = 0; i < ${#v}; i++)); do printf '%s\000' "${v:i:1}"; done; printf '\000\000'; } > "$1/$2-$GK3_LOADER_GUID"
+}
+# misc_ok <misc 分区> <none|windows|android>：前 64 KiB = 初始状态，之后全零
+misc_ok() {
+    misc_want "$2" "$W/misc.want"
+    cmp -s <(head -c 65536 "$1") "$W/misc.want" && [ "$(tail -c +65537 "$1" | tr -d '\0' | wc -c)" = 0 ]
+}
 fp() { sgdisk -p "$1" 2>/dev/null | grep -v '^Disk identifier'; head -c 1048576 "$1" | sha256sum; }
 
 W=$(mktemp -d /tmp/gk3-test.XXXX)
@@ -125,7 +155,7 @@ RAWSZ=$(stat -c%s "$W/expect/super.raw")
 # 装完之后的逐项核对。$1=盘 $2=救援 yes|no $3=ESP 节点（双系统时是别人的 ESP，不叫 esp）
 #   $4 $5 = 救援分区里的 squashfs、ESP 上的救援 initramfs 应当来自哪个文件（默认发布目录里那两个）
 verify_install() {
-    local d=$1 resc=$2 esp=${3:-} rsq=${4:-$REL/rescue.squashfs} rini=${5:-$REL/initramfs.img} n p m
+    local d=$1 resc=$2 esp=${3:-} rsq=${4:-$REL/rescue.squashfs} rini=${5:-$REL/initramfs.img} mdef=${6:-none} n p m
     [ -n "$esp" ] || esp=$(gk3__bylabel "$d" esp)
     [ -b "$esp" ] || { bad "找不到 ESP"; return; }
     for n in misc metadata boot_a boot_b super userdata; do
@@ -147,12 +177,17 @@ verify_install() {
         [ "$(sha_head "$(gk3__bylabel "$d" $n)" "$(stat -c%s "$REL/boot.img")")" = "$(sha "$REL/boot.img")" ] \
             || { bad "$n 内容不对"; return; }
     done; ok "boot_a / boot_b == boot.img"
-    [ "$(head -c $((GK3_MISC_MIB << 20)) "$(gk3__bylabel "$d" misc)" | tr -d '\0' | wc -c)" = 0 ] \
-        && ok "misc 全零" || bad "misc 不是全零"
+    misc_ok "$(gk3__bylabel "$d" misc)" "$mdef" \
+        && ok "misc：BCAB _a 15/6 未成功、_b 0/0，GK3 记录（已迁移、set_default=${mdef}）—— 与独立算的逐字节相同，其余全零" \
+        || { bad "misc 不是期望的初始状态（set_default=${mdef}）"; "$(gk3__misc_tool)" dump "$(gk3__bylabel "$d" misc)" 2>/dev/null | sed 's/^/      /'; }
 
     m=$W/mnt-esp; mkdir -p "$m"; mount -o ro "$esp" "$m" || { bad "ESP 挂不上"; return; }
     [ "$(sha "$m/EFI/BOOT/BOOTAA64.EFI")" = "$(sha "$GK3_SDBOOT")" ] && ok "EFI/BOOT/BOOTAA64.EFI = systemd-boot" || bad "BOOTAA64.EFI 不对"
     grep -qx 'default \*-android-a.conf' "$m/loader/loader.conf" && ok "loader.conf default = *-android-a.conf" || bad "loader.conf default 不对"
+    # U13 / U3：有 Windows 的启动管理器 ⇒ 菜单 5 秒；纯 Android 15 秒；都不写 menu-hidden
+    local tmo=15; [ -f "$m/EFI/Microsoft/Boot/bootmgfw.efi" ] && tmo=5
+    grep -qx "timeout $tmo" "$m/loader/loader.conf" && ! grep -q 'menu-hidden' "$m/loader/loader.conf" \
+        && ok "loader.conf timeout ${tmo}（$([ "$tmo" = 5 ] && echo 双系统 U13 || echo 纯 Android U3)），没有 menu-hidden" || bad "loader.conf 的 timeout 不对（要 $tmo）：$(grep timeout "$m/loader/loader.conf")"
     for s in a b; do
         for n in Image gaokun3.dtb ramdisk.img; do
             [ "$(sha "$m/$MID/android/slot_$s/$n")" = "$(sha "$W/expect/$n")" ] || { bad "slot_$s/$n 不对"; umount "$m"; return; }
@@ -279,7 +314,7 @@ fi
 gk3_apply --disk "$DB" --mode alongside --rescue no --release "$REL" \
           --region-start "$RS" --region-end "$RE" --esp "${DB}p1" >"$W/b.log" 2>&1; rc=$?
 if [ "$rc" = 0 ]; then ok "双系统安装完成"
-    verify_install "$DB" no "${DB}p1"
+    verify_install "$DB" no "${DB}p1" "$REL/rescue.squashfs" "$REL/initramfs.img" android
 else bad "双系统安装失败 rc=$rc"; tail -20 "$W/b.log" | sed 's/^/      /'; fi
 same=1; for n in 2 3 4; do [ "$(sha "${DB}p$n")" = "${H[$n]}" ] || { same=0; bad "p$n 的内容变了"; }; done
 [ "$same" = 1 ] && ok "MSR / NTFS / WinRE 三个分区逐字节未变"
@@ -345,14 +380,25 @@ tryb() {  # $1=说明 $2=--esp $3=期望的报错片段
     else bad "$1：rc=${rc}，或报错不对，或盘被改了"; printf '%s\n' "$out" | tail -3 | sed 's/^/      /'; fi
 }
 EI=$(gk3_esp_info "${DE}p1")
-[ "$(gk3__f "$EI" free_mib)" -lt "$(gk3__f "$EI" need_mib)" ] && printf '%s' "$EI" | grep -q 'windows=no' \
-    && ok "gk3_esp_info 事先就报出来了：$EI" || bad "gk3_esp_info 不对：$EI"
-tryb "Windows 默认的 100 MiB ESP" "${DE}p1" "ESP 空间不够"
+[ "$(gk3__f "$EI" free_mib)" -lt "$(gk3__f "$EI" need_mib)" ] && printf '%s' "$EI" | grep -q 'windows=no' && printf '%s' "$EI" | grep -q ' small=yes ' \
+    && ok "gk3_esp_info 事先就报出来了（small=yes）：$EI" || bad "gk3_esp_info 不对：$EI"
+# U17：100 MiB 的 ESP 明确拒绝（ERR esp-too-small），不去撞"空间不够、请清理"—— 那种 ESP 清理也清不出来
+tryb "Windows 默认的 100 MiB ESP（U17 明确拒绝）" "${DE}p1" "^ERR code=esp-too-small size_mib=100 min_mib=200 touched=no"
 tryb "--esp 指向 NTFS 分区" "${DE}p2" "不是 FAT"
 tryb "--esp 指向不存在的节点" "${DE}p9" "要 --esp"
+# U12：这个 ESP 上没有 Windows 的启动管理器 ⇒ 不能选 Windows 为默认（在空间检查之前就拒绝）
+tryb_def() { local out rc; out=$(gk3_apply --disk "$DE" --mode alongside --rescue no --release "$REL" --default-os windows \
+        --region-start "$(gk3__f "$FE" start)" --region-end "$(gk3__f "$FE" end)" --esp "${DE}p1" 2>&1); rc=$?
+    [ "$rc" != 0 ] && printf '%s' "$out" | grep -q '^ERR code=default-os-no-windows ' && [ "$(fp "$DE")" = "$BEFORE_E" ] \
+        && ok "没有 Windows 的 ESP 上选 Windows 为默认：default-os-no-windows，盘没动" || { bad "没有 Windows 也让选 Windows 为默认（rc=${rc}）"; printf '%s\n' "$out" | tail -3 | sed 's/^/      /'; }; }
+tryb_def
+OUT=$(gk3_apply --disk "$DC" --mode wipe --rescue no --release "$REL" --default-os windows 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '^ERR code=default-os-no-windows touched=no' && [ "$(fp "$DC")" = "$BEFORE" ] \
+    && ok "整盘清空 + 选 Windows 为默认：拒绝（清空之后没有 Windows），盘没动" || bad "整盘清空居然接受了 Windows 为默认（rc=${rc}）"
 OUT=$(GK3_DRYRUN=1 gk3_apply --disk "$DC" --mode wipe --rescue yes --release "$REL" 2>&1); rc=$?
 [ "$rc" = 0 ] && printf '%s' "$OUT" | grep -q '^DRY: sgdisk --zap-all' && [ "$(fp "$DC")" = "$BEFORE" ] \
-    && ok "dry-run：列出了 $(printf '%s\n' "$OUT" | grep -c '^DRY:') 条命令，盘一个字节没变" || bad "dry-run 不对（rc=${rc}）"
+  && printf '%s' "$OUT" | grep -q '^DRY: .*gk3-misc init <misc分区> --slot a --default none$' \
+    && ok "dry-run：列出了 $(printf '%s\n' "$OUT" | grep -c '^DRY:') 条命令（含 gk3-misc init），盘一个字节没变" || bad "dry-run 不对（rc=${rc}）"
 
 # ── D. 免 U 盘：安装器就跑在目标盘上 ─────────────────────────────────────────
 # 用户 2026-09-25：LiveCD 的初衷之一是【免 U 盘安装】，并且要能装双系统。于是"介质与目标同盘"
@@ -399,7 +445,8 @@ printf '%s' "$RI" | grep -q ' rescue=yes ' && [ "$(gk3__find_rescue_squashfs "$R
 gk3_apply --disk "$DD" --mode alongside --rescue yes --release "$RELW" \
           --region-start "$RS" --region-end "$RE" --esp "${DD}p1" >"$W/d.log" 2>&1; rc=$?
 if [ "$rc" = 0 ]; then ok "双系统装进同一块盘的空闲区（带救援系统）：完成（介质分区一直挂着）"
-    verify_install "$DD" yes "${DD}p1" /media/gk3/gaokun3/live.squashfs /media/gk3/gaokun3/initramfs.img
+    # 这块盘的 ESP 上没放 Windows 的启动管理器 ⇒ 不算双系统：set_default 不放、菜单 15 秒
+    verify_install "$DD" yes "${DD}p1" /media/gk3/gaokun3/live.squashfs /media/gk3/gaokun3/initramfs.img none
 else bad "双系统安装失败 rc=$rc"; tail -20 "$W/d.log" | sed 's/^/      /'; fi
 findmnt -rn -S "${DD}p4" -T /media/gk3 >/dev/null && [ "$(sha /media/gk3/gaokun3/live.squashfs)" = "$LIVE_SHA" ] \
     && [ "$(sgdisk -i 4 "$DD" 2>/dev/null | awk '/unique GUID/{print $4}')" = "$PU4" ] \
@@ -499,10 +546,109 @@ printf '%s\n' "$P" | grep -q "^PLAN op=reuse name=misc .*size_kib=$MK " && print
 BEFORE_R=$(sgdisk -p "$DR" | grep -v '^Disk identifier')
 gk3_apply --disk "$DR" --mode reinstall --rescue no --release "$REL" --esp "${DR}p1" >"$W/r.log" 2>&1; rc=$?
 [ "$rc" = 0 ] && ok "真机布局：重新安装完成（安装器所在的 p3 一直挂着）" || { bad "真机布局的重新安装失败 rc=$rc"; tail -8 "$W/r.log" | sed 's/^/      /'; }
-[ "$(head -c $(( MK * 1024 )) "${DR}p4" | tr -d '\0' | wc -c)" = 0 ] && ok "1007 KiB 的 misc 整个清零了（不再按 4 MiB 写爆）" || bad "misc 没清干净"
+misc_ok "${DR}p4" none && ok "1007 KiB 的 misc：垃圾全清掉、前 64 KiB 是初始状态、之后全零（不再按 4 MiB 写爆）" || bad "misc 没清干净 / 初始状态不对"
 [ "$(sgdisk -p "$DR" | grep -v '^Disk identifier')" = "$BEFORE_R" ] && findmnt -rn -S "${DR}p3" -T /media/gk3 >/dev/null \
     && ok "分区表没变，p3 还挂着" || bad "真机布局：分区表变了或 p3 被动了"
 umount /media/gk3
+
+# ── K. 双系统专项（S10 / S15）────────────────────────────────────────────────
+echo "═══ K. 双系统专项：休眠 / BitLocker / 默认系统 / 菜单 5 秒 / 32 MiB 余量 / 重新安装删入口条目 ═══"
+DK=$(new_disk k 40G)
+TOT=$(blockdev --getsz "$DK"); LAST=$(( TOT - 34 )); BLS=$(( (LAST - 131072 + 1) / 2048 * 2048 ))
+sgdisk -o \
+  -n 1:2048:+300M -t 1:ef00 -c 1:"EFI system partition" \
+  -n 2:0:+16M     -t 2:0c01 -c 2:"Microsoft reserved partition" \
+  -n 3:0:+4G      -t 3:0700 -c 3:"Basic data partition" \
+  -n 4:$BLS:$LAST -t 4:0700 -c 4:"Basic data partition" "$DK" >/dev/null 2>&1
+partprobe "$DK" 2>/dev/null; udevadm settle 2>/dev/null; sleep 1
+mkfs.vfat -F 32 -n SYSTEM "${DK}p1" >/dev/null
+mmd -i "${DK}p1" ::/EFI ::/EFI/Microsoft ::/EFI/Microsoft/Boot ::/EFI/Boot
+mcopy -i "${DK}p1" "$W/bootmgfw.efi" ::/EFI/Microsoft/Boot/bootmgfw.efi
+mcopy -i "${DK}p1" "$W/winfallback.efi" ::/EFI/Boot/bootaa64.efi
+mkntfs -Q -F -L Windows "${DK}p3" >/dev/null 2>&1
+# p4：BitLocker 卷的样子（blkid 认 TYPE=BitLocker：Win7 头 eb 58 90 "-FVE-FS-"、偏移 176 的 FVE 元数据位置、那里再一个 "-FVE-FS-"）
+python3 - "${DK}p4" <<'PY'
+import struct, sys
+with open(sys.argv[1], "r+b") as f:
+    s = bytearray(512); s[0:3] = b"\xeb\x58\x90"; s[3:11] = b"-FVE-FS-"
+    struct.pack_into("<H", s, 11, 512); s[13] = 8; struct.pack_into("<Q", s, 176, 1 << 20)
+    f.write(s); f.seek(1 << 20); f.write(b"-FVE-FS-" + struct.pack("<HH", 64, 2) + bytes(52))
+PY
+[ "$(blkid -p -o value -s TYPE "${DK}p4")" = BitLocker ] && ok "p4 被 blkid 认成 BitLocker（假的加密卷）" || bad "假 BitLocker 卷没被认出来"
+# Windows 在休眠（快速启动的"关机"）：C: 根上的 hiberfil.sys 以 hibr 开头
+mk=$W/mnt-k; mkdir -p "$mk"
+ntfs-3g "${DK}p3" "$mk" && { printf 'hibr'; head -c 8192 /dev/urandom; } > "$mk/hiberfil.sys" && umount "$mk"
+# 假 efivarfs：一个指着 live 的 LoaderEntryDefault（§4.9.3 的"不合法值"）与一个 OneShot
+EFV=$W/efivars; mkdir -p "$EFV"
+efw "$EFV" LoaderEntryDefault gaokun3-live.conf; efw "$EFV" LoaderEntryOneShot "*-android-a.conf"
+PROBE=$(gk3_probe 2>/dev/null | awk -v d="$DK" 'index($0, "disk="d" ")')
+FREE=$(printf '%s\n' "$PROBE" | grep '^FREE ' | sort -t= -k5 -n | tail -1); RS=$(gk3__f "$FREE" start); RE=$(gk3__f "$FREE" end)
+kapply() { gk3_apply --disk "$DK" --mode alongside --rescue no --release "$REL" --region-start "$RS" --region-end "$RE" --esp "${DK}p1" "$@"; }
+EI=$(GK3_EFIVARS=$EFV gk3_esp_info "${DK}p1")
+printf '%s' "$EI" | grep -q 'windows=yes gaokun3=no' && printf '%s' "$EI" | grep -q ' bootaa64=other bitlocker=yes hibernated=yes ' \
+  && printf '%s' "$EI" | grep -q ' entry=none ' && printf '%s' "$EI" | grep -q ' loader_default=gaokun3-live.conf ' \
+    && ok "gk3_esp_info 事先报出：Windows 在、BOOTAA64 不是我们的、BitLocker、在休眠、LoaderEntryDefault" || bad "gk3_esp_info 不对：$EI"
+BEFORE_K=$(fp "$DK")
+OUT=$(GK3_EFIVARS=$EFV kapply --bitlocker-key yes 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q "^ERR code=esp-windows-hibernated part=${DK}p3 touched=no" && [ "$(fp "$DK")" = "$BEFORE_K" ] \
+    && ok "U18：Windows 在休眠 ⇒ 拒绝写 ESP（esp-windows-hibernated），盘没动" || { bad "休眠没拦住（rc=${rc}）"; printf '%s\n' "$OUT" | tail -3 | sed 's/^/      /'; }
+ntfs-3g "${DK}p3" "$mk" && rm -f "$mk/hiberfil.sys" && umount "$mk"
+EI=$(gk3_esp_info "${DK}p1")
+printf '%s' "$EI" | grep -q ' bitlocker=yes hibernated=unknown ' \
+    && ok "关了休眠、但有 BitLocker 卷（里面读不到）：hibernated=unknown（只警告，不拦）" || bad "hibernated 不对：$EI"
+BEFORE_K=$(fp "$DK")
+OUT=$(GK3_EFIVARS=$EFV kapply 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '^ERR code=bitlocker-key-unconfirmed touched=no' && [ "$(fp "$DK")" = "$BEFORE_K" ] \
+    && ok "U16：BitLocker + 这次要换 BOOTAA64、没给 --bitlocker-key ⇒ 拒绝，盘没动" || { bad "BitLocker 没拦住（rc=${rc}）"; printf '%s\n' "$OUT" | tail -3 | sed 's/^/      /'; }
+OUT=$(GK3_ESP_WIN_RESERVE_KIB=1048576 GK3_EFIVARS=$EFV kapply --bitlocker-key yes 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '^ERR code=esp-win-reserve left_mib=[0-9-]* need_mib=1024 touched=no' && [ "$(fp "$DK")" = "$BEFORE_K" ] \
+    && ok "U17：扣掉一次 OTA 之后给 Windows 留的不够（把门槛临时调到 1 GiB）⇒ esp-win-reserve，盘没动" || { bad "U17 余量没拦住（rc=${rc}）"; printf '%s\n' "$OUT" | tail -3 | sed 's/^/      /'; }
+H3=$(sha "${DK}p3"); H4=$(sha "${DK}p4")
+GK3_EFIVARS=$EFV kapply --bitlocker-key yes --default-os windows >"$W/k.log" 2>&1; rc=$?
+if [ "$rc" = 0 ]; then ok "双系统（BitLocker 已确认、Windows 为默认）：装完"
+    verify_install "$DK" no "${DK}p1" "$REL/rescue.squashfs" "$REL/initramfs.img" windows
+else bad "双系统安装失败 rc=$rc"; tail -15 "$W/k.log" | sed 's/^/      /'; fi
+grep -q '^U17：装完、扣掉一次 OTA 的暂时空间后还剩 [0-9]* MiB 给 Windows 与固件' "$W/k.log" && ok "U17 的余量算了一遍、记进日志" || bad "日志里没有 U17 那一行"
+[ ! -e "$EFV/LoaderEntryDefault-$GK3_LOADER_GUID" ] && [ -e "$EFV/LoaderEntryOneShot-$GK3_LOADER_GUID" ] \
+  && grep -q "删掉了 EFI 变量 LoaderEntryDefault（原值 'gaokun3-live.conf'）" "$W/k.log" && ! grep -q '^NOTE ' "$W/k.log" \
+    && ok "LoaderEntryDefault（指着 live）删掉了；OneShot 不是整盘清空、留着；Windows 为默认【不】直接写变量（走 GK3 的 set_default）" \
+    || bad "EFI 变量的处理不对：$(ls "$EFV")"
+[ "$(sha "${DK}p3")" = "$H3" ] && [ "$(sha "${DK}p4")" = "$H4" ] && ok "Windows 卷（NTFS / BitLocker）逐字节未变" || bad "Windows 卷被动了"
+# 重新安装：ESP 上已有统一启动入口（上一版装的系统部署的）+ 一条手放的实验条目 + 另一个目录的直连条目
+mount "${DK}p1" "$mk"
+EK=$mk/loader/entries
+for n in gk3boot-android-a.conf gk3boot-android-b+3.conf gk3prev-android-a.conf gk3boot-android-a.conf.staged; do
+    printf 'title Android\nversion gk3boot-V1\nsort-key 0gk3\nefi /EFI/gk3boot/V1/gk3boot.efi\noptions gk3.observe=0 gk3.hint=a gk3.dispatch=1\n' > "$EK/$n"
+done
+printf 'title Android fastboot / boot menu\nversion gk3boot-V1\nefi /EFI/gk3boot/V1/gk3boot.efi\noptions gk3.action=fastboot\n' > "$EK/gk3boot-tools.conf"
+printf 'title test\nefi /EFI/gk3boot/V2/gk3boot.efi\n' > "$EK/gk3test.conf"
+mkdir -p "$mk/EFI/gk3boot/V1" "$mk/EFI/gk3boot/V2" "$mk/EFI/gk3boot/log"
+echo x > "$mk/EFI/gk3boot/V1/gk3boot.efi"; echo y > "$mk/EFI/gk3boot/V2/gk3boot.efi"; echo z > "$mk/EFI/gk3boot/log/one.log"
+cp "$EK/$MID-android-b.conf" "$EK/$OTHER-android-b.conf"
+touch -d '2001-01-01 00:00:00' "$mk/EFI/BOOT/BOOTAA64.EFI" "$mk/EFI/systemd/systemd-bootaa64.efi"
+umount "$mk"
+EI=$(gk3_esp_info "${DK}p1")
+printf '%s' "$EI" | grep -q ' bootaa64=sdboot ' && printf '%s' "$EI" | grep -q ' entry=V1 entry_mode=action entry_state=a,b+3 staged=yes prev=yes ' \
+    && ok "gk3_esp_info 报出入口：版本 V1、动作模式、条目 a / b+3、有 .staged 与 gk3prev；BOOTAA64 已是我们的" || bad "入口状态报得不对：$EI"
+# EFI 变量删不掉（只读）：装照样成功，但给界面一条 NOTE
+EFV2=$W/efivars-ro; mkdir -p "$EFV2"; mount -t tmpfs tmpfs "$EFV2"; efw "$EFV2" LoaderEntryDefault auto-windows; mount -o remount,ro "$EFV2"
+GK3_EFIVARS=$EFV2 gk3_apply --disk "$DK" --mode reinstall --rescue no --release "$REL" --esp "${DK}p1" --keep-data yes >"$W/k2.log" 2>&1; rc=$?
+if [ "$rc" = 0 ]; then ok "重新安装（BOOTAA64 已是这一份 ⇒ 不要 --bitlocker-key；默认 Android）：完成"
+    verify_install "$DK" no "${DK}p1" "$REL/rescue.squashfs" "$REL/initramfs.img" android
+else bad "双系统上的重新安装失败 rc=$rc"; tail -15 "$W/k2.log" | sed 's/^/      /'; fi
+mount -o ro "${DK}p1" "$mk"
+[ -z "$(ls "$EK" | grep -E '^gk3(boot|prev)-')" ] && ! ls "$EK" | grep -q 'gk3boot.*disabled' && [ ! -e "$mk/EFI/gk3boot/V1" ] \
+  && [ -f "$mk/EFI/gk3boot/V2/gk3boot.efi" ] && [ -f "$mk/EFI/gk3boot/log/one.log" ] && [ -f "$EK/gk3test.conf" ] \
+    && ok "统一启动入口的条目（现役 / +3 / gk3prev / .staged / tools）删掉了、不是改名停用；没人引用的 V1/ 删掉，手放条目引用的 V2/ 与 log/ 留着" \
+    || { bad "入口条目 / 目录的处理不对"; ls "$EK" "$mk/EFI/gk3boot" | sed 's/^/      /'; }
+[ -e "$EK/$OTHER-android-b.conf.disabled" ] && [ ! -e "$EK/$OTHER-android-b.conf" ] \
+    && ok "另一个目录的直连条目照旧改名停用（收紧后的匹配只认 <32 位十六进制>-android-<槽>.conf）" || bad "另一个目录的直连条目没被停用"
+[ "$(stat -c %Y "$mk/EFI/BOOT/BOOTAA64.EFI")" -lt 1000000000 ] && [ "$(stat -c %Y "$mk/EFI/systemd/systemd-bootaa64.efi")" -lt 1000000000 ] \
+    && ok "U16：BOOTAA64.EFI / systemd-bootaa64.efi 字节相同 ⇒ 没重写（mtime 还是 2001 年）" || bad "字节相同的 BOOTAA64 被重写了"
+umount "$mk"
+grep -q '^NOTE code=loadervar-stuck name=LoaderEntryDefault value=auto-windows$' "$W/k2.log" \
+    && ok "LoaderEntryDefault 删不掉（只读）：安装照样成功，stdout 给一条 NOTE code=loadervar-stuck" || bad "删不掉变量时没有 NOTE"
+umount "$EFV2"
 
 # ── G. 手动调整磁盘 ────────────────────────────────────────────────────────
 # 用户 2026-09-25："能给的都给" —— 删除 / 新建 / 格式化 / 缩小 / 扩大。每个操作都要守住：
@@ -733,9 +879,12 @@ VM=$(GK3_LOCAL_MANIFEST=$W/local-variants.txt GK3_MANIFEST_URL=http://127.0.0.1:
 kill $SRVPID1 $SRVPID2 $SRVPID3 $SRVPID4 2>/dev/null
 # 下载下来的目录交给 gk3_apply —— 网络安装与 U 盘安装是同一条写盘路径
 DN=$(new_disk n 40G); sgdisk -o "$DN" >/dev/null 2>&1
-gk3_apply --disk "$DN" --mode wipe --rescue no --release "$DL" >"$W/n.log" 2>&1; rc=$?
+EFVN=$W/efivars-n; mkdir -p "$EFVN"; efw "$EFVN" LoaderEntryDefault gk3boot-android-a.conf; efw "$EFVN" LoaderEntryOneShot auto-windows
+GK3_EFIVARS=$EFVN gk3_apply --disk "$DN" --mode wipe --rescue no --release "$DL" >"$W/n.log" 2>&1; rc=$?
 [ "$rc" = 0 ] && [ "$(sha_head "$(gk3__bylabel "$DN" super)" "$RAWSZ")" = "$(sha "$W/expect/super.raw")" ] \
     && ok "用下载下来的目录真装一遍：成功，super 逐字节正确" || { bad "网络安装的 apply 失败 rc=$rc"; tail -5 "$W/n.log"; }
+[ -z "$(ls -A "$EFVN")" ] && misc_ok "$(gk3__bylabel "$DN" misc)" none \
+    && ok "整盘清空：残留的 LoaderEntryDefault（Android 条目的精确 id）与 LoaderEntryOneShot 都删了；misc 是初始状态" || bad "整盘清空后 EFI 变量还在：$(ls "$EFVN")"
 
 # ── J. 写盘进程脱离界面（v1.0 计划 GUI-11）──────────────────────────────────
 echo "═══ J. gk3_job_run：写盘放进独立单元，界面死了它照样写完 ═══"

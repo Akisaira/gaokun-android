@@ -134,6 +134,7 @@ ath11k 固件 / OpenRC 的 runlevel 链接）。
 | `gk3-unsparse.py` | 把 sparse 镜像从 stdin **顺序**展开写到分区，边写边报进度 | `simg2img` 接受 `-` 但**喂管道会失败**（`sparse_read.cpp:103` 导入时要 lseek）——而发版产物是 `.zst`，不走管道就得先落一份 12 GiB 的临时文件 |
 | `gk3-bootimg.py` | 把 boot.img（v2）拆成 `Image` / `gaokun3.dtb` / `ramdisk.img` / `cmdline.txt` | systemd-boot 只认 ESP 上的普通文件；与设备侧 `bootimg_extract.cpp` 是同一件事的两个实现，必须逐字节相同 |
 | `gk3-wpa-scan.py` | 解析 `wpa_cli scan_results` | 中文 SSID 在里面全是 `\xNN` 转义，而且那是制表符分隔的 —— 原来的 awk 两样都处理错 |
+| `gk3-misc`（2026-10-05，S10） | `init`：清零后的 misc 写初始 A/B 状态（`_a` 15/6、`_b` 0/0）与 GK3 记录 | 布局只在 libgk3core 里有一份（入口、HAL、执行端共用）；源码 `tools/gk3boot/misc/gk3-misc.c`，`build-rootfs.sh` 静态编进镜像，仓库里跑时 `gk3__misc_tool` 用 cc 现编 |
 
 测试（全部绿了才动 `installer-lib.sh`）：
 
@@ -153,7 +154,11 @@ bash scripts/live/test-in-container.sh scripts/live/test-shrink.sh
 （分区、super 逐字节、两个槽、启动项 options 与 boot.img 的 cmdline 一致、
 双系统时 Windows 那几个分区逐字节未变、PARTUUID 未变、ESP 没被格式化……），
 再验一组必须**在动盘之前**就拒绝的反例（截断的 .zst、sha256 不符、
-Windows 默认的 100 MiB ESP、在已装过的盘上再装一次）。
+Windows 默认的 100 MiB ESP、在已装过的盘上再装一次）。每次装完都核对 misc 的前 64 KiB 与独立算的初始状态逐字节相同。
+K 组是双系统专项（S10 / S15，`tools/gk3boot/README.md` §17）：Windows 休眠拒绝写 ESP、BitLocker + 换 BOOTAA64 要
+`--bitlocker-key yes`、32 MiB 余量、Windows 为默认写进 GK3 的 `set_default`、`timeout 5`、`LoaderEntryDefault` 被删
+（假 efivarfs：`GK3_EFIVARS=<目录>`）、重新安装删掉统一启动入口的条目、字节相同的 BOOTAA64 不重写。
+⚠️ 测试环境要 gcc（`test-env.Dockerfile`，给 `gk3__misc_tool` 现编 gk3-misc）。
 `GK3_TEST_BOOTIMG=/repo/out/…/boot.img` 可以换成真发版的 boot.img。
 
 ★ 它第一次跑就抓到：**双系统模式从来装不上**——`gk3_apply` 在写完分区表之后

@@ -16,6 +16,8 @@
 #   `!! …` 与普通日志仍是中文 —— 它们给日志、给命令行版看；界面只把它们放进"详情"。
 #   进度代码与 ERR 代码的全集 = live/installer-flutter/lib/ui/messages.dart 里的两个 switch（新加一个要两边一起加）。
 #   ERR 为什么也走 stderr：`x=$(gk3__…)` 会把 stdout 吞掉，报错跟着丢；stderr 不会。
+# stdout 上另有一种记录：`NOTE code=<代码> [k=v …]` —— gk3_apply 成功了，但有件事要在完成页告诉用户
+#   （2026-10-05 S10：loadervar-stuck name= value= = EFI 变量删不掉）。前端 session.notes 收集、DonePage 按代码说。
 #
 
 # ★ 值里不会有空格：自由文本字段（分区名、卷标、磁盘型号、SSID）一律经
@@ -30,7 +32,7 @@
 #   . installer-lib.sh
 #   gk3_preflight                  # 这台机器能不能装（型号 / BIOS / Secure Boot / 工具）
 #   gk3_probe                      # 列出磁盘 / 分区 / 空闲区
-#   gk3_esp_info <分区>            # 现有 ESP 的剩余空间、上面有没有 Windows（双系统之前问）
+#   gk3_esp_info <分区>            # 现有 ESP 的剩余空间、上面有没有 Windows、BitLocker / 休眠、统一启动入口（双系统之前问）
 #   gk3_release_info [目录]        # 发布目录 / 安装 U 盘里带了什么（镜像、救援系统、版本）
 #   gk3_net_release <url> <目录>   # 网络安装：下载一整套发布文件并逐个校验
 #   gk3_plan  <参数…>              # 算出分区方案（纯计算，不碰磁盘）
@@ -63,6 +65,24 @@ GK3_ESP_REINSTALL_NEED_MIB=16
 # OTA postinstall 的门槛：ESP 空闲 + 目标槽目录里将被覆盖的旧文件 > 56 MiB
 # （device/huawei/gaokun3/bin/gaokun3-ota-postinstall.sh:93-96）。装完之后要还能 OTA
 GK3_ESP_OTA_NEED_KIB=57344
+# ★ 双系统（ESP 上有 EFI/Microsoft/Boot/bootmgfw.efi）共用 ESP 的余量（docs/boot-entry-design.md §4.9.8、U17）：
+#   写完、并扣掉下一次 OTA 的暂时空间（一个槽的 Image + ramdisk + dtb，再加一版统一启动入口）之后，
+#   还要给 Windows 和固件留 ≥ 32 MiB —— 功能更新要系统分区空闲 15 MB、质量更新 13 MB（设计稿引的微软 KB 3086249），
+#   固件胶囊也暂存在 ESP 的 EFI/UpdateCapsule。postinstall / gk3-esp-sync 要用同一个数（设计稿：三处一致）。
+GK3_ESP_WIN_RESERVE_KIB=32768
+# 一版统一启动入口（EFI/gk3boot/<ver>/ 下 gk3boot.efi + fastboot.img）的估计，设计稿 §4.9.8 那张表的"≤5"
+GK3_ESP_GK3BOOT_KIB=5120
+# 比这小的 ESP（用户自己重装 Windows 得到的 100 MiB）在 1.0 里明确不装（U17；1.x 的 XBOOTLDR 方案才放得下）。
+# 200：出厂 300 MiB 与 Windows 在 4Kn 盘上建的 260 MiB 都过，100 MiB 那一档不过
+GK3_ESP_MIN_SIZE_MIB=200
+# loader.conf 的菜单等待（秒）。纯 Android 按 U3：观察期保持 15（D19：要等"不接键盘盖也能操作菜单"确认之后
+#   才降到 3 / menu-hidden，docs/v1.0-plan.md:341，至今未确认）；双系统按 U13：固定显示菜单 5 秒，不写 menu-hidden
+#   （平板形态下切 Windows 主要靠这个菜单）。OTA postinstall 只把【这里原来写的 15】改成 5，用户改过的不动
+GK3_LOADER_TIMEOUT=15
+GK3_LOADER_TIMEOUT_DUAL=5
+# systemd-boot 的厂商 GUID（refs/systemd-v257/src/boot/efivars.h:12，与 scripts/boot-oneshot.sh、
+# overlay-common/usr/bin/gk3-boot-android 相同）。LoaderEntryDefault / LoaderEntryOneShot 都在它下面
+GK3_LOADER_GUID=4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
 
 # 这个库所在的目录。gk3-unsparse.py / gk3-bootimg.py / gk3-wpa-scan.py 跟它放在一起
 # （仓库里是 scripts/live/，live 镜像里是 /usr/share/gaokun3/）。
@@ -566,9 +586,16 @@ gk3__emit_part() {
 # 这是【唯一】会写盘的函数。
 #
 #   gk3_apply --disk X --mode wipe|alongside|reinstall --rescue yes|no --release DIR \
-#             [--region-start S --region-end E --esp PATH] [--userdata-mib N] [--keep-data yes|no]
+#             [--region-start S --region-end E --esp PATH] [--userdata-mib N] [--keep-data yes|no] \
+#             [--default-os android|windows] [--bitlocker-key yes]
 #   reinstall：不改分区表，复用盘上现有的那套分区（gk3__plan_reinstall）；--keep-data yes 不格式化
 #   userdata / metadata（默认格式化 —— 跨版本降级时保留的数据可能起不来）
+#   --default-os（双系统，U12）：冷开机默认进哪个系统，默认 android。windows 要 ESP 上有 Windows 的启动管理器。
+#     ★ 不在这里写 LoaderEntryDefault：写成 GK3 记录里的 set_default 请求（gk3-misc init --default），由统一启动入口
+#       第一次在动作模式下运行时按 core/src/dual.c 的规则写 —— 与 Android 里 Parts 改默认系统同一条通路。理由见
+#       下面"misc"一节的注释（直接写的话，装完第一次重启就进了 Windows，而且 Android 里的重启也会落进 Windows）
+#   --bitlocker-key yes（U16）：Windows 卷是 BitLocker、而这次要改 EFI/BOOT/BOOTAA64.EFI 时必须给 —— 用户在界面上确认过
+#     "已拿到恢复密钥"。没给就在动盘之前拒绝（ERR bitlocker-key-unconfirmed）
 #
 # 发布目录 = GitHub Release / R2 的 install/<VER>/ 下载下来的那一份：
 #   boot.img                         必需
@@ -617,6 +644,81 @@ gk3__esp_delta_kib() {
     echo "$kib"
 }
 
+# systemd-boot 从哪来（gk3_apply 往 ESP 上写的那一份；gk3_esp_info 拿它比 BOOTAA64）。$1=发布目录（可空）
+gk3__sdboot() {
+    if [ -n "${GK3_SDBOOT:-}" ]; then [ -f "$GK3_SDBOOT" ] && echo "$GK3_SDBOOT"; return; fi
+    gk3__find_file systemd-bootaa64.efi /usr/share/gaokun3 "${1:-}" /usr/lib/systemd/boot/efi
+}
+
+# gk3-misc（tools/gk3boot/misc/gk3-misc.c）：安装器用它的 init 子命令初始化 misc（S10，docs/boot-entry-design.md §4.7）。
+# 找的顺序：GK3_MISC_TOOL → 与本库同目录（live 镜像的 /usr/share/gaokun3/gk3-misc，build-rootfs.sh 静态编进去的）→ PATH →
+#   仓库 checkout（命令行版从 scripts/live/ source 本库）里就地用 cc 编一份到 $GK3_RUNDIR/bin/（源文件比它新就重编）。
+# ⚠️ 不用 Python 另写一份：BCAB 与 GK3 记录的布局只在 libgk3core 里有一份（入口、HAL、执行端、这里都用它）
+gk3__misc_tool() {
+    local t src out
+    for t in "${GK3_MISC_TOOL:-}" "$GK3_LIBDIR/gk3-misc"; do
+        [ -n "$t" ] && [ -x "$t" ] && { echo "$t"; return 0; }
+    done
+    t=$(command -v gk3-misc 2>/dev/null) && { echo "$t"; return 0; }
+    src=$GK3_LIBDIR/../../tools/gk3boot
+    [ -f "$src/misc/gk3-misc.c" ] && command -v cc >/dev/null 2>&1 || return 1
+    out=$GK3_RUNDIR/bin/gk3-misc
+    if [ ! -x "$out" ] || [ -n "$(find "$src/misc" "$src/core" -name '*.[ch]' -newer "$out" 2>/dev/null | head -1)" ]; then
+        mkdir -p "$GK3_RUNDIR/bin" || return 1
+        # 编法同 tools/gk3boot/Makefile 的 $(B)/gk3-misc
+        cc -std=c11 -O2 -I"$src/core/include" -o "$out.new" "$src/misc/gk3-misc.c" "$src"/core/src/*.c >&2 \
+            && mv -f "$out.new" "$out" || { rm -f "$out.new"; return 1; }
+        echo "gk3-misc：从仓库源码编了一份 → $out" >&2
+    fi
+    echo "$out"
+}
+
+# 同一块盘上的 Windows 卷是什么状态（双系统写 ESP 之前看，U16 / U18；docs/boot-entry-design.md §4.9.7、§4.9.10）。
+#   $1=ESP 分区节点 → 一行 `bitlocker=yes|no hibernated=yes|no|unknown hib_part=<分区>`
+# hibernated：任一 NTFS 卷的 hiberfil.sys 以 hibr/HIBR 开头（gk3__ntfs_hibernated，ntfscat 只读）⇒ yes；
+#   没有 ntfscat、或者盘上有 BitLocker 卷（里面的 NTFS 这边读不到）而别的 NTFS 都没在休眠 ⇒ unknown；否则 no。
+# ⚠️ 只看 ESP 所在的那块盘：Windows 的 C: 在别的盘上时这里看不到（本机只有一块 NVMe）
+gk3__win_state() {
+    local disk p fs bl=no hib=no hp="" unk=no
+    disk=$(gk3__disk_of "$1") || { echo "bitlocker=no hibernated=unknown hib_part="; return 0; }
+    for p in $(lsblk -nrpo NAME "$disk" 2>/dev/null); do
+        [ "$p" != "$disk" ] && [ -b "$p" ] || continue
+        fs=$(blkid -p -o value -s TYPE "$p" 2>/dev/null)
+        case "$fs" in
+            BitLocker) bl=yes ;;
+            ntfs)
+                if ! command -v ntfscat >/dev/null 2>&1; then unk=yes
+                elif [ "$hib" = no ] && gk3__ntfs_hibernated "$p"; then hib=yes; hp=$p; fi ;;
+        esac
+    done
+    [ "$hib" = no ] && { [ "$bl" = yes ] || [ "$unk" = yes ]; } && hib=unknown
+    echo "bitlocker=$bl hibernated=$hib hib_part=$hp"
+}
+
+# ── systemd-boot 的 EFI 变量（LoaderEntryDefault / LoaderEntryOneShot）─────────────────────────
+# 文件格式同 overlay-common/usr/bin/gk3-boot-android：4 字节属性 + UTF-16LE + 双字节 NUL；覆盖 / 删之前先 chattr -i。
+# GK3_EFIVARS=<目录>：测试时当作 efivarfs（与 gk3-boot-android 同一个开关）。
+# ⓘ live 的内核 cmdline 带 efi=noruntime，但变量照样能读写：uefisecapp（docs/fastboot-design.md:71，#42）；
+#   ⬜ 在真机的 live 里删变量没实测过（gk3-boot-android 写 OneShot 同样待核，TODO V16）
+gk3__efivars() {   # efivarfs 的目录（没挂就挂一次）；不可用 ⇒ 返回 1
+    local d=${GK3_EFIVARS:-/sys/firmware/efi/efivars}
+    [ -n "${GK3_EFIVARS:-}" ] && { [ -d "$d" ] && echo "$d"; return; }
+    [ -n "$(ls -A "$d" 2>/dev/null)" ] || mount -t efivarfs efivarfs "$d" 2>/dev/null
+    [ -n "$(ls -A "$d" 2>/dev/null)" ] && echo "$d"
+}
+gk3__loader_var() {   # $1=名字 → 打印值；不存在 ⇒ 返回 1；efivarfs 不可用 ⇒ 返回 2
+    local d; d=$(gk3__efivars) || return 2
+    [ -f "$d/$1-$GK3_LOADER_GUID" ] || return 1
+    tail -c +5 "$d/$1-$GK3_LOADER_GUID" 2>/dev/null | tr -d '\000'
+}
+gk3__loader_var_del() {   # $1=名字；本来就没有也算成功
+    local d f; d=$(gk3__efivars) || return 1
+    f=$d/$1-$GK3_LOADER_GUID
+    [ -e "$f" ] || return 0
+    chattr -i "$f" 2>/dev/null; rm -f "$f" 2>/dev/null
+    [ ! -e "$f" ]
+}
+
 # 写完之后从【介质】读回来核对：卸下、丢掉这块设备的缓存（blockdev --flushbufs）、只读挂回去逐个 cmp。
 # 挂着直接 cmp 读的是页缓存 —— 介质在回写时才报的错那样看不出来（2026-09-27 审查）。
 #   gk3__verify_on <分区> <文件系统类型> <分区上的相对路径>=<源文件> …
@@ -634,7 +736,7 @@ gk3__verify_on() {
 }
 
 gk3_apply() {
-    local disk="" mode=wipe rescue=no rel="" rstart="" rend="" esp="" ud_mib="" keep=no
+    local disk="" mode=wipe rescue=no rel="" rstart="" rend="" esp="" ud_mib="" keep=no defos=android blkey=no
     # 目标盘动过没有（gk3_fail 把它带进 ERR 的 touched=）。【不是】local：命令行版在失败之后要读它
     GK3__TOUCHED=no
     while [ $# -gt 0 ]; do
@@ -648,11 +750,15 @@ gk3_apply() {
             --region-end) rend=$2; shift 2 ;;
             --esp) esp=$2; shift 2 ;;
             --userdata-mib) ud_mib=$2; shift 2 ;;
+            --default-os) defos=$2; shift 2 ;;
+            --bitlocker-key) blkey=$2; shift 2 ;;
             *) gk3_fail usage -- "apply: 不认识的参数 $1"; return 1 ;;
         esac
     done
     [ -n "$disk" ] || { gk3_fail usage -- "apply 要 --disk"; return 1; }
     [ -n "$rel" ] && [ -d "$rel" ] || { gk3_fail usage -- "apply 要 --release <目录>"; return 1; }
+    case "$defos" in android|windows) ;; *) gk3_fail usage -- "--default-os 只能是 android 或 windows（给的是 '$defos'）"; return 1 ;; esac
+    [ "$defos" = windows ] && [ "$mode" = wipe ] && { gk3_fail default-os-no-windows -- "整盘清空之后盘上没有 Windows，不能把它设成默认系统"; return 1; }
 
     local DRY=${GK3_DRYRUN:-0}
     # ⚠️ 回显走 stderr：stdout 只留给行记录（文件头的协议）。原先 "+ 命令" 与
@@ -697,6 +803,8 @@ gk3_apply() {
         command -v "$t" >/dev/null || { gk3_fail tool-missing "tool=$t" -- "缺工具：$t"; return 1; }
     done
     case "$super_src" in *.zst) command -v zstd >/dev/null || { gk3_fail tool-missing tool=zstd -- "缺工具：zstd"; return 1; } ;; esac
+    local misc_tool
+    misc_tool=$(gk3__misc_tool) || { gk3_fail tool-missing tool=gk3-misc -- "缺工具：gk3-misc（live 镜像自带；从仓库跑命令行版时要能用 cc 现编 tools/gk3boot/misc/gk3-misc.c）"; return 1; }
 
     # ★ 完整性也在动盘之前验。下载断在一半的 super.img.zst 能通过上面所有检查，
     #   要到流式写盘写到一半才暴露 —— 那时分区表已经改了。有发版的校验清单
@@ -738,7 +846,7 @@ gk3_apply() {
     #   双系统的 apply 此前从未真跑过：真盘上验过的只是 gk3_plan 的方案计算。
     # ESP 上 <machine-id>/ 的名字：双系统 / 重新安装在动盘前按现有 ESP 选（gk3__esp_pick_mid），
     # 整盘清空时 ESP 是新格式化的，在写引导链时再选（那时没有现成目录 → 用这个）
-    local esp_mid="" mid_fb=${GK3_MACHINE_ID:-$(cat /etc/machine-id 2>/dev/null || echo 8a29534fa802480d9fbb71aa18c01d7b)}
+    local esp_mid="" esp_win=no mid_fb=${GK3_MACHINE_ID:-$(cat /etc/machine-id 2>/dev/null || echo 8a29534fa802480d9fbb71aa18c01d7b)}
     # 要往 ESP 上写的文件：<相对路径>=<源>。算空间与写完之后逐个核对用的是同一份清单
     gk3__esp_files() {
         local sl f
@@ -786,8 +894,44 @@ gk3_apply() {
                 fi
                 free_kib=$(df -k "$em" | awk 'NR==2{print $4}')
                 slot_kib=$(( $(cat "$parts/Image" "$parts/gaokun3.dtb" "$parts/ramdisk.img" | wc -c) / 1024 ))
+                # 双系统（共用 Windows 的 ESP）：vfat 挂载不分大小写（Windows 写的是 EFI/Microsoft/Boot/bootmgfw.efi）
+                [ -f "$em/EFI/Microsoft/Boot/bootmgfw.efi" ] && esp_win=yes
+                # 这次会不会改 BOOTAA64 的字节（U16：只在字节不同时写；会改 + Windows 卷是 BitLocker ⇒ 要用户确认拿到了恢复密钥）
+                local aa_change=no
+                if [ ! -f "$em/EFI/BOOT/BOOTAA64.EFI" ] || ! cmp -s "$em/EFI/BOOT/BOOTAA64.EFI" "$sdboot"; then aa_change=yes; fi
                 umount "$em"; rmdir "$em" 2>/dev/null
-                echo "ESP 上用目录 ${esp_mid}；要写 $(( need_kib / 1024 )) MiB（已扣掉会被覆盖的同名文件），空闲 $(( free_kib / 1024 )) MiB" >&2
+                echo "ESP 上用目录 ${esp_mid}；要写 $(( need_kib / 1024 )) MiB（已扣掉会被覆盖的同名文件），空闲 $(( free_kib / 1024 )) MiB；Windows 的启动管理器：${esp_win}；BOOTAA64 要变：${aa_change}" >&2
+                if [ "$esp_win" = yes ]; then
+                    # ★ U18：Windows 休眠（快速启动的"关机"也是休眠，默认开着）时它缓存着 ESP 的 FAT —— 这边写了，Windows 醒来
+                    #   再写就可能把 FAT 写坏（设计稿 §4.9.10，D4 定级）。复用缩分区那条路上的判据（gk3__ntfs_hibernated，只读）
+                    local ws; ws=$(gk3__win_state "$esp")
+                    echo "Windows 卷：$ws" >&2
+                    if [ "$(gk3__f "$ws" hibernated)" = yes ]; then
+                        rm -rf "$parts"
+                        gk3_fail esp-windows-hibernated "part=$(gk3__f "$ws" hib_part)" -- "Windows 处于休眠或“快速启动”状态（$(gk3__f "$ws" hib_part)）—— 这时往共用的 EFI 分区里写东西，Windows 醒来时可能把它写坏。回 Windows 关掉快速启动、用“关机”退出，再试（盘还没动过）"
+                        return 1
+                    fi
+                    [ "$(gk3__f "$ws" hibernated)" = unknown ] && echo "⚠️ 看不出 Windows 是否在休眠（BitLocker 卷读不到里面，或缺 ntfscat）—— 请确认是在 Windows 里用“关机”（不是休眠）退出的、快速启动已关" >&2
+                    # ★ U16 规则 3：BitLocker 的卷 + 这次要换掉 BOOTAA64（固件每次开机进的就是它，PCR4 会变）⇒ 下一次进 Windows
+                    #   多半要恢复密钥。Linux 这边暂停不了 BitLocker，只能要用户确认手里有密钥（界面上那个勾选框）
+                    if [ "$(gk3__f "$ws" bitlocker)" = yes ] && [ "$aa_change" = yes ] && [ "$blkey" != yes ]; then
+                        rm -rf "$parts"
+                        gk3_fail bitlocker-key-unconfirmed -- "Windows 的卷是 BitLocker 加密的，这次安装要换掉 EFI/BOOT/BOOTAA64.EFI —— 下次进 Windows 可能要 48 位恢复密钥。确认拿到了恢复密钥（https://aka.ms/myrecoverykey）再装（盘还没动过）"
+                        return 1
+                    fi
+                elif [ "$defos" = windows ]; then
+                    rm -rf "$parts"
+                    gk3_fail default-os-no-windows "esp=$esp" -- "$esp 上没有 Windows 的启动管理器（EFI/Microsoft/Boot/bootmgfw.efi），不能把 Windows 设成默认系统（盘还没动过）"
+                    return 1
+                fi
+                # ★ U17：用户自己重装 Windows 得到的 100 MiB ESP，装完是负数 —— 明确拒绝，不让它去撞下面的空间检查
+                #   （那样只会说"空间不够、请清理"，而清理也清不出来）。重新安装不查：我们已经在这个 ESP 上了
+                local esp_size_mib=$(( $(blockdev --getsize64 "$esp" 2>/dev/null || echo 0) / 1048576 ))
+                if [ "$mode" = alongside ] && [ "$esp_size_mib" -gt 0 ] && [ "$esp_size_mib" -lt "$GK3_ESP_MIN_SIZE_MIB" ]; then
+                    rm -rf "$parts"
+                    gk3_fail esp-too-small "size_mib=$esp_size_mib" "min_mib=$GK3_ESP_MIN_SIZE_MIB" -- "这个 EFI 分区只有 ${esp_size_mib} MiB（重装 Windows 建的那种），装不下 Android 的启动文件、也没法给 Windows 更新留余量。1.0 不支持这种布局（以后的版本会改用单独的 XBOOTLDR 分区）（盘还没动过）"
+                    return 1
+                fi
                 if [ "$free_kib" -lt "$need_kib" ]; then
                     rm -rf "$parts"
                     gk3_fail esp-full "need_mib=$(( need_kib / 1024 ))" "free_mib=$(( free_kib / 1024 ))" -- "ESP 空间不够：要写 $(( need_kib / 1024 )) MiB，只有 $(( free_kib / 1024 )) MiB。请先清理 EFI 分区（盘还没动过）"
@@ -797,6 +941,17 @@ gk3_apply() {
                     rm -rf "$parts"
                     gk3_fail esp-ota-room "left_mib=$(( (free_kib - need_kib) / 1024 ))" -- "ESP 装得下，但装完只剩 $(( (free_kib - need_kib) / 1024 )) MiB —— 以后的系统更新（OTA）会因为 ESP 空间不够失败。请先清理 EFI 分区（盘还没动过）"
                     return 1
+                fi
+                # ★ U17：双系统再加一道 —— 扣掉下一次 OTA 的暂时空间（一个槽 + 一版入口）之后，还要给 Windows 与固件留 32 MiB。
+                #   ⚠️ 清理时绝不删 Persisted_Capsules.bin、EFI/Microsoft、EFI/UpdateCapsule（固件与 Windows 的）
+                if [ "$esp_win" = yes ]; then
+                    local win_left=$(( free_kib - need_kib - slot_kib - GK3_ESP_GK3BOOT_KIB ))
+                    if [ "$win_left" -lt "$GK3_ESP_WIN_RESERVE_KIB" ]; then
+                        rm -rf "$parts"
+                        gk3_fail esp-win-reserve "left_mib=$(( win_left / 1024 ))" "need_mib=$(( GK3_ESP_WIN_RESERVE_KIB / 1024 ))" -- "装完、再扣掉以后系统更新要的暂时空间，EFI 分区只剩 $(( win_left / 1024 )) MiB，不够给 Windows 更新和固件留的 $(( GK3_ESP_WIN_RESERVE_KIB / 1024 )) MiB。请先在 Windows 里清理 EFI 分区（不要删 Persisted_Capsules.bin、EFI/Microsoft、EFI/UpdateCapsule）（盘还没动过）"
+                        return 1
+                    fi
+                    echo "U17：装完、扣掉一次 OTA 的暂时空间后还剩 $(( win_left / 1024 )) MiB 给 Windows 与固件（要 ≥ $(( GK3_ESP_WIN_RESERVE_KIB / 1024 ))）" >&2
                 fi
                 # 重新安装是【覆盖】ESP 上我们自己的文件，不是新增 —— 按 150 MiB 要求的话，一台已经装过的
                 # 机器（我们的文件占了一百多 MiB）会被误判成"空间不够"
@@ -930,12 +1085,40 @@ EOF
         #   refs/lineage-system-core/fs_mgr/fs_mgr.cpp:412 tune_reserved_size）
         gk3__run mkfs.ext4 -q -F -m 0 -L userdata "$p_data" || return 1
     fi
-    # misc 必须是全零：libboot_control 读到坏 CRC 才会初始化一份新的 bootloader_control。
+    # misc：先整块清零（BCB、旧的 A/B 状态、VAB 合并状态、旧的 GK3 记录全不留），再写一份合法的初始状态。
     # ⚠️ 按分区的【实际大小】清零，不按 GK3_MISC_MIB：重新安装时复用的 misc 可能比 4 MiB 小
     #    （本机 1007 KiB）—— 按 4 MiB 写会在写满之后报 No space left，整个安装失败在这一步
     local misc_kib; misc_kib=$(( $(blockdev --getsize64 "$p_misc" 2>/dev/null || echo $(( GK3_MISC_MIB << 20 ))) / 1024 ))
     # conv=nocreat：节点要是在这之前被 udev 删了又没建回来，dd 会在 /dev 里新建一个普通文件、写成功、盘上什么也没有（审查 #4）
     gk3__run dd if=/dev/zero of="$p_misc" bs=1024 count="$misc_kib" conv=fsync,nocreat status=none || return 1
+    # ★ 1.0（S10，docs/boot-entry-design.md §4.7 "misc"）：清零之后用 gk3-misc init 写一份合法的初始状态，不再留全零：
+    #   * bootloader_control：_a priority 15 / tries 6 / 未成功，_b priority 0 / tries 0。原先全零 ⇒ libboot_control 读到坏 CRC
+    #     重建成"每槽 7/7、当前槽已成功"（libboot_control.cpp:140-180）—— _b 也成了可启动，而新装机器的 _b 没有 system、
+    #     LP 里那一槽是陈旧元数据（C′ §2.6）。统一启动入口按 BCAB 选槽，这一槽必须是 0/0。
+    #   * GK3 记录（misc+8 KiB）：带迁移标记（BCB 刚清零 = 没有存量请求）⇒ 入口第一次在动作模式下运行时不把之后 Android 写的
+    #     BCB（例如第一次开机就恢复出厂）当成存量清掉（§4.10）。HAL 与入口见到的都是一份有效记录。
+    #   * 双系统的默认系统（U12）：写成 set_default 请求，由入口第一次在动作模式下运行时去写 / 删 LoaderEntryDefault
+    #     （core/src/dual.c 的 gk3_dual_plan_default；条目 id 的选法 = 入口的 win_entry_id：有 gk3-windows.conf 用它，否则 auto-windows）。
+    #     【不】在这里直接写 LoaderEntryDefault=auto-windows，因为：
+    #       ① 装完第一次重启就会进 Windows —— 而第一次开机要进 Android 走开机向导（设计稿 §8.2 #60）；
+    #       ② 第一次开机走的是直连条目（入口要等这一次开机完成时由 HAL 部署，见下面"统一启动入口"），入口没运行就没有
+    #          "预置 OneShot"，于是 Android 里的任何重启都会落进 Windows（§4.9.3"预置 OneShot"）；
+    #       ③ 装的要是一个不带入口的旧版本（版本列表里能选），变量就再也没人管，同样每次重启都进 Windows。
+    #     走请求这条路：第二次开机（经入口）时生效，此后与 Parts 里改默认系统完全相同；最坏情况是"默认没改成"，不是"进错系统"。
+    #   ⚠️ 统一启动入口本身【不】在这里部署（条目与 EFI/gk3boot/ 不写）：入口二进制在 vendor 里（/vendor/boot/gk3boot/），
+    #     装好的系统在第一次开机完成时由 boot_control HAL 按 persist.vendor.gaokun3.gk3boot 部署它自己那一版（§12）——
+    #     安装器另带一份就是第二份拷贝，版本会和系统对不上；第一次开机本来也没有要它保护的东西（_b 不可启动、没有 OTA）。
+    local misc_def=none
+    [ "$esp_win" = yes ] && misc_def=$defos
+    if [ "$DRY" = 1 ]; then
+        echo "DRY: $misc_tool init $p_misc --slot a --default $misc_def" >&2
+    else
+        local mi
+        mi=$("$misc_tool" init "$p_misc" --slot a --default "$misc_def" 2>&1)
+        printf '%s\n' "$mi" | grep '^MISCINIT ' >/dev/null \
+            || { printf '%s\n' "$mi" >&2; gk3_fail misc-init "dev=$p_misc" -- "初始化 misc（${p_misc}）失败：$(printf '%s' "$mi" | tail -1)"; return 1; }
+        echo "misc：$(printf '%s\n' "$mi" | grep '^MISCINIT ')" >&2
+    fi
     [ "$rescue" = yes ] && { gk3__run mkfs.ext4 -q -F -L gk3rescue "$p_resc" || return 1; }
 
     # ── 写 super（30% → 70%，进度由 gk3-unsparse.py 按块推进）──────────
@@ -985,6 +1168,29 @@ EOF
             mv "$e" "$e.disabled" || { esp_fail "停用 ${e##*/}"; return 1; }
             echo "停用了另一个目录的启动项 ${e##*/} → ${e##*/}.disabled（默认项的通配会同时匹配它）" >&2
         done
+        # ★ S10：统一启动入口的条目（gk3boot-android-<槽>[+N[-M]].conf、.staged、gk3prev-android-<槽>.conf、gk3boot-tools.conf）
+        #   与没人再引用的 EFI/gk3boot/<版本>/ 一并删掉（log/ 留着）—— 装完的机器回到"还没有入口"，第一次开机走直连条目，
+        #   开机完成时由【装上的这个系统】的 HAL 部署它自己那一版（理由见上面 misc 那段）。留着的话：
+        #     · 装的是更旧的版本：新入口去引导旧系统，HAL 要到开机完成才对齐；装的是不带入口的版本（0.7.x）：没人清 boot_streak、
+        #       没人祝福条目，入口按 bootloop 处理、每次开机掉进执行端；
+        #     · misc 刚初始化过，旧入口记的分派 / 计数都没了，它的状态与 misc 对不上。
+        #   整盘清空的 ESP 是新格式化的，不会有这些；只动我们自己的名字（设计稿 §4.9.11 的写盘白名单）
+        local gn=0
+        for e in "$mnt"/loader/entries/gk3boot-android-* "$mnt"/loader/entries/gk3prev-android-* "$mnt/loader/entries/gk3boot-tools.conf"; do
+            [ -f "$e" ] || continue
+            rm -f "$e" || { esp_fail "删入口条目 ${e##*/}"; return 1; }
+            gn=$((gn + 1))
+        done
+        if [ -d "$mnt/EFI/gk3boot" ]; then
+            for e in "$mnt"/EFI/gk3boot/*; do
+                [ -d "$e" ] && [ "${e##*/}" != log ] || continue
+                # 还有别的条目（手放的实验条目）指着它就留着 —— 同 HAL 回收目录的规则（Gk3Boot.cpp"删没人引用的目录"）
+                grep -qsiF "/EFI/gk3boot/${e##*/}/" "$mnt"/loader/entries/*.conf && continue
+                rm -rf "$e" || { esp_fail "删 EFI/gk3boot/${e##*/}"; return 1; }
+                gn=$((gn + 1))
+            done
+        fi
+        [ "$gn" = 0 ] || echo "统一启动入口：删掉了 $gn 个旧的条目 / 版本目录（装好的系统第一次开机完成时会部署它自己那一版）" >&2
         # --no-variables 那条路的等价物：固件实际走的是可移动介质回落路径
         # EFI/BOOT/BOOTAA64.EFI（内核带 efi=noruntime，不指望 EFI 启动变量）
         #
@@ -1003,8 +1209,15 @@ EOF
                 echo "原有的 $f 已备份为 $f.before-gaokun3" >&2
             fi
         done
-        cp "$sdboot" "$mnt/EFI/BOOT/BOOTAA64.EFI" || { esp_fail "BOOTAA64.EFI"; return 1; }
-        cp "$sdboot" "$mnt/EFI/systemd/systemd-bootaa64.efi" || { esp_fail "systemd-bootaa64.efi"; return 1; }
+        # ★ U16 规则 1：只在字节不同时写。BitLocker 量的是固件每次开机加载的这个文件（PCR4），同一份字节重写一遍
+        #   本身不改 PCR，但"只在不同时写"让"装过一次之后的重新安装从不动它"成为可以断言的事实（test-apply 看 mtime）
+        for f in EFI/BOOT/BOOTAA64.EFI EFI/systemd/systemd-bootaa64.efi; do
+            if cmp -s "$sdboot" "$mnt/$f"; then
+                echo "$f 已是这一份 systemd-boot，不重写" >&2
+            else
+                cp "$sdboot" "$mnt/$f" || { esp_fail "${f##*/}"; return 1; }
+            fi
+        done
         local slot
         for slot in a b; do
             cp "$parts/Image" "$parts/gaokun3.dtb" "$parts/ramdisk.img" "$mnt/$mid/android/slot_$slot/" || { esp_fail "slot_$slot 的内核 / dtb / ramdisk"; return 1; }
@@ -1045,8 +1258,12 @@ ENTRY
         #    但 boot_control HAL 在 Android 第一次标记启动成功时就会把 default
         #    改写成 *-android-<槽>.conf（EspSlot.cpp:120-172）—— 那个选择只活到
         #    第一次开机，代价却是每个新用户第一次重启落进一个他不认识的系统。）
+        # ★ 菜单等待：双系统（ESP 上有 Windows 的启动管理器）5 秒、不写 menu-hidden（U13）；纯 Android 15 秒（U3 / D19）。
+        #   OTA postinstall 认的就是这两个数：只把【我们写的】15 在双系统机器上改成 5，用户改过的不碰
+        local tmo=$GK3_LOADER_TIMEOUT
+        [ -f "$mnt/EFI/Microsoft/Boot/bootmgfw.efi" ] && tmo=$GK3_LOADER_TIMEOUT_DUAL
         cat > "$mnt/loader/loader.conf" <<LOADER || { esp_fail "loader.conf"; return 1; }
-timeout 15
+timeout $tmo
 console-mode keep
 editor no
 default *-android-a.conf
@@ -1099,6 +1316,30 @@ RESC
         local -a wl
         mapfile -t wl < <(gk3__esp_files "$mid")
         gk3__verify_on "$p_esp" vfat "${wl[@]}" || return 1
+    fi
+
+    # ── systemd-boot 的 EFI 变量（§4.9.3"不是合法值就删"、§4.9.11 整盘清空删残留）────────────────
+    # LoaderEntryDefault 优先于 loader.conf 的 default（refs/systemd-v257/src/boot/boot.c:1788-1824）。装完它还在的话，
+    # 第一次重启进的就不是新装的 Android：指 live / 救援 / 直连条目时那一项被钉住，指 Windows 时直接进了 Windows。
+    # 所以不管值是什么都删（选了 Windows 为默认也删：见 misc 那段 —— 默认系统由入口按 GK3 里的请求去写）。
+    # 整盘清空时 LoaderEntryOneShot 一并删（盘上已经没有它能指的东西）。删不掉只警告：盘上的东西都已写好。
+    if [ "$DRY" = 1 ]; then
+        echo "DRY: 删 EFI 变量 LoaderEntryDefault$([ "$mode" = wipe ] && echo ' 与 LoaderEntryOneShot')（如果有）" >&2
+    else
+        local vn vv vr
+        for vn in LoaderEntryDefault $([ "$mode" = wipe ] && echo LoaderEntryOneShot); do
+            vv=$(gk3__loader_var "$vn"); vr=$?
+            case "$vr" in
+                2) echo "读不到 EFI 变量（efivarfs 不可用）—— $vn 没检查" >&2; break ;;
+                1) continue ;;
+            esac
+            if gk3__loader_var_del "$vn"; then
+                echo "删掉了 EFI 变量 $vn（原值 '${vv}'）" >&2
+            else
+                echo "⚠️ EFI 变量 $vn='${vv}' 删不掉" >&2
+                echo "NOTE code=loadervar-stuck name=$vn value=$(gk3__enc "$vv")"
+            fi
+        done
     fi
 
     # ── 救援系统 ────────────────────────────────────────────────────────
@@ -1918,26 +2159,57 @@ gk3_release_info() {
 
 # 看一个现有 ESP 的状况（只读挂载）。双系统之前界面要用它判断"装不装得下"，
 # 并且在用户往下走【之前】就写明原因 —— 而不是等 gk3_apply 在动盘前一刻才拒绝。
-#   ESP part=… size_mib=… free_mib=… need_mib=150 windows=yes|no gaokun3=yes|no mountable=yes|no
+#   ESP part=… size_mib=… free_mib=… need_mib=150 windows=yes|no gaokun3=yes|no mountable=yes|no \
+#       small=yes|no bootaa64=none|sdboot|other bitlocker=yes|no hibernated=yes|no|unknown \
+#       entry=<版本>|none entry_mode=action|observe|none entry_state=<a+3,b…>|none staged=yes|no prev=yes|no \
+#       loader_default=<值>|none|unknown boot_entries=<N>|unknown
 #   windows=yes：EFI/Microsoft/Boot/bootmgfw.efi 在 —— 装完之后 systemd-boot 会把它列进菜单
 #   gaokun3=yes：上面已经有我们的启动项（重装 / 已经装过）
+#   ── 2026-10-05（S10 / S15，docs/boot-entry-design.md §4.7 的"gk3_esp_info 增报"）──
+#   small=yes：分区小于 GK3_ESP_MIN_SIZE_MIB（100 MiB 那种），双系统明确不装（U17）
+#   bootaa64：EFI/BOOT/BOOTAA64.EFI 与 live 自带的 systemd-boot 比 —— none 没有 / sdboot 同一份字节 / other 不同
+#     （other + bitlocker=yes ⇒ 安装会换掉它，界面要用户确认拿到恢复密钥，U16）
+#   bitlocker / hibernated：同一块盘上的 Windows 卷（gk3__win_state）；hibernated=yes ⇒ 不许写 ESP（U18）
+#   entry*：统一启动入口在这个 ESP 上的样子（只报告；重新安装会把它们删掉，由装好的系统自己部署，见 gk3_apply）
+#     entry = 现役 gk3boot-android-* 条目里的版本；entry_state = 各条目去掉前缀 / .conf 后的名字（a+3 = 槽 a、还剩 3 次计数）
+#   loader_default：EFI 变量 LoaderEntryDefault（none = 没设 = 默认 Android；unknown = efivarfs 读不到）
+#   boot_entries：固件里 Boot#### 的个数（efibootmgr；没有它 ⇒ unknown）
 # ★ Windows 默认建的 ESP 只有 100 MiB，放不下 GK3_ESP_NEED_MIB —— 这是双系统最常见的
 #   "装不了"，不是边角情况（scripts/live/test-apply.sh 的 C 组有这条）。
 gk3_esp_info() {
-    local part=$1 m free size win=no ours=no
+    local part=$1 m free size win=no ours=no small=no aa=none sd ver=none emode=none est="" staged=no prev=no e n ld be ws
     [ -b "$part" ] || { gk3_fail not-block "dev=$part" -- "不是块设备：$part"; return 1; }
     size=$(( $(blockdev --getsize64 "$part" 2>/dev/null || echo 0) / 1048576 ))
+    [ "$size" -lt "$GK3_ESP_MIN_SIZE_MIB" ] && small=yes
+    ld=$(gk3__loader_var LoaderEntryDefault); case $? in 0) ld=$(gk3__enc "$ld") ;; 1) ld=none ;; *) ld=unknown ;; esac
+    be=unknown
+    command -v efibootmgr >/dev/null 2>&1 && be=$(efibootmgr 2>/dev/null | grep -cE '^Boot[0-9A-Fa-f]{4}')
     m=$(mktemp -d)
     if ! mount -o ro -t vfat "$part" "$m" 2>/dev/null; then
-        rmdir "$m"; echo "ESP part=$part size_mib=$size free_mib=0 need_mib=$GK3_ESP_NEED_MIB windows=no gaokun3=no mountable=no"
+        rmdir "$m"; echo "ESP part=$part size_mib=$size free_mib=0 need_mib=$GK3_ESP_NEED_MIB windows=no gaokun3=no mountable=no small=$small bootaa64=none bitlocker=no hibernated=unknown entry=none entry_mode=none entry_state=none staged=no prev=no loader_default=$ld boot_entries=$be"
         return 0
     fi
     free=$(df -m "$m" | awk 'NR==2{print $4}')
     # vfat 挂载本来就不分大小写，不用自己列大小写组合
     [ -f "$m/EFI/Microsoft/Boot/bootmgfw.efi" ] && win=yes
     ls "$m"/loader/entries/*-android-*.conf >/dev/null 2>&1 && ours=yes
+    if [ -f "$m/EFI/BOOT/BOOTAA64.EFI" ]; then
+        aa=other; sd=$(gk3__sdboot) && cmp -s "$m/EFI/BOOT/BOOTAA64.EFI" "$sd" && aa=sdboot
+    fi
+    for e in "$m"/loader/entries/gk3boot-android-*.conf; do
+        [ -f "$e" ] || continue
+        n=${e##*/}; n=${n#gk3boot-android-}; est="$est,${n%.conf}"
+        ver=$(sed -n 's/^version[[:space:]]*gk3boot-//p' "$e" | head -1 | tr -d '\r ')
+        if grep -qE '^options[[:space:]].*gk3\.observe=1([[:space:]]|$)' "$e"; then emode=observe; else emode=action; fi
+    done
+    ls "$m"/loader/entries/gk3boot-android-*.conf.staged >/dev/null 2>&1 && staged=yes
+    ls "$m"/loader/entries/gk3prev-android-*.conf >/dev/null 2>&1 && prev=yes
     umount "$m"; rmdir "$m"
-    echo "ESP part=$part size_mib=$size free_mib=${free:-0} need_mib=$GK3_ESP_NEED_MIB windows=$win gaokun3=$ours mountable=yes"
+    est=${est#,}
+    ws=$(gk3__win_state "$part")
+    echo "ESP part=$part size_mib=$size free_mib=${free:-0} need_mib=$GK3_ESP_NEED_MIB windows=$win gaokun3=$ours mountable=yes" \
+         "small=$small bootaa64=$aa bitlocker=$(gk3__f "$ws" bitlocker) hibernated=$(gk3__f "$ws" hibernated)" \
+         "entry=$(gk3__enc "${ver:-none}") entry_mode=$emode entry_state=${est:-none} staged=$staged prev=$prev loader_default=$ld boot_entries=$be"
 }
 
 # 一次问完整块盘上所有分区能不能缩。
