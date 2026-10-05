@@ -205,6 +205,9 @@ KPATCHES=(
     0073-platform-arm64-gaokun-ec-report-initial-lid-state.patch
     # 0074：【本地】后摄 OV13B10 节点补回 privacy LED（0018 删 s5k3l6 时连带删了）。只动 camera.dtsi。HW-9。
     0074-arm64-dts-gaokun3-camera-rear-privacy-led.patch
+    # 0076：【本地，v7.2.9 起】撤回 stable 的 Revert "drm/msm: dsi: fix PLL init in bonded mode"（5de981b7db）——
+    #    没有它本机双 DSI 绑定面板黑屏（触摸中断 0/s）；有它 118/s 有画面。2026-10-05 二分定案。
+    0076-drm-msm-dsi-phy-7nm-reapply-bonded-pll-init-reverting-5de981b7db.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
