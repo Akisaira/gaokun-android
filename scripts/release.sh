@@ -43,7 +43,8 @@
 #         GAOKUN3_DEV_BUILD=1 scripts/release.sh --dry-run --stage-only
 #     第 2 步对产物逐条断言（--stage-only 只报不拦，与 allow_suspend 那条同一个规矩）。
 #   每版还附一份内核的"对应源码清单"（GPL-2.0 §3，见 gen_kernel_sources）。它要读构建内核的那棵树：
-#     GK3_KTREE  内核树，默认 ~/gk3-kernel-iris（编发布内核的那棵；旧树 ~/gk3-kernel 还打着 upstream-venus）
+#     GK3_KTREE  内核树，默认 ~/gk3-kernel-72y（编发布内核的那棵，v7.2.9 基线，SEC-9 2026-10-05 起；
+#                v7.2-rc2 的旧树 ~/gk3-kernel-iris 只对得上本仓 c1062f2 及以前的配方）
 #     GK3_REPO   本仓 checkout，默认本脚本所在的仓库（要它的 patches/ 与 kernel-*.sh）
 #
 #   ★ REL-5 版本属性（2026-10-05）：
@@ -78,7 +79,7 @@ set -euo pipefail
 
 # 要在 cd 到 ANDROID_BUILD_TOP 之前算：BASH_SOURCE 可能是相对路径
 REPO=${GK3_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
-KTREE=${GK3_KTREE:-$HOME/gk3-kernel-iris}
+KTREE=${GK3_KTREE:-$HOME/gk3-kernel-72y}
 
 BUCKET=${BUCKET:-gaokun-android}
 HOST=${HOST:-https://ota.072172.xyz}
@@ -116,16 +117,19 @@ fi
 #   kernel-source.txt           清单本体：二进制 sha256、基底、补丁序列与 sha256、ReSukiSU、配置、重建步骤
 #   kernel-config.txt           从【发布的 boot.img】里抽的 .config（scripts/extract-kconfig.py）——
 #                               不取构建树 O= 目录里那份，那份可能已经被下一轮实验改过
-#   kernel-base-patches.tar.gz  构建树上 v7.2-rc2..HEAD 的提交（git format-patch），即 buildbot 那一层。
+#   kernel-base-patches.tar.gz  构建树上 $LINUX_BASE_TAG..HEAD 的提交（git format-patch），即 buildbot 那一层。
 #                               直接带补丁本身，就不依赖"当时用的是 buildbot 哪个提交"这个从没记过的信息
 #   crdroid-manifest.xml        repo manifest -r（ROM 侧各仓库的确切提交）；拿不到就在清单里写命令
 # ⚠️ 不写进 install-artifacts.sha256：那份文件安装器在读（scripts/live/m0-internal.sh:221-225），
 #    只认三个载荷；这几份的 sha256 记在 kernel-source.txt 里。
 # 缺了任何一样就是这一版给不出对应源码 ⇒ 发版（含 --dry-run）拦，--stage-only 只警告。
-LINUX_BASE_TAG=v7.2-rc2
-# tag 对象 4c45e14df2f4e77982ad70d6d8e3fe750edd4c37 解引用后的提交
-# （2026-10-04 `git ls-remote github.com/torvalds/linux refs/tags/v7.2-rc2*`，与本机 refs/linux-v7.2-rc2-git 的 HEAD 相同）
-LINUX_BASE=8cdeaa50eae8dad34885515f62559ee83e7e8dda
+# ★ SEC-9（2026-10-05）：基线从 v7.2-rc2 追到 v7.2.9 stable。v7.2-rc2 时代的值（tag 对象 4c45e14df2f4…、
+#   提交 8cdeaa50eae8…、torvalds 仓库）见本仓 c1062f2 —— 发 #16 及以前的内核要用那时的脚本。
+LINUX_BASE_TAG=v7.2.9
+LINUX_BASE_URL=https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+# tag 对象 bd50482a9c7a6eb91468f1064a346a75e677e692 解引用后的提交
+# （2026-10-05 `git ls-remote git.kernel.org/…/stable/linux.git 'refs/tags/v7.2.9*'`）
+LINUX_BASE=5fce161649b4d779d1b76d9fcd52dc77779774b8
 GPL_FILES=()
 gpl_bad() {
     [ "$STAGE_ONLY" = 1 ] || die "源码清单：$*"
@@ -260,7 +264,7 @@ PY
         echo "kernel-config.txt sha256 $(sha256sum "$cfg" | cut -c1-64) (the embedded .config, = /proc/config.gz, extracted from boot.img)"
         echo
         echo "## 2. Kernel base"
-        echo "upstream    https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git  $LINUX_BASE_TAG = $LINUX_BASE"
+        echo "upstream    $LINUX_BASE_URL  $LINUX_BASE_TAG = $LINUX_BASE"
         echo "build tree  HEAD ${HEAD:-<unknown>} (git describe: ${DESC:-?})"
         echo "$NB commits on top of $LINUX_BASE_TAG = the linux-gaokun-buildbot patches, applied with git am"
         echo "            (https://github.com/KawaiiHachimi/linux-gaokun-buildbot)"
@@ -295,7 +299,7 @@ PY
         echo "the non-kernel files in patches/) are all in the repository commit above."
         echo
         echo "## 6. Rebuilding the kernel"
-        echo "  git clone --branch $LINUX_BASE_TAG https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git && cd linux"
+        echo "  git clone --branch $LINUX_BASE_TAG $LINUX_BASE_URL && cd linux"
         echo "  tar xzf kernel-base-patches.tar.gz && git am kernel-base-patches/*.patch"
         echo "  git -C <gaokun-android> checkout $RC"
         echo "  bash <gaokun-android>/scripts/kernel-apply-patches.sh .     # section 3, in order"
