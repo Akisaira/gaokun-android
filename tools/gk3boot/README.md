@@ -1591,7 +1591,7 @@ make -C tools/gk3boot postinstall-test   # 115/115（未改）
 GK3_DOCKER_PREFIX=s15- bash scripts/gk3boot/test-executor.sh all    # 25/25
 ```
 
-`test-executor.sh all` 汇总（macOS 27 + colima，QEMU 10.0.13，测试内核 Debian 6.12.111；gk3boot 在 `410489c` 之上带未提交改动构建，
+`test-executor.sh all` 汇总（macOS 27 + colima，QEMU 10.0.13，测试内核 Debian 6.12.111；gk3boot 在 `43235de` 之上带未提交改动构建，
 sha256 `edb42b59…`；fastboot.img `05d1fac9…`）：
 
 ```
