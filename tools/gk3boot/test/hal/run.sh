@@ -10,6 +10,9 @@
 # 场景（S1–S14）覆盖：零写入（只读挂）、首次部署、bless、清 streak 与事件、升级轮换成 gk3prev、
 # 未祝福的旧版不升格、模式切换、.staged 激活、OTA 回滚丢弃 .staged、off 撤除、实验条目与 log/ 不回收、
 # 非法模式、缺直连条目、vendor 没带入口、观察模式的 cmdline fallback、ESP 挂不上。
+# S15–S23：执行端 fastboot.img（随入口部署 / 轮换 / 整目录回收、坏了重写、空间不够或不是 gzip 时不挡入口、
+# vendor 不带时删同版本目录里陈旧的那份）与非默认条目 gk3boot-tools.conf（只在 action + 执行端就位时部署、
+# 跟着现役换版本、observe / off 时删、指着旧目录时改回来）。ESP 剩余空间用 shim.h 的 GK3T_ESP_FREE_KB 假装。
 #
 # ⚠️ 测的是逻辑，不是 Android：SELinux、真 vfat（大小写、rename 覆盖）、O_DIRECT 对齐、属性服务都要上机看。
 set -eu
@@ -54,6 +57,9 @@ vendor() {
     mkdir -p "$T/vendor/boot/gk3boot"
     { printf 'MZ'; head -c 3000 /dev/zero | tr '\0' "${2:-x}"; } > "$T/vendor/boot/gk3boot/gk3boot.efi"
     echo "$1" > "$T/vendor/boot/gk3boot/version"
+}
+vfb() {   # vfb <KB> [填充字符]：给 vendor 加一份执行端 fastboot.img（gzip 魔数开头）
+    { printf '\037\213\010'; head -c $(($1 * 1024)) /dev/zero | tr '\0' "${2:-f}"; } > "$T/vendor/boot/gk3boot/fastboot.img"
 }
 run() {   # run <mode> <entry> [event]
     { echo "persist.vendor.gaokun3.gk3boot=$1"; [ -n "$2" ] && echo "ro.boot.gk3boot.entry=$2"; [ -n "${3:-}" ] && echo "ro.boot.gk3boot.event=$3"; } > "$T/props"
@@ -162,6 +168,72 @@ echo "═ S14 ESP 挂不上 ⇒ error、mode=unknown，misc 照样清"
 fresh V1; "$D" mkmisc "$T/misc.img" 2
 export GK3T_NOMOUNT=1; run action ""; unset GK3T_NOMOUNT
 chk "error=cannot mount ESP、streak=2 已清" 'echo "$(p error)" | grep -q "cannot mount" && [ "$(p mode)" = unknown ] && "$D" dump "$T/misc.img" | grep -q "streak=0"'
+
+# ── 执行端 fastboot.img 与 gk3boot-tools.conf（S15–S23）──
+TOOLS_V() { printf 'title      Android fastboot / boot menu\nversion    gk3boot-%s\nsort-key   0gk3tools\nefi        /EFI/gk3boot/%s/gk3boot.efi\noptions    gk3.action=fastboot\n' "$1" "$1"; }
+TE=$T/esp/loader/entries
+fbeq() { cmp -s "$T/esp/EFI/gk3boot/$1/fastboot.img" "$T/vendor/boot/gk3boot/fastboot.img"; }
+
+echo "═ S15 action、vendor V1 带 fastboot.img、第一次部署 ⇒ 二进制 + 执行端 + +3 ×2 + gk3boot-tools.conf"
+fresh V1; vfb 300 f; run action ""
+chk "条目 = +3 ×2 + gk3boot-tools.conf" '[ "$(ls_e)" = "gk3boot-android-a+3.conf gk3boot-android-b+3.conf gk3boot-tools.conf " ]'
+chk "fastboot.img 与 vendor 逐字节相同、没有 .new" 'fbeq V1 && ! find "$T/esp" -name "*.new" | grep -q .'
+chk "gk3boot-tools.conf 正文逐字节" '[ "$(cat "$TE/gk3boot-tools.conf")" = "$(TOOLS_V V1)" ]'
+chk "mode=action version=V1 error 空" '[ "$(p mode)" = action ] && [ "$(p version)" = V1 ] && [ -z "$(p error)" ]'
+
+echo "═ S15b 经 gk3boot-tools.conf 进执行端再回 Android ⇒ 不 bless、不算 bypassed、via=gk3boot；bless 之后再开零写入"
+S0=$(snap); run action gk3boot-tools.conf
+chk "via=gk3boot bypassed=0、ESP 没变（只读挂）" '[ "$(p via)" = gk3boot ] && [ "$(p bypassed)" = 0 ] && [ "$(snap)" = "$S0" ] && [ "$(mounts)" = "ro=1 rw=0" ]'
+mv "$TE/gk3boot-android-a+3.conf" "$TE/gk3boot-android-a+2-1.conf"; run action gk3boot-android-a+2-1.conf
+S0=$(snap); run action gk3boot-android-a.conf
+chk "bless 之后再开：只读挂、零写入（fastboot.img 与 tools 都判'已是这一版'）" '[ "$(mounts)" = "ro=1 rw=0" ] && [ "$(snap)" = "$S0" ]'
+
+echo "═ S16 OTA 到 V2（带执行端）⇒ V1 → gk3prev、tools 跟着换到 V2、两个目录各有自己的 fastboot.img"
+vendor V2 y; vfb 310 g; run action gk3boot-android-a.conf
+chk "条目 = +3 ×2 + tools + gk3prev ×2" '[ "$(ls_e)" = "gk3boot-android-a+3.conf gk3boot-android-b+3.conf gk3boot-tools.conf gk3prev-android-a.conf gk3prev-android-b.conf " ]'
+chk "tools → V2" '[ "$(cat "$TE/gk3boot-tools.conf")" = "$(TOOLS_V V2)" ]'
+chk "V2/fastboot.img = vendor、V1/ 的 gk3boot.efi + fastboot.img 还在（gk3prev 那一版）" 'fbeq V2 && [ -f "$T/esp/EFI/gk3boot/V1/fastboot.img" ] && [ -f "$T/esp/EFI/gk3boot/V1/gk3boot.efi" ]'
+
+echo "═ S17 同版本 action → observe ⇒ tools 删掉、fastboot.img 照样在（文件规则与 gk3boot.efi 相同）"
+run observe ""
+chk "没有 tools、+3 ×2 是 observe" '! [ -e "$TE/gk3boot-tools.conf" ] && grep -q "gk3.observe=1" "$TE/gk3boot-android-a+3.conf"'
+chk "V2/fastboot.img 还在" 'fbeq V2'
+
+echo "═ S18 回到 action、ESP 上 V2/fastboot.img 被改坏 ⇒ 重写、tools 回来"
+printf 'junk' > "$T/esp/EFI/gk3boot/V2/fastboot.img"; run action ""
+chk "fastboot.img 重写成 vendor 那份、tools → V2" 'fbeq V2 && [ "$(cat "$TE/gk3boot-tools.conf")" = "$(TOOLS_V V2)" ]'
+chk "error 空" '[ -z "$(p error)" ]'
+
+echo "═ S19 tools 指着一个旧目录（手改 / 半路断电）⇒ 改回现役那一版、旧目录没人引用就回收"
+mkdir -p "$T/esp/EFI/gk3boot/V0"; echo x > "$T/esp/EFI/gk3boot/V0/gk3boot.efi"; TOOLS_V V0 > "$TE/gk3boot-tools.conf"; run action ""
+chk "tools → V2、V0 被回收、V1（gk3prev）还在" '[ "$(cat "$TE/gk3boot-tools.conf")" = "$(TOOLS_V V2)" ] && [ ! -e "$T/esp/EFI/gk3boot/V0" ] && [ -d "$T/esp/EFI/gk3boot/V1" ]'
+
+echo "═ S20 新槽 vendor V3 不带执行端（ESP 上 V3/ 里却有一份陈旧的 fastboot.img）⇒ 入口照常换到 V3、tools 删、陈旧那份删"
+for s in a b; do mv "$TE/gk3boot-android-$s+3.conf" "$TE/gk3boot-android-$s.conf"; done   # V2 祝福过
+vendor V3 z; mkdir -p "$T/esp/EFI/gk3boot/V3"; printf 'stale' > "$T/esp/EFI/gk3boot/V3/fastboot.img"; run action gk3boot-android-b.conf
+chk "条目 = +3 ×2 + gk3prev ×2（→ V2），没有 tools" '[ "$(ls_e)" = "gk3boot-android-a+3.conf gk3boot-android-b+3.conf gk3prev-android-a.conf gk3prev-android-b.conf " ] && grep -q "/EFI/gk3boot/V2/" "$TE/gk3prev-android-a.conf"'
+chk "V3/ 只剩 gk3boot.efi；V1 回收；V2 带着它的 fastboot.img 留着" '[ "$(ls "$T/esp/EFI/gk3boot/V3")" = gk3boot.efi ] && [ ! -e "$T/esp/EFI/gk3boot/V1" ] && [ -f "$T/esp/EFI/gk3boot/V2/fastboot.img" ]'
+chk "error 空" '[ -z "$(p error)" ]'
+
+echo "═ S21 ESP 空间不够写 fastboot.img（剩 1000 KB < 600 KB + 1 MiB）⇒ 入口照常部署、不写执行端、不建 tools、error 说清楚"
+fresh V4; vfb 600 h; export GK3T_ESP_FREE_KB=1000; run action ""
+chk "+3 ×2、没有 tools、没有 fastboot.img（也没有 .new）" '[ "$(ls_e)" = "gk3boot-android-a+3.conf gk3boot-android-b+3.conf " ] && [ ! -e "$T/esp/EFI/gk3boot/V4/fastboot.img" ] && ! find "$T/esp" -name "*.new" | grep -q .'
+chk "mode=action version=V4、error 提到 fastboot.img" '[ "$(p mode)" = action ] && [ "$(p version)" = V4 ] && echo "$(p error)" | grep -q "fastboot.img: ESP too full"'
+mv "$TE/gk3boot-android-a+3.conf" "$TE/gk3boot-android-a.conf"; run action gk3boot-android-a.conf
+S0=$(snap); run action gk3boot-android-a.conf
+chk "空间一直不够时：再开机只读挂、零写入（空间在 dry 那遍就判了）" '[ "$(mounts)" = "ro=1 rw=0" ] && [ "$(snap)" = "$S0" ]'
+unset GK3T_ESP_FREE_KB; run action gk3boot-android-a.conf
+chk "空间回来了 ⇒ 补上 fastboot.img 与 tools" 'fbeq V4 && [ "$(cat "$TE/gk3boot-tools.conf")" = "$(TOOLS_V V4)" ]'
+
+echo "═ S22 vendor 的 fastboot.img 不是 gzip ⇒ 入口照常部署、不写执行端、不建 tools"
+fresh V5; printf 'PK not gzip, just some bytes' > "$T/vendor/boot/gk3boot/fastboot.img"; run action ""
+chk "+3 ×2、没有 tools、没有 fastboot.img、error=not gzip" '[ "$(ls_e)" = "gk3boot-android-a+3.conf gk3boot-android-b+3.conf " ] && [ ! -e "$T/esp/EFI/gk3boot/V5/fastboot.img" ] && echo "$(p error)" | grep -q "not gzip"'
+
+echo "═ S23 off ⇒ tools 与其他入口条目一起删、目录（含 fastboot.img）整个回收"
+fresh V6; vfb 100 i; run action ""
+chk "前提：tools 已部署" '[ -f "$TE/gk3boot-tools.conf" ]'
+run off ""
+chk "没有任何 gk3 条目、EFI/gk3boot/V6 没了" '[ -z "$(ls_e)" ] && [ ! -e "$T/esp/EFI/gk3boot/V6" ]'
 
 echo "═ ASan/UBSan 报告"
 chk "日志里没有 sanitizer 报错" '! grep -q "ERROR: AddressSanitizer\|runtime error" "$T/log"'

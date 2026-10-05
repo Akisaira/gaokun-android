@@ -26,14 +26,26 @@
  *   4. 导出 vendor.gaokun3.bootentry.*（Parts 据此发通知），最后写 .done（Parts 等它）。
  *
  * ── 部署（persist.vendor.gaokun3.gk3boot）────────────────────────────────────
- *   off（缺省）：删掉全部 gk3boot / gk3prev 条目（含 .staged）和 EFI/gk3boot/<ver>/ 目录（log/ 留着）⇒ 下次开机走直连条目。
- *   observe / action：让"现役入口"= 本槽 vendor 里那一版（/vendor/boot/gk3boot/{gk3boot.efi,version}），模式 = 属性：
+ *   off（缺省）：删掉全部 gk3boot / gk3prev 条目（含 .staged 与 gk3boot-tools.conf）和 EFI/gk3boot/<ver>/ 目录
+ *     （log/ 留着）⇒ 下次开机走直连条目。
+ *   observe / action：让"现役入口"= 本槽 vendor 里那一版（/vendor/boot/gk3boot/{gk3boot.efi,version[,fastboot.img]}），
+ *   模式 = 属性：
  *     · 二进制不同或没有 → 拷到 EFI/gk3boot/<ver>/gk3boot.efi（.new → fsync → 读回比对 → rename）；
+ *     · 执行端 initramfs fastboot.img（设计稿 §4.1、§4.3.5；与 gk3boot.efi 同版本、同目录、一起轮换）同一条规则拷到
+ *       EFI/gk3boot/<ver>/fastboot.img。它写失败【不挡】入口部署（只记日志 + error）：没有执行端时 gk3boot 照常启动
+ *       Android。vendor 没带它时，ESP 上同版本目录里的那份（违反了"换任一个就换版本串"的规矩才会有）删掉；
+ *     · 非默认条目 gk3boot-tools.conf（sort-key 0gk3tools，options gk3.action=fastboot：从 systemd-boot 菜单直接进
+ *       执行端）只在 action 且这一版的 fastboot.img 已在 ESP 上时部署，总是指向现役那一版；observe 时删掉。
+ *       它不带计数、不 bless，也不是 default 通配 *-android-<x>.conf 能命中的名字；
+ *       ESP 空间：写 fastboot.img 之前看 statvfs，剩余 < 它的大小 + 1 MiB 就不写（入口照常部署）。
+ *       常态最多两版目录共存（现役 + gk3prev）；OTA 后、新槽开机完成之前是三版（再加 postinstall 铺的 staged），
+ *       激活时最老那版被下面的"删没人引用的目录"回收 —— 激活本身只写条目、不新增二进制；
  *     · 现役条目（gk3boot-android-{a,b}[+N].conf）已是这一版、这个模式 → 不动（只清掉过期的 .staged）；
  *     · 否则：现役条目是【另一版】且【被祝福过】（至少一个不带计数 = 那一版在这台机器上起来过）→ 改写成
  *       gk3prev-android-{a,b}.conf（上一版入口，sort-key 0gk3prev，设计稿 §4.11 第 3 步）；
  *       然后写新的 gk3boot-android-{a,b}+3.conf（带计数 = 新激活的入口要靠开机完成来证明），删旧的现役条目与 .staged；
- *     · 最后删掉没有任何条目（任何 .conf 的 efi 行）引用的 EFI/gk3boot/<ver>/。
+ *     · 最后删掉没有任何条目（任何 .conf 的 efi 行，gk3boot-tools.conf 也算）引用的 EFI/gk3boot/<ver>/（整目录，
+ *       gk3boot.efi 与 fastboot.img 一起走）。
  *   postinstall（OTA 时，新 vendor 的脚本）在 ESP 上还没有入口时直接部署 +3，已有入口时只铺新版本目录 + .staged；
  *   .staged 在这里被"激活"（就是上面的对齐：vendor 版本 = staged 版本）。OTA 回滚到旧槽时 vendor 版本 ≠ staged 版本，
  *   .staged 被删、现役入口留在旧槽那一版 —— "入口的版本跟着正在跑的系统走"。
@@ -70,6 +82,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -103,9 +116,13 @@ constexpr char kModeProp[] = "persist.vendor.gaokun3.gk3boot";
 constexpr char kOutPrefix[] = "vendor.gaokun3.bootentry.";
 constexpr char kVendorEfi[] = "/vendor/boot/gk3boot/gk3boot.efi";
 constexpr char kVendorVer[] = "/vendor/boot/gk3boot/version";
+constexpr char kVendorFb[] = "/vendor/boot/gk3boot/fastboot.img";
 constexpr char kMiscDev[] = "/dev/block/by-name/misc";
 constexpr char kActivePrefix[] = "gk3boot-android-";
 constexpr char kPrevPrefix[] = "gk3prev-android-";
+constexpr char kToolsEntry[] = "gk3boot-tools.conf";
+// 写 fastboot.img 之前 ESP 上至少要剩 它的大小 + 这么多（.new 与旧文件并存的那一刻也算在"它的大小"里）
+constexpr uint64_t kFbReserve = 1 << 20;
 constexpr size_t kPropMax = 91;  // PROP_VALUE_MAX - 1
 
 void Out(const char* key, const std::string& value) {
@@ -233,7 +250,7 @@ RecResult ClearStreakAndTakeEvents() {
 
 // ──────────────────────────────────────────────────────────────── ESP：条目
 
-enum class Kind { kActive, kStaged, kPrev };
+enum class Kind { kActive, kStaged, kPrev, kTools };
 
 struct Gk3Entry {
     std::string file;      // loader/entries 下的文件名
@@ -273,8 +290,16 @@ bool IsDirectEntry(const std::string& n, char* slot) {
 }
 
 // gk3boot-android-<x>.conf / gk3boot-android-<x>+N[-M].conf / gk3boot-android-<x>.conf.staged / gk3prev-android-<x>.conf
+// / gk3boot-tools.conf（只认这一个精确名字：不带计数、没有槽，slot 填 'a' 不用）
 bool ParseEntryName(const std::string& n, Gk3Entry* e) {
     std::string rest;
+    if (n == kToolsEntry) {
+        e->kind = Kind::kTools;
+        e->slot = 'a';
+        e->file = n;
+        e->counted = false;
+        return true;
+    }
     if (StartsWith(n, kActivePrefix)) {
         e->kind = Kind::kActive;
         rest = n.substr(strlen(kActivePrefix));
@@ -448,18 +473,32 @@ bool RemoveTree(const std::string& path) {
     return ok;
 }
 
-// vendor 里那一版的二进制拷到 EFI/gk3boot/<ver>/gk3boot.efi：已经逐字节相同就不写；否则 .new → fsync →
-// 读回比对 → rename（与安装器 / postinstall"写完 cmp"同一条规矩，M4b 的教训）。
-bool InstallBinary(Pass* p, const std::string& ver, std::string* err) {
-    std::string want;
-    if (!android::base::ReadFileToString(kVendorEfi, &want) || want.size() < 1024 || want.compare(0, 2, "MZ") != 0) {
-        *err = "vendor gk3boot.efi unreadable or not a PE";
-        return false;
-    }
+// 把 want 放到 EFI/gk3boot/<ver>/<name>：已经逐字节相同就不写；否则 .new → fsync → 读回比对 → rename
+// （与安装器 / postinstall"写完 cmp"同一条规矩，M4b 的教训）。gk3boot.efi 与 fastboot.img 共用。
+// space_check：真写之前先看 ESP 剩余（fastboot.img 用；gk3boot.efi 约 100 KB，沿用原来"写失败就报错"）。
+bool PutVerified(Pass* p, const std::string& ver, const std::string& name, const std::string& want, bool space_check,
+                 std::string* err) {
     const std::string dir = Gk3Dir() + "/" + ver;
-    const std::string dst = dir + "/gk3boot.efi";
+    const std::string dst = dir + "/" + name;
     std::string have;
     if (android::base::ReadFileToString(dst, &have) && have == want) return true;
+    // 空间在 dry 那一遍就看（只读挂也能 statvfs）：不够时两遍都判"不写"，ESP 长期满着也不会每次开机都读写挂一遍
+    if (space_check) {
+        // statvfs：fs_type:filesystem getattr，所有域都有（refs/lineage-sepolicy/private/domain.te:276）
+        struct statvfs sv;
+        if (statvfs(kEspRoot, &sv) == 0) {
+            uint64_t avail = static_cast<uint64_t>(sv.f_bavail) * sv.f_frsize;
+            if (avail < want.size() + kFbReserve) {
+                if (!p->dry)
+                    LOG(ERROR) << "gk3boot: ESP has " << avail << " bytes free, " << name << " needs " << want.size()
+                               << " + " << kFbReserve << " reserve; not writing it";
+                *err = name + ": ESP too full";
+                return false;
+            }
+        } else if (!p->dry) {
+            PLOG(WARNING) << "gk3boot: statvfs " << kEspRoot << " (writing " << name << " anyway)";
+        }
+    }
     p->changed = true;
     if (p->dry) return true;
     if (!MkdirP(dir)) {
@@ -473,24 +512,62 @@ bool InstallBinary(Pass* p, const std::string& ver, std::string* err) {
         if (fd < 0 || !android::base::WriteFully(fd.get(), want.data(), want.size()) || fsync(fd.get()) != 0) {
             PLOG(ERROR) << "gk3boot: write " << tmp;
             unlink(tmp.c_str());
-            *err = "write gk3boot.efi failed (ESP full?)";
+            *err = "write " + name + " failed (ESP full?)";
             return false;
         }
     }
     std::string back;
     if (!android::base::ReadFileToString(tmp, &back) || back != want) {
         unlink(tmp.c_str());
-        *err = "gk3boot.efi read-back mismatch";
+        *err = name + " read-back mismatch";
         return false;
     }
     if (rename(tmp.c_str(), dst.c_str()) != 0) {
         PLOG(ERROR) << "gk3boot: rename " << tmp;
         unlink(tmp.c_str());
-        *err = "rename gk3boot.efi failed";
+        *err = "rename " + name + " failed";
         return false;
     }
     LOG(INFO) << "gk3boot: installed " << dst << " (" << want.size() << " bytes)";
     return true;
+}
+
+// vendor 里那一版的入口二进制 → EFI/gk3boot/<ver>/gk3boot.efi。失败 = 这次不部署（调用方 keep_as_is）。
+bool InstallBinary(Pass* p, const std::string& ver, std::string* err) {
+    std::string want;
+    if (!android::base::ReadFileToString(kVendorEfi, &want) || want.size() < 1024 || want.compare(0, 2, "MZ") != 0) {
+        *err = "vendor gk3boot.efi unreadable or not a PE";
+        return false;
+    }
+    return PutVerified(p, ver, "gk3boot.efi", want, false, err);
+}
+
+// 执行端 initramfs（gzip cpio，scripts/gk3boot/build-fastboot-img.sh 产出）→ EFI/gk3boot/<ver>/fastboot.img。
+//   kAbsent  vendor 这一版不带执行端（ESP 上同版本目录里若有一份，删掉：同一个版本串只能对应一套文件）
+//   kReady   ESP 上的那份与 vendor 逐字节相同（dry 时 = 第二遍会写成这样）
+//   kFailed  vendor 那份坏了 / 写失败 / 空间不够 —— 只记 *err，入口照常部署（gk3boot 找不到执行端会照常启动 Android）
+enum class FbState { kAbsent, kReady, kFailed };
+
+FbState InstallFastboot(Pass* p, const std::string& ver, std::string* err) {
+    if (access(kVendorFb, F_OK) != 0) {
+        const std::string stale = Gk3Dir() + "/" + ver + "/fastboot.img";
+        if (access(stale.c_str(), F_OK) == 0) {
+            p->changed = true;
+            if (!p->dry) {
+                LOG(WARNING) << "gk3boot: vendor has no fastboot.img but " << stale
+                             << " exists (same version string, different file set?); removing it";
+                if (unlink(stale.c_str()) != 0) PLOG(WARNING) << "gk3boot: unlink " << stale;
+            }
+        }
+        return FbState::kAbsent;
+    }
+    std::string want;
+    if (!android::base::ReadFileToString(kVendorFb, &want) || want.size() < 18 ||
+        static_cast<unsigned char>(want[0]) != 0x1f || static_cast<unsigned char>(want[1]) != 0x8b) {
+        *err = "vendor fastboot.img unreadable or not gzip";
+        return FbState::kFailed;
+    }
+    return PutVerified(p, ver, "fastboot.img", want, true, err) ? FbState::kReady : FbState::kFailed;
 }
 
 // 条目正文。postinstall（bin/gaokun3-ota-postinstall.sh 的 gk3_entry_text）写的是同一个格式，改一边要改另一边。
@@ -504,6 +581,16 @@ std::string EntryText(Kind kind, char slot, const std::string& ver, bool observe
            "sort-key   " + sort + "\n" +
            "efi        /EFI/gk3boot/" + ver + "/gk3boot.efi\n" +
            "options    gk3.observe=" + (observe ? "1" : "0") + " gk3.hint=" + slot + "\n";
+}
+
+// gk3boot-tools.conf 的正文（设计稿 §4.1、§4.3.5：菜单里直接进执行端）。postinstall 的 gk3_tools_text 同一格式。
+// 不带 gk3.hint / gk3.observe：去执行端不需要选槽，观察模式也不部署它。
+std::string ToolsText(const std::string& ver) {
+    return "title      Android fastboot / boot menu\n"
+           "version    gk3boot-" + ver + "\n" +
+           "sort-key   0gk3tools\n"
+           "efi        /EFI/gk3boot/" + ver + "/gk3boot.efi\n" +
+           "options    gk3.action=fastboot\n";
 }
 
 std::string ActiveName(char slot, bool counted) {
@@ -601,6 +688,21 @@ void Bless(Pass* p, const std::string& entry) {
     LOG(INFO) << "gk3boot: blessed " << entry << " -> " << ActiveName(e.slot, false);
 }
 
+// gk3boot-tools.conf：want（action、这一版的 fastboot.img 已在 ESP 上）⇒ 写成指向 <ver> 的那份（已一样就不写）；
+// 否则删掉（observe、这一版不带执行端、执行端没写上）。写失败只记进 *soft —— 它是非默认条目，没有它照常开机。
+void AlignTools(Pass* p, const std::vector<Gk3Entry>& tools, bool want, const std::string& ver, std::string* soft) {
+    if (!want) {
+        for (const auto& e : tools) RemoveEntry(p, e);
+        return;
+    }
+    if (!WriteFileAtomic(p, EntriesDir() + "/" + kToolsEntry, ToolsText(ver))) {
+        *soft += (soft->empty() ? "" : "; ") + std::string("write ") + kToolsEntry + " failed";
+        return;
+    }
+    if (!p->dry && (tools.empty() || tools[0].version != ver))
+        LOG(INFO) << "gk3boot: " << kToolsEntry << " -> " << ver << " (gk3.action=fastboot)";
+}
+
 void Reconcile(Pass* p, Mode mode, EspResult* r) {
     EspScan s = ScanEsp();
     if (!s.ok) {
@@ -608,9 +710,14 @@ void Reconcile(Pass* p, Mode mode, EspResult* r) {
         r->mode = "unknown";
         return;
     }
-    std::vector<Gk3Entry> active, staged, prev;
+    std::vector<Gk3Entry> active, staged, prev, tools;
     for (const auto& e : s.gk3) {
-        (e.kind == Kind::kActive ? active : e.kind == Kind::kStaged ? staged : prev).push_back(e);
+        switch (e.kind) {
+            case Kind::kActive: active.push_back(e); break;
+            case Kind::kStaged: staged.push_back(e); break;
+            case Kind::kPrev: prev.push_back(e); break;
+            case Kind::kTools: tools.push_back(e); break;
+        }
     }
     auto keep_as_is = [&]() {
         r->mode = active.empty() ? "off" : (active[0].observe ? "observe" : "action");
@@ -655,6 +762,16 @@ void Reconcile(Pass* p, Mode mode, EspResult* r) {
         keep_as_is();
         return;
     }
+    // 执行端：失败只进 fb_err（最后并进 error），不挡下面的入口部署
+    std::string fb_err;
+    const FbState fb = InstallFastboot(p, ver, &fb_err);
+    if (fb == FbState::kFailed && !p->dry)
+        LOG(ERROR) << "gk3boot: fastboot.img not deployed (" << fb_err << "); the loader is deployed anyway, "
+                   << "gk3boot boots Android when the executor is missing";
+    const bool want_tools = !observe && fb == FbState::kReady;
+    auto soft = [&]() {
+        if (!fb_err.empty()) r->error += (r->error.empty() ? "" : "; ") + fb_err;
+    };
 
     bool have[2] = {false, false}, up_to_date = !active.empty(), proven = false;
     std::string old_ver = active.empty() ? "" : active[0].version;
@@ -670,9 +787,11 @@ void Reconcile(Pass* p, Mode mode, EspResult* r) {
     std::string prev_ver = prev.empty() ? "" : prev[0].version;
     if (up_to_date) {
         for (const auto& e : staged) RemoveEntry(p, e);
+        AlignTools(p, tools, want_tools, ver, &fb_err);
         CollectGarbage(p, RefsAfter(s, {ver, prev_ver}));
         r->mode = observe ? "observe" : "action";
         r->version = ver;
+        soft();
         return;
     }
 
@@ -693,9 +812,12 @@ void Reconcile(Pass* p, Mode mode, EspResult* r) {
         if (!WriteFileAtomic(p, EntriesDir() + "/" + ActiveName(x, true), EntryText(Kind::kActive, x, ver, observe))) {
             r->error = "write " + ActiveName(x, true) + " failed";
             keep_as_is();
-            return;  // 旧条目不删：至少还有原来那一套
+            soft();
+            return;  // 旧条目不删：至少还有原来那一套（gk3boot-tools.conf 也不动）
         }
     }
+    // gk3boot-tools.conf 跟着现役换到这一版（新现役条目写好之后、删旧的之前）
+    AlignTools(p, tools, want_tools, ver, &fb_err);
     for (const auto& e : active) {
         if (e.file != ActiveName(e.slot, true)) RemoveEntry(p, e);
     }
@@ -706,6 +828,7 @@ void Reconcile(Pass* p, Mode mode, EspResult* r) {
                   << "), entries gk3boot-android-{a,b}+3.conf";
     r->mode = observe ? "observe" : "action";
     r->version = ver;
+    soft();
 }
 
 // 一遍：bless + 对齐。返回这一遍里算出来的结果；p->changed 表示（dry 时）还有事要做
