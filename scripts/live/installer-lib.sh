@@ -208,7 +208,9 @@ gk3_partpath() {
 #   CHECK id=model      ok=yes|no|unknown value=GK-W7X
 #   CHECK id=bios       ok=yes value=2.16          （只报版本，不拦 —— 见下）
 #   CHECK id=secureboot ok=yes|no|unknown value=disabled|enabled
-#   CHECK id=tools      ok=yes|no         missing=a,b
+#   CHECK id=tools      ok=yes|no         missing=a,b pkgs=p,q
+#     pkgs：缺的工具在 Debian / Ubuntu 上属于哪些包（去重、按 missing 的顺序；gk3__tool_pkg），
+#     前端照着提示 `apt install <pkgs>`（v1.0 计划 INST-16：原先的提示是手抄的一行包名，漏了 partprobe 所在的 parted）
 # ok=no 的项前端必须拦住；unknown 只警告 —— 读不到 ≠ 不合格（例如内核没开 DMIID）。
 #
 # ★ 型号 / BIOS 的读取点：/sys/class/dmi/id/{product_name,bios_version}
@@ -256,13 +258,34 @@ gk3_preflight() {
         *) echo "CHECK id=secureboot ok=unknown value=" ;;
     esac
 
-    local t missing=""
+    local t p missing="" pkgs=""
     for t in sgdisk partprobe blkid lsblk findmnt mkfs.vfat mkfs.ext4 dd od zstd python3; do
-        command -v "$t" >/dev/null 2>&1 || missing="$missing,$t"
+        command -v "$t" >/dev/null 2>&1 && continue
+        missing="$missing,$t"; p=$(gk3__tool_pkg "$t")
+        case ",$pkgs," in *",$p,"*) ;; *) pkgs="$pkgs,$p" ;; esac
     done
-    missing=${missing#,}
-    [ -z "$missing" ] && echo "CHECK id=tools ok=yes" || echo "CHECK id=tools ok=no missing=$missing"
+    missing=${missing#,}; pkgs=${pkgs#,}
+    [ -z "$missing" ] && echo "CHECK id=tools ok=yes" || echo "CHECK id=tools ok=no missing=$missing pkgs=$pkgs"
     return 0
+}
+
+# 工具 → Debian / Ubuntu 的包名（INST-16）。对照的是 live 镜像里 dpkg -S 的结果（Debian 13，2026-10-05 在
+# gk3-bootsmoke 容器里查的：partprobe 在 parted、blkid / lsblk / findmnt 在 util-linux、python3 由 python3-minimal
+# 提供但装 python3 即可）。Ubuntu 的包名同名（未逐个核实）。不认识的工具原样回它自己的名字。
+gk3__tool_pkg() {
+    case "$1" in
+        sgdisk) echo gdisk ;;
+        partprobe) echo parted ;;
+        blkid|lsblk|findmnt) echo util-linux ;;
+        mkfs.vfat) echo dosfstools ;;
+        mkfs.ext4|resize2fs|e2fsck|chattr) echo e2fsprogs ;;
+        ntfsresize|ntfscat|ntfs-3g|mkntfs) echo ntfs-3g ;;
+        dd|od|sha256sum) echo coreutils ;;
+        zstd) echo zstd ;;
+        python3) echo python3 ;;
+        systemd-run|systemd-inhibit) echo systemd ;;
+        *) echo "$1" ;;
+    esac
 }
 
 # ── 方案计算 ────────────────────────────────────────────────────────────────
@@ -490,7 +513,8 @@ gk3__emit_part() {
 #   recovery-ramdisk.img             可选（发版不带，见 docs/INSTALL.md）
 #   systemd-bootaa64.efi             可选（live 镜像自带 /usr/share/gaokun3/ 那份）
 #   rescue.squashfs + initramfs.img  --rescue yes 时必需；发布目录里没有就用
-#                                    启动介质上的（/media/gk3/gaokun3/，build-usb.sh 放的）
+#                                    启动介质上的（/media/gk3/gaokun3/，build-usb.sh 放的；
+#                                    Windows 安装包那条路上是 live.squashfs，gk3__find_rescue_squashfs）
 #   wpa_supplicant.conf              可选，装进救援分区
 #
 # 进度打在 stderr：`PROGRESS <百分比> <说明>`，其余是日志。
@@ -596,11 +620,8 @@ gk3_apply() {
 
     local r_squash="" r_initrd=""
     if [ "$rescue" = yes ]; then
-        # ★ 找救援镜像的顺序：发布目录 → U 盘上专门放的救援镜像（gaokun3/install-rescue/，
-        #   build-usb.sh --rescue-squashfs）→ 最后才是 U 盘上正在跑的这个。
-        #   ⚠️ 最后那个是 live 镜像本身（带图形安装器、开机 tty1 就起它、185 MiB），不是
-        #      rescue profile（104 MiB、只有 ssh 与工具）—— 只是"有总比没有好"的兜底。
-        r_squash=$(gk3__find_file rescue.squashfs "$rel" /media/gk3/gaokun3/install-rescue /media/gk3/gaokun3) \
+        # 找救援镜像的顺序见 gk3__find_rescue_squashfs（发布目录 → U 盘上专门放的 → 正在跑的这个）
+        r_squash=$(gk3__find_rescue_squashfs "$rel") \
             || { gk3_die "选了装救援系统，但发布目录和启动介质上都没有 rescue.squashfs"; return 1; }
         r_initrd=$(gk3__find_file initramfs.img "$rel" /media/gk3/gaokun3) \
             || { gk3_die "选了装救援系统，但发布目录和启动介质上都没有 initramfs.img"; return 1; }
@@ -970,20 +991,37 @@ LOADER
             #    全内存）"从没在本机菜单上看过，取稳妥的一侧）。
             # 救援系统与 Android 共用内核与 dtb（docs/stage7-live-installer.md §2.3），
             # 只多一个 initramfs；cmdline 从 Android 那份派生（见 gk3__rescue_cmdline）
-            cat > "$mnt/loader/entries/$mid-rescue.conf" <<RESC || { esp_fail "救援启动项"; return 1; }
-title      gaokun3 rescue (runs from RAM)
-version    gaokun3-rescue
-sort-key   linux1
-linux      /$mid/android/slot_a/Image
-devicetree /$mid/android/slot_a/gaokun3.dtb
+            # ★ 两条：一条借 slot_a 的内核、一条借 slot_b 的（v1.0 计划 INST-17）。原先只有 slot_a 那条 ——
+            #   OTA 往 slot_a 写进一个起不来的内核，救援也跟着起不来，而那正是要用救援的时候。第二条只是一个
+            #   .conf（initramfs 共用一份、内核与 dtb 是 slot_b 本来就有的），不多占 ESP 空间。
+            #   文件名 / version 是承重的：OTA postinstall 按 <mid>-rescue*.conf + linux 行认出借了哪个槽的内核，
+            #   给它同步 options（gaokun3-ota-postinstall.sh 的"救援条目"一节；OTA-10）。
+            # ⓘ 标题只写借谁的内核：原先的 "(runs from RAM)" 不准 —— squashfs 是从救援分区只读 loop 挂的，
+            #   只有写入层在内存里（initramfs-init 的 overlay 那段）。
+            local rs rf rk
+            for rs in a b; do
+                rf=$mid-rescue.conf; rk=linux1
+                [ "$rs" = a ] || { rf=$mid-rescue-$rs.conf; rk=linux2; }
+                cat > "$mnt/loader/entries/$rf" <<RESC || { esp_fail "救援启动项 $rf"; return 1; }
+title      gaokun3 rescue (slot $rs kernel)
+version    gaokun3-rescue-$rs
+sort-key   $rk
+linux      /$mid/android/slot_$rs/Image
+devicetree /$mid/android/slot_$rs/gaokun3.dtb
 initrd     /$mid/rescue/initramfs.img
 options    $(gk3__rescue_cmdline "$cmdline")
 RESC
+            done
         fi
         sync
         for slot in a b; do
             [ -s "$mnt/loader/entries/$mid-android-$slot.conf" ] || { esp_fail "启动项 $mid-android-$slot.conf 是空的"; return 1; }
         done
+        if [ "$rescue" = yes ]; then
+            for f in "$mid-rescue.conf" "$mid-rescue-b.conf"; do
+                [ -s "$mnt/loader/entries/$f" ] || { esp_fail "救援启动项 $f 是空的"; return 1; }
+            done
+        fi
     else
         echo "DRY: 往 $p_esp 写 systemd-boot、两个 Android 启动项（options=$cmdline …）、内核/dtb/ramdisk" >&2
     fi
@@ -1056,6 +1094,21 @@ gk3__find_file() {
         [ -f "$d/$name" ] && { echo "$d/$name"; return 0; }
     done
     return 1
+}
+
+# 装进救援分区的 squashfs 去哪找。$1=发布目录（可空）。gk3_apply、gk3_release_info、install-gaokun3.sh 共用这一条规则。
+#   1. 发布目录里的 rescue.squashfs（命令行安装：从 Release 下载的，release-installer.sh 附带）
+#   2. U 盘上专门放的救援镜像 gaokun3/install-rescue/rescue.squashfs（build-usb.sh --rescue-squashfs）
+#   3. U 盘上正在跑的这个：build-usb.sh 把 live 镜像就叫 gaokun3/rescue.squashfs
+#   4. Windows 安装包的 GK3LIVE 分区上正在跑的这个：build-bundle.sh 把它叫 gaokun3/live.squashfs
+#      ★ v1.0 计划 INST-6：原先只按 rescue.squashfs 这个名字找，从 Windows 开始的安装（免 U 盘）永远装不上救援系统。
+#        不在 Windows 安装包里另放一份（又是约 200 MiB 要下载、要拷进 GK3LIVE），就用正在跑的这一份。
+#   ⚠️ 3、4 是 live 镜像本身（带图形安装器、开机 tty1 就起它），不是 rescue profile（只有 ssh 与工具）——
+#      发布版本来就不带 rescue profile（release-installer.sh 的注释：它在真机上一次没起过），所以这是常态，不是兜底。
+#   装进救援分区时一律改名叫 rescue.squashfs（救援条目的 gk3.squash= 指的是它，见 gk3__rescue_cmdline）。
+gk3__find_rescue_squashfs() {
+    gk3__find_file rescue.squashfs "${1:-}" /media/gk3/gaokun3/install-rescue /media/gk3/gaokun3 \
+        || gk3__find_file live.squashfs /media/gk3/gaokun3
 }
 
 # 写 super。输入是 .zst（发版产物）或 super.img（sparse 或 raw）。
@@ -1747,7 +1800,7 @@ gk3_release_info() {
         sha=yes
         ver=$(awk '{sub(/^\*/, "", $2)} $2 ~ /\.zip$/ {sub(/\.zip$/, "", $2); print $2; exit}' "$d/install-artifacts.sha256")
     fi
-    gk3__find_file rescue.squashfs "$d" /media/gk3/gaokun3/install-rescue /media/gk3/gaokun3 >/dev/null \
+    gk3__find_rescue_squashfs "$d" >/dev/null \
         && gk3__find_file initramfs.img "$d" /media/gk3/gaokun3 >/dev/null && rescue=yes
     echo "RELEASE dir=$(gk3__enc "$d") boot=$boot super=$super sha256=$sha rescue=$rescue version=$(gk3__enc "${ver:-?}") super_mib=$smib"
 }

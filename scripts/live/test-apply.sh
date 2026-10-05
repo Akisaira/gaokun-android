@@ -123,8 +123,9 @@ CMDLINE=$(cat "$W/expect/cmdline")
 RAWSZ=$(stat -c%s "$W/expect/super.raw")
 
 # 装完之后的逐项核对。$1=盘 $2=救援 yes|no $3=ESP 节点（双系统时是别人的 ESP，不叫 esp）
+#   $4 $5 = 救援分区里的 squashfs、ESP 上的救援 initramfs 应当来自哪个文件（默认发布目录里那两个）
 verify_install() {
-    local d=$1 resc=$2 esp=${3:-} n p m
+    local d=$1 resc=$2 esp=${3:-} rsq=${4:-$REL/rescue.squashfs} rini=${5:-$REL/initramfs.img} n p m
     [ -n "$esp" ] || esp=$(gk3__bylabel "$d" esp)
     [ -b "$esp" ] || { bad "找不到 ESP"; return; }
     for n in misc metadata boot_a boot_b super userdata; do
@@ -167,14 +168,25 @@ verify_install() {
         [ "$(sed -n 's/^options *//p' "$m/loader/entries/$MID-rescue.conf")" = "$want" ] \
           && ! grep -q 'androidboot\.' "$m/loader/entries/$MID-rescue.conf" \
           && grep -q 'usbhid.quirks' "$m/loader/entries/$MID-rescue.conf" \
-          && [ "$(sha "$m/$MID/rescue/initramfs.img")" = "$(sha "$REL/initramfs.img")" ] \
+          && [ "$(sha "$m/$MID/rescue/initramfs.img")" = "$(sha "$rini")" ] \
             && ok "救援启动项：cmdline 从 boot.img 派生（去掉 androidboot.*、保留 usbhid.quirks），initramfs 正确" \
             || bad "救援启动项不对"
+        # INST-17：第二条救援条目借 slot_b 的内核与 dtb，initramfs 与 options 与第一条相同（不另占 ESP 空间）
+        local ra=$m/loader/entries/$MID-rescue.conf rb=$m/loader/entries/$MID-rescue-b.conf
+        [ "$(sed -n 's/^linux *//p' "$ra")" = "/$MID/android/slot_a/Image" ] \
+          && [ "$(sed -n 's/^devicetree *//p' "$ra")" = "/$MID/android/slot_a/gaokun3.dtb" ] \
+          && [ "$(sed -n 's/^linux *//p' "$rb")" = "/$MID/android/slot_b/Image" ] \
+          && [ "$(sed -n 's/^devicetree *//p' "$rb")" = "/$MID/android/slot_b/gaokun3.dtb" ] \
+          && [ "$(sed -n 's/^options *//p' "$rb")" = "$want" ] \
+          && [ "$(sed -n 's/^initrd *//p' "$rb")" = "/$MID/rescue/initramfs.img" ] \
+          && [ "$(ls "$m/$MID/rescue/")" = initramfs.img ] \
+            && ok "两条救援条目：rescue.conf 借 slot_a、rescue-b.conf 借 slot_b 的内核，同一个 initramfs、同样的 options" \
+            || { bad "slot_b 的救援条目不对"; sed 's/^/      /' "$rb" 2>/dev/null; }
     fi
     umount "$m"
     if [ "$resc" = yes ]; then
         m=$W/mnt-resc; mkdir -p "$m"; mount -o ro "$(gk3__bylabel "$d" gk3rescue)" "$m"
-        [ "$(sha "$m/gaokun3/rescue.squashfs")" = "$(sha "$REL/rescue.squashfs")" ] \
+        [ "$(sha "$m/gaokun3/rescue.squashfs")" = "$(sha "$rsq")" ] \
           && [ "$(stat -c%a "$m/gaokun3/wpa_supplicant.conf")" = 600 ] \
             && ok "救援分区：squashfs 正确、WiFi 配置权限 600" || bad "救援分区内容不对"
         # 公开的 live 镜像不带公钥 —— 救援系统要能远程进去，公钥得跟着装进来
@@ -183,6 +195,19 @@ verify_install() {
         umount "$m"
     fi
 }
+
+# ── P. 预检：缺工具时报出包名（v1.0 计划 INST-16）───────────────────────────
+echo "═══ P. 预检：缺的工具对应哪个包 ═══"
+PB=$W/pathbin; mkdir -p "$PB"
+# 预检本身要用的命令照常给；故意不给 sgdisk、partprobe、blkid、lsblk（后两个同属 util-linux：包名只出一次）
+for t in id cat od sed tr grep dmesg findmnt mkfs.vfat mkfs.ext4 dd zstd python3; do
+    command -v "$t" >/dev/null && ln -sf "$(command -v "$t")" "$PB/$t"
+done
+TL=$(PATH=$PB gk3_preflight 2>/dev/null | grep '^CHECK id=tools ')
+[ "$TL" = "CHECK id=tools ok=no missing=sgdisk,partprobe,blkid,lsblk pkgs=gdisk,parted,util-linux" ] \
+    && ok "缺 sgdisk / partprobe / blkid / lsblk：$TL" || bad "预检的包名不对：$TL"
+TL=$(gk3_preflight 2>/dev/null | grep '^CHECK id=tools ')
+[ "$TL" = "CHECK id=tools ok=yes" ] && ok "工具齐全：$TL（没有 pkgs= 字段）" || bad "工具齐全时预检不对：$TL"
 
 # ── A. 命令行版，整盘 ───────────────────────────────────────────────────────
 echo "═══ A. install-gaokun3.sh 整盘安装 ═══"
@@ -335,7 +360,9 @@ partprobe "$DD" 2>/dev/null; udevadm settle 2>/dev/null; sleep 1
 mkfs.vfat -F 32 -n SYSTEM "${DD}p1" >/dev/null; mkntfs -Q -F -L Windows "${DD}p3" >/dev/null 2>&1
 mkfs.vfat -F 32 -n GK3LIVE "${DD}p4" >/dev/null
 mkdir -p /media/gk3 && mount "${DD}p4" /media/gk3 && mkdir -p /media/gk3/gaokun3
-head -c 1048576 /dev/urandom > /media/gk3/gaokun3/live.squashfs; LIVE_SHA=$(sha /media/gk3/gaokun3/live.squashfs); sync
+# GK3LIVE 的布局照 Windows 安装包（scripts/windows/build-bundle.sh）：live.squashfs + initramfs.img，没有 rescue.squashfs
+head -c 1048576 /dev/urandom > /media/gk3/gaokun3/live.squashfs; LIVE_SHA=$(sha /media/gk3/gaokun3/live.squashfs)
+head -c 70000 /dev/urandom > /media/gk3/gaokun3/initramfs.img; sync
 PU4=$(sgdisk -i 4 "$DD" 2>/dev/null | awk '/unique GUID/{print $4}')
 PROBE=$(gk3_probe 2>/dev/null | awk -v d="$DD" '$2=="path="d || index($0, "disk="d" ") || index($0, "path="d"p")')
 printf '%s\n' "$PROBE" | grep -q "^DISK path=$DD .*medium=yes" && printf '%s\n' "$PROBE" | grep -q "^PART path=${DD}p4 .*medium=yes" \
@@ -351,10 +378,16 @@ OUT=$(gk3_apply --disk "$DD" --mode wipe --rescue no --release "$REL" 2>&1); rc=
     && ok "整盘清空介质所在的盘：拒绝且盘没动" || bad "整盘清空没被拦住（rc=${rc}）"
 FREE=$(printf '%s\n' "$PROBE" | grep '^FREE ' | sort -t= -k5 -n | tail -1)
 RS=$(gk3__f "$FREE" start); RE=$(gk3__f "$FREE" end)
-gk3_apply --disk "$DD" --mode alongside --rescue no --release "$REL" \
+# ★ v1.0 计划 INST-6：从 Windows 开始的安装，发布目录（网络下载的 / payload/）里没有救援件，介质上也没有叫
+#   rescue.squashfs 的文件 —— 原先因此永远装不上救援系统。现在用正在跑的 live.squashfs
+RELW=$W/rel-win; mkdir -p "$RELW"; cp "$REL"/boot.img "$REL"/super.img.zst "$REL"/install-artifacts.sha256 "$REL"/wpa_supplicant.conf "$REL"/authorized_keys "$REL"/recovery-ramdisk.img "$RELW/"
+RI=$(gk3_release_info "$RELW")
+printf '%s' "$RI" | grep -q ' rescue=yes ' && [ "$(gk3__find_rescue_squashfs "$RELW")" = /media/gk3/gaokun3/live.squashfs ] \
+    && ok "Windows 安装包的介质（只有 live.squashfs）：gk3_release_info 报 rescue=yes，用的是 live.squashfs" || bad "Windows 安装包的介质认不出救援镜像：$RI"
+gk3_apply --disk "$DD" --mode alongside --rescue yes --release "$RELW" \
           --region-start "$RS" --region-end "$RE" --esp "${DD}p1" >"$W/d.log" 2>&1; rc=$?
-if [ "$rc" = 0 ]; then ok "双系统装进同一块盘的空闲区：完成（介质分区一直挂着）"
-    verify_install "$DD" no "${DD}p1"
+if [ "$rc" = 0 ]; then ok "双系统装进同一块盘的空闲区（带救援系统）：完成（介质分区一直挂着）"
+    verify_install "$DD" yes "${DD}p1" /media/gk3/gaokun3/live.squashfs /media/gk3/gaokun3/initramfs.img
 else bad "双系统安装失败 rc=$rc"; tail -20 "$W/d.log" | sed 's/^/      /'; fi
 findmnt -rn -S "${DD}p4" -T /media/gk3 >/dev/null && [ "$(sha /media/gk3/gaokun3/live.squashfs)" = "$LIVE_SHA" ] \
     && [ "$(sgdisk -i 4 "$DD" 2>/dev/null | awk '/unique GUID/{print $4}')" = "$PU4" ] \

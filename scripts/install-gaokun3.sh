@@ -44,11 +44,14 @@
 #   boot_a/b   64M   Standard Android boot images, in AB_OTA_PARTITIONS.
 #   super      12G   system/system_ext/product/vendor (Virtual A/B: one
 #                    physical copy plus COW snapshots in userdata).
-#   gk3rescue   1G   Optional rescue system: a squashfs that runs entirely in
-#                    RAM (docs/stage7-live-installer.md). Installed only when
+#   gk3rescue   1G   Optional rescue system: a squashfs mounted read-only from
+#                    this partition, its writable layer in RAM
+#                    (docs/stage7-live-installer.md). Installed only when
 #                    rescue.squashfs + initramfs.img are available — in the
-#                    release directory, or on our live USB. The old 24 GiB
-#                    "clone whatever live system you booted" rescue is gone.
+#                    release directory, or on our live USB. Two boot entries
+#                    use it: one with slot a's kernel, one with slot b's.
+#                    The old 24 GiB "clone whatever live system you booted"
+#                    rescue is gone.
 #   userdata   rest  /data. Last on disk so it can be grown without moving
 #                    anything.
 # ────────────────────────────────────────────────────────────────────────────
@@ -81,6 +84,7 @@ done
 # ── preflight ──────────────────────────────────────────────────────────────
 say "Preflight"
 blocked=0
+pkgs=
 # GK3_SKIP_PREFLIGHT=1 exists only for scripts/live/test-apply.sh, which runs
 # this script inside a container against a loop device — there is no UEFI there.
 if [ "${GK3_SKIP_PREFLIGHT:-0}" = 1 ]; then
@@ -88,6 +92,10 @@ if [ "${GK3_SKIP_PREFLIGHT:-0}" = 1 ]; then
 else
 while read -r _ id ok rest; do
     id=${id#id=}; ok=${ok#ok=}
+    # INST-16: the backend names the Debian/Ubuntu packages of the missing tools
+    if [ "$id" = tools ]; then
+        for kv in $rest; do case "$kv" in pkgs=*) pkgs=$(printf '%s' "${kv#pkgs=}" | tr ',' ' ') ;; esac; done
+    fi
     case "$ok" in
         yes)     printf '  ✓ %-11s %s\n' "$id" "$rest" ;;
         unknown) printf '  ? %-11s %s  (could not tell — continuing)\n' "$id" "$rest" ;;
@@ -95,7 +103,7 @@ while read -r _ id ok rest; do
     esac
 done < <(gk3_preflight)
 if [ "$blocked" = 1 ]; then
-    cat >&2 <<'EOF'
+    cat >&2 <<EOF
 
 Refusing to continue. What the failures mean:
   root        run with sudo
@@ -103,7 +111,8 @@ Refusing to continue. What the failures mean:
   model       this installer is for the MateBook E Go 2022 (GK-W7X) only
               (override: GK3_SKIP_MODEL_CHECK=1)
   secureboot  the kernel is unsigned — disable Secure Boot in firmware setup
-  tools       Debian/Ubuntu: apt install gdisk dosfstools e2fsprogs zstd python3
+  tools       Debian/Ubuntu: apt install ${pkgs:-gdisk parted util-linux dosfstools e2fsprogs coreutils zstd python3}
+              (installing also needs systemd-boot-efi, for systemd-bootaa64.efi)
 EOF
     exit 1
 fi
@@ -111,7 +120,9 @@ fi
 
 # ── what will happen ───────────────────────────────────────────────────────
 RESCUE=no
-if gk3__find_file rescue.squashfs "$REL" /media/gk3/gaokun3 >/dev/null \
+# Same lookup as the graphical installer (gk3__find_rescue_squashfs): the
+# release directory first, then the medium this live system was started from.
+if gk3__find_rescue_squashfs "$REL" >/dev/null \
    && gk3__find_file initramfs.img "$REL" /media/gk3/gaokun3 >/dev/null; then
     RESCUE=yes
 fi
@@ -150,7 +161,7 @@ say "Done"
 cat <<EOF
 
 Reboot. The boot menu waits 15 seconds and then starts
-"crDroid 16.0 (gaokun3) — slot _a".$( [ "$RESCUE" = yes ] && printf '\nThe rescue system is in the same menu; it is never the default.' )
+"crDroid 16.0 (gaokun3) — slot _a".$( [ "$RESCUE" = yes ] && printf '\nThe rescue system is in the same menu, twice (using the kernel of slot a,\nand of slot b); it is never the default.' )
 
 First boot takes a couple of minutes. Afterwards:
   * connect Wi-Fi once by hand. That is the only manual step left: the
