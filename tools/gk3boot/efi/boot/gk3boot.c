@@ -22,6 +22,9 @@
  *       cmdline 由 gk3_cmdline_fastboot 拼。执行端缺失 / 读不出 / 内核读不出 ⇒ 记日志、照常启动 Android（不消费 BCB）；
  *       进执行端那一次不扣 tries、不加 boot_streak；bootloader / fastboot / recovery 类 BCB 进之前清掉，wipe 类留给执行端；
  *     - ESP 日志只在异常时写（正常路径对 ESP 零写入，§4.12），屏幕上也不打字（§4.3.1）。
+ *     - 双系统（S15，README §16，⬜ 未上机）：读 LoaderEntryDefault（不合法就删）、应用 GK3 的 set_default 请求、
+ *       消费 next=windows / next=sdboot-menu / clean_poweroff（Android 有待办时作废），默认是 Windows 时交接前
+ *       预置 LoaderEntryOneShot=*-android-<x>.conf。规则在 libgk3core 的 dual.c，这里只碰变量和复位（见"双系统"一节）。
  *
  * fail-open（§4.12 阶梯第 1 步）：任何一步失败 → 记日志 → 写 LoaderEntryOneShot = 本 ESP 上的直连条目
  * <machine-id>-android-<x>.conf（x = 目标槽；没有就用另一槽的）→ ResetSystem(EfiResetCold)。写变量失败也照样复位。
@@ -791,7 +794,7 @@ static void rec_prepare(const uint8_t *m)
     }
 }
 
-static void rec_write(const char *what)
+static gk3_err rec_write(const char *what)
 {
     static uint8_t back[GK3_REC_SIZE];
     gk3_rec_seal(g_rec);
@@ -802,6 +805,203 @@ static void rec_write(const char *what)
     else
         gk3_logf("gk3rec: written (%s), boot_streak=%u ok_streak=%u flags=0x%x (read back OK)\n", what,
                  gk3_rec_boot_streak(g_rec), gk3_rec_ok_streak(g_rec), gk3_rec_flags(g_rec));
+    return e;
+}
+
+/* ------------------------------------------------------------------ 双系统（S15，设计稿 §4.9.3 / §4.9.4 / §4.4.4）
+ *
+ * 规则本身在 libgk3core（core/src/dual.c，主机单测 test/test_dual.c）；这里只做 UEFI 那一半：读 / 写 / 删 systemd-boot 的
+ * LoaderEntryDefault 与 LoaderEntryOneShot、看 \EFI\Microsoft\Boot\bootmgfw.efi 在不在、复位。
+ *   - 只在动作模式下写（观察模式只打 "would"，§4.12）；纯 Android（变量不存在、记录里没有双系统意图）时
+ *     只多一次 GetVariable(LoaderEntryDefault)，不多写任何东西。
+ *   - 去 Windows 的那一次：先把清掉标记的 GK3 记录写回 misc（读回），再写 OneShot=Windows 条目，冷复位；
+ *     不扣 tries、不加 boot_streak、不预置。任何一步失败都改为照常启动 Android（不会循环：标记要么已清，要么还在、下次再试一次）。
+ *     复位用 EfiResetCold，不是设计稿写的 Warm：Cold 是 fail-open 已在本机固件上验过的那条路（E6），NV 变量在复位前已落盘。
+ *   - 正常路径不写 ESP 日志（每次切 Windows 都留一份会慢慢吃掉共用 ESP，U17）；只有写失败、不合法的默认值才算异常。 */
+
+static const CHAR16 kBootmgfw[] = u"\\EFI\\Microsoft\\Boot\\bootmgfw.efi";
+#define VAR_ATTR (EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS)
+
+static struct {
+    int win;                   /* -1 = 还没看；0 / 1 = ESP 上有没有 bootmgfw.efi */
+    gk3_defvar var;            /* LoaderEntryDefault 进来时的样子 */
+    char value[96];            /* 它的原值（ASCII，非 ASCII 记成 '?'） */
+    bool default_windows;      /* 处理完 set_default / 不合法值之后：默认是不是 Windows */
+    bool preset;               /* 交接前预置 LoaderEntryOneShot = *-android-<x>.conf */
+    bool menu;                 /* next=sdboot-menu：已清掉，return EFI_SUCCESS 回 systemd-boot 菜单 */
+} dual = {-1, GK3_DEFVAR_ABSENT, "", false, false, false};
+
+static bool win_present(void)
+{
+    if (dual.win < 0) {
+        EFI_STATUS st = self_li ? gk3_file_exists(self_li->DeviceHandle, kBootmgfw) : EFI_NOT_FOUND;
+        dual.win = !EFI_ERROR(st);
+        gk3_logf("dual: \\EFI\\Microsoft\\Boot\\bootmgfw.efi %s\n", dual.win ? "present" : gk3_efi_strerror(st));
+    }
+    return dual.win;
+}
+
+/* Windows 条目的 id：安装器自写的 type1 条目 gk3-windows.conf（U22，id = 文件名，boot.c:1540-1541）优先，
+ * 否则 systemd-boot 自动生成的 auto-windows（boot.c:2146-2148） */
+static const char *win_entry_id(void)
+{
+    return self_li && !EFI_ERROR(gk3_file_exists(self_li->DeviceHandle, u"\\loader\\entries\\gk3-windows.conf"))
+               ? "gk3-windows.conf"
+               : "auto-windows";
+}
+
+/* systemd-boot 厂商 GUID 下的字符串变量：val 非 NULL = 写（属性 0x07、UTF-16LE + NUL，同 scripts/boot-oneshot.sh），
+ * NULL = 删（size 0；本来就没有算成功）。写 / 删之后都读回核对。 */
+static EFI_STATUS loader_var_set(const CHAR16 *name, const char *val)
+{
+    static CHAR16 v[96];
+    static uint8_t back[200];
+    UINTN bsz = sizeof(back);
+    UINT32 battr = 0;
+    EFI_STATUS st;
+    if (!val) {
+        st = gk3_setvar(name, &gk3_guid_loader, VAR_ATTR, NULL, 0);
+        if (EFI_ERROR(st) && st != EFI_NOT_FOUND)
+            return st;
+        st = gk3_getvar(name, &gk3_guid_loader, NULL, back, &bsz);
+        return st == EFI_NOT_FOUND ? EFI_SUCCESS : EFI_ERROR(st) && st != EFI_BUFFER_TOO_SMALL ? st : EFI_DEVICE_ERROR;
+    }
+    size_t n = gk3_strlen(val);
+    if (n + 1 > sizeof(v) / sizeof(v[0]))
+        return EFI_BAD_BUFFER_SIZE;
+    for (size_t i = 0; i <= n; i++)
+        v[i] = (CHAR16)(unsigned char)val[i];
+    UINTN size = (n + 1) * sizeof(CHAR16);
+    st = gk3_setvar(name, &gk3_guid_loader, VAR_ATTR, v, size);
+    if (EFI_ERROR(st))
+        return st;
+    st = gk3_getvar(name, &gk3_guid_loader, &battr, back, &bsz);
+    if (EFI_ERROR(st))
+        return st;
+    return bsz == size && !gk3_memcmp(back, v, size) && battr == VAR_ATTR ? EFI_SUCCESS : EFI_DEVICE_ERROR;
+}
+
+static void read_default_var(void)
+{
+    static uint8_t buf[200];
+    UINTN sz = sizeof(buf) - 2;
+    gk3_memset(buf, 0, sizeof(buf));
+    EFI_STATUS st = gk3_getvar(u"LoaderEntryDefault", &gk3_guid_loader, NULL, buf, &sz);
+    dual.value[0] = 0;
+    if (st == EFI_NOT_FOUND) {
+        dual.var = GK3_DEFVAR_ABSENT;
+        return;
+    }
+    if (st == EFI_BUFFER_TOO_SMALL) {      /* 存在、但长得不像任何条目 id */
+        gk3_memcpy(dual.value, "(too long)", 11);
+        dual.var = GK3_DEFVAR_OTHER;
+        return;
+    }
+    if (EFI_ERROR(st)) {                   /* 读不出：什么都不做（不去删一个看不见的东西） */
+        gk3_logf("dual: GetVariable(LoaderEntryDefault): %s; treated as absent\n", gk3_efi_strerror(st));
+        dual.var = GK3_DEFVAR_ABSENT;
+        return;
+    }
+    gk3_ucs2_to_ascii((const CHAR16 *)buf, sz / 2, dual.value, sizeof(dual.value));
+    dual.var = gk3_defvar_classify(dual.value);
+}
+
+static const char *const defvar_name[] = {"absent", "windows-entry", "NOT-LEGAL"};
+static const char *const setdef_name[] = {"none", "windows", "android"};
+
+/* §4.9.3 a、b（动作模式，g_rec 已备好）：删不合法的 LoaderEntryDefault、应用 set_default 请求、更新默认系统缓存 */
+static void dual_defaults(void)
+{
+    gk3_def_plan p;
+    gk3_setdef req = gk3_rec_set_default_req(g_rec);
+    read_default_var();
+    bool win = (dual.var == GK3_DEFVAR_WINDOWS || req == GK3_SETDEF_WINDOWS) ? win_present() : false;
+    gk3_dual_plan_default(g_rec, dual.var, win, &p);
+    dual.default_windows = p.default_windows;
+    if (dual.var != GK3_DEFVAR_ABSENT || req != GK3_SETDEF_NONE)
+        gk3_logf("dual: LoaderEntryDefault=\"%s\" (%s) set_default=%s -> %s; default %s\n", dual.value,
+                 defvar_name[dual.var], setdef_name[req],
+                 p.action == GK3_DEFACT_DELETE ? "delete" : p.action == GK3_DEFACT_SET_WINDOWS ? "set Windows" : "keep",
+                 p.default_windows ? "Windows" : "Android");
+    EFI_STATUS st = EFI_SUCCESS;
+    const char *id = NULL;
+    if (p.action == GK3_DEFACT_DELETE)
+        st = loader_var_set(u"LoaderEntryDefault", NULL);
+    else if (p.action == GK3_DEFACT_SET_WINDOWS)
+        st = loader_var_set(u"LoaderEntryDefault", id = win_entry_id());
+    if (EFI_ERROR(st)) {
+        dual.default_windows = p.default_windows_before;
+        if (p.applied != GK3_SETDEF_NONE)
+            gk3_rec_event_add(g_rec, GK3_EV_INTENT_DROPPED, GK3_DROP_VAR_FAILED, GK3_INTENT_SET_DEFAULT);
+        anomaly("dual: %s LoaderEntryDefault failed: %s; the default stays %s", id ? "writing" : "deleting",
+                gk3_efi_strerror(st), dual.default_windows ? "Windows" : "Android");
+    } else if (p.action != GK3_DEFACT_NONE) {
+        gk3_logf("dual: LoaderEntryDefault %s%s (read back OK)\n", id ? "= " : "deleted", id ? id : "");
+        if (p.reset)
+            notable("dual: LoaderEntryDefault=\"%s\" is not a Windows entry id (§4.9.3): deleted (= default Android), "
+                    "event default_reset", dual.value);
+    }
+    gk3_rec_put_default_os(g_rec, dual.default_windows ? GK3_OS_WINDOWS : GK3_OS_ANDROID);
+}
+
+/* §4.9.3 d：标记已在 g_rec 里清掉。先写 misc（读回），再写 OneShot = Windows 条目，冷复位。失败就返回（调用方照常启动 Android） */
+static void go_windows(gk3_intent why)
+{
+    const char *id = win_entry_id();
+    const char *what = why == GK3_INTENT_NEXT_WINDOWS ? "next=windows" : "clean_poweroff (default Windows)";
+    if (rec_write("to-windows")) {
+        anomaly("dual: %s: GK3 record not written, so the mark is not cleared on disk; NOT going to Windows "
+                "(booting Android)", what);
+        return;
+    }
+    EFI_STATUS st = loader_var_set(u"LoaderEntryOneShot", id);
+    if (EFI_ERROR(st)) {
+        gk3_rec_event_add(g_rec, GK3_EV_INTENT_DROPPED, GK3_DROP_VAR_FAILED, why);
+        anomaly("dual: %s: SetVariable(LoaderEntryOneShot=%s): %s; booting Android instead", what, id,
+                gk3_efi_strerror(st));
+        return;
+    }
+    gk3_logf("dual: %s -> LoaderEntryOneShot=%s written, read back OK; tries / streak untouched; "
+             "ResetSystem(EfiResetCold) (t=%llu ms)\n", what, id, MS());
+    gk3_log_close(&g_log);
+    gk3_rt->ResetSystem(EfiResetCold, EFI_SUCCESS, 0, NULL);
+    gk3_screenf("!! ResetSystem returned; waiting for the %u s watchdog\n", WATCHDOG_SEC);
+    for (;;)
+        gk3_bs->Stall(1000000);
+}
+
+/* §4.9.3 e：默认是 Windows 时，交接前预置 OneShot = *-android-<x>.conf（通配：计数用完的入口条目照常排到最后，
+ * boot.c:1771-1784 只做 fnmatch）。x 取这次要启动的槽（与设计稿的 hint 只在入口计数全用完、落到直连条目时有差别，
+ * 那时落到正在跑的这个槽更稳）。失败只记异常：之后 Android 里的重启会落进 Windows，不挡这次启动。 */
+static void preset_oneshot(void)
+{
+    char v[24];
+    if (!dual.preset)
+        return;
+    gk3_snprintf(v, sizeof(v), "*-android-%c.conf", 'a' + (g_slot & 1));
+    EFI_STATUS st = loader_var_set(u"LoaderEntryOneShot", v);
+    if (EFI_ERROR(st))
+        anomaly("dual: default is Windows but presetting LoaderEntryOneShot=%s failed: %s (a reboot from Android "
+                "will land in Windows)", v, gk3_efi_strerror(st));
+    else
+        gk3_logf("dual: default is Windows: LoaderEntryOneShot=%s preset (read back OK)\n", v);
+}
+
+/* 观察模式：只说会怎么做 */
+static void dual_observe(const uint8_t *rec)
+{
+    read_default_var();
+    bool win = dual.var == GK3_DEFVAR_WINDOWS ? win_present() : false;
+    bool valid = !gk3_rec_validate(rec);
+    gk3_next_kind nk = valid ? gk3_rec_next(rec, NULL) : GK3_NEXT_NONE;
+    bool cp = valid && gk3_rec_clean_poweroff(rec);
+    gk3_setdef req = valid ? gk3_rec_set_default_req(rec) : GK3_SETDEF_NONE;
+    if (dual.var == GK3_DEFVAR_ABSENT && nk != GK3_NEXT_WINDOWS && nk != GK3_NEXT_SDBOOT_MENU && !cp && !req)
+        return;
+    gk3_logf("would (action): dual: LoaderEntryDefault=\"%s\" (%s%s) set_default=%s next=%u clean_poweroff=%u "
+             "(nothing written in observe mode; no OneShot preset)\n", dual.value, defvar_name[dual.var],
+             dual.var == GK3_DEFVAR_WINDOWS ? (win ? ", bootmgfw present" : ", bootmgfw ABSENT") : "",
+             setdef_name[req], nk, cp);
 }
 
 /* 启动 Android 的那一次（动作模式）：boot_streak +1、ok_streak、回落事件、分派关时的 BCB 记录。bcb_done = 这份 BCB
@@ -950,6 +1150,7 @@ static void step_misc(void)
                      bi.kind == GK3_BCB_NONE ? "BCB empty, " : "clear BCB without executing it, ");
         else
             gk3_logf("would (action): BCB -> %s (NOT done)\n", bcb_would(bi.kind));
+        dual_observe(rec);
     }
 
     /* BCAB + virtual_ab → 选槽（§4.3.2）；在副本上算，动作模式下写回的就是这份副本 */
@@ -1002,7 +1203,7 @@ static void step_misc(void)
     g_target = g_slot;
 
     /* —— 动作模式：执行端的去向（S7c）—— */
-    bool bcb_done = false;
+    bool bcb_done = false, bcb_pending = false;
     if (!opt.observe) {
         static uint8_t rec_save[GK3_REC_SIZE];
         gk3_disp_plan dp;
@@ -1012,6 +1213,23 @@ static void step_misc(void)
 
         gk3_memset(&dp, 0, sizeof(dp));
         rec_prepare(m);
+        /* S15 §4.9.3 a、b：默认系统（不合法的 LoaderEntryDefault、set_default 请求、缓存）。在存 rec_save 之前做：
+         * 下面"执行端不可用 → 退回进来时的记录"不该把已经写了变量的那一步也退掉 */
+        dual_defaults();
+        /* §4.2 第 4 步、§4.4.4：next=sdboot-menu（执行端留下的"下次停在 systemd-boot 菜单"）早于 BCB 分派 */
+        if (gk3_rec_next(g_rec, NULL) == GK3_NEXT_SDBOOT_MENU) {
+            gk3_dual_boot db;
+            gk3_dual_plan_boot(g_rec, dual.default_windows, false, true, &db);
+            if (!rec_write("sdboot-menu")) {
+                gk3_logf("dual: next=sdboot-menu consumed: returning EFI_SUCCESS to systemd-boot (menu without "
+                         "countdown, boot.c:2971-2976); tries / streak untouched\n");
+                gk3_screenf("gk3boot: next=sdboot-menu -> back to the boot menu\n");
+                dual.menu = true;
+                gk3_free_pages(m, GK3_MISC_READ_SIZE);
+                return;
+            }
+            /* 写不进去：不回菜单（否则每次开机都停在菜单），照常往下走；内存里已清，rec_android 会再试着写 */
+        }
         gk3_memcpy(rec_save, g_rec, GK3_REC_SIZE);
         if (opt.action[0]) {
             why = opt.action;               /* gk3boot-tools.conf：用户在 systemd-boot 菜单里选的，不看分派开关、不碰 BCB */
@@ -1031,6 +1249,7 @@ static void step_misc(void)
             case GK3_DISP_EXECUTOR:
                 why = gk3_bcb_kind_name(dp.why);
                 from_bcb = true;
+                bcb_pending = true;       /* S15：这份 BCB 这一版会执行 = Android 待办（执行端不可用时也算） */
                 break;
             case GK3_DISP_NONE:
                 break;
@@ -1055,6 +1274,15 @@ static void step_misc(void)
                     gk3_rec_event_add(g_rec, GK3_EV_NOSLOT, 0xff, s.active);
                 } else if (!str_cmp(why, "merging")) {
                     gk3_rec_event_add(g_rec, GK3_EV_REFUSED_MERGING, (uint8_t)s.slot, GK3_MERGE_MERGING);
+                }
+                /* S15：进执行端 = Android 待办 ⇒ next=windows / clean_poweroff 作废；默认 Windows 时同样预置 OneShot
+                 * （执行端里 reboot 之后回 Android，而不是落进默认的 Windows） */
+                {
+                    gk3_dual_boot db;
+                    gk3_dual_plan_boot(g_rec, dual.default_windows, true, true, &db);
+                    dual.preset = db.preset_oneshot;
+                    if (db.dropped)
+                        gk3_logf("dual: entering the executor: intents dropped (mask %u)\n", db.dropped);
                 }
                 notable("executor: why=%s%s slot=_%c (kernel boot_%c); tries NOT decremented, boot_streak NOT counted",
                         why, from_bcb ? " (from BCB)" : opt.action[0] ? " (gk3.action)" : "", 'a' + g_slot,
@@ -1091,6 +1319,23 @@ static void step_misc(void)
     }
 
     if (!opt.observe) {
+        /* 0) S15 §4.9.3 c、d、e：去不去 Windows。"Android 待办" = 这份 BCB 这一版会执行、强制槽、BCAB 无效（HAL 要重建）、
+         *    选中的槽在扣 tries（OTA 后的新槽）、上一次没走到开机完成（HAL 没清 boot_streak）；next=slot:x 由 libgk3core 算。
+         *    分派关时 BCB 只记录不执行，不算待办（否则一份留着的 BCB 会永远挡住"重启到 Windows"）。 */
+        bool pending = bcb_pending || opt.force_slot >= 0 || s.kind != GK3_SEL_BOOT || s.decremented ||
+                       gk3_rec_boot_streak(g_rec) > 0;
+        gk3_next_kind nk = gk3_rec_next(g_rec, NULL);
+        bool cp = gk3_rec_clean_poweroff(g_rec), want = nk == GK3_NEXT_WINDOWS || cp;
+        gk3_dual_boot db;
+        gk3_dual_plan_boot(g_rec, dual.default_windows, want ? win_present() : false, pending, &db);
+        if (want)
+            gk3_logf("dual: next=%u clean_poweroff=%u default=%s pending=%u -> %s%s\n", nk, cp,
+                     dual.default_windows ? "Windows" : "Android", pending,
+                     db.kind == GK3_DUAL_WINDOWS ? "Windows" : "Android",
+                     db.dropped ? " (intents dropped, event intent_dropped)" : "");
+        if (db.kind == GK3_DUAL_WINDOWS)
+            go_windows(db.why);            /* 只在失败时回来 */
+        dual.preset = dual.default_windows;
         /* 1) 扣 tries（§4.3.2-3）：写 → Flush → 读回比对；写不进去就不启动这一槽（没扣到 tries 的未确认槽可能一直起不来） */
         if (s.decremented && opt.force_slot < 0) {
             gk3_err e = misc_write(GK3_MISC_BCAB_OFF, copy, 32, back);
@@ -1132,7 +1377,7 @@ static void step_cmdline(void)
 {
     static char base[GK3_BOOT_ARGS_SIZE + GK3_BOOT_EXTRA_ARGS_SIZE + 8], out[4096];
     gk3_android_args a = {g_slot, "gk3boot-" GK3BOOT_VERSION, g_event, g_entry, opt.observe ? "observe" : "action",
-                          !opt.observe && g_streak[0] ? g_streak : NULL};
+                          !opt.observe && g_streak[0] ? g_streak : NULL, !opt.observe && opt.dispatch ? "1" : NULL};
     long bn = gk3_bootimg_cmdline(&boot.b, base, sizeof(base));
     if (bn < 0)
         fail_open("cmdline", "boot.img cmdline does not fit");
@@ -1160,6 +1405,14 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     step_header();
     step_disk();
     step_misc();
+    if (dual.menu) {
+        /* S15 next=sdboot-menu：唯一允许 return SUCCESS 的情况（§4.12 第 5 条）—— systemd-boot 停在不倒计时的菜单上。
+         * 先撤掉自己的 120 s 看门狗（systemd-boot 等按键时自己会再设 5 分钟的，console.c:94-96） */
+        gk3_bs->SetWatchdogTimer(0, 0, 0, NULL);
+        gk3_logd("gk3boot.result=sdboot-menu t=%llu ms\n", MS());
+        gk3_log_close(&g_log);
+        return EFI_SUCCESS;
+    }
     gk3_bootimg *b = &boot.b;
     gk3_linux L = {
         .dtb_len = 0,
@@ -1174,6 +1427,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         L.dtb = boot.img + b->dtb_off;
         L.dtb_len = b->dtb_size;
         L.cmdline = ex.cmdline16;
+        preset_oneshot();
         gk3_logf("gk3boot: booting the executor (why=%s) with boot_%c's kernel via H2 (t=%llu ms)\n", ex.why,
                  'a' + boot.slot, MS());
         EFI_STATUS r = gk3_linux_boot(&L, pre_start, &stage);
@@ -1189,6 +1443,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     L.dtb = boot.img + b->dtb_off;
     L.dtb_len = b->dtb_size;
     L.cmdline = g_cmdline16;
+    preset_oneshot();
     gk3_logf("gk3boot: booting boot_%c via H2 (t=%llu ms)\n", 'a' + g_slot, MS());
     EFI_STATUS r = gk3_linux_boot(&L, pre_start, &stage);
     /* 只有失败才回到这里 */

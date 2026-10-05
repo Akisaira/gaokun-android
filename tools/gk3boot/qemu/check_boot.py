@@ -30,7 +30,8 @@ import sys
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][A-Za-z0-9]|\x1b[=>]|\r")
 OURS = ("androidboot.slot_suffix", "androidboot.bootloader", "androidboot.gk3boot.event",
-        "androidboot.gk3boot.entry", "androidboot.gk3boot.mode", "androidboot.gk3boot.streak")
+        "androidboot.gk3boot.entry", "androidboot.gk3boot.mode", "androidboot.gk3boot.streak",
+        "androidboot.gk3boot.dispatch")
 
 fails = 0
 
@@ -68,7 +69,7 @@ def key(t):
     return t.split("=", 1)[0]
 
 
-def expected_cmdline(base, slot, version, event, entry, mode="observe", streak=None):
+def expected_cmdline(base, slot, version, event, entry, mode="observe", streak=None, dispatch=False):
     t = [x for x in tokens(base) if key(x) not in OURS]
     t += ["androidboot.slot_suffix=_" + slot, "androidboot.bootloader=gk3boot-" + version,
           "androidboot.gk3boot.event=" + event]
@@ -77,6 +78,8 @@ def expected_cmdline(base, slot, version, event, entry, mode="observe", streak=N
     t.append("androidboot.gk3boot.mode=" + mode)
     if streak is not None:
         t.append("androidboot.gk3boot.streak=%d" % streak)
+    if dispatch:
+        t.append("androidboot.gk3boot.dispatch=1")   # S15：动作模式且分派开着
     return " ".join(t)
 
 
@@ -173,7 +176,9 @@ def main():
     # —— 交接路径 ——
     slot = a.slot
     base = bootimg_cmdline(a.bootimg)
-    want = expected_cmdline(base, slot, a.version, a.event, entry, a.mode, a.streak)
+    # S15：分派开（条目 options 里 gk3.dispatch=1；夹具从不改编译期缺省 0）且动作模式 ⇒ 多一项 androidboot.gk3boot.dispatch=1
+    disp = a.mode == "action" and "gk3.dispatch=1" in m.get("gk3boot_options", "").split()
+    want = expected_cmdline(base, slot, a.version, a.event, entry, a.mode, a.streak, disp)
     if lg:
         has(lg, r"^slot: _%s \(" % slot, "启动 _%s" % slot)
         has(lg, r"^boot_%s: read [\d.]+ ms, sha1\(id\) [\d.]+ ms: OK$" % slot, "boot_%s 整份读进来、SHA1(id) 与头一致" % slot)

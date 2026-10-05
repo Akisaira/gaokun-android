@@ -10,7 +10,13 @@
   fixture.py diff     BEFORE.json AFTER.json [--allow-misc] [--new-logs-out FILE]
                       只允许 ESP 上多出 \\EFI\\gk3boot\\{probe\\log-*,log\\boot-*}.txt 与条目计数改名；
                       --allow-misc：misc 区域的变化交给 check_misc.py 逐字节判（gk3boot 动作模式会写它）
-  fixture.py vars     IN.fd OUT.fd --oneshot NAME 往 AAVMF 变量库里写 LoaderEntryOneShot（与 boot-oneshot.sh 同一格式）
+  fixture.py vars     IN.fd OUT.fd [--oneshot NAME] [--set NAME=VALUE ...] [--del NAME ...]
+                      往 AAVMF 变量库里写 systemd-boot 厂商 GUID 下的字符串变量（与 boot-oneshot.sh 同一格式）；
+                      --oneshot X 等于 --set LoaderEntryOneShot=X；--del 删掉（S15：LoaderEntryDefault 等）
+  fixture.py misc-set DISK MANIFEST [--streak N] [--next windows|sdboot-menu|none] [--set-default windows|android|none]
+                      [--poweroff] [--default-os unknown|android|windows]
+                      改盘上 misc+8 KiB 的 GK3 记录（没有有效记录就先建一份空的）、重算 CRC —— 在两次 QEMU 之间冒充
+                      Android 侧（HAL 开机完成清 streak、Parts 的请求、on shutdown 的 mark-poweroff；S15）
   fixture.py vars-get IN.fd NAME                  打印 systemd-boot 厂商 GUID 下变量 NAME 的值（UTF-16 解码）或 "(absent)"
   fixture.py esp-get  DISK MANIFEST PATH OUT      从盘上的 ESP 取一个文件
   fixture.py misc-get DISK MANIFEST OUT           取 misc 分区的前 64 KiB（gk3boot 读的那一段）
@@ -172,7 +178,7 @@ COUNTER = re.compile(r"\+\d+(-\d+)?(?=\.conf$)")
 
 
 def esp_tree(stage, variant, gk3boot_options=None, gk3boot_entry=GK3BOOT_ENTRY, loader_default="*-android-a.conf",
-             fastboot_img=None):
+             fastboot_img=None, windows=False, gk3_windows_entry=False):
     """在 stage 目录下摆出 ESP 的内容。返回条目文件名等信息。
     gk3boot_options 不为 None 时摆 gk3boot（S5）的条目，否则摆探针（S4）的条目。
     gk3boot_entry：条目文件名。gk3boot-e4.conf（E4 的样子：非默认、经 OneShot 进入）；
@@ -192,6 +198,16 @@ def esp_tree(stage, variant, gk3boot_options=None, gk3boot_entry=GK3BOOT_ENTRY, 
     cmd = open(CMDLINE_VEC).read().split()
     base = " ".join(t for t in cmd if not t.startswith("initrd=") and not t.startswith("androidboot.slot_suffix="))
     fake = open(os.path.join(EFI_BUILD, "gk3-fake-android.efi"), "rb").read()
+    if windows:
+        # S15 双系统：ESP 上有 Windows 的启动管理器（假的：打一行 GK3-FAKE-WINDOWS 后关机）。systemd-boot 据它生成
+        # auto-windows（boot.c:2146-2148，只看文件能不能 Open，:1978-1982）；BCD 没有，标题用缺省的 "Windows Boot Manager"
+        put("EFI/Microsoft/Boot/bootmgfw.efi", open(os.path.join(EFI_BUILD, "gk3-fake-windows.efi"), "rb").read())
+        if gk3_windows_entry:
+            # U22：安装器自写的 type1 条目（id = 文件名 gk3-windows.conf）
+            put("loader/entries/gk3-windows.conf", (
+                "title      Windows\n"
+                "sort-key   0gk3w\n"
+                "efi        /EFI/Microsoft/Boot/bootmgfw.efi\n").encode())
     for slot in "ab":
         put("%s/android/slot_%s/Image" % (MID, slot), fake)
         put("%s/android/slot_%s/gaokun3.dtb" % (MID, slot), minimal_fdt())
@@ -349,7 +365,8 @@ def cmd_mkdisk(a):
 
         # ESP
         stage = tempfile.mkdtemp()
-        info = esp_tree(stage, a.variant, a.gk3boot_options, a.gk3boot_entry, a.loader_default, a.fastboot_img)
+        info = esp_tree(stage, a.variant, a.gk3boot_options, a.gk3boot_entry, a.loader_default, a.fastboot_img,
+                        a.windows, a.gk3_windows_entry)
         esp = at("esp")
         fat = os.path.join(a.out, "esp.tmp")
         make_fat(stage, esp["last"] - esp["first"] + 1, fat, fill=a.variant == "espfull")
@@ -475,15 +492,65 @@ def cmd_diff(a):
 # ---------------------------------------------------------------- AAVMF 变量
 
 def cmd_vars(a):
-    # LoaderEntryOneShot：属性 NV|BS|RT = 7，UTF-16LE + 双 NUL（同 scripts/boot-oneshot.sh）
-    data = (a.oneshot.encode("utf-16-le") + b"\0\0").hex()
-    j = dict(version=2, variables=[dict(name="LoaderEntryOneShot", guid="4a67b082-0a4c-41cf-b6c7-440b29bb8c4f",
-                                        attr=7, data=data)])
+    # 属性 NV|BS|RT = 7，UTF-16LE + 双 NUL（同 scripts/boot-oneshot.sh）
+    sets = list(a.set or [])
+    if a.oneshot:
+        sets.append("LoaderEntryOneShot=" + a.oneshot)
+    vs = []
+    for kv in sets:
+        k, v = kv.split("=", 1)
+        vs.append(dict(name=k, guid="4a67b082-0a4c-41cf-b6c7-440b29bb8c4f", attr=7,
+                       data=(v.encode("utf-16-le") + b"\0\0").hex()))
+    cmd = ["virt-fw-vars", "-i", a.input, "-o", a.out]
+    for k in a.delete or []:
+        cmd += ["--delete", k]
     jf = a.out + ".json"
-    json.dump(j, open(jf, "w"))
-    run(["virt-fw-vars", "-i", a.input, "-o", a.out, "--set-json", jf])
-    os.unlink(jf)
-    print("✓ %s：LoaderEntryOneShot=%s" % (os.path.basename(a.out), a.oneshot))
+    if vs:
+        json.dump(dict(version=2, variables=vs), open(jf, "w"))
+        cmd += ["--set-json", jf]
+    run(cmd)
+    if vs:
+        os.unlink(jf)
+    print("✓ %s：%s%s" % (os.path.basename(a.out), " ".join(sets), "".join(" 删 " + k for k in a.delete or [])))
+
+
+def rec_seal(r):
+    struct.pack_into("<I", r, 2044, zlib.crc32(bytes(r[:2044])) & 0xffffffff)
+
+
+def rec_valid(r):
+    magic, ver, size = struct.unpack_from("<IHH", r, 0)
+    return magic == 0x52334B47 and ver == 1 and size == 2048 and \
+        struct.unpack_from("<I", r, 2044)[0] == zlib.crc32(bytes(r[:2044])) & 0xffffffff
+
+
+def cmd_misc_set(a):
+    """S15：GK3 记录的 Android 侧写者在 QEMU 里没有（夹具的"Android"是测试 initramfs）—— 这里照 README §5 / §16 的布局
+    用 Python 独立写：boot_streak @20、next_kind @21、flags bit2 @8、set_default @360、default_os @361、CRC @2044"""
+    m = json.load(open(a.manifest))
+    p = next(x for x in m["parts"] if x["name"] == "misc")
+    with open(a.disk, "r+b") as f:
+        f.seek(p["first"] * SECTOR + 8192)
+        r = bytearray(f.read(2048))
+        if not rec_valid(r):
+            r = bytearray(gk3_record())
+        if a.streak is not None:
+            r[20] = a.streak
+        if a.next:
+            r[21] = {"none": 0, "sdboot-menu": 1, "windows": 3}[a.next]
+            r[22] = 0
+        if a.set_default:
+            r[360] = dict(none=0, windows=1, android=2)[a.set_default]
+        if a.default_os:
+            r[361] = dict(unknown=0, android=1, windows=2)[a.default_os]
+        if a.poweroff:
+            flags = struct.unpack_from("<I", r, 8)[0] | 4
+            struct.pack_into("<I", r, 8, flags)
+        rec_seal(r)
+        f.seek(p["first"] * SECTOR + 8192)
+        f.write(bytes(r))
+    print("✓ misc GK3 记录：streak=%u next=%u flags=0x%x set_default=%u default_os=%u" % (
+        r[20], r[21], struct.unpack_from("<I", r, 8)[0], r[360], r[361]))
 
 
 def cmd_vars_get(a):
@@ -718,6 +785,8 @@ def main():
     p.add_argument("--gk3boot-entry", default=GK3BOOT_ENTRY)
     p.add_argument("--loader-default", default="*-android-a.conf")
     p.add_argument("--fastboot-img", help="放到 EFI/gk3boot/e4/fastboot.img 的执行端 initramfs（S7c）")
+    p.add_argument("--windows", action="store_true", help="S15：ESP 上放 EFI/Microsoft/Boot/bootmgfw.efi（假 Windows）")
+    p.add_argument("--gk3-windows-entry", action="store_true", help="S15：再写 loader/entries/gk3-windows.conf（U22）")
     p = sp.add_parser("snapshot")
     p.add_argument("disk")
     p.add_argument("manifest")
@@ -743,7 +812,17 @@ def main():
     p = sp.add_parser("vars")
     p.add_argument("input")
     p.add_argument("out")
-    p.add_argument("--oneshot", required=True)
+    p.add_argument("--oneshot")
+    p.add_argument("--set", action="append", help="NAME=VALUE（systemd-boot 厂商 GUID，属性 7，UTF-16LE + NUL）")
+    p.add_argument("--del", dest="delete", action="append", help="删掉这个变量")
+    p = sp.add_parser("misc-set")
+    p.add_argument("disk")
+    p.add_argument("manifest")
+    p.add_argument("--streak", type=int)
+    p.add_argument("--next", choices=["windows", "sdboot-menu", "none"])
+    p.add_argument("--set-default", choices=["windows", "android", "none"])
+    p.add_argument("--default-os", choices=["unknown", "android", "windows"])
+    p.add_argument("--poweroff", action="store_true", help="置 flags bit2 clean_poweroff（= on shutdown 的 mark-poweroff）")
     p = sp.add_parser("esp-get")
     p.add_argument("disk")
     p.add_argument("manifest")
@@ -774,7 +853,7 @@ def main():
     p.add_argument("--out", required=True)
     a = ap.parse_args()
     dict(mkdisk=cmd_mkdisk, snapshot=cmd_snapshot, diff=cmd_diff, vars=cmd_vars, esp_get=cmd_esp_get,
-         vars_get=cmd_vars_get, misc_get=cmd_misc_get, part_get=cmd_part_get,
+         vars_get=cmd_vars_get, misc_get=cmd_misc_get, part_get=cmd_part_get, misc_set=cmd_misc_set,
          initramfs=cmd_initramfs, fdt_mark=cmd_fdt_mark, exec_initrd=cmd_exec_initrd, mkbootimg=cmd_mkbootimg, misc=cmd_misc)[
         a.cmd.replace("-", "_")](a)
 

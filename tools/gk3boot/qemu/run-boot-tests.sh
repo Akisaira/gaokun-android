@@ -44,6 +44,18 @@
 #   exec-wipe        BCB=--wipe_data（已迁移）→ 执行端免确认擦 userdata / metadata → 重启 → Android；userdata 头 4 KiB 全零
 #   exec-bootloop    已确认的 _a 连续 5 次没开机完成 → 执行端 why=bootloop → fastboot reboot → Android（ok_streak 清零）
 #   exec-tools       gk3boot-tools.conf（gk3.action=fastboot，经 OneShot）→ 执行端；分派关 ⇒ reboot bootloader 原地重起（11）
+#
+# S15 双系统（README §16；ESP 上放假的 \EFI\Microsoft\Boot\bootmgfw.efi = gk3-fake-windows.efi，systemd-boot 据它生成
+# auto-windows；两次 QEMU 之间用 fixture.py misc-set 冒充 Android 侧 —— HAL 开机完成清 streak、Parts 的请求、on shutdown）：
+#   dual-preset   LoaderEntryDefault=auto-windows：#1 菜单里选 Android（OneShot）→ 入口预置 OneShot=*-android-a.conf → Android；
+#                 #2 "Android 里重启"（不动变量）→ 预置的 OneShot 把它带回 Android；#3 "Android 里关机"（clean_poweroff）→
+#                 冷开机经预置进入口 → 先清标记再 OneShot=auto-windows → 复位 → Windows；#4 再冷开机 → 直接 Windows（入口不跑）
+#   dual-next     默认 Android、记录里 next=windows：#1 → Windows 一次（标记先清）；#2 冷开机 → Android（一次性）
+#   dual-pending  next=windows 但 _b 是 OTA 后的新槽（tries 计数中）= Android 待办 → 作废（intent_dropped）、照常启动 _b、扣 tries
+#   dual-setdef   LoaderEntryDefault 是 gk3boot 条目的精确 id（不合法）+ set_default=windows + 有 gk3-windows.conf：
+#                 #1 删掉 → 改写成 gk3-windows.conf → 预置 → Android；#2 set_default=android → 删变量、不预置；
+#                 #3 冷开机 → loader.conf 默认 → 入口 → Android
+#   dual-sdmenu   next=sdboot-menu（+ clean_poweroff）→ 清掉、返回 EFI_SUCCESS → systemd-boot 停在菜单上（不启动任何东西）
 set -uo pipefail
 cd "$(dirname "$0")/.."
 O=build/qemu-boot
@@ -58,7 +70,8 @@ PROC_VEC=test/vectors/proc-cmdline-20261005.txt
 SCEN=("$@")
 if [ ${#SCEN[@]} -eq 0 ]; then
     SCEN=(linux-a linux-b force-a strictnx espfull badsha miscerr
-          action-normal action-tries failopen-oneshot bcb-present vab-merging bcb-dispatch migrate exec-missing)
+          action-normal action-tries failopen-oneshot bcb-present vab-merging bcb-dispatch migrate exec-missing
+          dual-preset dual-next dual-pending dual-setdef dual-sdmenu)
     [ -n "${FBI_IMG:-}" ] && [ -s "${FBI_IMG:-}" ] && [ -s "${FBI_MODULES:-/nonexistent}/order" ] && \
         SCEN+=(exec-bootloader exec-wipe exec-bootloop exec-tools)
     [ -n "${BOOTIMG:-}" ] && [ -f "$BOOTIMG" ] && SCEN=(real "${SCEN[@]}")
@@ -174,6 +187,42 @@ print("  %s 条目 = %s（期望 %s）" % ("✓" if good else "✗", names, want
 sys.exit(0 if good else 1)
 PY
     [ "$v" = "(absent)" ]
+}
+
+# —— S15 双系统 ——
+vset() {   # vset 目录 fixture.py vars 的参数…（--set NAME=VALUE / --del NAME / --oneshot X）
+    local d=$1
+    shift
+    $FX vars "$d/vars.fd" "$d/vars.fd.new" "$@" >/dev/null && mv "$d/vars.fd.new" "$d/vars.fd"
+}
+vis() {    # vis 目录 变量名 期望值（"(absent)" = 不存在）
+    local v
+    v=$($FX vars-get "$1/vars.fd" "$2")
+    if [ "$v" = "$3" ]; then echo "  ✓ $2 = $v"; else echo "  ✗ $2 = $v（期望 $3）"; return 1; fi
+}
+# 一次"冷开机去 Windows"：win_run 场景 目录 序号 —— 串口里出现假 Windows、没有 Linux；盘上除 misc 外不变；
+# misc 交给 check_misc.py（全局数组 M）。入口这一路不写 ESP 日志（正常路径）。
+win_run() {
+    local name=$1 d=$2 k=$3 rc=0 out r
+    say "$name #$k（期望进 Windows）"
+    $FX snapshot "$d/disk.img" "$d/manifest.json" "$d/before-$k.json" || return 1
+    $FX misc-get "$d/disk.img" "$d/manifest.json" "$d/misc-before-$k.bin" || return 1
+    python3 qemu/qemu_run.py --code "$CODE" --disk "$d/disk.img" --vars "$d/vars.fd" --log "$d/serial-$k.log" \
+        --timeout 900 || rc=1
+    $FX snapshot "$d/disk.img" "$d/manifest.json" "$d/after-$k.json" || return 1
+    $FX misc-get "$d/disk.img" "$d/manifest.json" "$d/misc-after-$k.bin" || return 1
+    out=$($FX diff "$d/before-$k.json" "$d/after-$k.json" --allow-misc --new-logs-out "$d/newlogs-$k.txt"); r=$?
+    printf '%s\n' "$out" | sed 's/^/  /'
+    [ $r = 0 ] || rc=1
+    t "没有新的 ESP 日志（去 Windows 是正常路径）" test ! -s "$d/newlogs-$k.txt" || rc=1
+    t "串口：假 Windows 起来了（entry=${WIN_ID:-auto-windows}）" grep -q "GK3-FAKE-WINDOWS booted entry=\"${WIN_ID:-auto-windows}\"" "$d/serial-$k.log" || rc=1
+    t "串口：没有 Linux / 假 Android 起来" sh -c "! grep -q 'GK3-INIT hello\|GK3-FAKE-ANDROID booted' '$d/serial-$k.log'" || rc=1
+    t "串口：Windows 只起了一次（没有循环）" test "$(grep -c 'GK3-FAKE-WINDOWS booted' "$d/serial-$k.log")" = 1 || rc=1
+    t "QEMU 是假 Windows 关的机（不是超时）" grep -q '^# qemu exit=0' "$d/serial-$k.log" || rc=1
+    vis "$d" LoaderEntryOneShot "(absent)" || rc=1
+    echo "misc（BEFORE → AFTER）："
+    python3 qemu/check_misc.py "$d/misc-before-$k.bin" "$d/misc-after-$k.bin" "${M[@]}" || rc=1
+    return $rc
 }
 
 fresh() {   # $1 目录，其余是 mkdisk 参数
@@ -531,6 +580,127 @@ EOF
                --dt-marker "gk3boot-dtb-a-$RUN" --initrd-marker "$IMARK")
             M=(--bcb-cleared --rec-streak 1 --rec-flags 1 --rec-events 2 --rec-event bcb_dropped:-:3 --rec-dispatch 0:0)
             act_run "$s" "$d" 1; } ;;
+    dual-preset)
+        say "dual-preset（S15）：Windows 为默认 —— Android 里的重启回 Android（预置 OneShot），从 Android 关机后冷开机进 Windows"
+        fresh "$d" --windows --boot-a "$P/linux-a.img" --boot-b "$P/linux-b.img" --gk3boot-options "gk3.hold=1" \
+            --gk3boot-entry gk3boot-android-a.conf && vset "$d" --set LoaderEntryDefault=auto-windows && {
+            r=0
+            Q=(--machine-opts acpi=off)
+            # #1 默认是 Windows，用户在菜单里选 Android（= OneShot 指 gk3boot 条目）
+            vset "$d" --oneshot gk3boot-android-a.conf || r=1
+            C=(--kind linux --bootimg "$P/linux-a.img" --slot a --event none --entry gk3boot-android-a.conf --streak 1
+               --no-log --dt-marker "gk3boot-dtb-a-$RUN" --initrd-marker "$IMARK")
+            M=(--rec-streak 1 --rec-flags 0 --rec-events 0 --rec-default-os 2)
+            act_run "$s" "$d" 1 || r=1
+            vis "$d" LoaderEntryOneShot '*-android-a.conf' || r=1
+            vis "$d" LoaderEntryDefault auto-windows || r=1
+            # #2 Android 开机完成（HAL 清 streak）后重启：不动变量，预置的 OneShot 让它回到 Android
+            $FX misc-set "$d/disk.img" "$d/manifest.json" --streak 0 || r=1
+            M=(--rec-streak 1 --rec-flags 0 --rec-events 0 --rec-default-os 2)
+            act_run "$s" "$d" 2 || r=1
+            t "#2 Android 里重启回到了 Android（不是默认的 Windows）" sh -c "! grep -q GK3-FAKE-WINDOWS '$d/serial-2.log'" || r=1
+            vis "$d" LoaderEntryOneShot '*-android-a.conf' || r=1
+            # #3 Android 开机完成后关机：on shutdown 的 mark-poweroff 置 clean_poweroff → 冷开机 → Windows
+            $FX misc-set "$d/disk.img" "$d/manifest.json" --streak 0 --poweroff || r=1
+            M=(--rec-streak 0 --rec-flags 0 --rec-events 1 --rec-event to_windows:-:2 --rec-default-os 2)
+            win_run "$s" "$d" 3 || r=1
+            vis "$d" LoaderEntryDefault auto-windows || r=1
+            # #4 再冷开机：没有 OneShot、没有标记 → systemd-boot 直接进 Windows，入口不跑、misc 一个字节不变
+            M=(--unchanged)
+            win_run "$s" "$d" 4 || r=1
+            [ $r = 0 ]; } ;;
+    dual-next)
+        say "dual-next（S15）：默认 Android，GK3 里 next=windows（Parts 的'重启到 Windows'）→ Windows 一次 → 之后回 Android"
+        fresh "$d" --windows --boot-a "$P/linux-a.img" --boot-b "$P/linux-b.img" --gk3boot-options "gk3.hold=1" \
+            --gk3boot-entry gk3boot-android-a.conf && \
+            $FX misc-set "$d/disk.img" "$d/manifest.json" --streak 0 --next windows >/dev/null && {
+            r=0
+            M=(--rec-streak 0 --rec-next 0 --rec-flags 0 --rec-events 1 --rec-event to_windows:-:1 --rec-default-os 1)
+            win_run "$s" "$d" 1 || r=1
+            vis "$d" LoaderEntryDefault "(absent)" || r=1
+            Q=(--machine-opts acpi=off)
+            C=(--kind linux --bootimg "$P/linux-a.img" --slot a --event none --entry gk3boot-android-a.conf --streak 1
+               --no-log --dt-marker "gk3boot-dtb-a-$RUN" --initrd-marker "$IMARK")
+            M=(--rec-streak 1 --rec-next 0 --rec-flags 0 --rec-events 1 --rec-default-os 1)
+            act_run "$s" "$d" 2 || r=1
+            vis "$d" LoaderEntryOneShot "(absent)" || r=1     # 默认 Android：不预置
+            [ $r = 0 ]; } ;;
+    dual-pending)
+        say "dual-pending（S15）：next=windows，但 _b 是 OTA 后还没确认的新槽（tries 计数中）→ 作废、照常启动 _b"
+        fresh "$d" --windows --boot-a "$P/linux-a.img" --boot-b "$P/linux-b.img" --misc "$P/misc-b-active.bin" \
+            --gk3boot-options "gk3.hold=1" --gk3boot-entry gk3boot-android-b.conf --loader-default '*-android-b.conf' && \
+            $FX misc-set "$d/disk.img" "$d/manifest.json" --streak 0 --next windows >/dev/null && {
+            Q=(--machine-opts acpi=off)
+            C=(--kind linux --bootimg "$P/linux-b.img" --slot b --event none --entry gk3boot-android-b.conf --streak 1
+               --no-log --dt-marker "gk3boot-dtb-b-$RUN" --initrd-marker "$IMARK")
+            # intent_dropped：slot 字段 = 1（android_pending），aux = 1（next=windows）
+            M=(--bcab "a=14/1/ok b=15/5" --rec-streak 1 --rec-next 0 --rec-flags 0 --rec-events 1
+               --rec-event intent_dropped:1:1 --rec-default-os 1)
+            act_run "$s" "$d" 1 && ! grep -q GK3-FAKE-WINDOWS "$d/serial-1.log"; } ;;
+    dual-setdef)
+        say "dual-setdef（S15）：不合法的 LoaderEntryDefault 被删、set_default=windows 改写成 gk3-windows.conf（U22）、再改回 Android"
+        fresh "$d" --windows --gk3-windows-entry --boot-a "$P/linux-a.img" --boot-b "$P/linux-b.img" \
+            --gk3boot-options "gk3.hold=1" --gk3boot-entry gk3boot-android-a.conf && \
+            vset "$d" --set LoaderEntryDefault=gk3boot-android-a.conf && \
+            $FX misc-set "$d/disk.img" "$d/manifest.json" --streak 0 --set-default windows >/dev/null && {
+            r=0
+            Q=(--machine-opts acpi=off)
+            C=(--kind linux --bootimg "$P/linux-a.img" --slot a --event none --entry gk3boot-android-a.conf --streak 1
+               --log-has '^dual: LoaderEntryDefault="gk3boot-android-a\.conf" \(NOT-LEGAL\) set_default=windows -> set Windows; default Windows$'
+               --log-has '^dual: LoaderEntryDefault = gk3-windows\.conf \(read back OK\)$'
+               --log-has '^note: dual: LoaderEntryDefault="gk3boot-android-a\.conf" is not a Windows entry id'
+               --log-has '^dual: default is Windows: LoaderEntryOneShot=\*-android-a\.conf preset \(read back OK\)$'
+               --dt-marker "gk3boot-dtb-a-$RUN" --initrd-marker "$IMARK")
+            M=(--rec-streak 1 --rec-set-default 0 --rec-flags 0 --rec-events 2 --rec-event default_set:0:2 --rec-default-os 2)
+            act_run "$s" "$d" 1 || r=1
+            vis "$d" LoaderEntryDefault gk3-windows.conf || r=1
+            vis "$d" LoaderEntryOneShot '*-android-a.conf' || r=1
+            # #2 Parts 改回 Android（HAL 写 set_default=android）后重启：经预置回入口 → 删变量、不再预置
+            $FX misc-set "$d/disk.img" "$d/manifest.json" --streak 0 --set-default android >/dev/null || r=1
+            C=(--kind linux --bootimg "$P/linux-a.img" --slot a --event none --entry gk3boot-android-a.conf --streak 1
+               --no-log --dt-marker "gk3boot-dtb-a-$RUN" --initrd-marker "$IMARK")
+            M=(--rec-streak 1 --rec-set-default 0 --rec-flags 0 --rec-events 3 --rec-event default_set:0:1 --rec-default-os 1)
+            act_run "$s" "$d" 2 || r=1
+            vis "$d" LoaderEntryDefault "(absent)" || r=1
+            vis "$d" LoaderEntryOneShot "(absent)" || r=1
+            # #3 冷开机：没有任何变量 → loader.conf 的 default → 入口 → Android
+            $FX misc-set "$d/disk.img" "$d/manifest.json" --streak 0 >/dev/null || r=1
+            M=(--rec-streak 1 --rec-flags 0 --rec-events 3 --rec-default-os 1)
+            act_run "$s" "$d" 3 || r=1
+            [ $r = 0 ]; } ;;
+    dual-sdmenu)
+        say "dual-sdmenu（S15，§4.4.4）：next=sdboot-menu → 入口清掉、返回 EFI_SUCCESS → systemd-boot 停在不倒计时的菜单上"
+        fresh "$d" --windows --boot-a "$P/linux-a.img" --boot-b "$P/linux-b.img" --gk3boot-options "gk3.hold=1" \
+            --gk3boot-entry gk3boot-android-a.conf && \
+            $FX misc-set "$d/disk.img" "$d/manifest.json" --streak 0 --next sdboot-menu --poweroff --default-os windows >/dev/null && {
+            r=0
+            $FX misc-get "$d/disk.img" "$d/manifest.json" "$d/misc-before-1.bin" || r=1
+            $FX snapshot "$d/disk.img" "$d/manifest.json" "$d/before-1.json" || r=1
+            # 停在菜单上就不会自己结束：看到入口那一行后再等 20 秒（菜单的倒计时若还在，2 秒就会启动默认项）
+            python3 qemu/qemu_run.py --code "$CODE" --disk "$d/disk.img" --vars "$d/vars.fd" --log "$d/serial-1.log" \
+                --timeout 600 --stop-on "gk3boot: next=sdboot-menu -> back to the boot menu" --stop-delay 20 || r=1
+            $FX misc-get "$d/disk.img" "$d/manifest.json" "$d/misc-after-1.bin" || r=1
+            $FX snapshot "$d/disk.img" "$d/manifest.json" "$d/after-1.json" || r=1
+            out=$($FX diff "$d/before-1.json" "$d/after-1.json" --allow-misc --new-logs-out "$d/newlogs-1.txt") || r=1
+            printf '%s\n' "$out" | sed 's/^/  /'
+            t "入口在屏幕上说了一句就回菜单" grep -q 'gk3boot: next=sdboot-menu -> back to the boot menu' "$d/serial-1.log" || r=1
+            t "之后 20 秒里什么都没启动（菜单不倒计时，boot.c:2971-2976）" \
+                sh -c "! grep -q 'GK3-INIT hello\|GK3-FAKE-WINDOWS booted\|GK3-FAKE-ANDROID booted' '$d/serial-1.log'" || r=1
+            t "入口只跑了一次（返回菜单后没有再被选中）" \
+                test "$(grep -v '^# STOPPED' "$d/serial-1.log" | grep -c 'gk3boot: next=sdboot-menu')" = 1 || r=1
+            t "返回之后 systemd-boot 重画了菜单、而且没有倒计时（不再出现 \"Boot in N s.\"）" python3 - "$d/serial-1.log" <<'EOF'
+import sys
+s = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
+after = s.split("gk3boot: next=sdboot-menu -> back to the boot menu")[1].split("# STOPPED")[0]
+assert "gk3boot (default entry)" in after, "菜单没重画"
+assert "Boot in" not in after, "还在倒计时"
+EOF
+            t "没有新的 ESP 日志" test ! -s "$d/newlogs-1.txt" || r=1
+            echo "misc（BEFORE → AFTER）："
+            # next 清掉；clean_poweroff 作废（intent_dropped：slot 1 = android_pending、aux 2 = clean_poweroff）；streak 不加
+            python3 qemu/check_misc.py "$d/misc-before-1.bin" "$d/misc-after-1.bin" --rec-streak 0 --rec-next 0 \
+                --rec-flags 0 --rec-events 1 --rec-event intent_dropped:1:2 --rec-default-os 1 || r=1
+            [ $r = 0 ]; } ;;
     *) echo "✗ 不认识的场景 $s"; false ;;
     esac
     r=$?

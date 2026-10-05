@@ -39,7 +39,7 @@ CORE_OBJ := $(patsubst $(GK3)/core/src/%.c,$(B)/core/%.o,$(CORE_SRC))
 LIB_OBJ  := $(B)/lib/gk3efi.o
 
 # 夹具用的假内核总是有；探针（S4）、入口（S5）的源码在才编
-PROGS    := $(B)/gk3-fake-android.efi
+PROGS    := $(B)/gk3-fake-android.efi $(B)/gk3-fake-windows.efi
 ifneq ($(wildcard $(GK3)/efi/probe/gk3probe.c),)
 PROGS    += $(B)/gk3probe.efi $(B)/gk3probe-child.efi
 endif
@@ -93,6 +93,14 @@ $(B)/gk3probe.so: $(B)/probe/gk3probe.o $(B)/probe/child_blob.o $(LIB_OBJ) $(COR
 	$(LD) $(LDFLAGS) $^ -o $@ $(LIBS)
 
 $(B)/gk3-fake-android.so: $(B)/qemu/fake-android.o $(LIB_OBJ) $(CORE_OBJ)
+	$(LD) $(LDFLAGS) $^ -o $@ $(LIBS)
+
+# S15：同一份源码换个标记，冒充 ESP 上的 \EFI\Microsoft\Boot\bootmgfw.efi（双系统场景，qemu/run-boot-tests.sh dual-*）
+$(B)/qemu/fake-windows.o: $(GK3)/qemu/fake-android.c $(GK3)/efi/lib/gk3efi.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DGK3_FAKE_WHO='"WINDOWS"' -c $< -o $@
+
+$(B)/gk3-fake-windows.so: $(B)/qemu/fake-windows.o $(LIB_OBJ) $(CORE_OBJ)
 	$(LD) $(LDFLAGS) $^ -o $@ $(LIBS)
 
 $(B)/%.efi: $(B)/%.so

@@ -7,6 +7,11 @@
  */
 #include "gk3efi.h"
 
+/* S15：Makefile 用 -DGK3_FAKE_WHO='"WINDOWS"' 再编一份，冒充 bootmgfw.efi（GK3-FAKE-WINDOWS booted …） */
+#ifndef GK3_FAKE_WHO
+#define GK3_FAKE_WHO "ANDROID"
+#endif
+
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 {
     static char opts[1200], sel[128];
@@ -22,8 +27,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         gk3_ucs2_to_ascii(li->LoadOptions, li->LoadOptionsSize / 2, opts, sizeof(opts));
     if (!EFI_ERROR(gk3_getvar(u"LoaderEntrySelected", &gk3_guid_loader, NULL, buf, &sz)))
         gk3_ucs2_to_ascii((const CHAR16 *)buf, sz / 2, sel, sizeof(sel));
-    gk3_logf("\nGK3-FAKE-ANDROID booted entry=\"%s\" load_options=\"%s\"\n", sel, opts);
-    gk3_logf("GK3-FAKE-ANDROID ResetSystem(EfiResetShutdown)\n");
+    gk3_logf("\nGK3-FAKE-" GK3_FAKE_WHO " booted entry=\"%s\" load_options=\"%s\"\n", sel, opts);
+    gk3_logf("GK3-FAKE-" GK3_FAKE_WHO " ResetSystem(EfiResetShutdown)\n");
     gk3_rt->ResetSystem(EfiResetShutdown, EFI_SUCCESS, 0, NULL);
     for (;;)
         gk3_bs->Stall(1000000);

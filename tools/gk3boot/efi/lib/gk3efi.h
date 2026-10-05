@@ -189,6 +189,9 @@ EFI_STATUS gk3_dir_each(EFI_HANDLE dev, const CHAR16 *path, gk3_dir_cb cb, void 
 /* 把 dev 上的整个文件读进新分配的整页缓冲（gk3_free_pages(*out, *out_len) 释放）。只读。
  * 0 字节或超过 max 返回 EFI_BAD_BUFFER_SIZE（执行端 initramfs 有 4 MiB 预算，读到离谱的大小就不要用）。 */
 EFI_STATUS gk3_file_read(EFI_HANDLE dev, const CHAR16 *path, void **out, size_t *out_len, size_t max);
+/* dev 上 path 是一个非空的普通文件 ⇒ SUCCESS（只 Open + GetInfo，不读内容；S15 判 bootmgfw.efi 在不在用：
+ * systemd-boot 生成 auto-windows 也只看它能不能 Open，boot.c:1978-1982、:2146-2148）。不在 / 是目录 / 0 字节 ⇒ NOT_FOUND。只读。 */
+EFI_STATUS gk3_file_exists(EFI_HANDLE dev, const CHAR16 *path);
 /* LoadedImage->FilePath 里的 Media/FilePath 节点拼成路径，去掉文件名，留目录（以 '\' 结尾，'/' 换成 '\'）：
  * \EFI\gk3boot\<ver>\gk3boot.efi → \EFI\gk3boot\<ver>\ 。没有 FilePath 节点 / 放不下返回 false。 */
 bool gk3_image_dir(const EFI_DEVICE_PATH_PROTOCOL *fp, CHAR16 *out, size_t cap);

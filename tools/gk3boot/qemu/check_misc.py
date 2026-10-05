@@ -15,7 +15,8 @@ import zlib
 
 fails = 0
 EV = {1: "fallback", 2: "boot_corrupt", 3: "bcb_dropped", 4: "wipe_failed", 5: "refused_merging", 6: "bootloop",
-      7: "noslot", 8: "migrated", 9: "bcb_ignored"}
+      7: "noslot", 8: "migrated", 9: "bcb_ignored",
+      10: "default_reset", 11: "intent_dropped", 12: "to_windows", 13: "default_set"}   # 10–13：S15 双系统
 
 
 def ok(cond, what):
@@ -53,7 +54,7 @@ def rec(m):
         if s:
             evs.append((s, EV.get(code, str(code)), slot, aux))
     return dict(valid=valid, flags=flags, streak=r[20], ok_streak=r[27], seq=seq, events=evs, dispatch=(r[23], r[25]),
-                bcb_seen=struct.unpack_from("<I", r, 356)[0])
+                bcb_seen=struct.unpack_from("<I", r, 356)[0], next=r[21], set_default=r[360], default_os=r[361])
 
 
 def main():
@@ -70,6 +71,9 @@ def main():
     ap.add_argument("--rec-dispatch", help="分派记录 why:count（why 是 gk3_bcb_kind 的数值，wipe = 3），如 3:1")
     ap.add_argument("--rec-ok-streak", type=int, help="偏移 27 的 ok_streak（S7c 的 bootloop 判据）")
     ap.add_argument("--bcb-cleared", action="store_true", help="BCB（0–2 KiB）允许变，且之后必须整份全零（S7c 分派清掉）")
+    ap.add_argument("--rec-next", type=int, help="S15：偏移 21 的 next_kind（0 无 / 1 sdboot-menu / 3 windows）")
+    ap.add_argument("--rec-set-default", type=int, help="S15：偏移 360 的 set_default 请求（0 无 / 1 windows / 2 android）")
+    ap.add_argument("--rec-default-os", type=int, help="S15：偏移 361 的默认系统缓存（0 未知 / 1 android / 2 windows）")
     a = ap.parse_args()
     b, c = open(a.before, "rb").read(), open(a.after, "rb").read()
     ok(len(b) == len(c) == 65536, "两份都是 64 KiB")
@@ -108,10 +112,11 @@ def main():
         ok(b[2048:2080] == c[2048:2080], "BCAB 逐字节不变")
     r = rec(c)
     if a.rec_streak is not None or a.rec_flags is not None or a.rec_event or a.rec_events is not None or a.rec_dispatch \
-            or a.rec_ok_streak is not None:
+            or a.rec_ok_streak is not None or a.rec_next is not None or a.rec_default_os is not None:
         ok(r["valid"], "GK3 记录有效（magic / version / size / CRC32）")
-        print("  GK3 记录：streak=%u flags=0x%x seq=%u bcb_seen=%08x dispatch(why,count)=%s 事件=%s" % (
-            r["streak"], r["flags"], r["seq"], r["bcb_seen"], r["dispatch"], r["events"]))
+        print("  GK3 记录：streak=%u flags=0x%x seq=%u bcb_seen=%08x dispatch(why,count)=%s next=%u set_default=%u "
+              "default_os=%u 事件=%s" % (r["streak"], r["flags"], r["seq"], r["bcb_seen"], r["dispatch"], r["next"],
+                                         r["set_default"], r["default_os"], r["events"]))
     if a.rec_streak is not None:
         ok(r["streak"] == a.rec_streak, "boot_streak = %d" % a.rec_streak)
     if a.rec_ok_streak is not None:
@@ -123,11 +128,18 @@ def main():
     if a.rec_event:
         code, slot, aux = a.rec_event.split(":")
         last = r["events"][-1] if r["events"] else None
-        ok(last is not None and last[1] == code and last[2] == (0xff if slot == "-" else ord(slot) - 97)
+        want_slot = 0xff if slot == "-" else int(slot) if slot.isdigit() else ord(slot) - 97
+        ok(last is not None and last[1] == code and last[2] == want_slot
            and last[3] == int(aux), "最新事件 = %s" % a.rec_event)
     if a.rec_dispatch:
         w, n = (int(x) for x in a.rec_dispatch.split(":"))
         ok(r["dispatch"] == (w, n), "分派记录 why=%d count=%d（得到 %s）" % (w, n, r["dispatch"]))
+    if a.rec_next is not None:
+        ok(r["next"] == a.rec_next, "next_kind = %d（得到 %d）" % (a.rec_next, r["next"]))
+    if a.rec_set_default is not None:
+        ok(r["set_default"] == a.rec_set_default, "set_default = %d（得到 %d）" % (a.rec_set_default, r["set_default"]))
+    if a.rec_default_os is not None:
+        ok(r["default_os"] == a.rec_default_os, "default_os = %d（得到 %d）" % (a.rec_default_os, r["default_os"]))
     if a.rec_bcb_seen:
         crc = zlib.crc32(c[0:2048]) & 0xffffffff or 1
         ok(r["bcb_seen"] == crc, "bcb_seen = CRC32(BCB) = %08x" % crc)

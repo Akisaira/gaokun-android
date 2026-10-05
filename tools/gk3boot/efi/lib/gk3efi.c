@@ -1121,6 +1121,37 @@ EFI_STATUS gk3_file_read(EFI_HANDLE dev, const CHAR16 *path, void **out, size_t 
     return EFI_SUCCESS;
 }
 
+EFI_STATUS gk3_file_exists(EFI_HANDLE dev, const CHAR16 *path)
+{
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
+    EFI_FILE_PROTOCOL *root = NULL, *f = NULL;
+    static union {
+        EFI_FILE_INFO fi;
+        uint64_t align;
+        uint8_t raw[1024];
+    } u;
+    UINTN isz = sizeof(u.raw);
+    EFI_STATUS st;
+
+    if (!dev)
+        return EFI_INVALID_PARAMETER;
+    st = gk3_bs->HandleProtocol(dev, (EFI_GUID *)&gk3_guid_simple_fs, (void **)&fs);
+    if (EFI_ERROR(st) || !fs)
+        return EFI_ERROR(st) ? st : EFI_NOT_FOUND;
+    st = fs->OpenVolume(fs, &root);
+    if (EFI_ERROR(st) || !root)
+        return EFI_ERROR(st) ? st : EFI_NOT_FOUND;
+    st = root->Open(root, &f, (CHAR16 *)path, EFI_FILE_MODE_READ, 0);
+    root->Close(root);
+    if (EFI_ERROR(st) || !f)
+        return EFI_ERROR(st) ? st : EFI_NOT_FOUND;
+    st = f->GetInfo(f, (EFI_GUID *)&gk3_guid_file_info, &isz, u.raw);
+    f->Close(f);
+    if (EFI_ERROR(st))
+        return st;
+    return (u.fi.Attribute & EFI_FILE_DIRECTORY) || u.fi.FileSize == 0 ? EFI_NOT_FOUND : EFI_SUCCESS;
+}
+
 bool gk3_image_dir(const EFI_DEVICE_PATH_PROTOCOL *fp, CHAR16 *out, size_t cap)
 {
     size_t o = 0, last = 0;
