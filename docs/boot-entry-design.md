@@ -1044,7 +1044,7 @@ UEFI 下的 Blt 横屏大字、中文点阵：1.x，与 UEFI 内 fastboot 一起
 | S6 | **BCB 分派与执行端引导**：迁移、分派计数、bootloop 计数、一次性意图、内核来源三级回落 | M | S5 | — |
 | S7 | **执行端**：C′ §5 的第 1、2、4、5、6 步子集，改为读 `gk3.why/disk/slot`；`set_active` 与 slot getvar 用 `libgk3core`；"Other systems" 写 OneShot | L（3–5 周） | 本机 Docker + platform-tools；E6 | `fastboot.img` |
 | S8 | `gk3-esp-sync` 抽取 + 静态 bootimg_extract（C′ 第 3 步） | M | 并入 ROM 构建 | 共用件 |
-| S9 | **Android 侧**：HAL 开机完成线程、vendor rc、属性与 sepolicy、Parts 通知；postinstall 部署 / staged / 停铺 recovery-ramdisk；vendor 里加 `/vendor/boot/gk3boot/`；prebuilt 目录 + `sync-device-tree.sh` 断言 | M | 一次 ROM 构建（rom 档，并入已排的批次） | — |
+| S9 | **Android 侧**：HAL 开机完成线程、vendor rc、属性与 sepolicy、Parts 通知；postinstall 部署 / staged / 停铺 recovery-ramdisk；vendor 里加 `/vendor/boot/gk3boot/`；prebuilt 目录 + `sync-device-tree.sh` 断言 | M | 一次 ROM 构建（rom 档，并入已排的批次） | **2026-10-05 已写、未编译未上机**：`boot_control/Gk3Boot.cpp`、Parts `BootEntryNotifier`、postinstall `gk3_deploy`、`prebuilt-gk3boot/`，开关 `persist.vendor.gaokun3.gk3boot`（off 缺省 / observe / action）；说明与上机步骤 `tools/gk3boot/README.md` §12。与原文的差别：第一次部署也可在开机完成时由 HAL 做（属性从 off 改成 observe/action 后重启即可，不必等 OTA）；入口版本跟着正在跑的系统的 vendor 走 |
 | S10 | **安装器**：清单、条目、misc 初始化、收紧停用匹配、`gk3_esp_info`、test-apply 用例；release.sh 附件和断言 | M | 安装器重建 | — |
 | S11 | **开发脚本**：install-ota-local 第 4 步、boot-oneshot 认识计数、misc-dump | S | 本机 | — |
 | S12 | **Windows 伴随工具**（U23）：入口路径约束回归、安装到 `%ProgramFiles%\gaokun3` 与开始菜单、SYSTEM 计划任务、开机自检 / 规范化 / BIOS 提醒、`-RepairBoot [-Check]`、"重启到 Android"、`-SetDefault`、`-SuspendBitLocker`、`-RemoveAndroid`（含 GK3LIVE 与相邻断言）、快速启动一律关、U24 关休眠、GK3LIVE 去盘符、U 盘介质带一份；U25 的 Windows 侧预置（D4 之后）；D5/D6 之后决定默认路径是否改为 `-UseFallbackPath` | M（1–1.5 周） | Parallels 克隆机（D4） | — |

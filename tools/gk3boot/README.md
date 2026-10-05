@@ -5,7 +5,7 @@
 以及 **S3 / S4**：aarch64 UEFI 工具链（gnu-efi）、QEMU + AAVMF + systemd-boot 257.13 夹具、只读探针 `gk3probe.efi`（§9）；
 **S5 的最小可上机版本** `gk3boot.efi`：观察模式 + H2 交接 + fail-open，给 E4 门槛用（§10，2026-10-05 真机通过）；
 **S5 后续**：动作模式（扣 tries → 自动回滚、VAB 守卫、GK3 记录）、fail-open 写 OneShot、BCB 分派开关（默认关），
-到"可以当开发机默认条目"的程度，给 E5–E8 用（§11）。执行端（S7）还没开始。
+到"可以当开发机默认条目"的程度，给 E5–E8 用（§11）；**S9 Android 侧**（开机完成 bless / 清 streak / 通知、按开关部署，§12，未编译未上机）。执行端（S7）还没开始。
 
 ## 1. 结构
 
@@ -979,7 +979,7 @@ fail-open: LoaderEntryOneShot=8a29534fa802480d9fbb71aa18c01d7b-android-b.conf wr
   （scratchpad `s1-grep.txt`）只核了 BCAB 布局与偏移常量。**E7 之前先补这一条 grep**（构建机 light 档）；
 - 选中的槽已成功时 BCAB 不动；`bootctl set-active-boot-slot` 当前槽（successful=0、tries 6）之后，下一次开机 tries 6→5，
   Android 的 update_verifier 标成功后回到 tries 1 / successful（设计稿 E7 的那一条）；
-- `ro.boot.gk3boot.streak` 每次 +1、不会清零（S9 前）——这是预期，不触发任何动作。
+- `ro.boot.gk3boot.streak` 每次 +1、不会清零（S9 前）——这是预期，不触发任何动作。S9（§12）起开机完成时由 boot_control HAL 清零。
 
 撤回动作模式时，GK3 记录留在 misc+8 KiB 无害（没有别人读）；要清就 `dd if=/dev/zero of=/dev/block/by-name/misc bs=2048 seek=4 count=1`
 （**只有** 8192–10239 这 2 KiB；写前先 `dd` 备份整个 64 KiB）。
@@ -1002,3 +1002,59 @@ fail-open: LoaderEntryOneShot=8a29534fa802480d9fbb71aa18c01d7b-android-b.conf wr
 - 观察模式与动作模式共用同一个二进制：条目 options 写错（漏了 `gk3.observe=1`）就是动作模式 —— E5 的条目一定要带 `gk3.observe=1`，
   第 5 步看 `androidboot.gk3boot.mode=observe` 确认。
 - 计数改名、`LoaderBootCountPath`、SetVariable(NV) 从 gk3boot 里写：都只在 QEMU（AAVMF）上验过，华为固件上是 E5 / E6 要回答的问题。
+
+## 12. S9：Android 侧（2026-10-05，⬜ 未编译、未上机）
+
+设计稿 §4.6、§4.8、§4.11、§4.12、§4.14；U5（开机完成时由 Android 侧 bless + 分阶段激活）。
+
+### 12.1 组件
+
+| 件 | 位置 | 做什么 |
+|---|---|---|
+| libgk3core（Android） | `core/Android.bp`（`vendor: true` 的 `cc_library_static`） | 构建机的 crDroid 树里没有 `tools/`：`scripts/sync-device-tree.sh` 第 2c 步把 `core/` 整个拷到 `device/huawei/gaokun3/gk3core/` 并逐文件 md5 断言 |
+| 开机完成线程 | `device/huawei/gaokun3/boot_control/Gk3Boot.cpp`（boot_control HAL 里的一个线程） | 等 `vendor.gaokun3.boot.done=1`（HAL 的 rc 在 `sys.boot_completed=1` 时设）→ 清 GK3 `boot_streak`、取未通知事件并置"已通知"（O_DIRECT 写后读回）→ bless 本次条目 → 按开关对齐 ESP → 导出 `vendor.gaokun3.bootentry.*`。先**只读**挂 ESP 算一遍，有事才读写挂（正常开机 ESP 零写入） |
+| 部署（OTA 时） | `device/huawei/gaokun3/bin/gaokun3-ota-postinstall.sh` 的 `gk3_deploy` | ESP 上没有入口 ⇒ 直接 `gk3boot-android-{a,b}+3.conf`；已有别的版本 / 模式 ⇒ 只铺 `EFI/gk3boot/<ver>/` + `.staged`；任何失败都不让 OTA 失败 |
+| 预编译产物 | `device/huawei/gaokun3/prebuilt-gk3boot/{gk3boot.efi,version}`（不入库，README 在） | `device.mk` 两样都在才装进 `/vendor/boot/gk3boot/`；sync 3c 断言 version = 二进制里嵌的串；`release.sh` 断言 vendor 里那份逐字节相同 |
+| 通知 | Parts `BootEntryNotifier`（directBootAware，`LOCKED_BOOT_COMPLETED` 拉起） | `notify` 含 `fallback` ⇒"上次更新后的系统没能启动，已自动退回旧版本"；`bcb_dropped`、其他异常、`bypassed` 各一条 |
+
+### 12.2 开关 `persist.vendor.gaokun3.gk3boot`（vendor_gaokun3_prop）
+
+| 值 | 开机完成时（HAL） | OTA 时（postinstall，新 vendor 的脚本） |
+|---|---|---|
+| `off` / 没设（**缺省**；1.0 发版时再定） | 删全部 `gk3boot-android-*` / `gk3prev-android-*` 条目（含 `.staged`）与 `EFI/gk3boot/<ver>/`（`log/` 和手放实验条目引用的目录留着） | 删条目（目录留给新槽 HAL 回收：postinstall 跑在旧槽策略下，不加 `rmdir`） |
+| `observe` | 现役入口 = 本槽 vendor 那一版、`gk3.observe=1`：二进制不同就重写；条目已是这一版这个模式就不动；否则旧版（**祝福过**的）改成 `gk3prev-android-{a,b}.conf`、写新的 `+3`、删旧条目与 `.staged`、回收没人引用的目录 | 没有入口 ⇒ 直接 `+3`；有别的 ⇒ 目录 + `.staged` |
+| `action` | 同上，`gk3.observe=0` | 同上 |
+| 其他 | 不动 ESP，`error` 报属性非法 | 不动 |
+
+属性改了**下一次开机完成**才生效。入口计数用完（`+0-N`）不会被重新武装（留给人看，`bypassed` 通知）；要重来：`off` → 重启 → `observe|action` → 重启。
+
+### 12.3 导出的属性（`vendor.gaokun3.bootentry.*`）
+
+`via`（gk3boot / gk3prev / direct）、`event`（`ro.boot.gk3boot.event` 原样）、`notify`（逗号分隔：GK3 事件环里没通知过的
+fallback / boot_corrupt / bcb_dropped / wipe_failed / refused_merging / bootloop / noslot；记录无效时退回 cmdline 的 fallback）、
+`bypassed`、`streak`（清零前的值）、`mode` / `version`（对齐之后 ESP 上的现役入口）、`error`、`done`（本次开机令牌，最后写）。
+
+### 12.4 离线测试
+
+```sh
+make -C tools/gk3boot test               # libgk3core 402/402（没变）
+make -C tools/gk3boot hal-test           # Gk3Boot.cpp 主机场景 42/42（ASan+UBSan；路径 sed 成测试目录，libbase 用桩）
+make -C tools/gk3boot postinstall-test   # postinstall 选直连条目 + gk3_deploy，mksh/dash/ksh 62/62，含 postinstall→HAL 交叉核对
+```
+
+### 12.5 上机步骤（由用户执行）
+
+前提：ROM 带 `prebuilt-gk3boot/`（`sync-device-tree.sh` 3c 打印版本与 sha256）；`-userdebug`；**征得同意、有人能长按电源键**。
+
+1. 装机后什么都不设（`off`）：开机完成 → `getprop | grep bootentry` 应有 `mode=off`、`via=direct`、`error=` 空；
+   `logcat -b kernel | grep gk3boot` 有 "mounted read-only, nothing written"。ESP 上没有 `gk3boot-*`。
+2. `adb root; adb shell setprop persist.vendor.gaokun3.gk3boot observe` → 重启（直连开机）→ 开机完成：
+   ESP 上出现 `EFI/gk3boot/<ver>/gk3boot.efi`（sha256 = prebuilt）与 `gk3boot-android-{a,b}+3.conf`；`mode=observe version=<ver>`。
+3. 再重启：这次经 gk3boot（`ro.bootloader=gk3boot-<ver>`、`ro.boot.gk3boot.entry=gk3boot-android-<x>+2-1.conf`）；
+   开机完成后该条目被祝福成 `gk3boot-android-<x>.conf`（另一槽的还是 `+3`）；`via=gk3boot`。观察模式 misc 不动（`streak=` 空或旧值）。
+4. 再重启：`mode=observe`，log "nothing written"（零写入）。
+5. `setprop … action` → 重启（还是观察模式的入口）→ 开机完成时条目被重写成 `+3`、`gk3.observe=0`；再重启经动作模式入口：
+   之后每次开机 `ro.boot.gk3boot.streak=1`、`bootentry.streak=1`（入口 +1、开机完成清零；S9 之前它只增不减），
+   `adb exec-out 'dd if=/dev/block/by-name/misc bs=65536 count=1' > m.bin; tools/gk3boot/build/gk3-misc dump m.bin` 看 `boot_streak=0`。
+6. 撤回：`setprop … off` → 重启 → 开机完成时全撤（`EFI/gk3boot/log/` 留着）。
+
