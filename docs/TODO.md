@@ -249,6 +249,27 @@
 * ✅ **NET-4 的迁移问题 2026-10-05 合并时绕开**：1.0 **不开**随机化总开关（overlay 保持 `config_wifi_connected_mac_randomization_supported=false`），所有网络都用 [19] 派生的稳定设备 MAC —— 解决"每次开机都换"，且没有"老网络存的 ALWAYS 突然生效、每次连接都换"的问题。实机只读核对（dev.7）：总开关 false 时各网络的 `mRandomizedMacAddress` 存在但没被用，`wlan0` 仍是固件给的 `00:03:7f:12:…` ⇒ 与"false 时连接前不碰 MAC"一致。代价：和以前一样没有按网络的随机 MAC。⬜ 以后要开随机化：连同一次性迁移（WifiConfigManager 加标记）一起做；[20] 已备好（总开关关时无效）。上机判据改为：两次重启 `wlan0` 地址相同且首字节含 0x02。
 * ⓘ 热点 MAC 随机化、ACS（`config_wifi_softap_acs_supported`）、11ac/ax 热点这一轮都没动。
 
+### ▶ 1.0 批 2 · 音频（AV-4 / AV-10 / AV-16，外加 AV-5 的记录）已写、未编译、未上机（2026-10-05）
+
+逐项出处写在改动旁边的注释里（构建机 `~/crdroid` 与 `~/gk3-kernel-72y` 只读 grep，那时构建机开着、没跑 `m`）。
+
+| 项 | 提交 | 改了什么 | 关键核实 |
+|---|---|---|---|
+| AV-16 裁示例设备 | `2ab0372` | `primary_audio_policy_configuration.xml` 删掉 Telephony Tx/Rx、FM Tuner、APE `compressed_offload` 及其路由 | HAL 对这三类设备本来就只走桩（`StreamPrimary::useStubStream()`）；仓库别处没有引用这些端口名 |
+| AV-4 USB 音频 | `7240cd1` | ① `kernel-config-android.sh` 显式 `SND_USB` / `SND_USB_AUDIO` =y 并进 MUST_Y；② cmdline `snd_usb_audio.index=-2,-2,-2,-2`；③ 新 `audio/usb_audio_policy_configuration.xml`（去掉 USB_ACCESSORY）+ include + `device.mk` 拷贝；④ `manifest.xml` 声明 `IModule/usb` v4 | ① defconfig 里是 `=m`（`gaokun3_defconfig:317`），发布内核的 `=y` 是旧 `.config` 带下来的（v0.7.1 config:4373）；② 内置声卡等 ADSP 才注册，开机前就插着的 USB 声卡会抢 card0 ⇒ 内置声卡变 card1、整机没声音（primary 模块 / audio-route.sh / 策略都写死 card0）；负值是卡槽位掩码（`sound/core/init.c` `get_slot_from_bitmask()`），ASoC 卡用"任意空位"（`soc-core.c:2034`）；cmdline 因此到 528 字节、切进 `extra_cmdline`，三个解析方（`gk3-bootimg.py:81`、`bootimg_extract.cpp:170`、gk3boot `bootimg.c`）都会拼回来；④ APEX 自带的 VINTF 片段把 usb 注释掉了（`android.hardware.audio.service-aidl.xml:22`），同名 HAL 不同实例分两处声明不冲突（`HalManifest.cpp:104-165`） |
+| AV-10 耳机麦 | `3218dde` | `patches/0077`（tree-fix [21]）：`StreamPrimary::getCardAndDeviceId()` 地址里没有 `CARD_/DEV_` 时读 `ro.vendor.audio.primary.alsa.<类型小写>`；`device.mk` 设 `ro.vendor.audio.primary.alsa.in_headset=CARD_0_DEV_2`；策略声明 `Wired Headset Mic`（无 address、48k / 立体声）并接到 `primary input` | 可插拔端口不能带 address（策略 XML 耳机那段的守卫）⇒ HAL 只拿得到类型 `IN_HEADSET`（`AidlConversionCppNdk.cpp:520-523`），原来回落 (0,0) = 只有播放节点；属性落 `vendor_default_prop`，vendor 域可读（lineage-sepolicy `private/domain.te:473`），不加规则；构建机上：对打满补丁的树 `git apply --check` 干净，打上后 0010/0051/0052/0069 反向检查仍过、撤 0069 后 0063 仍过，用 soong ninja 里的真实 cflags 跑 `clang -fsyntax-only` rc=0 |
+
+**AV-10 条目本身**（策略 XML 里原来写着"见 docs/TODO.md"、而 TODO 里一直没有这一条 —— 现在就是这里）：有线耳机的麦克风不能用。硬件通路在：hw:0,2（`TX_CODEC_DMA_TX_3 → MultiMedia3`），混音器 TX 通路 `bin/audio-route.sh` 开机就摆好了（"耳机麦路由已应用（PCM2 / TX）"那段；控件名全部出自那里，这一轮没加新控件）。缺的只是"HAL 打开哪个 PCM"，上面那一行已补。⚠️ hw:0,2 以前只在**没插耳机**时录过（RMS −62 dBFS、51% 精确零，开路的样子，`docs/stage4-findings.md` #40），真信号与麦偏压（MIC BIAS 是否由 DAPM 自动打开）**待上机核实**；上游 UCM 原文本仓没有存档（`docs/hw-inventory.md` 提到的 `06-ucm2/` 不在仓库里），对不上就要回 Linux 救援里 `alsaucm` 对照。
+
+**AV-5（ADSP SSR 后混音路由丢失，推测、从没观测到过）**：批 1 那一半（hangdump 记 remoteproc 状态变化）AV-6 已经做了（`bin/gaokun3-hangdump.sh` 的 `rproc_sig()` / `rproc_event()`，ADSP 的 q6v5 ready 计数一涨就记一条到 `/data/vendor/gaokun3/rproc-events.log`），不用再补。⬜ 剩下的：真碰到一次 ADSP 重启后，**静默**核对路由还在不在 —— `tinymix -D 0 'WSA_CODEC_DMA_RX_0 Audio Mixer MultiMedia2'`、`'MultiMedia4 Mixer VA_CODEC_DMA_TX_0'`、`'MultiMedia3 Mixer TX_CODEC_DMA_TX_3'` 都应是 On（`audio-route.sh` 设的值）；是 Off 就坐实 AV-5，修法是让 audioroute 在声卡重新注册后重跑（现在只在 `sys.boot_completed=1` 跑一次，`etc/audioroute.rc`）。hangdump 自己不跑 tinymix：它的域没有 `audio_device` 权限（`sepolicy/gaokun3_scripts.te` 只给了 audioroute），为一个推测去开权限不值。**不要为了验它去手动触发 SSR。**
+
+* ⬜ **构建机先跑** `scripts/crdroid-tree-fixes.py ~/crdroid`：[21] 应报"已应用 0077…"、第二次跑报"已打过"、整体退出码 0；内核按 `kernel-config-android.sh` 重配后断言通过（SND_USB / SND_USB_AUDIO = y）；`m` 一次，看 `check_vintf` 认不认 `manifest.xml` 里的 `IModule/usb`（⚠️ 报错的退路写在 `manifest.xml` 注释里：删掉那段，改用补丁去掉 APEX 那份的注释）。
+* ⬜ **上机判据（全部静默，不放音）**：
+  * AV-16：`dumpsys media.audio_policy` 里没有 Telephony / FM Tuner 设备、Outputs 里没有 `compressed_offload`；`cat /proc/asound/card0/pcm1p/sub0/status` 在有 App 放音时仍是 RUNNING（可以开着网易云但把音量调到 0）。
+  * AV-4：`cat /proc/cmdline` 含 `snd_usb_audio.index=-2,-2,-2,-2`；`zcat /proc/config.gz | grep SND_USB_AUDIO=y`；`service list | grep IModule/usb` 有、`logcat -b all | grep -i "IModule/usb"` 没有注册失败；`dumpsys media.audio_policy` 的 HW Modules 里有 `usb`。**插 USB 声卡（先用 port1 —— port0 会触发 A6）**：`cat /proc/asound/cards` 内置声卡仍是 0、USB 卡 ≥1；`dumpsys usb` / `logcat -s UsbAlsaManager` 有 card 号；`dumpsys media.audio_policy` 出现 `USB Device Out` / `USB Headset Out` 为已连接设备，App 放音时 `/proc/asound/card1/pcm0p/sub0/status` 是 RUNNING（USB 耳机/DAC 的声音在用户自己耳机里，宿舍不外放）。**开机前就插着 USB 声卡再冷启动一次**：内置声卡仍是 card0、`logcat -s audioroute` 正常、内置喇叭 PCM 能 RUNNING —— 这是 index 掩码要防的那一种。
+  * AV-10：`getprop ro.vendor.audio.primary.alsa.in_headset` = `CARD_0_DEV_2`；插**带麦**耳机后 `dumpsys media.audio_policy` 有 `Wired Headset Mic` 连上；用录音机（或 `scripts/audio/mic-verify.sh` 那套 AAudio 冒烟，`gaokun3-mic-smoke`）录 5 秒，logcat `AHAL_StreamPrimary` 有 `ro.vendor.audio.primary.alsa.in_headset gives card id 0, device id 2`、`/proc/asound/card0/pcm2c/sub0/status` 是 RUNNING、录音文件非空；对着耳机麦说话的段 RMS 明显高于 −62 dBFS（开路电平）。拔掉耳机后再录：回到 `pcm3c`（内置麦）。插**三段耳机**（无麦）：不应连上 `Wired Headset Mic`，录音继续走内置麦。
+  * 回归：内置麦（`pcm3c`）、扬声器、有线耳机输出不变 —— `scripts/audio/mic-verify.sh` 四个用例 + `dumpsys media.audio_flinger` 的 latency 与上一版相同。
+
 ### ▶ v0.7.0-alpha（用户 2026-09-28 定：名字 v0.7.0-alpha、带 SELinux 第六轮、验收全过就推仓库 + 发版 + 发安装器预览）
 * 内核 = iris 候选 `56f9b66a`（全配方 0053–0057、0059–0061、0065–0067 + 0050，不带诊断）+ dtb `bad0cd6e`；候选内核上机验收过：
   解码 15/15、相机前后、host 角色 5 次待机 0 复位（#128 §16–§17）。ROM：`lunch lineage_gaokun3-bp4a-userdebug` + 一次 `m bacon superimage`
