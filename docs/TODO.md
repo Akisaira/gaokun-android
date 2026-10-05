@@ -33,6 +33,8 @@
 
 ### ▶ 1.0 批 0/1 已合并、待构建与验证（2026-10-05）
 
+> **★ 2026-10-05 16:0x `1.0.0-dev.7`（戳 `1791185227`，`out/v1dev7-1791185227/`）装进 `_a`（直连条目，gk3boot off）**：7.2.9 + 0076 + S7 执行端 + S9；vendor 带 gk3boot `0.2.0-e5.g99735dee8bb8`（`c84b7e3c…`）与 `fastboot.img`（`a24ba29a…`）。✅ 显示：触摸中断 120/s、vblank timeout 0（7.2.9 下终于有画面）；✅ 前后摄 PASS、camss/smmu 0；⚠️ iris 13/15：`drc avc drain` / `drc vp9 drain` 偶发固件 `sys error … deadbead`（重跑 avc 3/3、vp9 1/3），**测试中途我关了屏**——dev.4 同 7.2.9 亮屏 15/15 ⇒ ⬜ 亮屏 / #16 息屏各做一次对照再定（用户要求这段时间尽量不点屏）；⚠️ s2idle 循环：11 次挂起全 rc=0、固件每次重载、错误行 0，但第 7 轮起 Wi-Fi ~5 分钟内**一次重连都没尝试**（dmesg 无 authenticate），测试结束后才自己连上 ⇒ 内核侧正常、框架侧不再自动重连，原因未明（logcat 无 blocklist 记录；环境是手机热点「Xiaomi 17」，dev.4 同环境 10/10）⇒ 正在重跑一轮看能否复现。用户要求：屏幕在散热期间尽量不点亮（息屏超时已设 15 秒）。
+
 > **★★ 2026-10-05 15:1x 7.2.9 黑屏根因定案：v7.2.y stable 的 `5de981b7db` Revert "drm/msm: dsi: fix PLL init in bonded mode"（v7.2.6 进）**——撤掉了 93c97bc8d85d 对双 DSI 绑定 PLL 初始化的修复（上游撤它是因为非绑定屏回归）。判据（不用人看屏）：亮屏时 `himax-spi-ts` 触摸中断 ≈120/s = 面板在扫描。#16（rc2）120/s · v7.2.9 原版 0/s · **v7.2.9 + 撤回该提交 118/s**（经测试条目、`entry=TEST` 核对过）。⇒ `patches/0076` 撤回它（`ee81f67`），SEC-9 重新应用（`2333e2d`）；另一开发者说的"7.2 widebus 回归"是 7.1 前就进了的另一串（rc2 里已有），与本问题无关。候选内核与 diff 在 `out/k72y-bisect/`。屏幕彩线：用户散热后"比之前好多了" ⇒ 支持"排线受热"。⬜ dev.7（7.2.9 + 0076 + S7 执行端）构建中，装机后回归显示 / iris / 相机 / 待机。
 > **★ 同日 S7 fastboot 执行端合入 main（`c676eb1`…`99735de`，18 个提交）**：`gk3-fastbootd`（252/252）+ `fastboot.img` initramfs（11/11）接口统一（/init 管 gadget / UDC / 生命周期，守护进程管协议，退出码表意图），S7c gk3boot 拉起执行端（`gk3.dispatch=1` 时消费 BCB、首跑迁移；`gk3boot-tools.conf` 直进），QEMU 20 场景全过（含 exec-bootloader 真 fastboot getvar/reboot、exec-wipe）。分派开关默认仍关。⬜ 上机 E6（执行端、键码、port0、方向）→ E7（BCB 分派）→ E10（恢复出厂，要用户另行同意 + 备份）。
 
