@@ -313,8 +313,10 @@ gk3_entry_text() {   # $1=active|prev $2=槽 $3=版本 $4=observe（0|1）
     if [ "$1" = prev ]; then _gt="Android (previous loader)"; _gk=0gk3prev
     elif [ "$4" = 1 ]; then _gt="Android (gk3boot observe)"; _gk=0gk3
     else _gt="Android"; _gk=0gk3; fi
-    printf 'title      %s\nversion    gk3boot-%s\nsort-key   %s\nefi        /EFI/gk3boot/%s/gk3boot.efi\noptions    gk3.observe=%s gk3.hint=%s\n' \
-        "$_gt" "$3" "$_gk" "$3" "$4" "$2"
+    # 动作模式顺带 gk3.dispatch=1（1.0，与 boot_control/Gk3Boot.cpp 的 EntryText 逐字相同）
+    if [ "$4" = 1 ]; then _gd=""; else _gd=" gk3.dispatch=1"; fi
+    printf 'title      %s\nversion    gk3boot-%s\nsort-key   %s\nefi        /EFI/gk3boot/%s/gk3boot.efi\noptions    gk3.observe=%s gk3.hint=%s%s\n' \
+        "$_gt" "$3" "$_gk" "$3" "$4" "$2" "$_gd"
 }
 gk3_put() {   # $1=文件 $2…=gk3_entry_text 的参数；写 .new 再改名
     gk3_entry_text "$2" "$3" "$4" "$5" > "$1.new" && mv -f "$1.new" "$1" && return 0

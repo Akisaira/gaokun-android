@@ -80,7 +80,7 @@ chk "条目不变、陈旧 .staged 被清" '[ "$RC" = 0 ] && [ "$(gk)" = "gk3boo
 echo "  P4 action、ESP 上是同版本 observe ⇒ 写 .staged（observe=0），现役不动"
 sc p4 action "$V1"; act p4 "$V1" 1 gk3boot-android-a.conf gk3boot-android-b.conf; go p4
 chk "现役 + .staged ×2" '[ "$(gk)" = "gk3boot-android-a.conf gk3boot-android-a.conf.staged gk3boot-android-b.conf gk3boot-android-b.conf.staged " ]'
-chk ".staged 是 observe=0、title Android" 'grep -q "^options    gk3.observe=0 gk3.hint=a$" "$E/gk3boot-android-a.conf.staged" && grep -q "^title      Android$" "$E/gk3boot-android-a.conf.staged"'
+chk ".staged 是 observe=0、title Android" 'grep -q "^options    gk3.observe=0 gk3.hint=a gk3.dispatch=1$" "$E/gk3boot-android-a.conf.staged" && grep -q "^title      Android$" "$E/gk3boot-android-a.conf.staged"'
 
 echo "  P5 vendor 是新版 V2、ESP 上现役 V1 ⇒ V2 目录 + .staged，V1 原样"
 sc p5 action V2; act p5 "$V1" 0 gk3boot-android-a.conf gk3boot-android-b.conf; go p5

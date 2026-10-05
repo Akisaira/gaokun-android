@@ -651,7 +651,10 @@ std::string EntryText(Kind kind, char slot, const std::string& ver, bool observe
            "version    gk3boot-" + ver + "\n" +
            "sort-key   " + sort + "\n" +
            "efi        /EFI/gk3boot/" + ver + "/gk3boot.efi\n" +
-           "options    gk3.observe=" + (observe ? "1" : "0") + " gk3.hint=" + slot + "\n";
+           "options    gk3.observe=" + (observe ? "1" : "0") + " gk3.hint=" + slot +
+           // ★ 1.0（2026-10-05，E7 真机过）：动作模式顺带打开 BCB 分派 —— D4 把恢复出厂交给统一启动入口，
+           //   分派关着时 Settings 写的 --wipe_data 不会被执行（B6）。观察模式不分派。postinstall 的 gk3_entry_text 逐字相同。
+           (observe ? "" : " gk3.dispatch=1") + "\n";
 }
 
 // gk3boot-tools.conf 的正文（设计稿 §4.1、§4.3.5：菜单里直接进执行端）。postinstall 的 gk3_tools_text 同一格式。

@@ -131,6 +131,7 @@ yourself, you should know that they contain these components.
 ## 3. Unsupported or incomplete features
 
 ### *Erase all data* (factory reset) in Settings does nothing
+<!-- ⬜ 2026-10-05：1.0 构建起镜像默认 persist.vendor.gaokun3.gk3boot=action、条目带 gk3.dispatch=1（device.mk / Gk3Boot.cpp），Settings 写的 --wipe_data 会由统一启动入口分派给 fastboot 执行端去擦（QEMU exec-wipe 过、E7 分派真机过）。但 E10 真机恢复出厂还没做（要用户同意 + 备份）⇒ 这一节先不改；E10 过了再改成"1.0 起可用"，并写明首次开机后才生效（0.7.x 升上来的机器第一次开机走直连）。 -->
 <!-- B6 / A5 (user decision D4: to be handled by a future fastboot; design in progress). Rewrite once fastboot ships. -->
 * **What you see**: the machine reboots and **all your data is still there**, with no message.
 * **Why**: that feature relies on recovery to carry it out, and recovery cannot boot on this machine, so after the reboot

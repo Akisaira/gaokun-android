@@ -124,7 +124,7 @@ echo "═ S6 同一版本 observe → action ⇒ 重写 +3、gk3.observe=0、tit
 mv "$T/esp/loader/entries/gk3boot-android-a+3.conf" "$T/esp/loader/entries/gk3boot-android-a+1-2.conf"
 run action gk3boot-android-a+1-2.conf
 chk "条目 = +3 ×2 + gk3prev ×2" '[ "$(ls_e)" = "gk3boot-android-a+3.conf gk3boot-android-b+3.conf gk3prev-android-a.conf gk3prev-android-b.conf " ]'
-chk "options gk3.observe=0、title Android" 'grep -q "^options    gk3.observe=0 gk3.hint=a$" "$T/esp/loader/entries/gk3boot-android-a+3.conf" && grep -q "^title      Android$" "$T/esp/loader/entries/gk3boot-android-a+3.conf"'
+chk "options gk3.observe=0 + gk3.dispatch=1、title Android" 'grep -q "^options    gk3.observe=0 gk3.hint=a gk3.dispatch=1$" "$T/esp/loader/entries/gk3boot-android-a+3.conf" && grep -q "^title      Android$" "$T/esp/loader/entries/gk3boot-android-a+3.conf"'
 chk "gk3prev 仍指 V1" 'grep -q "/EFI/gk3boot/V1/" "$T/esp/loader/entries/gk3prev-android-a.conf"'
 
 echo "═ S7 postinstall 留下的 .staged（V4）+ 新槽 vendor = V4 ⇒ 激活：V3 祝福过 → gk3prev，V4 +3，.staged 没了"
