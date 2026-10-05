@@ -179,7 +179,17 @@ fi
 install -Dm644 "$LIVE/installer-lib.sh" "$ROOTFS/usr/share/gaokun3/installer-lib.sh"
 for f in gk3-unsparse.py gk3-bootimg.py gk3-wpa-scan.py; do install -Dm755 "$LIVE/$f" "$ROOTFS/usr/share/gaokun3/$f"; done
 install -Dm755 "$REPO/scripts/install-gaokun3.sh" "$ROOTFS/usr/share/gaokun3/install-gaokun3.sh"
-ok "安装器后端 + 命令行安装器（/usr/share/gaokun3/）"
+# gk3-misc（S10）：gk3_apply 清零 misc 之后用它的 init 写初始的 A/B 状态与 GK3 记录（installer-lib.sh 的 gk3__misc_tool 先找这里）。
+# 在构建容器里静态编（live-build.Dockerfile 装了 gcc / libc6-dev）：编法照 tools/gk3boot/Makefile 的 $(B)/gk3-misc.static ——
+#   构建容器里没有 make，改那边要改这里。静态链接：不依赖镜像里装没装哪个 libc 的哪一版
+G3=$REPO/tools/gk3boot
+[ -f "$G3/misc/gk3-misc.c" ] || die "没有 $G3/misc/gk3-misc.c（build-live.sh 要把 tools/gk3boot 一起拷进容器）"
+gcc -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -I"$G3/core/include" -static \
+    -o "$WORK/gk3-misc" "$G3/misc/gk3-misc.c" "$G3"/core/src/*.c || die "gk3-misc 编不过"
+strip "$WORK/gk3-misc"
+install -Dm755 "$WORK/gk3-misc" "$ROOTFS/usr/share/gaokun3/gk3-misc"
+sha256sum "$WORK/gk3-misc" | cut -d' ' -f1 > "$OUT/gk3-misc.sha256"
+ok "安装器后端 + 命令行安装器 + gk3-misc（静态，sha256 $(cut -c1-16 "$OUT/gk3-misc.sha256")…）（/usr/share/gaokun3/）"
 
 if [ "$PROFILE" = live ]; then
     mkdir -p "$ROOTFS/usr/lib/gaokun3/installer"
@@ -207,7 +217,11 @@ for c in sshd sgdisk parted partprobe resize2fs e2fsck mkfs.ext4 mkfs.vfat mkfs.
          udevadm wpa_supplicant wpa_cli dhcpcd iw python3 zstd curl cmp sha256sum mkntfs; do need_cmd "$c"; done
 need_path /usr/lib/systemd/boot/efi/systemd-bootaa64.efi   # gk3_apply 往目标机 ESP 上装的就是它
 need_path /usr/bin/busybox                                 # initramfs 用的静态 busybox
-for f in installer-lib.sh gk3-unsparse.py gk3-bootimg.py gk3-wpa-scan.py install-gaokun3.sh; do need_path "/usr/share/gaokun3/$f"; done
+for f in installer-lib.sh gk3-unsparse.py gk3-bootimg.py gk3-wpa-scan.py install-gaokun3.sh gk3-misc; do need_path "/usr/share/gaokun3/$f"; done
+# gk3-misc 在【目标】上真的能跑：在 chroot 里对一个 64 KiB 的空文件 init 一次、dump 读回来（静态链接，不看镜像的 libc）
+if in_ch 'f=$(mktemp) && head -c 65536 /dev/zero > $f && /usr/share/gaokun3/gk3-misc init $f --slot a | grep -q "^MISCINIT slot=a default=none " && /usr/share/gaokun3/gk3-misc dump $f | grep -q "_a priority=15 tries=6 successful=0"; r=$?; rm -f $f; exit $r'; then
+    ok "gk3-misc init 在镜像里能跑（64 KiB 空文件 → _a 15/6，读回一致）"
+else echo "   ✗ gk3-misc 在镜像里跑不起来 / init 结果不对"; BAD=1; fi
 # 辅助脚本在【目标】的 python 上真的能跑（不是只看文件在不在）
 if in_ch 'python3 /usr/share/gaokun3/gk3-wpa-scan.py < /dev/null'; then ok "gk3-wpa-scan.py 在镜像的 python3 上能跑"; else echo "   ✗ 辅助脚本在镜像的 python3 上跑不起来"; BAD=1; fi
 for u in gk3-wifi.service ssh.service gk3-diag.timer avahi-daemon.service; do need_enabled "$u"; done

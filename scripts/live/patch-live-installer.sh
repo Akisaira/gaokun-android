@@ -32,9 +32,9 @@ APP_SHA=$( (cd "$APP" && find . -type f | LC_ALL=C sort | xargs shasum -a 256) |
 echo "══ 底子 $(basename "$BASE")（${BASE_SHA:0:16}…）+ 安装器（${APP_SHA:0:16}…）"
 OV_SHA=$( (cd "$REPO/scripts/live" && find overlay-common overlay-live \( -type f -o -type l \) | LC_ALL=C sort | while read -r f; do
     [ -L "$f" ] && echo "$f -> $(readlink "$f")" || echo "$f $(shasum -a 256 < "$f" | cut -d' ' -f1)"; done) | shasum -a 256 | cut -d' ' -f1)
-LIB_SHA=$(cat "$REPO/scripts/live/installer-lib.sh" "$REPO"/scripts/live/gk3-{unsparse,bootimg,wpa-scan}.py "$REPO/scripts/install-gaokun3.sh" | shasum -a 256 | cut -d' ' -f1)
+LIB_SHA=$(cat "$REPO/scripts/live/installer-lib.sh" "$REPO"/scripts/live/gk3-{unsparse,bootimg,wpa-scan}.py "$REPO/scripts/install-gaokun3.sh" "$REPO/tools/gk3boot/misc/gk3-misc.c" "$REPO"/tools/gk3boot/core/src/*.c | shasum -a 256 | cut -d' ' -f1)
 docker run --rm -v "$(dirname "$BASE"):/base:ro" -v "$APP:/app:ro" -v "$REPO/out/live:/out" -v "$REPO/scripts/live:/live:ro" \
-    -v "$REPO/scripts/install-gaokun3.sh:/cli.sh:ro" -e OV_SHA="$OV_SHA" -e LIB_SHA="$LIB_SHA" \
+    -v "$REPO/scripts/install-gaokun3.sh:/cli.sh:ro" -v "$REPO/tools/gk3boot:/gk3boot:ro" -e OV_SHA="$OV_SHA" -e LIB_SHA="$LIB_SHA" \
     -e BASE_NAME="$(basename "$BASE")" -e BASE_SHA="$BASE_SHA" -e APP_SHA="$APP_SHA" "$TAG" bash -euo pipefail -c '
     R=/w/root; mkdir -p /w
     unsquashfs -q -n -d $R /base/$BASE_NAME >/dev/null
@@ -45,6 +45,13 @@ docker run --rm -v "$(dirname "$BASE"):/base:ro" -v "$APP:/app:ro" -v "$REPO/out
     install -Dm644 /live/installer-lib.sh $R/usr/share/gaokun3/installer-lib.sh
     for f in gk3-unsparse.py gk3-bootimg.py gk3-wpa-scan.py; do install -Dm755 /live/$f $R/usr/share/gaokun3/$f; done
     install -Dm755 /cli.sh $R/usr/share/gaokun3/install-gaokun3.sh
+    # gk3-misc（S10）：编法同 build-rootfs.sh（静态；构建环境 live-build.Dockerfile 带 gcc）
+    gcc -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -I/gk3boot/core/include -static -o /w/gk3-misc \
+        /gk3boot/misc/gk3-misc.c /gk3boot/core/src/*.c && strip /w/gk3-misc
+    install -Dm755 /w/gk3-misc $R/usr/share/gaokun3/gk3-misc
+    f=$(chroot $R mktemp) && head -c 65536 /dev/zero > $R$f && chroot $R /usr/share/gaokun3/gk3-misc init $f | grep -q "^MISCINIT slot=a " \
+        || { echo "✗ 换进去的 gk3-misc 在镜像里跑不起来"; exit 1; }
+    rm -f $R$f
     chroot $R bash -n /usr/share/gaokun3/installer-lib.sh || { echo "✗ 换进去的 installer-lib.sh 语法不对"; exit 1; }
     for od in overlay-common overlay-live; do
         cp -a /live/$od/. $R/ && (cd /live/$od && find . -mindepth 1 | sed "s#^\.##") | while read -r p; do chown -h 0:0 "$R$p"; done
@@ -55,7 +62,7 @@ docker run --rm -v "$(dirname "$BASE"):/base:ro" -v "$APP:/app:ro" -v "$REPO/out
         echo "✗ 安装器有解析不了的动态库："; chroot $R sh -c "ldd /usr/lib/gaokun3/installer/gk3_installer /usr/lib/gaokun3/installer/lib/*.so" | grep "not found" | sort -u; exit 1
     fi
     printf "%s\n" "这不是正式构建：scripts/live/patch-live-installer.sh 在现成的镜像上换了图形安装器" \
-        "底子      $BASE_NAME sha256=$BASE_SHA" "安装器    out/installer-flutter-linux-arm64 sha256(清单)=$APP_SHA" "overlay   scripts/live/overlay-{common,live} sha256(清单)=$OV_SHA" "后端      installer-lib.sh + gk3-*.py + install-gaokun3.sh sha256=$LIB_SHA" \
+        "底子      $BASE_NAME sha256=$BASE_SHA" "安装器    out/installer-flutter-linux-arm64 sha256(清单)=$APP_SHA" "overlay   scripts/live/overlay-{common,live} sha256(清单)=$OV_SHA" "后端      installer-lib.sh + gk3-*.py + install-gaokun3.sh + gk3-misc 源码 sha256=$LIB_SHA" \
         "时间      $(date -u +%FT%TZ)" > $R/etc/gaokun3-patched
     mksquashfs $R /out/gaokun3-live-patched.squashfs -comp zstd -Xcompression-level 19 -noappend -no-progress -quiet
     echo "   ✓ $(du -h /out/gaokun3-live-patched.squashfs | cut -f1)（底子 $(du -h /base/$BASE_NAME | cut -f1)）"'

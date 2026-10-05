@@ -55,10 +55,12 @@ L=$REPO/out/live
 grep -q "^GK3_INSTALLER_VERSION=$VER$" "$L/release.txt" || die "release.txt 里的版本不是 $VER"
 ! grep -q '^GK3_GIT=.*-dirty' "$L/release.txt" || die "release.txt 说工作区有改动（-dirty）"
 grep -q "^GK3_BOOTIMG_SHA256=$(shasum -a 256 "$BOOTIMG" | cut -d' ' -f1)$" "$L/release.txt" || die "镜像的内核不是来自给的 boot.img"
+# S10：安装器初始化 misc 要 /usr/share/gaokun3/gk3-misc（build-rootfs.sh 编进去、体检在镜像里跑过 init）。没有它 gk3_apply 在动盘前就拒绝
+grep -qE '^GK3_MISC_SHA256=[0-9a-f]{64}$' "$L/release.txt" || die "release.txt 里没有 GK3_MISC_SHA256 —— 镜像里没编进 gk3-misc（安装会在动盘前失败）"
 [ -f "$L/gaokun3-windows/release.txt" ] && cmp -s "$L/release.txt" "$L/gaokun3-windows/release.txt" || die "Windows 安装包里的 release.txt 不对"
 # 开发用的东西不许混进发布版
 ! grep -rqs 'gaokun3 M0' "$L/.entries" || die "带着 M0 的变体启动项（.entries 不空）"
-ok "版本、提交、内核来源都对；没有 M0 变体"
+ok "版本、提交、内核来源都对；带着 gk3-misc；没有 M0 变体"
 
 say "3. 打包 → $OUT"
 rm -rf "$OUT"; mkdir -p "$OUT"

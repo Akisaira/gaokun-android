@@ -106,6 +106,8 @@ docker run --rm --privileged "${MOUNTS[@]}" \
     O=/build/out; mkdir -p $O /build/boot
     # 仓库只读挂进来；构建脚本按自己所在目录找 overlay 与清单，所以拷一份可写的
     cp -a /repo/scripts /build/scripts
+    # gk3-misc 的源码（build-rootfs.sh 静态编进镜像，S10）；Mac 上编出来的 build/ 不要
+    mkdir -p /build/tools && cp -a /repo/tools/gk3boot /build/tools/gk3boot && rm -rf /build/tools/gk3boot/build
     mkdir -p /build/out-installer && [ "$PROFILE" = rescue ] || cp -a /repo/out/installer-flutter-linux-arm64/. /build/out-installer/
     bash /build/scripts/live/build-rootfs.sh --profile "$PROFILE" --out $O --installer /build/out-installer \
         ${HAVE_KEY:+--ssh-key /in/ssh.pub} ${HAVE_WIFI:+--wifi-conf /in/wpa.conf} ${HAVE_FW:+--firmware /in/firmware}
@@ -117,8 +119,8 @@ docker run --rm --privileged "${MOUNTS[@]}" \
     fi
     bash /build/scripts/live/build-initramfs.sh --busybox $O/busybox.static --firmware $O/fw --out $O
     python3 /build/scripts/live/gk3-bootimg.py /in/boot.img /build/boot
-    printf "GK3_INSTALLER_VERSION=%s\nGK3_GIT=%s\nGK3_BUILT=%s\nGK3_BOOTIMG_SHA256=%s\nGK3_PROFILE=%s\n" \
-        "$GK3_VERSION" "$GK3_GIT" "$GK3_BUILT" "$GK3_BOOTSHA" "$PROFILE" > $O/release.txt
+    printf "GK3_INSTALLER_VERSION=%s\nGK3_GIT=%s\nGK3_BUILT=%s\nGK3_BOOTIMG_SHA256=%s\nGK3_PROFILE=%s\nGK3_MISC_SHA256=%s\n" \
+        "$GK3_VERSION" "$GK3_GIT" "$GK3_BUILT" "$GK3_BOOTSHA" "$PROFILE" "$(cat $O/gk3-misc.sha256)" > $O/release.txt
     EA=(); while IFS= read -r e; do [ -n "$e" ] && EA+=(--entry "$e"); done < /outlive/.entries
     bash /build/scripts/live/build-usb.sh --squashfs $O/gaokun3-$PROFILE.squashfs --initramfs $O/initramfs.img \
         --kernel /build/boot/Image --dtb /build/boot/gaokun3.dtb --sdboot $O/systemd-bootaa64.efi \
