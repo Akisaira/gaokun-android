@@ -1,4 +1,4 @@
-D 155
+D 372
 O DISK path=/dev/nvme0n1 size_mib=488386 model=? removable=0 tran=nvme medium=yes
 O PART path=/dev/nvme0n1p1 num=1 start=2048 end=616447 size_mib=300 size_kib=307200 type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B name=EFI%20system%20partition fs=vfat fslabel=SYSTEM os=esp medium=no
 O PART path=/dev/nvme0n1p2 num=2 start=616448 end=649215 size_mib=16 size_kib=16384 type=E3C9E316-0B5C-4DB8-817D-F92DF00215AE name=Microsoft%20reserved%20partition fs= fslabel= os=msr medium=no

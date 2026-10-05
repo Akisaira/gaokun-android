@@ -1,15 +1,14 @@
-D 52
-E 分区 4 身份：PARTUUID=D4C59373-DBF7-496D-986C-B49029318EB3 类型=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7 名字=Basic data partition 属性=0000000000000000
-E PROGRESS 5 备份分区表
-E 分区表备份：/media/gk3/gaokun3/gpt-before-shrink-nvme0n1-20260928-020614.bin（还原：sgdisk --load-backup=/media/gk3/gaokun3/gpt-before-shrink-nvme0n1-20260928-020614.bin /dev/nvme0n1）
-E PROGRESS 15 演练缩小文件系统
-D 140
-E PROGRESS 30 缩小 NTFS
-D 735
-E PROGRESS 70 改分区表
+E 分区 4 身份：PARTUUID=308276AF-A68C-4F53-A55D-BBF05B20A39A 类型=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7 名字=Basic data partition 属性=0000000000000000
+E PROGRESS 5 gpt-backup
+E 分区表备份：/media/gk3/gaokun3/gpt-before-shrink-nvme0n1-20261005-102337.bin（还原：sgdisk --load-backup=/media/gk3/gaokun3/gpt-before-shrink-nvme0n1-20261005-102337.bin /dev/nvme0n1）
+E PROGRESS 15 shrink-trial
+D 135
+E PROGRESS 30 shrink-ntfs
+D 635
+E PROGRESS 70 gpt-edit
 D 1500
-E PROGRESS 90 复核
+E PROGRESS 90 verify
 E 分区 4：344708 MiB -> 334468 MiB（PARTUUID 未变）
-E PROGRESS 100 缩小完成
+E PROGRESS 100 done
 O RESULT op=shrink part=/dev/nvme0n1p4 size_mib=334468
 X 0
