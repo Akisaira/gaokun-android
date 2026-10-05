@@ -88,7 +88,9 @@ gk3-misc: $(B)/gk3-misc
 # —— 执行端 gk3-fastbootd（S7a） ——
 FBD_SRC  := $(wildcard fastbootd/*.c)
 FBD_HDR  := fastbootd/fbd.h core/include/gk3core.h
-FBD_VER  ?= $(shell git describe --always --dirty --abbrev=12 2>/dev/null || echo unknown)
+# -dirty 只看 tools/gk3boot 与 scripts/gk3boot（同 scripts/gk3boot/build-fastboot-img.sh）
+FBD_VER  ?= $(shell v=$$(git describe --always --abbrev=12 2>/dev/null || echo unknown); \
+              git status --porcelain -- . ../../scripts/gk3boot 2>/dev/null | grep -q . && v=$$v-dirty; echo $$v)
 FBD_FLAGS:= -std=gnu11 $(WARN) -Werror -Wno-missing-prototypes -Icore/include -Ifastbootd -DGK3FB_VERSION='"$(FBD_VER)"'
 
 $(B)/gk3-fastbootd: $(FBD_SRC) $(CORE_SRC) $(FBD_HDR) | $(B)

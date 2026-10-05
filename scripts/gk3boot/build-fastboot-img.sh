@@ -34,7 +34,10 @@ elif [ -n "$FBD" ]; then
     echo "▶ 带上 gk3-fastbootd：$FBD"
 fi
 EPOCH=$(git -C "$ROOT" log -1 --format=%ct 2>/dev/null || echo 0)
-FBD_VER=$(git -C "$ROOT" describe --always --dirty --abbrev=12 2>/dev/null || echo unknown)
+# -dirty 只看执行端自己的源码（与 test-boot.sh 的 gk3boot 版本串同一口径）：仓库别处的未提交改动（如 .gitignore）
+# 不该把守护进程标成脏版本（2026-10-05 E6 上机时 getvar 报 …-dirty，就是这么来的）
+FBD_VER=$(git -C "$ROOT" describe --always --abbrev=12 2>/dev/null || echo unknown)
+git -C "$ROOT" status --porcelain -- tools/gk3boot scripts/gk3boot 2>/dev/null | grep -q . && FBD_VER=$FBD_VER-dirty
 
 docker run --rm --name "${GK3_DOCKER_PREFIX:-}fbi-build-$$" -v "$ROOT:/src" ${MNT[@]+"${MNT[@]}"} -e SOURCE_DATE_EPOCH="$EPOCH" -e FBD_VER="$FBD_VER" -w /src "$IMG" \
     bash tools/gk3boot/initramfs/build.sh --out "$OUTREL" ${ARGS[@]+"${ARGS[@]}"}
