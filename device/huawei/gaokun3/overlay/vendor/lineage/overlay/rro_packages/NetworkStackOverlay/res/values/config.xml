@@ -45,4 +45,39 @@
 
     <string name="config_captive_portal_https_url" translatable="false">https://connect.rom.miui.com/generate_204</string>
     <string name="config_captive_portal_http_url" translatable="false">http://connect.rom.miui.com/generate_204</string>
+
+    <!--
+      v1.0 NET-10：联网检测加备用端点（2026-10-05，构建机 packages/modules/NetworkStack 核实）。
+      上面两条单 URL 只有一个探测地址：connect.rom.miui.com 一旦不可达，每次开机都会把已保存的网络判成
+      "无互联网"（#29 那个坑又回来）。
+      * 资源：res/values/config.xml:46-53 的 config_captive_portal_{https,http,fallback}_urls（string-array，默认空），
+        都在 overlayable "NetworkStackConfig" 里（overlayable.xml:42-44）。与上面同理要 add-resource。
+      * 生效方式：getProbeUrlArrayConfig 里【资源优先】，资源数组非空就不用单 URL 与 Settings 里的值
+        （NetworkMonitor.java:2856-2871）。数组里不止一个 URL 时改走 sendMultiParallelHttpAndHttpsProbes
+        （:2987-2990、:3460 起）：所有 URL 并行探测，evaluateCapportResult 汇总，任何一个 HTTPS 204 即判通。
+        ⇒ 第一项仍是原来的 miui，第二项是华为自己的 connectivitycheck（这台本来就是华为机器）。
+      * fallback_urls：只在 HTTPS/HTTP 各一个 URL 时用（:2983-2986 的 sendHttpAndHttpsParallelWithFallbackProbes），
+        数组模式下用不到；仍替掉默认的 www.google.com / play.googleapis.com（:33-36，国内不通），以防将来回到单 URL 模式。
+      * URL 里不能有逗号（:44-45）。
+      ⓘ 端点可达性：2026-10-05 从本机（Mac，国内网络，但经本机 Clash TUN —— remote_ip 是 198.18.x 假 IP，
+        所以不能证明直连可达）curl 过：connect.rom.miui.com、connectivitycheck.platform.hicloud.com、www.qualcomm.cn
+        的 http / https /generate_204 都回 204、内容长度 0。⬜ 平板上直连复测。
+      判据：`dumpsys network_stack` 里 NetworkMonitor 的 https/http URL 列表是这两项；
+        用 iptables 临时拒掉 connect.rom.miui.com 的地址后 Wi-Fi 仍显示已连接且可上网。
+    -->
+    <add-resource type="array" name="config_captive_portal_https_urls" />
+    <add-resource type="array" name="config_captive_portal_http_urls" />
+    <add-resource type="array" name="config_captive_portal_fallback_urls" />
+    <string-array name="config_captive_portal_https_urls" translatable="false">
+        <item>https://connect.rom.miui.com/generate_204</item>
+        <item>https://connectivitycheck.platform.hicloud.com/generate_204</item>
+    </string-array>
+    <string-array name="config_captive_portal_http_urls" translatable="false">
+        <item>http://connect.rom.miui.com/generate_204</item>
+        <item>http://connectivitycheck.platform.hicloud.com/generate_204</item>
+    </string-array>
+    <string-array name="config_captive_portal_fallback_urls" translatable="false">
+        <item>http://www.qualcomm.cn/generate_204</item>
+        <item>http://connectivitycheck.platform.hicloud.com/generate_204</item>
+    </string-array>
 </resources>
