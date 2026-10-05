@@ -25,6 +25,9 @@ rows = [  # bssid, freq, signal, flags, 原始 SSID 字节
     ("aa:00:00:00:00:07", 5240, -80, "[WPA2-PSK-CCMP][ESS]", b"\xd6\xd0\xce\xc4"),  # GBK 的"中文"
     ("aa:00:00:00:00:08", 5260, -50, "[WPA2-PSK-CCMP][ESS]", b""),                # 隐藏网络
     ("aa:00:00:00:00:09", 5280, -58, "[WPA2-PSK-CCMP][ESS]", b"100%\tsure"),      # % 与制表符
+    ("aa:00:00:00:00:0a", 5300, -61, "[WPA2-PSK+SAE-CCMP][ESS]", b"mixed"),        # WPA2/WPA3 混合
+    ("aa:00:00:00:00:0b", 2412, -62, "[WEP][ESS]", b"oldwep"),
+    ("aa:00:00:00:00:0c", 2417, -63, "[WPA2-OWE-CCMP][ESS]", b"owe-only"),
 ]
 print("bssid / frequency / signal level / flags / ssid")
 for r in rows:
@@ -54,6 +57,10 @@ echo "═══ 4. 分类 ═══"
 row "$(hex eduroam)" | grep -q 'auth=eap secure=\|secure=yes auth=eap' && ok "eduroam → auth=eap" || bad "企业网络没认出来"
 printf '%s' "$OUT" | grep -q 'ssid_hex=d6d0cec4 .*ssid=中文$' && ok "GBK 编码的 SSID：字节保住、显示为「中文」" || bad "GBK SSID 不对"
 printf '%s' "$OUT" | grep -q 'ssid_hex= ' && bad "隐藏网络不该列出来" || ok "隐藏网络没列出"
+# v1.0 计划 GUI-9：混合模式按 PSK 连（只有纯 SAE 才要 key_mgmt SAE）；WEP / OWE 照实报，界面标灰
+row "$(hex mixed)" | grep -q 'secure=yes auth=psk ' && ok "PSK+SAE 混合 → auth=psk" || bad "混合模式：$(row "$(hex mixed)")"
+row "$(hex oldwep)" | grep -q 'secure=yes auth=wep ' && ok "WEP → auth=wep" || bad "WEP：$(row "$(hex oldwep)")"
+row "$(hex owe-only)" | grep -q 'auth=owe ' && ok "OWE → auth=owe" || bad "OWE：$(row "$(hex owe-only)")"
 
 echo "═══ 5. 顺序：信号从强到弱 ═══"
 S=$(printf '%s\n' "$OUT" | sed -n 's/.*signal=\(-[0-9]*\).*/\1/p' | tr '\n' ' ')

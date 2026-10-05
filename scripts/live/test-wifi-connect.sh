@@ -77,6 +77,27 @@ run "hex:$(hex x)" "abcdefgh" yes
 run "hex:$(hex x)" "short" hidden
 [ "$(rc)" != 0 ] && [ ! -s "$T/wpa.log" ] && ok "7 个字符的密码：拒绝（原有的检查还在）" || bad "短密码被放行"
 
+echo "═══ 5. 纯 WPA3（SAE，v1.0 计划 GUI-9）═══"
+run "hex:$(hex 'wpa3-only')" "abcdefgh" sae
+[ "$(rc)" = 0 ] && sent "set_network 0 key_mgmt SAE" && sent "set_network 0 ieee80211w 2" && sent 'set_network 0 psk "abcdefgh"' \
+    && ok "key_mgmt SAE + ieee80211w 2，密码照样放 psk" || bad "SAE：rc=$(rc) $(cat "$T/wpa.log")"
+conf "	key_mgmt=SAE" && conf "	ieee80211w=2" && ok "存下的配置（给救援系统）也带 SAE" || bad "存下的配置缺 SAE：$(cat "$T/run/wpa_supplicant.conf" 2>&1)"
+run "hex:$(hex 'wpa3-hidden')" "abcdefgh" hidden sae
+[ "$(rc)" = 0 ] && sent "set_network 0 key_mgmt SAE" && sent "set_network 0 scan_ssid 1" && ok "隐藏 + SAE 一起" || bad "隐藏 + SAE：rc=$(rc)"
+run "hex:$(hex 'wpa2')" "abcdefgh"
+! grep -q 'key_mgmt\|ieee80211w' "$T/wpa.log" && ok "普通 WPA2 不动 key_mgmt / ieee80211w" || bad "WPA2 多发了 key_mgmt"
+run "hex:$(hex 'wpa3-only')" "" sae
+[ "$(rc)" != 0 ] && [ ! -s "$T/wpa.log" ] && grep -q '^ERR code=psk-length ' "$T/err" && ok "SAE 不给密码：动 wpa_supplicant 之前拒绝" || bad "SAE 空密码被放行"
+
+echo "═══ 6. 给界面的行：进度只有代码、失败有 ERR ═══"
+run "hex:$(hex x)" "abcdefgh"
+! grep '^PROGRESS ' "$T/err" | grep -qv -E '^PROGRESS [0-9]+ [a-z][a-z0-9-]*( [a-z_]+=[^ ]*)*$' && grep -q '^PROGRESS 20 wifi-assoc$' "$T/err" \
+    && ok "PROGRESS 行全是代码（hex 名字不带 ssid=）" || bad "进度行不对：$(grep PROGRESS "$T/err")"
+run "plain name" "abcdefgh"
+grep -q '^PROGRESS 20 wifi-assoc ssid=plain%20name$' "$T/err" && ok "明文名字：ssid= 百分号编码" || bad "明文名字的进度：$(grep PROGRESS "$T/err")"
+run "hex:$(hex x)" "short"
+grep -q '^ERR code=psk-length len=5$' "$T/err" && ok "密码太短：ERR code=psk-length len=5" || bad "没有 ERR：$(cat "$T/err")"
+
 echo
 echo "═══ 通过 $PASS · 失败 $FAIL ═══"
 [ "$FAIL" -eq 0 ]

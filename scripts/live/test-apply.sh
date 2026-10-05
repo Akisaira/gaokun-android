@@ -222,11 +222,22 @@ echo ERASE | DISK=$DA GK3_SKIP_PREFLIGHT=1 bash scripts/install-gaokun3.sh "$REL
 if [ "$rc" = 0 ]; then ok "输了 ERASE：装完（退出码 0）"; verify_install "$DA" yes
 else bad "整盘安装失败 rc=$rc"; tail -20 "$W/a1.log" | sed 's/^/      /'; fi
 grep -q '^PROGRESS 100 ' "$W/a1.log" && ok "进度走到 100" || bad "进度没走到 100"
-[ "$(grep -c '^PROGRESS [3-6][0-9] 写入 super' "$W/a1.log")" -ge 5 ] \
-    && ok "写 super 期间有 $(grep -c '^PROGRESS [3-6][0-9] 写入 super' "$W/a1.log") 行进度（simg2img 那里是几分钟的沉默）" \
+[ "$(grep -c '^PROGRESS [3-6][0-9] write-super done_mib=[0-9]* total_mib=[1-9]' "$W/a1.log")" -ge 5 ] \
+    && ok "写 super 期间有 $(grep -c '^PROGRESS [3-6][0-9] write-super ' "$W/a1.log") 行进度（simg2img 那里是几分钟的沉默）" \
     || bad "写 super 期间没有进度"
 ls /tmp/gpt-before-apply-"$(basename "$DA")"-*.bin >/dev/null 2>&1 && grep -q '分区表只备份到了内存里' "$W/a1.log" \
     && ok "动盘前备份了分区表（介质不可写 → 落到 /tmp，并且警告了重启就没）" || bad "没有分区表备份，或者落到内存里却没警告"
+# v1.0 计划 INST-10：给界面的进度只有代码，不夹中文（中文只在 `!!` 与日志里）
+BADP=$(grep '^PROGRESS ' "$W/a1.log" | grep -v -E '^PROGRESS [0-9]+ [a-z][a-z0-9-]*( [a-z_]+=[^ ]*)*$' | head -3)
+[ -z "$BADP" ] && ok "PROGRESS 行全是「百分比 代码 k=v…」（$(grep -c '^PROGRESS ' "$W/a1.log") 行）" || bad "有不合协议的进度行：$BADP"
+# 命令行版失败时说清楚盘动没动过：发布目录里缺 super → 在第一次写盘之前就失败
+mkdir -p "$W/badrel" && cp "$REL/boot.img" "$W/badrel/"
+BEFORE=$(fp "$DA")
+echo ERASE | DISK=$DA GK3_SKIP_PREFLIGHT=1 bash scripts/install-gaokun3.sh "$W/badrel" >"$W/a2.log" 2>&1; rc=$?
+[ "$rc" != 0 ] && [ "$(fp "$DA")" = "$BEFORE" ] && grep -q 'before anything was written' "$W/a2.log" \
+    && grep -q '^ERR code=release-no-super touched=no' "$W/a2.log" \
+    && ok "命令行版失败在动盘之前：明说盘没动过（ERR code=release-no-super touched=no），盘确实没变" \
+    || { bad "命令行版失败时没说清盘动没动过（rc=${rc}）"; tail -4 "$W/a2.log" | sed 's/^/      /'; }
 
 # ── B. 双系统 ──────────────────────────────────────────────────────────────
 echo "═══ B. 双系统：装进 Windows 盘中间的空闲区 ═══"
@@ -375,6 +386,7 @@ OUT=$(gk3_shrink "${DD}p4" 600 2>&1); rc=$?
 [ "$rc" != 0 ] && [ "$(fp "$DD")" = "$BEFORE_D" ] && ok "gk3_shrink 自己也拒绝缩介质分区，盘没动" || bad "gk3_shrink 缩了介质分区（rc=${rc}）"
 OUT=$(gk3_apply --disk "$DD" --mode wipe --rescue no --release "$REL" 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '锯掉' && [ "$(fp "$DD")" = "$BEFORE_D" ] \
+    && printf '%s' "$OUT" | grep -q "^ERR code=wipe-medium disk=$DD touched=no" \
     && ok "整盘清空介质所在的盘：拒绝且盘没动" || bad "整盘清空没被拦住（rc=${rc}）"
 FREE=$(printf '%s\n' "$PROBE" | grep '^FREE ' | sort -t= -k5 -n | tail -1)
 RS=$(gk3__f "$FREE" start); RE=$(gk3__f "$FREE" end)
@@ -460,6 +472,7 @@ SB=$(sha_head "$(gk3__bylabel "$DA" super)" 1048576)
 esp_left 0
 OUT=$(GK3_MACHINE_ID=$OTHER gk3_apply --disk "$DA" --mode reinstall --rescue yes --release "$REL" --esp "$ESPA" 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'ESP 空间不够：要写' && [ "$(sha_head "$(gk3__bylabel "$DA" super)" 1048576)" = "$SB" ] \
+    && printf '%s' "$OUT" | grep -q '^ERR code=esp-full need_mib=[0-9]* free_mib=[0-9]* touched=no' \
     && ok "ESP 放不下一整套新文件：按真要写的量算，动盘之前拒绝（super 没被碰）" \
     || { bad "ESP 不够却没在动盘前拦住（rc=${rc}）"; printf '%s\n' "$OUT" | tail -3 | sed 's/^/      /'; }
 esp_left 30
@@ -672,13 +685,14 @@ DL8=$W/dl8
 OUT=$(GK3_NET_TRIES=1 GK3_NET_SPEED_TIME=2 gk3_net_release http://127.0.0.1:18083/good/ "$DL8" 2>&1); rc=$?
 HALF=$(stat -c%s "$DL8/boot.img" 2>/dev/null || echo 0)
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'boot.img 没完成（curl 退出码 28，试了 1 次）' && [ "$HALF" -gt 0 ] \
+    && printf '%s' "$OUT" | grep -q '^ERR code=dl-incomplete name=boot.img rc=28 http=[0-9]* tries=1 kept_mib=0$' \
     && ok "重试次数用完：报失败（退出码 28），半截的 boot.img（${HALF} 字节）留着" || bad "重试上限不对（rc=${rc}、半截 ${HALF} 字节）：$(printf '%s' "$OUT" | tail -2)"
 : > "$W/srv-stall.log"
 GK3_NET_SPEED_TIME=2 GK3_NET_RETRY_DELAY=0 gk3_net_release http://127.0.0.1:18083/good/ "$DL8" >/dev/null 2>&1; rc=$?
 [ "$rc" = 0 ] && [ "$(sha "$DL8/boot.img")" = "$(sha "$REL/boot.img")" ] && grep -q "^/good/boot.img bytes=$HALF-" "$W/srv-stall.log" \
     && ok "失败之后再来一次（界面上的重试）：boot.img 从第 $HALF 字节接着下，sha256 一致" || bad "重试没有接着半截续传（rc=${rc}）：$(tr '\n' ' ' < "$W/srv-stall.log")"
 OUT=$(gk3_net_release http://127.0.0.1:18081/bad/ "$W/dl4" 2>&1); rc=$?
-[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'boot.img 的 sha256 不符' \
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'boot.img 的 sha256 不符' && printf '%s' "$OUT" | grep -q '^ERR code=dl-sha256 name=boot.img$' \
     && ok "服务器上的 boot.img 被改过：拒绝" || bad "被改过的文件居然通过了（rc=${rc}）"
 # ★ 2026-09-27 真机：下载 1.2 GiB 的两分半里进度一行没出（tr / mawk 往管道攒块）。按 curl 的样子喂：表头带 \n、
 #   每次刷新 "\r<一行>"、同一个百分比重复、最后一行 \n 结尾 —— 第一行进度必须在下一次刷新之前就出来
@@ -690,8 +704,9 @@ curl_like() {
 T0=$(date +%s%N)
 curl_like 2>&1 | gk3__curl_meter 5 95 super.img.zst | while read -r l; do echo "$(( ($(date +%s%N) - T0) / 1000000 )) $l"; done > "$W/meter.out"
 FIRST=$(head -1 "$W/meter.out" | cut -d' ' -f1)
-[ "${FIRST:-99999}" -lt 3000 ] && [ "$(cut -d' ' -f2- "$W/meter.out" | tr '\n' '|')" = "PROGRESS 13 下载 super.img.zst（10%）|PROGRESS 22 下载 super.img.zst（20%）|PROGRESS 90 下载 super.img.zst（100%）|" ] \
-    && ok "下载进度边下边出（第一行 ${FIRST} ms，不等 curl 结束）；重复的百分比只出一次；表头与结尾那行都认对" \
+# GUI-5：速度与剩余时间取 curl 的最后两列；剩余时间是 --:--:-- 时（结尾那行）不带 left=
+[ "${FIRST:-99999}" -lt 3000 ] && [ "$(cut -d' ' -f2- "$W/meter.out" | tr '\n' '|')" = "PROGRESS 13 dl name=super.img.zst pct=10 speed=9000k left=0:02:18|PROGRESS 22 dl name=super.img.zst pct=20 speed=9000k left=0:02:18|PROGRESS 90 dl name=super.img.zst pct=100 speed=9000k|" ] \
+    && ok "下载进度边下边出（第一行 ${FIRST} ms，不等 curl 结束）；重复的百分比只出一次；表头与结尾那行都认对；带速度与剩余时间" \
     || { bad "进度过滤不对（第一行 ${FIRST:-?} ms）"; sed 's/^/      /' "$W/meter.out"; }
 # 版本列表：variants.txt 还没发布（真机上 404）→ 退回 OTA 清单，推出"最新发布"，base 指向 install/<zip 名>/
 ZN=crDroidAndroid-16.0-20260916-gaokun3-v12.11
@@ -705,7 +720,8 @@ BASE=$(printf '%s' "$VM" | sed -n 's/.* base=\([^ ]*\).*/\1/p'); DL5=$W/dl5
 gk3_net_release "$BASE" "$DL5" >/dev/null 2>&1 && [ "$(sha "$DL5/super.img.zst")" = "$(sha "$REL/super.img.zst")" ] \
     && ok "推出来的 base 能直接交给 gk3_net_release 下载（sha256 一致）" || bad "推出来的 base 下载不了"
 OUT=$(GK3_MANIFEST_URL=http://127.0.0.1:18081/nope GK3_OTA_JSON_URL=http://127.0.0.1:18081/nope2 gk3_net_manifest 2>&1); rc=$?
-[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '都不可用' && ok "两份清单都取不到：报出两个地址" || bad "两份都取不到时报错不对：$OUT"
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '都不可用' && printf '%s' "$OUT" | grep -q '^ERR code=manifest-unavailable$' \
+    && ok "两份清单都取不到：报出两个地址（ERR code=manifest-unavailable）" || bad "两份都取不到时报错不对：$OUT"
 # 介质上的变体清单（局域网镜像 / 自建源 / 离线）：先列它；线上两份都取不到时有它就够了
 printf 'VARIANT id=lan name=%s desc= base=http://127.0.0.1:18081/install/%s/ size_mib=1\n' "LAN%20mirror" "$ZN" > "$W/local-variants.txt"
 VM=$(GK3_LOCAL_MANIFEST=$W/local-variants.txt GK3_MANIFEST_URL=http://127.0.0.1:18081/nope GK3_OTA_JSON_URL=http://127.0.0.1:18081/nope2 gk3_net_manifest 2>/dev/null); rc=$?
@@ -799,6 +815,28 @@ OUT=$(gk3_save_logs "${DM}p1" 2>&1); rc=$?
 [ "$rc" = 0 ] && printf '%s' "$OUT" | grep -q 'esp=yes' && findmnt -rno OPTIONS /media/gk3 | grep -q '^ro' \
     && ok "存到启动介质本身：esp=yes（电脑上不好读，界面要说一句），介质改回只读" || bad "存到介质不对（rc=${rc}）：$OUT"
 umount /media/gk3; unset GK3_JOBDIR GK3_JOB_POLL
+
+# ── H. 预检的电量（v1.0 计划 GUI-8）：假的 /sys/class/power_supply ─────────────
+echo "═══ H. 预检：电量 <15% 且没接电源才拦 ═══"
+PS=$W/ps
+mkps() {   # mkps <名字> <type> [capacity] [online] [status]
+    mkdir -p "$PS/$1"; echo "$2" > "$PS/$1/type"
+    [ -z "${3:-}" ] || echo "$3" > "$PS/$1/capacity"
+    [ -z "${4:-}" ] || echo "$4" > "$PS/$1/online"
+    [ -z "${5:-}" ] || echo "$5" > "$PS/$1/status"
+}
+pc() { GK3_POWER_SUPPLY_DIR=$PS gk3__power_check; }
+rm -rf "$PS"; mkps gaokun-ec-battery Battery 12 "" Discharging; mkps gaokun-ec-adapter USB "" 0
+[ "$(pc)" = "CHECK id=power ok=no value=12 ac=no min=15" ] && ok "12%、没接电源：ok=no" || bad "低电量没拦：$(pc)"
+echo 1 > "$PS/gaokun-ec-adapter/online"
+[ "$(pc)" = "CHECK id=power ok=yes value=12 ac=yes min=15" ] && ok "12%、接着电源：放行" || bad "接着电源还拦：$(pc)"
+echo 0 > "$PS/gaokun-ec-adapter/online"; echo 15 > "$PS/gaokun-ec-battery/capacity"
+[ "$(pc)" = "CHECK id=power ok=yes value=15 ac=no min=15" ] && ok "正好 15%：放行" || bad "15% 被拦：$(pc)"
+rm -rf "$PS"; mkps BAT0 Battery 5 "" Charging
+[ "$(pc)" = "CHECK id=power ok=yes value=5 ac=yes min=15" ] && ok "认不出名字时按 type 找电池；status=Charging 算接着电源" || bad "按 type 找不对：$(pc)"
+rm -rf "$PS"; mkdir -p "$PS"
+[ "$(pc)" = "CHECK id=power ok=unknown value= ac=no min=15" ] && ok "没有电池：ok=unknown（不拦）" || bad "没电池时：$(pc)"
+gk3_preflight 2>/dev/null | grep -q '^CHECK id=power ' && ok "gk3_preflight 带上了 CHECK id=power" || bad "gk3_preflight 里没有 power"
 
 echo
 echo "═══ 通过 $PASS · 失败 $FAIL ═══"

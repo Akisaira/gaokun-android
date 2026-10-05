@@ -13,7 +13,7 @@
 #   先落一份临时文件；这个脚本让 zstd 的输出直接流到分区上，不占临时空间。
 #
 # ★ 顺带解决：simg2img 写 12 GiB 期间一声不吭，界面上进度条会停几分钟。
-#   这里每前进 1% 往 stderr 打一行 `PROGRESS <百分比> <说明>`
+#   这里每前进 1% 往 stderr 打一行 `PROGRESS <百分比> write-super done_mib=… total_mib=…`
 #   （scripts/live/installer-lib.sh 的进度协议）。
 #
 # 语义刻意与 simg2img 一致，这样两者的输出可以逐字节比对（test-unsparse.sh）：
@@ -94,7 +94,8 @@ def main(argv):
         pct = base + (span * done_blks // total_blks if total_blks else span)
         if pct != last_pct:
             last_pct = pct
-            sys.stderr.write("PROGRESS %d 写入 super（%d / %d MiB）\n"
+            # 进度代码 write-super（installer-lib.sh 文件头的协议；界面按代码查 l10n）
+            sys.stderr.write("PROGRESS %d write-super done_mib=%d total_mib=%d\n"
                              % (pct, done_blks * blk_sz >> 20, total_bytes >> 20))
             sys.stderr.flush()
 

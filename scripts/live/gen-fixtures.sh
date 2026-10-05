@@ -311,6 +311,18 @@ O CHECK id=model ok=yes value=GK-W7X
 O CHECK id=bios ok=yes value=2.16
 O CHECK id=secureboot ok=yes value=disabled
 O CHECK id=tools ok=yes
+O CHECK id=power ok=yes value=76 ac=no min=15
+X 0
+EOF
+# 电量 9%、没接电源 ⇒ 拦（v1.0 计划 GUI-8；界面测试用 overrides 选它）
+cat > "$C/preflight-lowbatt.txt" <<'EOF'
+O CHECK id=root ok=yes
+O CHECK id=uefi ok=yes
+O CHECK id=model ok=yes value=GK-W7X
+O CHECK id=bios ok=yes value=2.16
+O CHECK id=secureboot ok=yes value=disabled
+O CHECK id=tools ok=yes
+O CHECK id=power ok=no value=9 ac=no min=15
 X 0
 EOF
 # BIOS 2.17 照样 ok=yes（不再限制 BIOS 版本，2026-09-25）；拦住它的是安全启动
@@ -321,6 +333,7 @@ O CHECK id=model ok=yes value=GK-W7X
 O CHECK id=bios ok=yes value=2.17
 O CHECK id=secureboot ok=no value=enabled
 O CHECK id=tools ok=yes
+O CHECK id=power ok=yes value=40 ac=yes min=15
 X 0
 EOF
 printf '%-78s %s\n' "gk3_preflight" "preflight-ok.txt   # 手写（容器不是 gaokun3）" >> "$C/index.txt"
@@ -334,7 +347,10 @@ for i, (f, s, fl, n) in enumerate([
     (5180, -42, "[WPA2-PSK-CCMP][ESS]", "宿舍网-5G".encode()), (2412, -63, "[WPA2-PSK-CCMP][ESS]", "宿舍网".encode()),
     (5745, -55, "[WPA2-PSK-CCMP][WPA3-SAE-CCMP][ESS]", b"TP-LINK_8A3F"), (2437, -70, "[ESS]", b"CMCC-WEB"),
     (5200, -58, "[WPA2-EAP-CCMP][ESS]", b"eduroam"), (2462, -77, "[WPA2-PSK-CCMP][ESS]", "隔壁 的 网".encode()),
-    (5240, -84, "[WPA2-PSK-CCMP][ESS]", b"ChinaNet-xk9q")]):
+    (5240, -84, "[WPA2-PSK-CCMP][ESS]", b"ChinaNet-xk9q"),
+    # v1.0 计划 GUI-9：纯 WPA3（能连，要 key_mgmt SAE）、WEP 与 OWE（连不了，界面标灰）
+    (5260, -60, "[WPA2-SAE-CCMP][ESS]", b"WPA3-Home"), (2422, -72, "[WEP][ESS]", b"OldRouter-WEP"),
+    (5280, -74, "[WPA2-OWE-CCMP][ESS]", b"Cafe-OWE")]):
     print("aa:bb:cc:00:00:%02x\t%d\t%d\t%s\t%s" % (i, f, s, fl, enc(n)))
 PYEOF
 python3 scripts/live/record-fixture.py "$C/wifi_scan.txt" -- python3 scripts/live/gk3-wpa-scan.py < "$W/scan_results" 2>/dev/null \
@@ -342,17 +358,18 @@ python3 scripts/live/record-fixture.py "$C/wifi_scan.txt" -- python3 scripts/liv
 printf '%-78s %s\n' "gk3_wifi_scan" "wifi_scan.txt   # 录（真 gk3-wpa-scan.py，合成的 scan_results）" >> "$C/index.txt"
 # 手写：连 WiFi（容器里没有 wlan0）—— 进度与结尾的 NET 记录照 gk3_wifi_connect 的输出写
 cat > "$C/wifi_connect-ok.txt" <<'EOF'
-E PROGRESS 20 正在连接 所选网络
+E PROGRESS 20 wifi-assoc
 D 1200
-E PROGRESS 60 取 IP 地址
+E PROGRESS 60 wifi-dhcp
 D 900
-E PROGRESS 100 已连接
+E PROGRESS 100 wifi-ok
 O NET if=wlan0 ip=192.168.10.239 ssid=宿舍网-5G online=yes
 X 0
 EOF
 cat > "$C/wifi_connect-fail.txt" <<'EOF'
-E PROGRESS 20 正在连接 所选网络
+E PROGRESS 20 wifi-assoc
 D 1500
+E ERR code=wifi-assoc
 E !! 连不上 所选网络（密码错？信号弱？）
 X 1
 EOF
@@ -385,9 +402,9 @@ printf '%-78s %s\n' "gk3_net_release *" "net_release.txt   # 录（本地服务�
 # 手写：变体清单（ota.072172.xyz/installer/variants.txt 还不存在 —— 要等发版流程生成它）
 # 格式见 installer-lib.sh 的 gk3_net_manifest：base= 指向 R2 上现成的 install/<VER>/ 目录
 cat > "$C/net_manifest.txt" <<'EOF'
-O VARIANT id=stock name=标准版 desc=不带%20Google%20服务，不带%20root。最接近%20AOSP。 base=https://ota.072172.xyz/install/crDroidAndroid-16.0-20260916-gaokun3-v12.11/ size_mib=1245
-O VARIANT id=gapps name=带%20Google%20服务 desc=预装%20GApps。首次开机要登录%20Google%20账号并按%20docs/INSTALL.md%20做一次认证。 base=https://ota.072172.xyz/install/example-gapps/ size_mib=1611
-O VARIANT id=ksu name=带%20root（KernelSU） desc=内核内置%20KernelSU。适合要调试或改系统的人。 base=https://ota.072172.xyz/install/example-ksu/ size_mib=1252
+O VARIANT id=stock name=标准版 desc=不带%20Google%20服务，不带%20root。最接近%20AOSP。 name_en=Standard desc_en=No%20Google%20services,%20no%20root.%20Closest%20to%20AOSP. base=https://ota.072172.xyz/install/crDroidAndroid-16.0-20260916-gaokun3-v12.11/ size_mib=1245
+O VARIANT id=gapps name=带%20Google%20服务 desc=预装%20GApps。首次开机要登录%20Google%20账号并按%20docs/INSTALL.md%20做一次认证。 name_en=With%20Google%20services desc_en=GApps%20preinstalled.%20Sign%20in%20to%20Google%20on%20first%20boot%20and%20certify%20the%20device%20as%20described%20in%20docs/INSTALL.md. base=https://ota.072172.xyz/install/example-gapps/ size_mib=1611
+O VARIANT id=ksu name=带%20root（KernelSU） desc=内核内置%20KernelSU。适合要调试或改系统的人。 name_en=With%20root%20(KernelSU) desc_en=KernelSU%20built%20into%20the%20kernel.%20For%20debugging%20or%20changing%20the%20system. base=https://ota.072172.xyz/install/example-ksu/ size_mib=1252
 X 0
 EOF
 printf '%-78s %s\n' "gk3_net_manifest" "net_manifest.txt   # 手写（清单 URL 还不存在）" >> "$C/index.txt"

@@ -9,8 +9,15 @@
 #      2026-09-24 收拢：命令行版现在只是这个库外面的一层薄壳。
 #
 # 全部输出都是【面向机器的行记录】：`键=值` 一行一条，前缀标明类型。
-# 人看的信息一律走 stderr；进度是 stderr 上的 `PROGRESS <百分比> <说明>`。
+# 人看的信息一律走 stderr；stderr 上另有两种给界面的行：
+#   PROGRESS <百分比> <代码> [k=v …]   进度。代码是 [a-z][a-z0-9-]*，前端按它查 l10n；值同样百分号编码
+#   ERR code=<代码> [k=v …]            失败的原因（紧接着还有一行给人看、给日志的 `!! <说明>`）
+# ★ 2026-10-05 起（v1.0 计划 INST-10）后端【不再】给界面送中文：英文界面里原先夹着这里写死的中文进度与报错。
+#   `!! …` 与普通日志仍是中文 —— 它们给日志、给命令行版看；界面只把它们放进"详情"。
+#   进度代码与 ERR 代码的全集 = live/installer-flutter/lib/ui/messages.dart 里的两个 switch（新加一个要两边一起加）。
+#   ERR 为什么也走 stderr：`x=$(gk3__…)` 会把 stdout 吞掉，报错跟着丢；stderr 不会。
 #
+
 # ★ 值里不会有空格：自由文本字段（分区名、卷标、磁盘型号、SSID）一律经
 #   gk3__enc 做百分号编码（% → %25，空格 → %20，制表符 → %09）。
 #   原因：Windows 建的分区 PARTLABEL 全是 "Basic data partition"
@@ -63,7 +70,30 @@ GK3_LIBDIR=${GK3_LIBDIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
 
 gk3_log()  { echo "$*" >&2; }
 gk3_die()  { echo "!! $*" >&2; return 1; }
-gk3_prog() { echo "PROGRESS $1 $2" >&2; }   # $1=百分比 $2=说明
+
+# 进度：gk3_prog <百分比> <代码> [k=v …]（值在这里编码）
+gk3_prog() {
+    local out="PROGRESS $1 $2" kv; shift 2
+    for kv in "$@"; do out="$out ${kv%%=*}=$(gk3__enc "${kv#*=}")"; done
+    echo "$out" >&2
+}
+
+# 失败：gk3_fail <代码> [k=v …] -- <给人看的说明…>
+#   stderr 上先出 `ERR code=<代码> k=v…`（给界面），再出 `!! <说明>`（给日志与命令行版）。返回 1。
+# ★ 在 gk3_apply / gk3_shrink 里面（看调用栈，不看变量 —— 同一个 shell 里先后调过它们，变量会留着）
+#   自动带上 touched=yes|no：目标盘动过没有（GK3__TOUCHED，由它们俩维护）。
+#   界面据此决定失败页说"盘没动过，可以返回 / 重试"还是"盘可能写了一半"；命令行版在失败时照着说一句。
+gk3_fail() {
+    local out="ERR code=$1" kv; shift
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do
+        kv=$1; shift
+        out="$out ${kv%%=*}=$(gk3__enc "${kv#*=}")"
+    done
+    [ "${1:-}" = -- ] && shift
+    case " ${FUNCNAME[*]} " in *" gk3_apply "*|*" gk3_shrink "*) out="$out touched=${GK3__TOUCHED:-no}" ;; esac
+    echo "$out" >&2
+    gk3_die "$@"
+}
 
 # 协议的百分号编码（见文件头）。
 gk3__enc() { printf '%s' "$1" | sed -e 's/%/%25/g' -e 's/ /%20/g' -e "s/$(printf '\t')/%09/g"; }
@@ -268,6 +298,7 @@ gk3_preflight() {
     done
     missing=${missing#,}; pkgs=${pkgs#,}
     [ -z "$missing" ] && echo "CHECK id=tools ok=yes" || echo "CHECK id=tools ok=no missing=$missing pkgs=$pkgs"
+    gk3__power_check
     return 0
 }
 
@@ -287,6 +318,36 @@ gk3__tool_pkg() {
         python3) echo python3 ;;
         systemd-run|systemd-inhibit) echo systemd ;;
         *) echo "$1" ;;
+    esac
+}
+
+# ★ 电量（v1.0 计划 GUI-8）：缩 NTFS、写 12 GiB 的 super 要几分钟到十几分钟，半路没电就是一块半装的盘。
+#   电量低于 GK3_POWER_MIN_PCT（默认 15）而且没接电源 ⇒ ok=no，拒绝开始。
+#   CHECK id=power ok=yes|no|unknown value=<电量%> ac=yes|no min=<门槛>
+#   名字取自本机的 EC 驱动：电池 gaokun-ec-battery、适配器 gaokun-ec-adapter（POWER_SUPPLY_TYPE_USB，属性 online）——
+#   refs/gaokun-buildbot/drivers/gaokun-ec/huawei-gaokun-battery.c:435、:174-175、:155-156；Android 下的实机路径
+#   docs/hw-inventory.md:664、scripts/perf/standby-sampler.sh:30-31。没有这两个名字就按 type 找（驱动改名 / 别的机器）。
+#   找不到电池 ⇒ ok=unknown（不拦）。⬜ live 镜像的内核里这个驱动在不在、名字是不是这两个，没在 live 里实测过。
+gk3__power_check() {
+    local ps=${GK3_POWER_SUPPLY_DIR:-/sys/class/power_supply} min=${GK3_POWER_MIN_PCT:-15}
+    local bat="" ac=no cap="" d t
+    if [ -r "$ps/gaokun-ec-battery/capacity" ]; then bat=$ps/gaokun-ec-battery
+    else
+        for d in "$ps"/*; do
+            [ "$(cat "$d/type" 2>/dev/null)" = Battery ] && [ -r "$d/capacity" ] && { bat=$d; break; }
+        done
+    fi
+    # 接着电源：任何一个不是电池的 power_supply 报 online=1（适配器、UCSI 的 source-psy 都算），或者电池自己说在充电
+    for d in "$ps"/*; do
+        t=$(cat "$d/type" 2>/dev/null)
+        [ -n "$t" ] && [ "$t" != Battery ] && [ "$(cat "$d/online" 2>/dev/null)" = 1 ] && { ac=yes; break; }
+    done
+    [ -n "$bat" ] && [ "$(cat "$bat/status" 2>/dev/null)" = Charging ] && ac=yes
+    [ -n "$bat" ] && cap=$(cat "$bat/capacity" 2>/dev/null)
+    case "$cap" in
+        ''|*[!0-9]*) echo "CHECK id=power ok=unknown value= ac=$ac min=$min" ;;
+        *) if [ "$cap" -ge "$min" ] || [ "$ac" = yes ]; then echo "CHECK id=power ok=yes value=$cap ac=$ac min=$min"
+           else echo "CHECK id=power ok=no value=$cap ac=$ac min=$min"; fi ;;
     esac
 }
 
@@ -563,17 +624,19 @@ gk3__verify_on() {
     local dev=$1 fst=$2 m w bad=""; shift 2
     blockdev --flushbufs "$dev" 2>/dev/null
     m=$(mktemp -d)
-    mount -o ro -t "$fst" "$dev" "$m" 2>/dev/null || { rmdir "$m"; gk3_die "写完之后 $dev 挂不回来"; return 1; }
+    mount -o ro -t "$fst" "$dev" "$m" 2>/dev/null || { rmdir "$m"; gk3_fail verify-remount "dev=$dev" -- "写完之后 $dev 挂不回来"; return 1; }
     for w in "$@"; do
         cmp -s "$m/${w%%=*}" "${w#*=}" || { bad=${w%%=*}; break; }
     done
     umount "$m"; rmdir "$m" 2>/dev/null
-    [ -z "$bad" ] || { gk3_die "$dev 上的 $bad 与源文件不一致（读回来核对没过）"; return 1; }
+    [ -z "$bad" ] || { gk3_fail verify-mismatch "dev=$dev" -- "$dev 上的 $bad 与源文件不一致（读回来核对没过）"; return 1; }
     echo "${dev}：$# 个文件从介质读回核对一致" >&2
 }
 
 gk3_apply() {
     local disk="" mode=wipe rescue=no rel="" rstart="" rend="" esp="" ud_mib="" keep=no
+    # 目标盘动过没有（gk3_fail 把它带进 ERR 的 touched=）。【不是】local：命令行版在失败之后要读它
+    GK3__TOUCHED=no
     while [ $# -gt 0 ]; do
         case "$1" in
             --disk) disk=$2; shift 2 ;;
@@ -585,11 +648,11 @@ gk3_apply() {
             --region-end) rend=$2; shift 2 ;;
             --esp) esp=$2; shift 2 ;;
             --userdata-mib) ud_mib=$2; shift 2 ;;
-            *) gk3_die "apply: 不认识的参数 $1"; return 1 ;;
+            *) gk3_fail usage -- "apply: 不认识的参数 $1"; return 1 ;;
         esac
     done
-    [ -n "$disk" ] || { gk3_die "apply 要 --disk"; return 1; }
-    [ -n "$rel" ] && [ -d "$rel" ] || { gk3_die "apply 要 --release <目录>"; return 1; }
+    [ -n "$disk" ] || { gk3_fail usage -- "apply 要 --disk"; return 1; }
+    [ -n "$rel" ] && [ -d "$rel" ] || { gk3_fail usage -- "apply 要 --release <目录>"; return 1; }
 
     local DRY=${GK3_DRYRUN:-0}
     # ⚠️ 回显走 stderr：stdout 只留给行记录（文件头的协议）。原先 "+ 命令" 与
@@ -597,27 +660,27 @@ gk3_apply() {
     gk3__run() {
         if [ "$DRY" = 1 ]; then echo "DRY: $*" >&2; else
             echo "+ $*" >&2
-            "$@" >&2 || { gk3_die "失败：$*"; return 1; }
+            "$@" >&2 || { gk3_fail cmd-failed "cmd=$1" -- "失败：$*"; return 1; }
         fi
     }
 
     # ── 输入：全部在动盘之前验完 ─────────────────────────────────────────
-    gk3_prog 1 "检查安装文件"
-    [ -f "$rel/boot.img" ] || { gk3_die "发布目录里没有 boot.img"; return 1; }
+    gk3_prog 1 check
+    [ -f "$rel/boot.img" ] || { gk3_fail release-no-boot -- "发布目录里没有 boot.img"; return 1; }
     local super_src
     if   [ -f "$rel/super.img.zst" ]; then super_src=$rel/super.img.zst
     elif [ -f "$rel/super.img" ];     then super_src=$rel/super.img
-    else gk3_die "发布目录里既没有 super.img.zst 也没有 super.img"; return 1; fi
+    else gk3_fail release-no-super -- "发布目录里既没有 super.img.zst 也没有 super.img"; return 1; fi
 
     local sdboot
     if [ -n "${GK3_SDBOOT:-}" ]; then
         # 显式指定的就用它，叫什么名字都行（原先按文件名找，于是这个开关只在文件
         # 恰好叫 systemd-bootaa64.efi 时才生效 —— 录 fixture 时才发现）
-        [ -f "$GK3_SDBOOT" ] || { gk3_die "GK3_SDBOOT 指的文件不存在：$GK3_SDBOOT"; return 1; }
+        [ -f "$GK3_SDBOOT" ] || { gk3_fail sdboot-missing -- "GK3_SDBOOT 指的文件不存在：$GK3_SDBOOT"; return 1; }
         sdboot=$GK3_SDBOOT
     else
         sdboot=$(gk3__find_file systemd-bootaa64.efi /usr/share/gaokun3 "$rel" /usr/lib/systemd/boot/efi) \
-            || { gk3_die "找不到 systemd-bootaa64.efi（Debian：apt install systemd-boot-efi）"; return 1; }
+            || { gk3_fail sdboot-missing -- "找不到 systemd-bootaa64.efi（Debian：apt install systemd-boot-efi）"; return 1; }
     fi
 
     local r_squash="" r_initrd=""
@@ -631,16 +694,16 @@ gk3_apply() {
 
     local t
     for t in sgdisk partprobe blkid lsblk mkfs.vfat mkfs.ext4 python3; do
-        command -v "$t" >/dev/null || { gk3_die "缺工具：$t"; return 1; }
+        command -v "$t" >/dev/null || { gk3_fail tool-missing "tool=$t" -- "缺工具：$t"; return 1; }
     done
-    case "$super_src" in *.zst) command -v zstd >/dev/null || { gk3_die "缺工具：zstd"; return 1; } ;; esac
+    case "$super_src" in *.zst) command -v zstd >/dev/null || { gk3_fail tool-missing tool=zstd -- "缺工具：zstd"; return 1; } ;; esac
 
     # ★ 完整性也在动盘之前验。下载断在一半的 super.img.zst 能通过上面所有检查，
     #   要到流式写盘写到一半才暴露 —— 那时分区表已经改了。有发版的校验清单
     #   （install-artifacts.sha256，scripts/release.sh 生成）就逐个核；没有清单时
     #   .zst 至少完整试解一遍（zstd -t，几秒钟）。
     if [ -f "$rel/install-artifacts.sha256" ]; then
-        gk3_prog 1 "核对 sha256"
+        gk3_prog 1 verify-sha
         local want f got
         while read -r want f; do
             f=${f#\*}
@@ -648,20 +711,20 @@ gk3_apply() {
             case "$f" in boot.img|super.img.zst|super.img) ;; *) continue ;; esac
             got=$(sha256sum "$rel/$f" 2>/dev/null | cut -d' ' -f1)
             [ -n "$got" ] || got=$(shasum -a 256 "$rel/$f" | cut -d' ' -f1)
-            [ "$got" = "$want" ] || { gk3_die "$f 的 sha256 与发版清单不符 —— 下载不完整或被改过（盘还没动过）"; return 1; }
+            [ "$got" = "$want" ] || { gk3_fail sha256-mismatch "file=$f" -- "$f 的 sha256 与发版清单不符 —— 下载不完整或被改过（盘还没动过）"; return 1; }
             echo "${f}：sha256 与发版清单一致" >&2
         done < "$rel/install-artifacts.sha256"
     elif [ "${super_src%.zst}" != "$super_src" ]; then
-        gk3_prog 1 "试解 super.img.zst"
+        gk3_prog 1 test-zst
         zstd -tq --long=31 "$super_src" \
-            || { gk3_die "super.img.zst 不完整（zstd -t 没通过）—— 重新下载（盘还没动过）"; return 1; }
+            || { gk3_fail zst-corrupt -- "super.img.zst 不完整（zstd -t 没通过）—— 重新下载（盘还没动过）"; return 1; }
     fi
 
     # boot.img 当场拆开：拆不开说明镜像有问题 —— 而此刻盘还一个字节都没动。
     # （拆包逻辑与设备侧 bootimg_extract.cpp 同源，见 gk3-bootimg.py 的文件头）
     local parts; parts=$(mktemp -d)
     python3 "$GK3_LIBDIR/gk3-bootimg.py" "$rel/boot.img" "$parts" \
-        || { rm -rf "$parts"; gk3_die "boot.img 拆不开 —— 盘还没动过"; return 1; }
+        || { rm -rf "$parts"; gk3_fail bootimg-unpack -- "boot.img 拆不开 —— 盘还没动过"; return 1; }
     # ★ cmdline 取自 boot.img（BOARD_KERNEL_CMDLINE），不在这里另抄一份：
     #   这里原先手抄的那份缺 androidboot.boot_devices（首阶段 by-name 解析靠它）、
     #   init=/init、himax disable_pressure=0 等（TODO B15）。
@@ -688,16 +751,16 @@ gk3_apply() {
         [ "$rescue" != yes ] || echo "$1/rescue/initramfs.img=$r_initrd"
     }
     if [ "$mode" != wipe ]; then
-        [ -n "$esp" ] && [ -b "$esp" ] || { rm -rf "$parts"; gk3_die "双系统模式要 --esp <现有 ESP 的分区节点>，给的是 '${esp}'"; return 1; }
+        [ -n "$esp" ] && [ -b "$esp" ] || { rm -rf "$parts"; gk3_fail esp-missing "esp=$esp" -- "双系统模式要 --esp <现有 ESP 的分区节点>，给的是 '${esp}'"; return 1; }
         if [ "$DRY" != 1 ]; then
             local etype efs
             efs=$(blkid -o value -s TYPE "$esp" 2>/dev/null)
             # ⚠️ 不用 lsblk -o PARTTYPE：它要 udev 数据库，没有 udev 时是空串（容器里实测）。
             #    blkid -p 是 libblkid 直接读分区表，救援系统里也成立。
             etype=$(blkid -p -o value -s PART_ENTRY_TYPE "$esp" 2>/dev/null | tr 'a-f' 'A-F')
-            [ "$efs" = vfat ] || { rm -rf "$parts"; gk3_die "$esp 不是 FAT 文件系统（是 '${efs}'）—— 不像一个 ESP"; return 1; }
+            [ "$efs" = vfat ] || { rm -rf "$parts"; gk3_fail esp-not-fat "esp=$esp" "fs=$efs" -- "$esp 不是 FAT 文件系统（是 '${efs}'）—— 不像一个 ESP"; return 1; }
             [ "$etype" = C12A7328-F81F-11D2-BA4B-00A0C93EC93B ] \
-                || { rm -rf "$parts"; gk3_die "$esp 的分区类型不是 EFI System（是 '${etype}'）"; return 1; }
+                || { rm -rf "$parts"; gk3_fail esp-not-esp-type "esp=$esp" "type=$etype" -- "$esp 的分区类型不是 EFI System（是 '${etype}'）"; return 1; }
             # ⚠️ 2026-09-29（SELinux 第七轮）：Android 侧按 by-name 名字给 ESP 打专用标签，只认
             #   `esp` 与 Windows 默认的 "EFI system partition"（sepolicy/file_contexts）。别的名字
             #   （空、大小写不同、本地化）在 enforcing 下 bootctl 与 OTA 都打不开它。不替别人改名，只警告。
@@ -727,12 +790,12 @@ gk3_apply() {
                 echo "ESP 上用目录 ${esp_mid}；要写 $(( need_kib / 1024 )) MiB（已扣掉会被覆盖的同名文件），空闲 $(( free_kib / 1024 )) MiB" >&2
                 if [ "$free_kib" -lt "$need_kib" ]; then
                     rm -rf "$parts"
-                    gk3_die "ESP 空间不够：要写 $(( need_kib / 1024 )) MiB，只有 $(( free_kib / 1024 )) MiB。请先清理 EFI 分区（盘还没动过）"
+                    gk3_fail esp-full "need_mib=$(( need_kib / 1024 ))" "free_mib=$(( free_kib / 1024 ))" -- "ESP 空间不够：要写 $(( need_kib / 1024 )) MiB，只有 $(( free_kib / 1024 )) MiB。请先清理 EFI 分区（盘还没动过）"
                     return 1
                 fi
                 if [ $(( free_kib - need_kib + slot_kib )) -le "$GK3_ESP_OTA_NEED_KIB" ]; then
                     rm -rf "$parts"
-                    gk3_die "ESP 装得下，但装完只剩 $(( (free_kib - need_kib) / 1024 )) MiB —— 以后的系统更新（OTA）会因为 ESP 空间不够失败。请先清理 EFI 分区（盘还没动过）"
+                    gk3_fail esp-ota-room "left_mib=$(( (free_kib - need_kib) / 1024 ))" -- "ESP 装得下，但装完只剩 $(( (free_kib - need_kib) / 1024 )) MiB —— 以后的系统更新（OTA）会因为 ESP 空间不够失败。请先清理 EFI 分区（盘还没动过）"
                     return 1
                 fi
                 # 重新安装是【覆盖】ESP 上我们自己的文件，不是新增 —— 按 150 MiB 要求的话，一台已经装过的
@@ -741,12 +804,12 @@ gk3_apply() {
                 echo "现有 ESP $esp 空闲 ${fm} MiB（需要 ${eneed}）" >&2
                 if [ "${fm:-0}" -lt "$eneed" ]; then
                     rm -rf "$parts"
-                    gk3_die "ESP 空间不够：只有 ${fm} MiB，需要 ${eneed} MiB。请先在原系统里清理 EFI 分区（盘还没动过）"
+                    gk3_fail esp-full "need_mib=$eneed" "free_mib=$fm" -- "ESP 空间不够：只有 ${fm} MiB，需要 ${eneed} MiB。请先在原系统里清理 EFI 分区（盘还没动过）"
                     return 1
                 fi
             else
                 rmdir "$em" 2>/dev/null; rm -rf "$parts"
-                gk3_die "挂不上现有 ESP $esp —— 不敢往一个读不了的 ESP 上装引导链（盘还没动过）"
+                gk3_fail esp-mount "esp=$esp" -- "挂不上现有 ESP $esp —— 不敢往一个读不了的 ESP 上装引导链（盘还没动过）"
                 return 1
             fi
         fi
@@ -760,7 +823,7 @@ gk3_apply() {
     local medium_disk; medium_disk=$(gk3__medium_disk)
     if [ "$mode" = wipe ] && [ -n "$medium_disk" ] && [ "$medium_disk" = "$disk" ]; then
         rm -rf "$parts"
-        gk3_die "拒绝：安装介质就在目标盘 $disk 上，整盘清空会锯掉自己脚下的地板"
+        gk3_fail wipe-medium "disk=$disk" -- "拒绝：安装介质就在目标盘 $disk 上，整盘清空会锯掉自己脚下的地板"
         return 1
     fi
 
@@ -769,12 +832,12 @@ gk3_apply() {
     mounted=$(lsblk -nro MOUNTPOINT "$disk" 2>/dev/null | grep -v '^$' | tr '\n' ' ')
     if [ -n "$mounted" ] && [ "$mode" = wipe ]; then
         rm -rf "$parts"
-        gk3_die "拒绝：$disk 上还有挂载着的分区（${mounted}）"
+        gk3_fail wipe-mounted "disk=$disk" "mounts=$mounted" -- "拒绝：$disk 上还有挂载着的分区（${mounted}）"
         return 1
     fi
 
     # ── 方案 ────────────────────────────────────────────────────────────
-    gk3_prog 2 "计算分区方案"
+    gk3_prog 2 plan
     local plan
     plan=$(gk3_plan --disk "$disk" --mode "$mode" --rescue "$rescue" --keep-data "$keep" \
                     ${rstart:+--region-start "$rstart"} ${rend:+--region-end "$rend"} \
@@ -794,12 +857,14 @@ gk3_apply() {
         done
         if [ -n "$busy" ]; then
             rm -rf "$parts"
-            gk3_die "拒绝：要重写的分区还挂着（${busy# }）—— 安装器是不是就从它上面跑的？"
+            gk3_fail reinstall-busy "parts=${busy# }" -- "拒绝：要重写的分区还挂着（${busy# }）—— 安装器是不是就从它上面跑的？"
             return 1
         fi
     fi
 
     # ── 建分区 ──────────────────────────────────────────────────────────
+    # 从这里往下就可能已经改了目标盘（宁可早报"动过"：说没动过而其实动了，用户会放心地重启回旧系统）
+    GK3__TOUCHED=yes
     # ⚠️★ ④ 动手之前先把分区表备份到介质上。出事能一条命令还原：
     #     sgdisk --load-backup=<文件> <盘>
     #   代价是几十 KB 和一秒钟；没有它的话，改错分区表就只能靠猜。
@@ -810,7 +875,7 @@ gk3_apply() {
     if [ "$mode" = reinstall ]; then
         echo "重新安装：不改分区表，复用现有的 $(printf '%s\n' "$plan" | grep -c '^PLAN op=reuse') 个分区" >&2
     else
-    gk3_prog 5 "写分区表"
+    gk3_prog 5 write-gpt
     if printf '%s\n' "$plan" | grep -q '^PLAN op=wipe'; then
         gk3__run sgdisk --zap-all "$disk" || return 1
     fi
@@ -828,7 +893,7 @@ EOF
     fi
 
     # ── 格式化 ──────────────────────────────────────────────────────────
-    gk3_prog 15 "格式化"
+    gk3_prog 15 format
     # ⚠️★ 每一个分区节点都必须【解析成功且确实是块设备】才往下走。
     #   loop 设备实测暴露过：partprobe 还没沉降时 gk3__bylabel 会返回空串，
     #   于是命令变成 `dd of=` / `mkfs.ext4 -F ""` —— 那种情况下会发生什么
@@ -874,17 +939,17 @@ EOF
     [ "$rescue" = yes ] && { gk3__run mkfs.ext4 -q -F -L gk3rescue "$p_resc" || return 1; }
 
     # ── 写 super（30% → 70%，进度由 gk3-unsparse.py 按块推进）──────────
-    gk3_prog 30 "写入 super"
+    gk3_prog 30 write-super
     gk3__write_super "$super_src" "$p_super" || return 1
 
-    gk3_prog 70 "写入 boot_a / boot_b"
+    gk3_prog 70 write-boot
     gk3__run dd if="$rel/boot.img" of="$p_boota" bs=4M conv=fsync,nocreat status=none || return 1
     gk3__run dd if="$rel/boot.img" of="$p_bootb" bs=4M conv=fsync,nocreat status=none || return 1
     # 写过的节点必须还是块设备 —— 否则上面那些字节进了内存里的一个文件（gk3-unsparse 同理：它会 O_CREAT）
     if [ "$DRY" != 1 ]; then
         local wn
         for wn in "$p_misc" "$p_boota" "$p_bootb" "$p_super"; do
-            [ -b "$wn" ] || { gk3_die "$wn 已经不是块设备了 —— 写进去的东西不在盘上（udev 在写盘期间重建了节点？）"; return 1; }
+            [ -b "$wn" ] || { gk3_fail node-vanished "dev=$wn" -- "$wn 已经不是块设备了 —— 写进去的东西不在盘上（udev 在写盘期间重建了节点？）"; return 1; }
         done
     fi
 
@@ -892,7 +957,7 @@ EOF
     # ⚠️ 少了这一步，前面所有东西都写对了，机器照样起不来 —— 这台机器是 UEFI，
     #    内核/dtb/ramdisk 是 ESP 上的【普通文件】，不在 boot 分区里被引导。
     #    （boot_a/boot_b 有内容是为了让 update_engine 的 A/B 流程完整。）
-    gk3_prog 80 "安装引导链"
+    gk3_prog 80 bootloader
     local mid=$esp_mid
     # ⚠️ 挂载点用 mktemp，不用 /mnt/esp —— CLAUDE.md 操作禁忌 4：共享的挂载点
     #    会被另一个 shell 里"顺手看一眼"的人 umount 掉，于是这一步静默失败。
@@ -901,7 +966,7 @@ EOF
     # 整盘清空：ESP 是刚格式化的，没有现成目录 → 用 machine-id
     [ -n "$mid" ] || mid=$(gk3__esp_pick_mid "$mnt" "$mid_fb")
     # ★ 每一个写 ESP 的动作都查结果（2026-09-26 M4b：ESP 写满，cp 失败被忽略，安装照样报告成功）
-    esp_fail() { gk3_die "写 ESP 失败：$1 —— ESP 空间不够，或者介质出了错（${p_esp}）"; umount "$mnt" 2>/dev/null; rmdir "$mnt" 2>/dev/null; }
+    esp_fail() { gk3_fail esp-write "esp=$p_esp" -- "写 ESP 失败：$1 —— ESP 空间不够，或者介质出了错（${p_esp}）"; umount "$mnt" 2>/dev/null; rmdir "$mnt" 2>/dev/null; }
 
     if [ "$DRY" != 1 ]; then
         mkdir -p "$mnt/EFI/BOOT" "$mnt/EFI/systemd" "$mnt/loader/entries" \
@@ -1027,7 +1092,7 @@ RESC
     else
         echo "DRY: 往 $p_esp 写 systemd-boot、两个 Android 启动项（options=$cmdline …）、内核/dtb/ramdisk" >&2
     fi
-    gk3__run umount "$mnt" || { gk3_die "ESP 卸不下来（${p_esp}）—— 写进去的东西可能没落盘"; return 1; }
+    gk3__run umount "$mnt" || { gk3_fail esp-umount "esp=$p_esp" -- "ESP 卸不下来（${p_esp}）—— 写进去的东西可能没落盘"; return 1; }
     rmdir "$mnt" 2>/dev/null || true
     if [ "$DRY" != 1 ]; then
         # ★ 写完逐个核对（cp 没报错不等于文件是全的），从介质读回来
@@ -1038,7 +1103,7 @@ RESC
 
     # ── 救援系统 ────────────────────────────────────────────────────────
     if [ "$rescue" = yes ]; then
-        gk3_prog 92 "写入救援系统"
+        gk3_prog 92 write-rescue
         local rmnt; rmnt=$(mktemp -d)
         gk3__run mount "$p_resc" "$rmnt" || return 1
         # ★ 每一步都查（2026-09-27 审查：原先全不查，救援系统坏了要等到真要用它的那天才知道；
@@ -1084,7 +1149,7 @@ RESC
     fi
 
     rm -rf "$parts"
-    gk3_prog 100 "完成"
+    gk3_prog 100 done
     return 0
 }
 
@@ -1129,15 +1194,15 @@ gk3__write_super() {
             zstd -dc --long=31 "$src" | python3 "$us" --progress 30 40 "$dst"
             local -a rc=( "${PIPESTATUS[@]}" )
             if [ "${rc[0]}" != 0 ] || [ "${rc[1]}" != 0 ]; then
-                gk3_die "super 写入失败（zstd=${rc[0]} gk3-unsparse=${rc[1]}）—— .zst 下载完整吗？"
+                gk3_fail super-write "zstd=${rc[0]}" "unsparse=${rc[1]}" -- "super 写入失败（zstd=${rc[0]} gk3-unsparse=${rc[1]}）—— .zst 下载完整吗？"
                 return 1
             fi ;;
         *)
             if head -c4 "$src" | od -An -tx1 | tr -d ' \n' | grep -qi '^3aff26ed$'; then
-                python3 "$us" --progress 30 40 "$dst" < "$src" || { gk3_die "super 展开失败"; return 1; }
+                python3 "$us" --progress 30 40 "$dst" < "$src" || { gk3_fail super-write -- "super 展开失败"; return 1; }
             else
                 echo "super.img 不是 sparse 格式，直接写" >&2
-                dd if="$src" of="$dst" bs=4M conv=fsync,nocreat status=none || { gk3_die "dd super 失败"; return 1; }
+                dd if="$src" of="$dst" bs=4M conv=fsync,nocreat status=none || { gk3_fail super-write -- "dd super 失败"; return 1; }
             fi ;;
     esac
     # ★ 判格式不判校验和：偏移 4096 处必须是 LP geometry 魔数。
@@ -1146,7 +1211,7 @@ gk3__write_super() {
     #      Android 首阶段挂载失败后主动 reboot()，不留任何日志（docs/stage2-findings.md §1）。
     local lp; lp=$(dd if="$dst" bs=1 skip=4096 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')
     if [ "$lp" != "67446c61" ]; then
-        gk3_die "super 偏移 4096 处不是 LP geometry 魔数（读到 '${lp}'）—— 写进去的不是一份能用的 super"
+        gk3_fail super-bad-lp -- "super 偏移 4096 处不是 LP geometry 魔数（读到 '${lp}'）—— 写进去的不是一份能用的 super"
         return 1
     fi
     echo "super：LP geometry 魔数正确" >&2
@@ -1171,7 +1236,7 @@ gk3__need_part() {
     if [ "${GK3_DRYRUN:-0}" = 1 ]; then echo "<${want}分区>"; return 0; fi
     path=$(gk3__bylabel "$disk" "$want")
     if [ -z "$path" ]; then
-        gk3_die "分区 $want 没解析出来（$disk 上找不到这个 PARTLABEL）"; return 1
+        gk3_fail part-missing "name=$want" "disk=$disk" -- "分区 $want 没解析出来（$disk 上找不到这个 PARTLABEL）"; return 1
     fi
     # ⚠️ 分区节点的出现是异步的（udev / devtmpfs），刚写完分区表时它可能还没到。
     #    第一版在这里直接判死，结果 loop 设备实测必然失败 —— 而 lsblk 明明
@@ -1182,7 +1247,7 @@ gk3__need_part() {
         sleep 0.2; i=$((i+1))
     done
     if [ ! -b "$path" ]; then
-        gk3_die "$path 等了 10 秒还不是块设备 —— 分区表写下去了但内核没认"; return 1
+        gk3_fail part-node-timeout "dev=$path" -- "$path 等了 10 秒还不是块设备 —— 分区表写下去了但内核没认"; return 1
     fi
     gk3__node_matches "$disk" "$path" || return 1
     echo "$path"
@@ -1265,9 +1330,9 @@ gk3__ntfs_trial_mount() {
         if gk3__ntfs_hibernated "$part"; then rc=14; else rc=15; fi
     fi
     case "$rc" in
-        14) gk3_die "Windows 处于休眠或“快速启动”状态（${part}）—— 这时改它的大小会损坏 Windows 的数据。回 Windows 关掉快速启动、用“关机”退出，再试（盘没动过）" ;;
-        15) gk3_die "这个 NTFS 分区上次没有正常关机（${part}，日志里有没做完的操作）—— 回 Windows 正常开关机一次，再试（盘没动过）" ;;
-        *)  gk3_die "ntfs-3g 挂不上 ${part}（退出码 ${rc}）—— 不敢改它的大小（盘没动过）" ;;
+        14) gk3_fail ntfs-hibernated "part=$part" -- "Windows 处于休眠或“快速启动”状态（${part}）—— 这时改它的大小会损坏 Windows 的数据。回 Windows 关掉快速启动、用“关机”退出，再试（盘没动过）" ;;
+        15) gk3_fail ntfs-dirty "part=$part" -- "这个 NTFS 分区上次没有正常关机（${part}，日志里有没做完的操作）—— 回 Windows 正常开关机一次，再试（盘没动过）" ;;
+        *)  gk3_fail ntfs-mount "part=$part" "rc=$rc" -- "ntfs-3g 挂不上 ${part}（退出码 ${rc}）—— 不敢改它的大小（盘没动过）" ;;
     esac
     return 1
 }
@@ -1341,6 +1406,7 @@ gk3_shrink_info() {
 # ⚠️ 这个函数会改用户的数据，所以它自己把所有前提再验一遍，不依赖调用方。
 gk3_shrink() {
     local part=$1 target_mib=$2
+    GK3__TOUCHED=no    # 见 gk3_apply
     local info fs cur min floor disk num pu pl pt start end bk newpu newmib rc
     info=$(gk3_shrink_info "$part") || { echo "$info"; return 1; }
     fs=$(gk3__f "$info" fs); cur=$(gk3__f "$info" cur_mib); min=$(gk3__f "$info" min_mib)
@@ -1349,16 +1415,16 @@ gk3_shrink() {
     # 写页面文件了 —— 那是"能装上但不能用"。
     floor=$(( min + 512 ))
     if [ "$target_mib" -lt "$floor" ]; then
-        gk3_die "目标 ${target_mib} MiB 太小：最小 ${min} + 512 余量 = ${floor} MiB"; return 1
+        gk3_fail shrink-too-small "target_mib=$target_mib" "floor_mib=$floor" -- "目标 ${target_mib} MiB 太小：最小 ${min} + 512 余量 = ${floor} MiB"; return 1
     fi
     if [ "$target_mib" -ge "$cur" ]; then
-        gk3_die "目标 ${target_mib} MiB 不小于当前 ${cur} MiB，没必要缩"; return 1
+        gk3_fail shrink-not-smaller "target_mib=$target_mib" "cur_mib=$cur" -- "目标 ${target_mib} MiB 不小于当前 ${cur} MiB，没必要缩"; return 1
     fi
 
     disk=/dev/$(lsblk -no PKNAME "$part" 2>/dev/null | head -1)
     num=$(cat "/sys/class/block/$(basename "$part")/partition" 2>/dev/null)
     if [ ! -b "$disk" ] || [ -z "$num" ]; then
-        gk3_die "认不出 $part 属于哪块盘的第几个分区"; return 1
+        gk3_fail part-unknown "part=$part" -- "认不出 $part 属于哪块盘的第几个分区"; return 1
     fi
 
     # ★ 保住身份：PARTUUID（Windows BCD 靠它）、PARTLABEL、类型 GUID
@@ -1366,73 +1432,75 @@ gk3_shrink() {
     pl=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition name:' | cut -d"'" -f2)
     pt=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition GUID code:' | awk '{print $4}')
     if [ -z "$pu" ] || [ -z "$pt" ]; then
-        gk3_die "读不到分区 $num 的 GUID —— 不敢重建它"; return 1
+        gk3_fail gpt-read "part=$part" -- "读不到分区 $num 的 GUID —— 不敢重建它"; return 1
     fi
     local pattr; pattr=$(gk3__part_attr "$disk" "$num")
     echo "分区 $num 身份：PARTUUID=$pu 类型=$pt 名字=${pl:-(无)} 属性=${pattr:-?}" >&2
 
-    gk3_prog 5 "备份分区表"
+    gk3_prog 5 gpt-backup
     gk3__gpt_backup "$disk" shrink; bk=${GK3_GPT_BK:-（没有备份）}
 
     # ── 第 1 步：缩文件系统（演练 → 真做）───────────────────────────────
-    gk3_prog 15 "演练缩小文件系统"
+    gk3_prog 15 shrink-trial
     case "$fs" in
         ntfs)
             gk3__ntfs_trial_mount "$part" || return 1
             if ! ntfsresize --no-action --size "${target_mib}M" "$part" >/dev/null 2>&1 </dev/null; then
-                gk3_die "ntfsresize 演练没通过 —— 不往下做"; return 1
+                gk3_fail ntfs-dryrun -- "ntfsresize 演练没通过 —— 不往下做"; return 1
             fi
-            gk3_prog 30 "缩小 NTFS"
+            gk3_prog 30 shrink-ntfs
+            GK3__TOUCHED=yes
             # 一个 --force = 替用户答"确认"那一问（ntfsresize.c:4656）。脏卷的话它先被脏卷检查吃掉，
             # 确认那一问就会去读 stdin —— 接的是 /dev/null，于是停下。别再喂 y
             if ! ntfsresize --force --size "${target_mib}M" "$part" >/dev/null 2>&1 </dev/null; then
-                gk3_die "缩小 NTFS 失败 —— 分区表还没动过，数据应当完好"; return 1
+                gk3_fail ntfs-shrink -- "缩小 NTFS 失败 —— 分区表还没动过，数据应当完好"; return 1
             fi ;;
         ext2|ext3|ext4)
-            gk3_prog 20 "检查文件系统（resize2fs 要求）"
+            gk3_prog 20 fsck
+            GK3__TOUCHED=yes    # e2fsck -p 会修（写）文件系统
             e2fsck -fp "$part" >/dev/null 2>&1; rc=$?
             # e2fsck 返回 1/2 表示"修好了"；>=4 才是真出事
             if [ "$rc" -ge 4 ]; then
-                gk3_die "e2fsck 报错（${rc}），不敢缩"; return 1
+                gk3_fail fsck "rc=$rc" -- "e2fsck 报错（${rc}），不敢缩"; return 1
             fi
-            gk3_prog 30 "缩小 ext 文件系统"
+            gk3_prog 30 shrink-ext
             if ! resize2fs "$part" "${target_mib}M" >/dev/null 2>&1; then
-                gk3_die "resize2fs 失败 —— 分区表还没动过"; return 1
+                gk3_fail resize2fs -- "resize2fs 失败 —— 分区表还没动过"; return 1
             fi ;;
-        *) gk3_die "不支持缩 $fs"; return 1 ;;
+        *) gk3_fail fs-unsupported "fs=$fs" -- "不支持缩 $fs"; return 1 ;;
     esac
 
     # ── 第 2 步：缩分区（文件系统已经小了，这一步才安全）────────────────
-    gk3_prog 70 "改分区表"
+    gk3_prog 70 gpt-edit
     start=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^First sector:' | awk '{print $3}')
     if [ -z "$start" ]; then
-        gk3_die "读不到分区 $num 的起始扇区"; return 1
+        gk3_fail gpt-read "part=$part" -- "读不到分区 $num 的起始扇区"; return 1
     fi
     end=$(( start + target_mib * 2048 - 1 ))
     if ! sgdisk -d "$num" "$disk" >/dev/null 2>&1; then
-        gk3_die "删旧分区项失败"; return 1
+        gk3_fail gpt-rewrite -- "删旧分区项失败"; return 1
     fi
     if ! sgdisk -n "${num}:${start}:${end}" -t "${num}:${pt}" -u "${num}:${pu}" "$disk" >/dev/null 2>&1; then
-        gk3_die "重建分区项失败 —— 分区表备份在 $bk"; return 1
+        gk3_fail gpt-rewrite -- "重建分区项失败 —— 分区表备份在 $bk"; return 1
     fi
     # 分区名丢了的话 by-name 找不到它（userdata / metadata 丢了名字，以后重新安装就找不到）
     if [ -n "$pl" ] && ! sgdisk -c "${num}:${pl}" "$disk" >/dev/null 2>&1; then
-        gk3_die "分区名 $pl 没写回去 —— 分区表备份在 $bk"; return 1
+        gk3_fail gpt-rewrite -- "分区名 $pl 没写回去 —— 分区表备份在 $bk"; return 1
     fi
     gk3__part_attr_restore "$disk" "$num" "$pattr" || return 1
     gk3__settle "$disk"
 
     # ── 第 3 步：验 ─────────────────────────────────────────────────────
-    gk3_prog 90 "复核"
+    gk3_prog 90 verify
     newpu=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition unique GUID:' | awk '{print $4}')
     if [ "$newpu" != "$pu" ]; then
-        gk3_die "PARTUUID 变了（$pu -> ${newpu}）—— Windows 会起不来"; return 1
+        gk3_fail partuuid-changed -- "PARTUUID 变了（$pu -> ${newpu}）—— Windows 会起不来"; return 1
     fi
     newmib=$(( $(blockdev --getsize64 "$part" 2>/dev/null || echo 0) / 1048576 ))
     [ "$newmib" = "$target_mib" ] \
-        || { gk3_die "分区 $num 现在是 ${newmib} MiB，不是要的 ${target_mib} MiB（内核没看到新分区表？）—— 文件系统已缩到 ${target_mib} MiB，数据完好；重启后看一眼"; return 1; }
+        || { gk3_fail shrink-size-mismatch "have_mib=$newmib" "want_mib=$target_mib" -- "分区 $num 现在是 ${newmib} MiB，不是要的 ${target_mib} MiB（内核没看到新分区表？）—— 文件系统已缩到 ${target_mib} MiB，数据完好；重启后看一眼"; return 1; }
     echo "分区 ${num}：${cur} MiB -> ${newmib} MiB（PARTUUID 未变）" >&2
-    gk3_prog 100 "缩小完成"
+    gk3_prog 100 done
     return 0
 }
 
@@ -1465,7 +1533,7 @@ gk3__wifi_if() {
 gk3_wifi_up() {
     local ifc; ifc=$(gk3__wifi_if)
     if [ ! -e "/sys/class/net/$ifc" ]; then
-        gk3_die "没有 $ifc —— ath11k 没起来（看 dmesg | grep ath11k）"; return 1
+        gk3_fail wifi-no-if "if=$ifc" -- "没有 $ifc —— ath11k 没起来（看 dmesg | grep ath11k）"; return 1
     fi
     ip link set "$ifc" up 2>/dev/null
     if wpa_cli -i "$ifc" -p "$GK3_WPA_CTRL" status >/dev/null 2>&1; then
@@ -1477,7 +1545,7 @@ gk3_wifi_up() {
     wpa_supplicant -B -i "$ifc" -c "$cfg" >/dev/null 2>&1
     local i=0
     while ! wpa_cli -i "$ifc" -p "$GK3_WPA_CTRL" status >/dev/null 2>&1; do
-        i=$((i+1)); [ "$i" -gt 20 ] && { gk3_die "wpa_supplicant 起不来"; return 1; }
+        i=$((i+1)); [ "$i" -gt 20 ] && { gk3_fail wpa-start -- "wpa_supplicant 起不来"; return 1; }
         sleep 0.5
     done
 }
@@ -1497,7 +1565,9 @@ gk3_wifi_scan() {
 }
 
 # 连接。$1=SSID（或 hex:<gk3_wifi_scan 给的 ssid_hex>）$2=密码（空 = 开放网络）
-#       $3=hidden：隐藏网络（不广播 SSID，扫描列表里没有它，用户手输名字）
+#       之后的参数（顺序随意）：hidden = 隐藏网络（不广播 SSID，扫描列表里没有它，用户手输名字）；
+#                               sae = 纯 WPA3-Personal（gk3_wifi_scan 报 auth=sae 的网络）
+#   WEP、OWE、企业网络（EAP）不支持：界面在列表里把它们标灰（gk3-wpa-scan.py 照实报 auth=wep|owe|eap）
 #
 # ★ 隐藏网络要网络块里的 scan_ssid=1（加全局的 ap_scan=1 —— 那是默认值，我们没改它）：
 #   Debian wpasupplicant 2.10-24 的 README.Debian:521-523。它让 wpa_supplicant 发带这个 SSID 的探测请求，
@@ -1510,45 +1580,66 @@ gk3_wifi_scan() {
 #   装进救援分区，于是装好的救援系统一开机就能连上同一个网 —— 否则就是
 #   "救援起来了但网没起来 = 一台连不上的机器"（docs/stage7-live-installer.md:200-202）。
 gk3_wifi_connect() {
-    local ssid=$1 psk=${2:-} hidden=${3:-} ssid_cfg show
-    case "$hidden" in ''|hidden) ;; *) gk3_die "第三个参数只能是 hidden：$hidden"; return 1 ;; esac
+    local ssid=$1 psk=${2:-} hidden="" sae="" ssid_cfg show ssid_show="" f
+    shift 2 2>/dev/null || shift $#
+    for f in "$@"; do
+        case "$f" in
+            hidden) hidden=hidden ;;
+            sae)    sae=sae ;;
+            '')     ;;
+            *) gk3_fail usage -- "第三个参数起只能是 hidden / sae：$f"; return 1 ;;
+        esac
+    done
+    # 纯 WPA3（SAE）要密码：开放网络没有 SAE 这回事
+    [ -z "$sae" ] || [ -n "$psk" ] || { gk3_fail psk-length "len=0" -- "WPA3（SAE）网络要密码"; return 1; }
     case "$ssid" in
         hex:*) ssid_cfg=${ssid#hex:}
-               case "$ssid_cfg" in ''|*[!0-9a-fA-F]*) gk3_die "SSID 的十六进制写法不对：$ssid_cfg"; return 1 ;; esac
-               [ $(( ${#ssid_cfg} % 2 )) = 0 ] || { gk3_die "SSID 的十六进制长度是奇数"; return 1; }
+               case "$ssid_cfg" in ''|*[!0-9a-fA-F]*) gk3_fail usage -- "SSID 的十六进制写法不对：$ssid_cfg"; return 1 ;; esac
+               [ $(( ${#ssid_cfg} % 2 )) = 0 ] || { gk3_fail usage -- "SSID 的十六进制长度是奇数"; return 1; }
                # 802.11 的 SSID 最长 32 字节（手输的隐藏网络名可能超 —— 中文一个字就 3 字节）
-               [ ${#ssid_cfg} -le 64 ] || { gk3_die "网络名最长 32 字节，这个是 $(( ${#ssid_cfg} / 2 )) 字节"; return 1; }
+               [ ${#ssid_cfg} -le 64 ] || { gk3_fail ssid-too-long -- "网络名最长 32 字节，这个是 $(( ${#ssid_cfg} / 2 )) 字节"; return 1; }
                show="所选网络" ;;
-        *)     ssid_cfg="\"$ssid\""; show=$ssid ;;
+        *)     ssid_cfg="\"$ssid\""; show=$ssid; ssid_show=$ssid ;;
     esac
     # ⚠️ 长度不对时 wpa_supplicant 直接拒绝（wpa_supplicant/config.c:571，要 8–63 个字符）。
     #    原先这里把 set_network 的返回值扔掉了，于是密码太短要白等 20 秒超时，
     #    然后报"密码错？信号弱？"—— 一个本可以立刻说清楚的错误。
     if [ -n "$psk" ] && { [ ${#psk} -lt 8 ] || [ ${#psk} -gt 63 ]; }; then
-        gk3_die "WiFi 密码要 8–63 个字符，这个是 ${#psk} 个"; return 1
+        gk3_fail psk-length "len=${#psk}" -- "WiFi 密码要 8–63 个字符，这个是 ${#psk} 个"; return 1
     fi
     gk3_wifi_up || return 1
     local ifc W; ifc=$(gk3__wifi_if)
     W="wpa_cli -i $ifc -p $GK3_WPA_CTRL"
     local id
     id=$($W add_network 2>/dev/null | tail -1)
-    case "$id" in ''|*[!0-9]*) gk3_die "add_network 失败"; return 1 ;; esac
+    case "$id" in ''|*[!0-9]*) gk3_fail wpa-reject -- "add_network 失败"; return 1 ;; esac
     [ "$($W set_network "$id" ssid "$ssid_cfg" 2>/dev/null | tail -1)" = OK ] \
-        || { gk3_die "wpa_supplicant 不接受这个 SSID"; return 1; }
+        || { gk3_fail wpa-reject -- "wpa_supplicant 不接受这个 SSID"; return 1; }
     if [ -n "$psk" ]; then
         [ "$($W set_network "$id" psk "\"$psk\"" 2>/dev/null | tail -1)" = OK ] \
-            || { gk3_die "wpa_supplicant 不接受这个密码（含控制字符？）"; return 1; }
+            || { gk3_fail wpa-reject -- "wpa_supplicant 不接受这个密码（含控制字符？）"; return 1; }
     else
         $W set_network "$id" key_mgmt NONE >/dev/null 2>&1
     fi
+    # ★ 纯 WPA3-Personal（扫描结果只有 SAE、没有 PSK，gk3-wpa-scan.py 报 auth=sae）：不设 key_mgmt 时默认是
+    #   "WPA-PSK WPA-EAP"，连这种 AP 必然失败、而且表现和密码错一模一样（v1.0 计划 GUI-9）。
+    #   Debian wpasupplicant 2:2.10-24 的 examples/wpa_supplicant.conf:991："WPA3-Personal-only mode: ieee80211w=2 and key_mgmt=SAE"；
+    #   密码照样放 psk（同一份文件 :1047-1051：没设 sae_password 时 SAE 用 psk 的口令，只是仍受 8–63 的限制）。
+    #   WPA2/WPA3 混合（transition）模式的 AP 扫描结果里有 PSK，扫描那边报 auth=psk，走普通 WPA-PSK 就连得上。
+    #   ⬜ 真机上没对着纯 SAE 的 AP 验过（2026-10-05 只在桩上验了参数）。
+    if [ -n "$sae" ]; then
+        [ "$($W set_network "$id" key_mgmt SAE 2>/dev/null | tail -1)" = OK ] \
+            && [ "$($W set_network "$id" ieee80211w 2 2>/dev/null | tail -1)" = OK ] \
+            || { gk3_fail wpa-reject -- "wpa_supplicant 不接受 key_mgmt SAE / ieee80211w 2（没编进 SAE？）"; return 1; }
+    fi
     if [ -n "$hidden" ]; then
         [ "$($W set_network "$id" scan_ssid 1 2>/dev/null | tail -1)" = OK ] \
-            || { gk3_die "wpa_supplicant 不接受 scan_ssid"; return 1; }
+            || { gk3_fail wpa-reject -- "wpa_supplicant 不接受 scan_ssid"; return 1; }
     fi
     $W enable_network "$id" >/dev/null 2>&1
     $W select_network "$id" >/dev/null 2>&1
 
-    gk3_prog 20 "正在连接 $show"
+    gk3_prog 20 wifi-assoc ${ssid_show:+"ssid=$ssid_show"}
     local i=0 st
     while [ "$i" -lt 40 ]; do
         st=$($W status 2>/dev/null | sed -n 's/^wpa_state=//p')
@@ -1560,9 +1651,9 @@ gk3_wifi_connect() {
         esac
         i=$((i+1)); sleep 0.5
     done
-    [ "$st" = COMPLETED ] || { gk3_die "连不上 ${show}（密码错？信号弱？）"; return 1; }
+    [ "$st" = COMPLETED ] || { gk3_fail wifi-assoc -- "连不上 ${show}（密码错？信号弱？）"; return 1; }
 
-    gk3_prog 60 "取 IP 地址"
+    gk3_prog 60 wifi-dhcp
     dhcpcd -n "$ifc" >/dev/null 2>&1 || dhcpcd "$ifc" >/dev/null 2>&1
     i=0
     while [ "$i" -lt 30 ]; do
@@ -1570,7 +1661,7 @@ gk3_wifi_connect() {
         i=$((i+1)); sleep 0.5
     done
     ip -4 addr show "$ifc" 2>/dev/null | grep -q 'inet ' \
-        || { gk3_die "连上了但没拿到 IP（DHCP 没响应？）"; return 1; }
+        || { gk3_fail wifi-dhcp -- "连上了但没拿到 IP（DHCP 没响应？）"; return 1; }
     # 存一份给 gk3_apply 装进救援分区（0600：里面是明文密码，和原先
     # "把用户当前用的那份 wpa_supplicant.conf 复制过去"是同一个设计）
     ( umask 077; mkdir -p "$GK3_RUNDIR"
@@ -1580,8 +1671,9 @@ gk3_wifi_connect() {
         echo "	ssid=$ssid_cfg"
         [ -z "$hidden" ] || echo "	scan_ssid=1"
         if [ -n "$psk" ]; then echo "	psk=\"$psk\""; else echo "	key_mgmt=NONE"; fi
+        [ -z "$sae" ] || { echo "	key_mgmt=SAE"; echo "	ieee80211w=2"; }
         echo "}"; } > "$GK3_RUNDIR/wpa_supplicant.conf" ) 2>/dev/null || true
-    gk3_prog 100 "已连接"
+    gk3_prog 100 wifi-ok
     gk3_net_status
 }
 
@@ -1599,7 +1691,8 @@ gk3_net_status() {
 #    清单托管在 R2（和 OTA 用同一套布局）。
 #
 # 清单格式（一行一个变体，值按协议百分号编码）：
-#   VARIANT id=stock name=标准版 desc=... base=https://ota.072172.xyz/install/<VER>/ size_mib=...
+#   VARIANT id=stock name=标准版 desc=... [name_en=Standard desc_en=...] base=https://ota.072172.xyz/install/<VER>/ size_mib=...
+#   （name_<语言> / desc_<语言> 可选：界面按当前语言取，没有就用 name / desc —— 英文界面不该只看到中文的版本名）
 # ★ base= 指向一个【发布目录】，就是 release.sh 已经在传的那套 R2 布局
 #   install/<VER>/{boot.img, super.img.zst, install-artifacts.sha256}
 #   （scripts/release.sh:154-172）—— 不另打包，也就不会有第二份可能漂的东西。
@@ -1616,7 +1709,7 @@ GK3_OTA_JSON_URL=${GK3_OTA_JSON_URL:-https://ota.072172.xyz/ota/gaokun3.json}
 #    install/<zip 名去掉 .zip>/（release.sh 同一次上传，scripts/release.sh:154-172）。
 gk3_net_manifest() {
     local url=${1:-$GK3_MANIFEST_URL} out local_n=0
-    command -v curl >/dev/null || { gk3_die "没有 curl"; return 1; }
+    command -v curl >/dev/null || { gk3_fail tool-missing tool=curl -- "没有 curl"; return 1; }
     if [ -f "$GK3_LOCAL_MANIFEST" ]; then
         local_n=$(grep -c '^VARIANT ' "$GK3_LOCAL_MANIFEST")
         echo "介质上的变体清单 ${GK3_LOCAL_MANIFEST}：$local_n 个" >&2
@@ -1629,7 +1722,7 @@ gk3_net_manifest() {
     gk3__ota_variant && return 0
     # 线上两份都取不到：介质上有就够了（局域网 / 离线），否则才算失败
     [ "$local_n" -gt 0 ] && return 0
-    gk3_die "取不到版本列表：变体清单（${url}）与 OTA 清单（${GK3_OTA_JSON_URL}）都不可用"; return 1
+    gk3_fail manifest-unavailable -- "取不到版本列表：变体清单（${url}）与 OTA 清单（${GK3_OTA_JSON_URL}）都不可用"; return 1
 }
 
 # 从 OTA 清单推出一个变体（latest=yes）：名字取版本号，大小用 HEAD 量（安装文件的 Content-Length 之和）
@@ -1656,19 +1749,33 @@ EOF
 }
 
 # curl 的进度表 → PROGRESS 行（百分比变了才出一行）。$1=起点 $2=跨度 $3=文件名
+#   PROGRESS <总进度> dl name=<文件名> pct=<这个文件的百分比> [speed=<当前速度>] [left=<剩余时间>]
+#   speed / left 原样取 curl 进度表的最后两列（Current Speed、Time Left：如 2048k、0:06:59），界面换算成
+#   "2.0 MB/s · 约 7 分钟"（v1.0 计划 GUI-5）。续传时 curl 的这两列只算这一次传输 —— 速度不受影响，
+#   剩余时间正好是还要下的那部分。认不出的（--:--:--、超长时的 "1d 02h"）就不带，界面只显示速度。
+#   ⬜ 列的含义按 curl 的进度表格式（man curl 的 PROGRESS METER），只在这里的桩上验过，真机上没核对过那两列
 # ⚠️★ 2026-09-27 真机网络安装：原先是 tr '\r' '\n' | awk —— 1.2 GiB 下了两分半，进度一行也没出来，结束时才一起吐
 #   （屏幕上的进度条停在 5%、最后跳到 95%）。tr 往管道写是块缓冲的；换成 awk 自己按 \r 切也不行：
 #   mawk（Debian 的默认 awk）读管道同样攒块，实测三行进度全在最后一刻出来（-W interactive 又只认 \n）。
 #   bash 的 read 从管道逐字节读，读到一条就处理一条。curl 每次刷新是 "\r<一行>"，表头与最后一行带 \n
 gk3__curl_meter() {
-    local lo=$1 sp=$2 n=$3 rec line pct last=0
+    local lo=$1 sp=$2 n=$3 rec line pct last=0 speed left extra
+    local -a col
+    n=$(gk3__enc "$n")
     while IFS= read -r -d $'\r' rec || [ -n "$rec" ]; do
         while IFS= read -r line; do
             pct=${line#"${line%%[![:space:]]*}"}; pct=${pct%%[[:space:]]*}
             case "$pct" in ''|*[!0-9]*) continue ;; esac
             [ "$pct" -gt "$last" ] || continue
             last=$pct
-            echo "PROGRESS $(( lo + pct * sp * 90 / 10000 )) 下载 ${n}（${pct}%）"
+            read -r -a col <<< "$line"
+            extra=""
+            if [ "${#col[@]}" -ge 12 ]; then
+                speed=${col[${#col[@]}-1]}; left=${col[${#col[@]}-2]}
+                case "$speed" in [0-9]*) [[ "$speed" =~ ^[0-9.]+[kMGTP]?$ ]] && extra=" speed=$speed" ;; esac
+                [[ "$left" =~ ^[0-9]+:[0-9][0-9]:[0-9][0-9]$ ]] && extra="$extra left=$left"
+            fi
+            echo "PROGRESS $(( lo + pct * sp * 90 / 10000 )) dl name=$n pct=$pct$extra"
         done <<< "$rec"
     done
 }
@@ -1684,7 +1791,7 @@ gk3_net_fetch() {
     local url=$1 dst=$2 want=${3:-} lo=${4:-0} span=${5:-100} name rc try=1 http= why
     local tries=${GK3_NET_TRIES:-5}
     name=$(basename "$dst")
-    gk3_prog "$lo" "开始下载 $name"
+    gk3_prog "$lo" dl-start "name=$name"
     gk3__curl() {   # $1 = 续传参数（空 = 从头）
         # ⚠️ 用 --continue-at 支持断点续传：这台机器的 WAN 只有 1–2 MB/s，
         #    1.2 GB 要十几分钟，中途断一次全部重来是不可接受的。
@@ -1730,25 +1837,27 @@ gk3_net_fetch() {
     #   界面上的"重试"要接着它续传，不能让几分钟的下载白费（v1.0 计划 GUI-3）
     if gk3__curl_transient "$rc"; then
         gk3__curl_why
-        gk3_die "下载 $name 没完成（${why}，试了 ${try} 次）；已下的 $(( $(wc -c 2>/dev/null < "$dst" || echo 0) >> 20 )) MiB 留着，重试会接着下"
+        local kept; kept=$(( $(wc -c 2>/dev/null < "$dst" || echo 0) >> 20 ))
+        gk3_fail dl-incomplete "name=$name" "rc=$rc" "http=$http" "tries=$try" "kept_mib=$kept" \
+            -- "下载 $name 没完成（${why}，试了 ${try} 次）；已下的 $kept MiB 留着，重试会接着下"
         return 1
     fi
-    [ -f "$dst" ] || { gk3_die "下载失败（curl 退出码 ${rc}）"; return 1; }
+    [ -f "$dst" ] || { gk3_fail dl-failed "name=$name" "rc=$rc" -- "下载失败（curl 退出码 ${rc}）"; return 1; }
     if [ "$rc" != 0 ]; then
         # 续传一个其实已经下完的文件时服务器回 416，curl 报错而文件是好的 ——
         # 有 sha256 就让校验来裁决，没有就只能按失败算
-        [ -n "$want" ] || { gk3_die "下载失败（curl 退出码 ${rc}），且没有 sha256 可以核对"; return 1; }
+        [ -n "$want" ] || { gk3_fail dl-failed "name=$name" "rc=$rc" -- "下载失败（curl 退出码 ${rc}），且没有 sha256 可以核对"; return 1; }
         gk3_log "curl 退出码 ${rc}，交给 sha256 裁决"
     fi
     if [ -n "$want" ]; then
-        gk3_prog $(( lo + span * 95 / 100 )) "校验 $name"
+        gk3_prog $(( lo + span * 95 / 100 )) dl-verify "name=$name"
         local got; got=$(sha256sum "$dst" | cut -d' ' -f1)
         # ⚠️ 不符就删掉（2026-09-27 审查）：留着的话，下一次 --continue-at 会接在一个坏的（或另一个版本的）前缀后面，
         #   永远对不上 —— 在同一次会话里换一个版本再装，boot.img 同样大小续传 416、super 接错前缀，就是这样卡死的
-        [ "$got" = "$want" ] || { rm -f "$dst"; gk3_die "$name 的 sha256 不符：$got != ${want}（下载不完整或被篡改；已删掉，重试会从头下载）"; return 1; }
+        [ "$got" = "$want" ] || { rm -f "$dst"; gk3_fail dl-sha256 "name=$name" -- "$name 的 sha256 不符：$got != ${want}（下载不完整或被篡改；已删掉，重试会从头下载）"; return 1; }
         gk3_log "${name}：sha256 校验通过"
     fi
-    gk3_prog $(( lo + span )) "$name 下载完成"
+    gk3_prog $(( lo + span )) dl-done "name=$name"
 }
 
 # 下载一整套发布文件到 <目标目录>，逐个按 install-artifacts.sha256 校验。
@@ -1760,17 +1869,17 @@ gk3_net_fetch() {
 #    断线是常态），不是防一台恶意的服务器；那一层靠 HTTPS。
 gk3_net_release() {
     local base=${1%/} dst=$2 f want old="" ow
-    [ -n "$base" ] && [ -n "$dst" ] || { gk3_die "用法：gk3_net_release <base-url> <目标目录>"; return 1; }
+    [ -n "$base" ] && [ -n "$dst" ] || { gk3_fail usage -- "用法：gk3_net_release <base-url> <目标目录>"; return 1; }
     mkdir -p "$dst" || return 1
     # 上一次留下的校验清单：换了版本时，上一个版本留下的（半截）文件不能拿来续传（见下面）
     [ -f "$dst/install-artifacts.sha256" ] && old=$(cat "$dst/install-artifacts.sha256")
-    gk3_prog 0 "取校验清单"
+    gk3_prog 0 dl-sums
     curl -fsSL --retry 3 --max-time 60 -o "$dst/install-artifacts.sha256" "$base/install-artifacts.sha256" \
-        || { gk3_die "取不到校验清单：$base/install-artifacts.sha256"; return 1; }
+        || { gk3_fail dl-sums -- "取不到校验清单：$base/install-artifacts.sha256"; return 1; }
     # 先小后大：boot.img 失败的话，不必先等 1.2 GiB 下完才知道
     for f in boot.img super.img.zst; do
         want=$(awk -v n="$f" '{sub(/^\*/, "", $2)} $2==n{print $1}' "$dst/install-artifacts.sha256")
-        [ -n "$want" ] || { gk3_die "校验清单里没有 $f"; return 1; }
+        [ -n "$want" ] || { gk3_fail dl-sums-missing "name=$f" -- "校验清单里没有 $f"; return 1; }
         # ★ 换了版本（GUI 审查 2026-10-05）：下载失败时半截文件是故意留着的（界面上"重试"接着续传），
         #   而失败页同时提供"返回修改、换一个版本"。不先丢掉的话，新版本的后半截接在旧版本的前半截后面，
         #   第一次必然 sha256 不符、还报"被篡改"，用户得再点一次重试。只在两份清单都有这个文件、且 sha256 不同时丢
@@ -1785,7 +1894,7 @@ gk3_net_release() {
         if [ "$f" = boot.img ]; then gk3_net_fetch "$base/$f" "$dst/$f" "$want" 0 5 || return 1
         else                          gk3_net_fetch "$base/$f" "$dst/$f" "$want" 5 95 || return 1; fi
     done
-    gk3_prog 100 "发布文件已就绪"
+    gk3_prog 100 dl-ready
     echo "RELEASE dir=$(gk3__enc "$dst") source=net"
 }
 
@@ -1816,7 +1925,7 @@ gk3_release_info() {
 #   "装不了"，不是边角情况（scripts/live/test-apply.sh 的 C 组有这条）。
 gk3_esp_info() {
     local part=$1 m free size win=no ours=no
-    [ -b "$part" ] || { gk3_die "不是块设备：$part"; return 1; }
+    [ -b "$part" ] || { gk3_fail not-block "dev=$part" -- "不是块设备：$part"; return 1; }
     size=$(( $(blockdev --getsize64 "$part" 2>/dev/null || echo 0) / 1048576 ))
     m=$(mktemp -d)
     if ! mount -o ro -t vfat "$part" "$m" 2>/dev/null; then
@@ -1836,7 +1945,7 @@ gk3_esp_info() {
 #    source 整个库 —— 8 个分区就是 8 次。合成一个调用。
 gk3_shrink_scan() {
     local disk=$1 n part
-    [ -b "$disk" ] || { gk3_die "不是块设备：$disk"; return 1; }
+    [ -b "$disk" ] || { gk3_fail not-block "dev=$disk" -- "不是块设备：$disk"; return 1; }
     for n in $(sgdisk -p "$disk" 2>/dev/null | awk '/^ *[0-9]+ /{print $1}'); do
         part=$(gk3_partpath "$disk" "$n")
         [ -b "$part" ] || continue
@@ -1863,16 +1972,16 @@ GK3_ESP_GUID=C12A7328-F81F-11D2-BA4B-00A0C93EC93B
 
 gk3__edit_guard() {    # $1=分区 → 设 GK3_E_DISK / GK3_E_NUM
     local part=$1
-    [ -b "$part" ] || { gk3_die "不是块设备：$part"; return 1; }
+    [ -b "$part" ] || { gk3_fail not-block "dev=$part" -- "不是块设备：$part"; return 1; }
     if [ "$(blkid -p -o value -s PART_ENTRY_TYPE "$part" 2>/dev/null | tr 'a-f' 'A-F')" = "$GK3_ESP_GUID" ]; then
-        gk3_die "$part 是 EFI 系统分区：动它，盘上所有系统都起不来（要重建 ESP，用整盘清空）"; return 1
+        gk3_fail edit-esp -- "$part 是 EFI 系统分区：动它，盘上所有系统都起不来（要重建 ESP，用整盘清空）"; return 1
     fi
     if findmnt -rn -S "$part" >/dev/null 2>&1; then
-        gk3_die "$part 正挂着（安装器是不是就从它上面跑的？）—— 不动它"; return 1
+        gk3_fail edit-mounted -- "$part 正挂着（安装器是不是就从它上面跑的？）—— 不动它"; return 1
     fi
     GK3_E_DISK=/dev/$(lsblk -no PKNAME "$part" 2>/dev/null | head -1)
     GK3_E_NUM=$(cat "/sys/class/block/$(basename "$part")/partition" 2>/dev/null)
-    [ -b "$GK3_E_DISK" ] && [ -n "$GK3_E_NUM" ] || { gk3_die "认不出 $part 属于哪块盘的第几个分区"; return 1; }
+    [ -b "$GK3_E_DISK" ] && [ -n "$GK3_E_NUM" ] || { gk3_fail part-unknown "part=$part" -- "认不出 $part 属于哪块盘的第几个分区"; return 1; }
 }
 
 # 分区的 GPT 属性位（16 位十六进制）。重建分区项时要原样带过去 —— Windows 恢复分区靠它们
@@ -1881,7 +1990,7 @@ gk3__part_attr() { sgdisk -i "$2" "$1" 2>/dev/null | awk '/^Attribute flags:/{pr
 gk3__part_attr_restore() {    # $1=盘 $2=号 $3=原来的属性位
     [ -z "$3" ] || [ "$3" = 0000000000000000 ] && return 0
     sgdisk -A "$2:=:$3" "$1" >/dev/null 2>&1 && [ "$(gk3__part_attr "$1" "$2")" = "$3" ] \
-        || { gk3_die "分区 $2 的属性位 $3 没带回去"; return 1; }
+        || { gk3_fail part-attr -- "分区 $2 的属性位 $3 没带回去"; return 1; }
 }
 
 # 动盘之前备份分区表到介质（出事一条命令还原）。gk3_apply / gk3_shrink / 调整磁盘共用这一份；路径留在 GK3_GPT_BK。
@@ -1927,7 +2036,7 @@ gk3__node_matches() {
     en=$(sgdisk -i "$n" "$disk" 2>/dev/null | awk '/^Last sector:/{print $3}')
     [ -n "$kst" ] && [ -n "$st" ] || return 0          # 读不到就不拦（不在这里制造新的失败）
     if [ "$kst" != $(( st * ss )) ] || [ "$ksz" != $(( (en - st + 1) * ss )) ]; then
-        gk3_die "内核看到的 ${path}（起点 ${kst}、${ksz} 扇区）与盘上的分区表（${st}–${en}）对不上 —— 新分区表没生效（有分区被占着？）。重启后再来"
+        gk3_fail kernel-stale "dev=$path" -- "内核看到的 ${path}（起点 ${kst}、${ksz} 扇区）与盘上的分区表（${st}–${en}）对不上 —— 新分区表没生效（有分区被占着？）。重启后再来"
         return 1
     fi
 }
@@ -1947,27 +2056,27 @@ gk3__type_for_fs() { case "$1" in vfat|ntfs) echo 0700 ;; *) echo 8300 ;; esac; 
 gk3_part_delete() {
     local part=$1
     gk3__edit_guard "$part" || return 1
-    gk3_prog 10 "备份分区表"
+    gk3_prog 10 gpt-backup
     gk3__gpt_backup "$GK3_E_DISK" delete
-    gk3_prog 50 "删除分区 $part"
-    sgdisk -d "$GK3_E_NUM" "$GK3_E_DISK" >/dev/null 2>&1 || { gk3_die "删分区项失败（分区表备份见上）"; return 1; }
+    gk3_prog 50 part-delete "part=$part"
+    sgdisk -d "$GK3_E_NUM" "$GK3_E_DISK" >/dev/null 2>&1 || { gk3_fail gpt-rewrite -- "删分区项失败（分区表备份见上）"; return 1; }
     gk3__settle "$GK3_E_DISK"
-    gk3_prog 100 "完成"
+    gk3_prog 100 done
     echo "RESULT op=delete part=$part"
 }
 
 gk3_part_format() {
     local part=$1 fs=$2 tool
-    case "$fs" in ext4) tool=mkfs.ext4 ;; vfat) tool=mkfs.vfat ;; ntfs) tool=mkntfs ;; *) gk3_die "不支持的文件系统：$fs"; return 1 ;; esac
-    command -v "$tool" >/dev/null || { gk3_die "缺工具：$tool"; return 1; }
+    case "$fs" in ext4) tool=mkfs.ext4 ;; vfat) tool=mkfs.vfat ;; ntfs) tool=mkntfs ;; *) gk3_fail fs-unsupported "fs=$fs" -- "不支持的文件系统：$fs"; return 1 ;; esac
+    command -v "$tool" >/dev/null || { gk3_fail tool-missing "tool=$tool" -- "缺工具：$tool"; return 1; }
     gk3__edit_guard "$part" || return 1
-    gk3_prog 20 "格式化 $part 为 $fs"
-    gk3__mkfs "$part" "$fs" || { gk3_die "格式化 $part 失败"; return 1; }
+    gk3_prog 20 part-format "part=$part" "fs=$fs"
+    gk3__mkfs "$part" "$fs" || { gk3_fail mkfs "part=$part" -- "格式化 $part 失败"; return 1; }
     # 类型码没改过去的话，格式化成 NTFS 的分区 Windows 不认（审查 #8）—— 文件系统已经建好，说清楚
     sgdisk -t "$GK3_E_NUM:$(gk3__type_for_fs "$fs")" "$GK3_E_DISK" >/dev/null 2>&1 \
-        || { gk3_die "已格式化成 ${fs}，但分区类型码没改过去（sgdisk -t 失败）—— 别的系统可能不认它"; return 1; }
+        || { gk3_fail part-type -- "已格式化成 ${fs}，但分区类型码没改过去（sgdisk -t 失败）—— 别的系统可能不认它"; return 1; }
     gk3__settle "$GK3_E_DISK"
-    gk3_prog 100 "完成"
+    gk3_prog 100 done
     echo "RESULT op=format part=$part fs=$fs"
 }
 
@@ -1977,11 +2086,11 @@ gk3_part_create() {
         case "$1" in
             --disk) disk=$2; shift 2 ;; --start) start=$2; shift 2 ;;
             --size-mib) mib=$2; shift 2 ;; --fs) fs=$2; shift 2 ;;
-            *) gk3_die "create: 不认识的参数 $1"; return 1 ;;
+            *) gk3_fail usage -- "create: 不认识的参数 $1"; return 1 ;;
         esac
     done
-    [ -b "$disk" ] && [ -n "$start" ] && [ -n "$mib" ] || { gk3_die "create 要 --disk --start --size-mib"; return 1; }
-    case "$fs" in ext4|vfat|ntfs|none) ;; *) gk3_die "不支持的文件系统：$fs"; return 1 ;; esac
+    [ -b "$disk" ] && [ -n "$start" ] && [ -n "$mib" ] || { gk3_fail usage -- "create 要 --disk --start --size-mib"; return 1; }
+    case "$fs" in ext4|vfat|ntfs|none) ;; *) gk3_fail fs-unsupported "fs=$fs" -- "不支持的文件系统：$fs"; return 1 ;; esac
     # 起点对齐到 1 MiB；整段必须落在【某一段】空闲区里 —— 空闲区用 gk3_probe 同一套算法算，不另写一份
     local st=$(( (start + 2047) / 2048 * 2048 )) en ok="" line a b
     en=$(( st + mib * 2048 - 1 ))
@@ -1992,36 +2101,36 @@ gk3_part_create() {
     done <<EOF
 $(gk3__probe_parts "$disk" "$(cat "/sys/block/$(basename "$disk")/size" 2>/dev/null || echo 0)" | grep '^FREE ')
 EOF
-    [ -n "$ok" ] || { gk3_die "扇区 [$st, $en] 不在任何一段空闲区里 —— 会压到别的分区（盘没动过）"; return 1; }
+    [ -n "$ok" ] || { gk3_fail create-overlap -- "扇区 [$st, $en] 不在任何一段空闲区里 —— 会压到别的分区（盘没动过）"; return 1; }
     case "$fs" in vfat|ntfs) name="Basic data partition" ;; *) name=linux ;; esac
-    gk3_prog 10 "备份分区表"
+    gk3_prog 10 gpt-backup
     gk3__gpt_backup "$disk" create
-    gk3_prog 30 "新建分区（${mib} MiB）"
-    sgdisk -n "0:$st:$en" -t "0:$(gk3__type_for_fs "$fs")" -c "0:$name" "$disk" >/dev/null 2>&1 || { gk3_die "sgdisk 建分区失败"; return 1; }
+    gk3_prog 30 part-create "mib=$mib"
+    sgdisk -n "0:$st:$en" -t "0:$(gk3__type_for_fs "$fs")" -c "0:$name" "$disk" >/dev/null 2>&1 || { gk3_fail create-failed -- "sgdisk 建分区失败"; return 1; }
     gk3__settle "$disk"
     # sgdisk -n 0 自己挑编号：按起始扇区找回来
     local num part
     num=$(sgdisk -p "$disk" 2>/dev/null | awk -v s="$st" '/^ *[0-9]+ /{ if ($2 == s) print $1 }')
     part=$(gk3_partpath "$disk" "$num")
-    [ -n "$num" ] && gk3__wait_node "$part" || { gk3_die "新分区的节点没出现（${part}）"; return 1; }
+    [ -n "$num" ] && gk3__wait_node "$part" || { gk3_fail create-node -- "新分区的节点没出现（${part}）"; return 1; }
     if [ "$fs" != none ]; then
-        gk3_prog 60 "格式化为 $fs"
-        gk3__mkfs "$part" "$fs" || { gk3_die "格式化新分区 $part 失败（分区已建好）"; return 1; }
+        gk3_prog 60 part-format "fs=$fs"
+        gk3__mkfs "$part" "$fs" || { gk3_fail mkfs "part=$part" -- "格式化新分区 $part 失败（分区已建好）"; return 1; }
     fi
-    gk3_prog 100 "完成"
+    gk3_prog 100 done
     echo "RESULT op=create part=$part fs=$fs size_mib=$mib"
 }
 
 gk3_part_resize() {
     local part=$1 target=$2 cur
-    [ -b "$part" ] || { gk3_die "不是块设备：$part"; return 1; }
+    [ -b "$part" ] || { gk3_fail not-block "dev=$part" -- "不是块设备：$part"; return 1; }
     cur=$(( $(blockdev --getsize64 "$part" 2>/dev/null || echo 0) / 1048576 ))
     if [ "$target" -lt "$cur" ]; then
         gk3__edit_guard "$part" || return 1
         gk3_shrink "$part" "$target" || return 1
         echo "RESULT op=shrink part=$part size_mib=$target"; return 0
     fi
-    [ "$target" -gt "$cur" ] || { gk3_die "目标大小与现在一样（${cur} MiB）"; return 1; }
+    [ "$target" -gt "$cur" ] || { gk3_fail grow-same -- "目标大小与现在一样（${cur} MiB）"; return 1; }
     gk3__grow "$part" "$target"
 }
 
@@ -2033,9 +2142,9 @@ gk3__grow() {
     disk=$GK3_E_DISK; num=$GK3_E_NUM
     fs=$(blkid -o value -s TYPE "$part" 2>/dev/null)
     case "$fs" in
-        ext2|ext3|ext4) command -v resize2fs >/dev/null || { gk3_die "缺工具：resize2fs"; return 1; } ;;
-        ntfs) command -v ntfsresize >/dev/null || { gk3_die "缺工具：ntfsresize"; return 1; } ;;
-        *) gk3_die "不支持扩大 ${fs:-没有文件系统的分区}（只支持 ext 与 NTFS）"; return 1 ;;
+        ext2|ext3|ext4) command -v resize2fs >/dev/null || { gk3_fail tool-missing tool=resize2fs -- "缺工具：resize2fs"; return 1; } ;;
+        ntfs) command -v ntfsresize >/dev/null || { gk3_fail tool-missing tool=ntfsresize -- "缺工具：ntfsresize"; return 1; } ;;
+        *) gk3_fail fs-unsupported "fs=${fs:-none}" -- "不支持扩大 ${fs:-没有文件系统的分区}（只支持 ext 与 NTFS）"; return 1 ;;
     esac
     st=$(sgdisk -i "$num" "$disk" 2>/dev/null | awk '/^First sector:/{print $3}')
     en=$(sgdisk -i "$num" "$disk" 2>/dev/null | awk '/^Last sector:/{print $3}')
@@ -2043,45 +2152,45 @@ gk3__grow() {
     pl=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition name:' | cut -d"'" -f2)
     pt=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition GUID code:' | awk '{print $4}')
     local pattr; pattr=$(gk3__part_attr "$disk" "$num")
-    [ -n "$st" ] && [ -n "$pu" ] && [ -n "$pt" ] || { gk3_die "读不到分区 $num 的起点 / GUID —— 不敢重建它"; return 1; }
+    [ -n "$st" ] && [ -n "$pu" ] && [ -n "$pt" ] || { gk3_fail gpt-read "part=$part" -- "读不到分区 $num 的起点 / GUID —— 不敢重建它"; return 1; }
     next=$(sgdisk -p "$disk" 2>/dev/null | awk -v e="$en" '/^ *[0-9]+ /{ if ($2 > e && (n == "" || $2 < n)) n = $2 } END { print n }')
     last=$(sgdisk -p "$disk" 2>/dev/null | sed -n 's/.*last usable sector is \([0-9]*\).*/\1/p')
     lim=$(( ${next:-$(( last + 1 ))} - 1 ))
     newend=$(( st + target * 2048 - 1 ))
     if [ "$newend" -gt "$lim" ]; then
-        gk3_die "后面紧挨着的空闲不够：最多能扩到 $(( (lim - st + 1) / 2048 )) MiB（盘没动过）"; return 1
+        gk3_fail grow-no-room "max_mib=$(( (lim - st + 1) / 2048 ))" -- "后面紧挨着的空闲不够：最多能扩到 $(( (lim - st + 1) / 2048 )) MiB（盘没动过）"; return 1
     fi
     if [ "$fs" = ntfs ]; then
         # 与缩小同一条纪律：脏卷（Windows 快速启动 / 休眠）不碰 —— ntfsresize --info 先问一遍
         gk3__ntfs_trial_mount "$part" || return 1
-        ntfsresize --info "$part" >/dev/null 2>&1 </dev/null || { gk3_die "ntfsresize 检查没通过（卷脏？回 Windows 关掉快速启动、正常关机）—— 盘没动过"; return 1; }
+        ntfsresize --info "$part" >/dev/null 2>&1 </dev/null || { gk3_fail ntfs-check -- "ntfsresize 检查没通过（卷脏？回 Windows 关掉快速启动、正常关机）—— 盘没动过"; return 1; }
     fi
-    gk3_prog 10 "备份分区表"
+    gk3_prog 10 gpt-backup
     gk3__gpt_backup "$disk" grow
-    gk3_prog 30 "扩大分区项"
-    sgdisk -d "$num" "$disk" >/dev/null 2>&1 || { gk3_die "删旧分区项失败"; return 1; }
+    gk3_prog 30 grow-entry
+    sgdisk -d "$num" "$disk" >/dev/null 2>&1 || { gk3_fail gpt-rewrite -- "删旧分区项失败"; return 1; }
     sgdisk -n "$num:$st:$newend" -t "$num:$pt" -u "$num:$pu" "$disk" >/dev/null 2>&1 \
-        || { gk3_die "重建分区项失败 —— 用上面的分区表备份还原"; return 1; }
+        || { gk3_fail gpt-rewrite -- "重建分区项失败 —— 用上面的分区表备份还原"; return 1; }
     if [ -n "$pl" ]; then
-        sgdisk -c "$num:$pl" "$disk" >/dev/null 2>&1 || { gk3_die "分区名 $pl 没写回去 —— 用上面的分区表备份还原"; return 1; }
+        sgdisk -c "$num:$pl" "$disk" >/dev/null 2>&1 || { gk3_fail gpt-rewrite -- "分区名 $pl 没写回去 —— 用上面的分区表备份还原"; return 1; }
     fi
     gk3__part_attr_restore "$disk" "$num" "$pattr" || return 1
     gk3__settle "$disk"
-    gk3__wait_node "$part" || { gk3_die "分区节点没回来（${part}）"; return 1; }
+    gk3__wait_node "$part" || { gk3_fail part-node-timeout "dev=$part" -- "分区节点没回来（${part}）"; return 1; }
     # 内核看到的必须已经是新大小 —— 否则 resize2fs / ntfsresize 会说"不用改"然后退出 0，报一个假的"扩大完成"
     [ "$(blockdev --getsize64 "$part" 2>/dev/null)" = "$(( target * 1048576 ))" ] \
-        || { gk3_die "内核还没看到新的分区大小（${part}）—— 分区项已扩大，文件系统没动；重启后再扩一次"; return 1; }
-    gk3_prog 60 "扩大文件系统"
+        || { gk3_fail grow-kernel-stale -- "内核还没看到新的分区大小（${part}）—— 分区项已扩大，文件系统没动；重启后再扩一次"; return 1; }
+    gk3_prog 60 grow-fs
     case "$fs" in
-        ntfs) ntfsresize --force "$part" >/dev/null 2>&1 </dev/null || { gk3_die "扩大 NTFS 失败（分区项已扩大，文件系统还是原来的大小，数据完好）"; return 1; } ;;
+        ntfs) ntfsresize --force "$part" >/dev/null 2>&1 </dev/null || { gk3_fail grow-ntfs -- "扩大 NTFS 失败（分区项已扩大，文件系统还是原来的大小，数据完好）"; return 1; } ;;
         *)
             e2fsck -fp "$part" >/dev/null 2>&1; rc=$?
-            [ "$rc" -lt 4 ] || { gk3_die "e2fsck 报错（${rc}），不敢扩"; return 1; }
-            resize2fs "$part" >/dev/null 2>&1 || { gk3_die "resize2fs 失败（分区项已扩大，文件系统还是原来的大小，数据完好）"; return 1; } ;;
+            [ "$rc" -lt 4 ] || { gk3_fail fsck "rc=$rc" -- "e2fsck 报错（${rc}），不敢扩"; return 1; }
+            resize2fs "$part" >/dev/null 2>&1 || { gk3_fail grow-resize2fs -- "resize2fs 失败（分区项已扩大，文件系统还是原来的大小，数据完好）"; return 1; } ;;
     esac
     [ "$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition unique GUID:' | awk '{print $4}')" = "$pu" ] \
-        || { gk3_die "PARTUUID 变了 —— Windows 会起不来"; return 1; }
-    gk3_prog 100 "完成"
+        || { gk3_fail partuuid-changed -- "PARTUUID 变了 —— Windows 会起不来"; return 1; }
+    gk3_prog 100 done
     echo "RESULT op=grow part=$part size_mib=$target"
 }
 

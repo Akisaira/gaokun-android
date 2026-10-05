@@ -11,7 +11,8 @@
 #   ssid      给人看的：按 UTF-8 解码，解不开再试 GB18030（老路由器有 GBK 编码的
 #             中文 SSID），都不行才显示 U+FFFD；再按协议做百分号编码
 #   auth      open | owe | wep | psk | sae | eap —— 界面据此决定要不要密码、
-#             以及"企业网络（eap）暂不支持"这种话要不要直说
+#             以及"企业网络（eap）暂不支持"这种话要不要直说。
+#             sae = 只有 SAE（纯 WPA3）；PSK 与 SAE 都有的混合模式报 psk。wep / owe / eap 安装器连不了，界面标灰
 #
 # ★ 为什么不用 awk：wpa_supplicant 用 printf_encode 输出 SSID
 #   （wpa-2.10 src/utils/common.c:477-523，wpa_ssid_txt 在 :622-633 调它），
@@ -52,8 +53,10 @@ def enc(text):
 def auth_of(flags):
     f = flags.upper()
     if "EAP" in f:  return "eap"
-    if "SAE" in f:  return "sae"
+    # WPA2/WPA3 混合（transition）模式的 AP 两种都报（"PSK+SAE"）：按 PSK 连就行 —— 只有纯 SAE 才是 sae
+    # （安装器对 sae 要另设 key_mgmt SAE + ieee80211w 2，见 installer-lib.sh 的 gk3_wifi_connect）
     if "PSK" in f:  return "psk"
+    if "SAE" in f:  return "sae"
     if "WEP" in f:  return "wep"
     if "OWE" in f:  return "owe"
     return "open"

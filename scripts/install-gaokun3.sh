@@ -113,6 +113,8 @@ Refusing to continue. What the failures mean:
   secureboot  the kernel is unsigned — disable Secure Boot in firmware setup
   tools       Debian/Ubuntu: apt install ${pkgs:-gdisk parted util-linux dosfstools e2fsprogs coreutils zstd python3}
               (installing also needs systemd-boot-efi, for systemd-bootaa64.efi)
+  power       battery below 15% and no charger: plug in the charger
+              (override the threshold: GK3_POWER_MIN_PCT=<percent>)
 EOF
     exit 1
 fi
@@ -154,8 +156,15 @@ read -r confirm
 
 # ── install ────────────────────────────────────────────────────────────────
 say "Installing"
-gk3_apply --disk "$DISK" --mode wipe --rescue "$RESCUE" --release "$REL" \
-    || die "installation failed — see the messages above"
+# On failure, say whether the disk was touched at all (GK3__TOUCHED, set by gk3_apply):
+# most failures happen during the checks before the first write, and then the old
+# system is still intact.
+if ! gk3_apply --disk "$DISK" --mode wipe --rescue "$RESCUE" --release "$REL"; then
+    if [ "${GK3__TOUCHED:-}" = no ]; then
+        die "installation failed before anything was written — $DISK has not been changed. See the messages above."
+    fi
+    die "installation failed — $DISK may be partly written and will not boot as it is. Fix the cause and run this again; the messages above also have the partition-table backup (sgdisk --load-backup=… restores the old table)."
+fi
 
 say "Done"
 cat <<EOF
