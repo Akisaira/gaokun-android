@@ -84,6 +84,23 @@ on boot
     #   不走 AOSP 的 ro.khungtask.enable：llkd.rc 那条路会顺带写 hung_task_panic 1 —— 一次误判就整机重启。
     #   1.0.0-dev.3 实测：没有这一行时 /proc/sys/kernel/hung_task_timeout_secs = 0。
     write /proc/sys/kernel/hung_task_timeout_secs 120
+    # PERF-6 第一步：background / system-background 两个 cpuset 限到 cpu0-3。
+    #   AOSP init.rc:364-398（on init）只是把每个 cpuset 都 copy 成 /dev/cpuset/cpus（= 0-7），注释原话
+    #   "the device's init.rc must actually set the correct cpus" —— 本机从没设过，实机所有 cpuset 都是 0-7
+    #   （docs/stage6-crdroid.md:1414、:1426）⇒ 后台任务和游戏抢同一批核。
+    #   cpu0-3 是 A78C（capacity-dmips-mhz 981，policy0 max 2438.4 MHz）、cpu4-7 是 X1C（1024，policy4 max 2688 MHz）：
+    #   refs/linux-v7.2-rc2/arch/arm64/boot/dts/qcom/sc8280xp.dtsi:49-226；频点见 overlay/…/xml/power_profile.xml 的注释。
+    #   两簇只差约 10%，所以只挪"后台"两档，foreground / top-app / restricted / camera-daemon 保持 0-7；
+    #   写法同构建树 device/linaro/dragonboard/init.common.rc:57-63（boot_completed 后 background 0、system-background 0-3）。
+    #   放在 on boot（晚于 init.rc 的 on init copy）：已经在这两个 cpuset 里的进程随 cpus 一起迁走，不怕时序。
+    #   SELinux：/dev/cpuset 是 cgroup 类型（refs/lineage-sepolicy/private/genfs_contexts:121），
+    #   vendor_init 有 cgroup:file w_file_perms（private/vendor_init.te:46）⇒ 不用加规则。
+    #   Power HAL 仍是 AOSP 示例桩（device.mk 的 android.hardware.power-service.example），这里不碰它。
+    #   ⬜ 未上机。判据：`cat /dev/cpuset/background/cpus /dev/cpuset/system-background/cpus` = 0-3、0-3，
+    #   top-app / foreground 仍 0-7；`grep Cpus_allowed_list /proc/$(pidof -s com.android.providers.media.module)/status`
+    #   之类后台进程 = 0-3；游戏帧率不低于改前（PERF-2 的 game-perf.sh 对照一次）。
+    write /dev/cpuset/background/cpus 0-3
+    write /dev/cpuset/system-background/cpus 0-3
     chown system system /sys/class/backlight/ae96000.dsi.0/brightness
     chmod 0664 /sys/class/backlight/ae96000.dsi.0/brightness
 
