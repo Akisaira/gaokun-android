@@ -1,7 +1,8 @@
 /*
  * 开机后拉起两个后台服务：
  *   · UsbPortNotifier（v1.0 PWR-4 / USB-1）：USB-C 口的提示；
- *   · BootEntryNotifier（2026-10-05，统一启动入口 S9）：入口回落 / 绕过等通知。
+ *   · BootEntryNotifier（2026-10-05，统一启动入口 S9）：入口回落 / 绕过等通知；
+ *   · KeyboardReplugWatcher（2026-10-05，v1.0 DISP-15）：键盘开关关着时，拔插键盘盖后再关一次。
  *
  * ★ 2026-10-05：改成 directBootAware + 同时收 LOCKED_BOOT_COMPLETED（TODO 里记过的小改进）。
  *   BOOT_COMPLETED 要等用户第一次解锁才发；有锁屏密码时，开机到解锁之间 Parts 什么都看不到
@@ -27,5 +28,6 @@ public class BootReceiver extends BroadcastReceiver {
         }
         context.startService(new Intent(context, UsbPortNotifier.class));
         context.startService(new Intent(context, BootEntryNotifier.class));
+        context.startService(new Intent(context, KeyboardReplugWatcher.class));
     }
 }

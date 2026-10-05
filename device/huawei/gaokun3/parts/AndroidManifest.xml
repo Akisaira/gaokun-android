@@ -159,6 +159,13 @@
             android:directBootAware="true"
             android:exported="false" />
 
+        <!-- 键盘开关关着时，键盘盖拔下再插回仍保持关着（v1.0 DISP-15 / HW-11，2026-10-05），见类顶部。
+             directBootAware：解锁之前（锁屏输密码时）插回键盘，也要按开关的状态处理。 -->
+        <service
+            android:name="com.huawei.gaokun3.parts.KeyboardReplugWatcher"
+            android:directBootAware="true"
+            android:exported="false" />
+
         <!-- BOOT_COMPLETED / LOCKED_BOOT_COMPLETED 都是系统（uid 1000）发的受保护广播；本应用也是 uid 1000，不导出照样收得到。
              ★ 2026-10-05 起 directBootAware 并收 LOCKED_BOOT_COMPLETED：有锁屏密码时，BOOT_COMPLETED 要等第一次
                解锁才发，解锁之前两个通知服务都起不来（TODO 里记过）。两个动作都要权限 RECEIVE_BOOT_COMPLETED（上面已声明）。 -->
