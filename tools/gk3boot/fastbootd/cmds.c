@@ -13,9 +13,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#ifdef __linux__
-#include <sys/reboot.h>
-#endif
 
 #include "fbd.h"
 
@@ -494,10 +491,46 @@ static void cmd_flash(fb_ctx *c, const char *name)
 
 /* ---------------------------------------------------------------- erase（§4.6.1 第 2、3 步） */
 
+int fb_erase_part(fb_ctx *c, int pi)
+{
+    const fb_part *p = &G.disk.p[pi];
+    if (pi != FB_P_USERDATA && pi != FB_P_METADATA) {
+        fb_fail(c, "erase is only supported for userdata and metadata (flash %s instead)", fb_part_names[pi]);
+        return -1;
+    }
+    if (precheck(c))
+        return -1;
+    announce(c, "erasing", pi);
+    fb_status("erasing %s", fb_part_names[pi]);
+    if (pi == FB_P_USERDATA) {
+        const uint64_t M = 1u << 20;
+        int r = fb_part_discard(&G.disk, pi, 0, p->size);
+        fb_info(c, "discard: %s", r == 0 ? "done" : r == 1 ? "not supported (zeroing only)" : strerror(errno));
+        if (p->size <= 2 * M) {
+            r = fb_part_zero_verify(&G.disk, pi, 0, p->size);
+        } else {
+            r = fb_part_zero_verify(&G.disk, pi, 0, M);
+            if (!r)
+                r = fb_part_zero_verify(&G.disk, pi, p->size - M, M);
+        }
+        if (r) {
+            fb_fail(c, "zeroing userdata failed: %s", strerror(errno));
+            return -1;
+        }
+        fb_info(c, "userdata: first and last 1 MiB zeroed, first 4 KiB read back as zero");
+    } else {
+        if (fb_part_zero_verify(&G.disk, pi, 0, p->size)) {
+            fb_fail(c, "zeroing metadata failed: %s", strerror(errno));
+            return -1;
+        }
+        fb_info(c, "metadata: all %llu bytes zeroed and read back", (unsigned long long)p->size);
+    }
+    return 0;
+}
+
 static void cmd_erase(fb_ctx *c, const char *name)
 {
     int pi;
-    const fb_part *p;
     if (!G.disk.ok) {
         fb_fail(c, "%s", G.disk.err);
         return;
@@ -512,48 +545,41 @@ static void cmd_erase(fb_ctx *c, const char *name)
         fb_fail(c, "Cannot erase %s while a snapshot update is in progress", fb_part_names[pi]);   /* commands.cpp:233-236 */
         return;
     }
-    if (precheck(c))
+    if (fb_erase_part(c, pi))
         return;
-    p = &G.disk.p[pi];
-    announce(c, "erasing", pi);
-    if (pi == FB_P_USERDATA) {
-        const uint64_t M = 1u << 20;
-        int r = fb_part_discard(&G.disk, pi, 0, p->size);
-        fb_info(c, "discard: %s", r == 0 ? "done" : r == 1 ? "not supported (zeroing only)" : strerror(errno));
-        if (p->size <= 2 * M) {
-            r = fb_part_zero_verify(&G.disk, pi, 0, p->size);
-        } else {
-            r = fb_part_zero_verify(&G.disk, pi, 0, M);
-            if (!r)
-                r = fb_part_zero_verify(&G.disk, pi, p->size - M, M);
-        }
-        if (r) {
-            fb_fail(c, "zeroing userdata failed: %s", strerror(errno));
-            return;
-        }
-        fb_info(c, "userdata: first and last 1 MiB zeroed, first 4 KiB read back as zero");
-    } else {
-        if (fb_part_zero_verify(&G.disk, pi, 0, p->size)) {
-            fb_fail(c, "zeroing metadata failed: %s", strerror(errno));
-            return;
-        }
-        fb_info(c, "metadata: all %llu bytes zeroed and read back", (unsigned long long)p->size);
-    }
     fb_info(c, "Will be formatted by Android on next boot");
     fb_okay(c, "Erasing succeeded");
 }
 
-/* ---------------------------------------------------------------- 重启类（经 BCB 让 gk3boot 下次进执行端） */
+/* ---------------------------------------------------------------- 重启类
+ *
+ * 守护进程不调 reboot(2)：收尾后以退出码把意图交给 /init（fbd.h 的 FB_EXIT_*）。
+ *   gk3.dispatch=1（拉起本执行端的 gk3boot 会消费 BCB）：reboot-bootloader / -fastboot / -recovery 照 init 的写法写 BCB，
+ *     然后冷重启 —— 走与 adb reboot bootloader 完全相同的路（gk3boot 分派回执行端），刷过的 boot_x 也真的换上了；
+ *   否则（分派关着、或执行端是从别的路进来的）：BCB 写了也没人消费，还会堵住 init 的写入通道（reboot.cpp:923-937）
+ *     ⇒ 不写，原地重起 fastboot（软重新枚举）/ 原地切到菜单。写不了 BCB（没有可信的 misc）时同样原地。 */
 
+/* 返回 -1 = 已回 FAIL；0 = BCB 已写好或保留（冷重启）；1 = 没写（原地） */
 static int bcb_update(fb_ctx *c, fb_reboot_kind k)
 {
     uint8_t bcb[GK3_MISC_BCB_SIZE];
     gk3_bcb_info bi;
-    if (!G.disk.ok)
-        return 0;   /* 没有可信的 misc：照样重启（主机要的是重启），意图只能丢 */
-    if (fb_misc_read(&G.disk, misc)) {
-        fb_info(c, "WARNING: cannot read misc (%s); rebooting without a boot intent", strerror(errno));
+    if (k != FB_RB_BOOTLOADER && k != FB_RB_FASTBOOT && k != FB_RB_RECOVERY)
         return 0;
+    if (!G.dispatch) {
+        fb_info(c, "gk3boot BCB dispatch is off for this boot (no gk3.dispatch=1): %s in place, no BCB written",
+                k == FB_RB_RECOVERY ? "switching to the menu" : "restarting fastboot");
+        return 1;
+    }
+    if (!G.disk.ok) {
+        fb_info(c, "no trusted misc (%s): %s in place", G.disk.err,
+                k == FB_RB_RECOVERY ? "switching to the menu" : "restarting fastboot");
+        return 1;
+    }
+    if (fb_misc_read(&G.disk, misc)) {
+        fb_info(c, "WARNING: cannot read misc (%s): %s in place", strerror(errno),
+                k == FB_RB_RECOVERY ? "switching to the menu" : "restarting fastboot");
+        return 1;
     }
     memcpy(bcb, misc, sizeof(bcb));
     gk3_bcb_classify(bcb, &bi);
@@ -566,7 +592,7 @@ static int bcb_update(fb_ctx *c, fb_reboot_kind k)
         memset(bcb, 0, GK3_BCB_COMMAND_LEN);
         memcpy(bcb, k == FB_RB_BOOTLOADER ? "bootonce-bootloader" : "boot-recovery",
                strlen(k == FB_RB_BOOTLOADER ? "bootonce-bootloader" : "boot-recovery"));
-    } else if (k == FB_RB_FASTBOOT) {
+    } else {
         /* init 的 reboot,fastboot 是整份重写（write_bootloader_message(options)）；但一个待执行的恢复出厂不能被它冲掉 */
         static const char *const args[] = {"--fastboot"};
         if (bi.kind == GK3_BCB_WIPE || bi.kind == GK3_BCB_PROMPT_WIPE) {
@@ -575,8 +601,6 @@ static int bcb_update(fb_ctx *c, fb_reboot_kind k)
         }
         gk3_bcb_clear(bcb);
         gk3_bcb_write_recovery(bcb, args, 1);
-    } else {
-        return 0;
     }
     if (precheck(c))
         return -1;
@@ -591,17 +615,33 @@ static int bcb_update(fb_ctx *c, fb_reboot_kind k)
 
 static void cmd_reboot(fb_ctx *c, fb_reboot_kind k)
 {
-    if (bcb_update(c, k))
+    int r = bcb_update(c, k);
+    if (r < 0)
         return;
+    if (r == 1)
+        k = k == FB_RB_RECOVERY ? FB_RB_MENU : FB_RB_RESTART;
     fb_pending_reboot = k;
-    fb_okay(c, "%s", k == FB_RB_POWEROFF ? "Shutting down" : "Rebooting");
+    fb_okay(c, "%s", k == FB_RB_POWEROFF ? "Shutting down" : k == FB_RB_RESTART ? "Restarting fastboot"
+                     : k == FB_RB_MENU ? "Switching to the menu" : "Rebooting");
+}
+
+int fb_reboot_exit_code(fb_reboot_kind k)
+{
+    switch (k) {
+    case FB_RB_POWEROFF: return FB_EXIT_POWEROFF;
+    case FB_RB_RESTART: return FB_EXIT_RESTART;
+    case FB_RB_MENU: return FB_EXIT_MENU;
+    default: return FB_EXIT_REBOOT;     /* reboot；bootloader / fastboot / recovery 的 BCB 已经写好 */
+    }
 }
 
 void fb_do_reboot(fb_reboot_kind k)
 {
-    static const char *const names[] = {"none", "reboot", "bootloader", "fastboot", "recovery", "poweroff"};
+    static const char *const names[] = {"none", "reboot", "bootloader", "fastboot", "recovery", "poweroff",
+                                        "restart", "menu"};
+    int code = fb_reboot_exit_code(k);
     fb_pending_reboot = FB_RB_NONE;
-    fb_log("reboot requested: %s", names[k]);
+    fb_log("reboot requested: %s (exit code %d for /init)", names[k], code);
     if (G.test_reboot) {
         FILE *f = fopen(G.test_reboot, "a");
         if (f) {
@@ -610,12 +650,14 @@ void fb_do_reboot(fb_reboot_kind k)
         }
         return;
     }
+    fb_status("%s", k == FB_RB_POWEROFF ? "powering off (host request)"
+                    : k == FB_RB_RESTART ? "restarting fastboot (host request)"
+                    : k == FB_RB_MENU ? "switching to the menu (host request)"
+                    : k == FB_RB_REBOOT ? "rebooting (host request)"
+                    : "rebooting to the executor (BCB written, host request)");
     sync();
-    usleep(300000);     /* 让最后一个 OKAY 走完 USB */
-#ifdef __linux__
-    reboot(k == FB_RB_POWEROFF ? RB_POWER_OFF : RB_AUTOBOOT);
-#endif
-    fb_log("reboot() returned: %s", strerror(errno));
+    usleep(300000);     /* 让最后一个 OKAY 走完 USB（/init 收到退出码后才解绑 UDC） */
+    exit(code);
 }
 
 /* ---------------------------------------------------------------- 进入时（boot-entry-design §4.3.4） */

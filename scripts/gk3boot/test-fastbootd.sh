@@ -12,8 +12,8 @@
 # 全程不碰设备、不碰构建机。产物：tools/gk3boot/build/fbd/gk3-fastbootd.static（与上机那份同一编法）。
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-IMG=fbd-gk3-fastbootd-test
-NAME=fbd-test-$$
+IMG=${GK3_DOCKER_PREFIX:-}fbd-gk3-fastbootd-test   # GK3_DOCKER_PREFIX：与别的会话共用 colima 时加前缀
+NAME=${GK3_DOCKER_PREFIX:-}fbd-test-$$
 
 docker info >/dev/null 2>&1 || { echo "✗ docker 不通 —— 本机先 colima start" >&2; exit 2; }
 

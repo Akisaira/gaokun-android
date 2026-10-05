@@ -12,7 +12,7 @@
 # 不碰设备、不碰构建机。用完 colima 要不要停，先看 `docker ps` 有没有别人的容器。
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-IMG=fbi-gk3boot-build
+IMG=${GK3_DOCKER_PREFIX:-}fbi-gk3boot-build   # GK3_DOCKER_PREFIX：与别的会话共用 colima 时给镜像 / 容器名加前缀
 OUTREL=tools/gk3boot/build/fastboot
 
 docker info >/dev/null 2>&1 || { echo "✗ docker 不通 —— 本机先 colima start" >&2; exit 2; }
@@ -33,7 +33,7 @@ if [ -n "$FBD" ]; then
 fi
 EPOCH=$(git -C "$ROOT" log -1 --format=%ct 2>/dev/null || echo 0)
 
-docker run --rm --name "fbi-build-$$" -v "$ROOT:/src" ${MNT[@]+"${MNT[@]}"} -e SOURCE_DATE_EPOCH="$EPOCH" -w /src "$IMG" \
+docker run --rm --name "${GK3_DOCKER_PREFIX:-}fbi-build-$$" -v "$ROOT:/src" ${MNT[@]+"${MNT[@]}"} -e SOURCE_DATE_EPOCH="$EPOCH" -w /src "$IMG" \
     bash tools/gk3boot/initramfs/build.sh --out "$OUTREL" ${ARGS[@]+"${ARGS[@]}"}
 f=$ROOT/$OUTREL/fastboot.img
 [ -s "$f" ] || { echo "✗ 没有产物 $f" >&2; exit 1; }

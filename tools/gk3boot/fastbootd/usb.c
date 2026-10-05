@@ -4,7 +4,9 @@
  *   接口 0xff/0x42/0x03（主机端判据 fastboot/fastboot.cpp:244），两个 bulk 端点（v2 描述符两端同号 1，
  *   写 v2 失败就退回 v1，v1 里 IN 是 2）；FS 64 / HS 512 / SS 1024 字节包；接口字符串 "fastbootd"。
  *   端点文件：ep0 控制、ep1 = OUT（主机 → 设备）、ep2 = IN。
- * gadget（--usb 时由本进程在 configfs 里建，boot-entry-design §4.4.1 / fastboot-design §4.7）：
+ * gadget：执行端里由 /init 建（usb_gadget/gk3fb、挂 functionfs、看到 ep1 才绑 UDC，README §13.3），本进程走
+ *   --usb-nosetup：只打开 $GK3_FFS/ep0 写描述符与字符串，不碰 configfs 的 UDC、不碰 role。
+ *   不在 /init 之下单独跑时（开发 / 别的 initramfs）也可以 --usb 让本进程自己建（以下几行是那条路径）：
  *   g1，18D1:4EE0（refs/aosp-build/target/product/base_vendor.mk:33-35 的 fastboot PID），一个 ffs.fastboot 函数，
  *   functionfs 挂到 /dev/usb-ffs/fastboot，描述符写进 ep0 之后才写 UDC（顺序反了 UDC 绑不上）。
  *   序列号 gaokun3（与 adb gadget 一致，init.gaokun3.usb.rc；U5 未定）。
@@ -25,9 +27,9 @@
 #include "fbd.h"
 
 #ifndef __linux__
-fb_transport *fb_usb_new(const char *udc, bool setup_gadget)
+fb_transport *fb_usb_new(const char *udc, bool setup_gadget, const char *ffs_dir)
 {
-    (void)udc; (void)setup_gadget;
+    (void)udc; (void)setup_gadget; (void)ffs_dir;
     fb_log("usb: FunctionFS transport needs Linux");
     return NULL;
 }
@@ -38,7 +40,8 @@ fb_transport *fb_usb_new(const char *udc, bool setup_gadget)
 #include <pthread.h>
 #include <sys/mount.h>
 
-#define FFS_DIR   "/dev/usb-ffs/fastboot"
+#define FFS_DEFAULT "/dev/usb-ffs/fastboot"
+static char ffs_root[200] = FFS_DEFAULT;   /* /init 建 gadget 时由 GK3_FFS 指定（--usb-nosetup 路径） */
 #define GADGET    "/sys/kernel/config/usb_gadget/g1"
 #define IO_CHUNK  (1u << 20)
 
@@ -209,8 +212,10 @@ static int setup_gadget(void)
         fb_log("usb: link function: %s", strerror(errno));
         return -1;
     }
-    mkdirs(FFS_DIR);
-    if (stat(FFS_DIR "/ep0", &st) && mount("fastboot", FFS_DIR, "functionfs", 0, "no_disconnect=1")) {
+    char ep0[256];
+    snprintf(ep0, sizeof(ep0), "%s/ep0", ffs_root);
+    mkdirs(ffs_root);
+    if (stat(ep0, &st) && mount("fastboot", ffs_root, "functionfs", 0, "no_disconnect=1")) {
         fb_log("usb: mount functionfs: %s", strerror(errno));
         return -1;
     }
@@ -255,8 +260,11 @@ static void *ep0_thread(void *arg)
 
 static int open_eps(usbx *x)
 {
-    x->out = open(FFS_DIR "/ep1", O_RDONLY | O_CLOEXEC);
-    x->in = open(FFS_DIR "/ep2", O_WRONLY | O_CLOEXEC);
+    char p[256];
+    snprintf(p, sizeof(p), "%s/ep1", ffs_root);
+    x->out = open(p, O_RDONLY | O_CLOEXEC);
+    snprintf(p, sizeof(p), "%s/ep2", ffs_root);
+    x->in = open(p, O_WRONLY | O_CLOEXEC);
     if (x->out < 0 || x->in < 0) {
         fb_log("usb: open bulk endpoints: %s", strerror(errno));
         if (x->out >= 0)
@@ -342,25 +350,28 @@ static void u_close(fb_transport *t)
     x->out = x->in = -1;
 }
 
-fb_transport *fb_usb_new(const char *udc, bool setup)
+fb_transport *fb_usb_new(const char *udc, bool setup, const char *ffs_dir)
 {
     fb_transport *t = calloc(1, sizeof(*t));
     usbx *x = calloc(1, sizeof(*x));
     struct desc_v2 v2;
     struct desc_v1 v1;
-    char cur[64];
+    char cur[64], ep0[256];
 
     if (!t || !x)
         return NULL;
+    if (ffs_dir && ffs_dir[0])
+        snprintf(ffs_root, sizeof(ffs_root), "%s", ffs_dir);
+    snprintf(ep0, sizeof(ep0), "%s/ep0", ffs_root);
     x->out = x->in = -1;
     if (setup) {
         ensure_device_role(udc);
         if (setup_gadget())
             return NULL;
     }
-    x->ep0 = open(FFS_DIR "/ep0", O_RDWR | O_CLOEXEC);
+    x->ep0 = open(ep0, O_RDWR | O_CLOEXEC);
     if (x->ep0 < 0) {
-        fb_log("usb: open %s/ep0: %s", FFS_DIR, strerror(errno));
+        fb_log("usb: open %s: %s", ep0, strerror(errno));
         return NULL;
     }
     memset(&v2, 0, sizeof(v2));

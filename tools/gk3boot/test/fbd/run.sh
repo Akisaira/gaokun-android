@@ -143,7 +143,9 @@ attach "$W/b1.img" LB1; attach "$W/b2.img" LB2; attach "$W/c1.img" LC1; attach "
 echo "  loop：factory=$LA dual=$LD dup=$LX missing=$LM 两块好盘=$LB1,$LB2 克隆=$LC1,$LC2"
 MA=$W/a/manifest.json
 MISC_A=$(part_uuid "$MA" misc)
-CL_A="console=tty0 gk3.mode=fastboot gk3.why=bootloader gk3.slot=a gk3.bootver=gk3boot-test gk3.disk=$MISC_A"
+# gk3.dispatch=1：入口开着 BCB 分派（S7c）⇒ 重启类命令写 BCB + 冷重启；CL_OFF（不带它）测"原地"
+CL_A="console=tty0 gk3.mode=fastboot gk3.why=bootloader gk3.slot=a gk3.bootver=gk3boot-test gk3.disk=$MISC_A gk3.dispatch=1"
+CL_OFF="console=tty0 gk3.mode=fastboot gk3.why=bootloader gk3.slot=a gk3.bootver=gk3boot-test gk3.disk=$MISC_A"
 
 # ======================================================================== 传输开关
 group "TCP 默认关（发布形态）"
@@ -391,6 +393,195 @@ start_daemon "$CL_A" --disks="$LA" || exit 1
 check "进入时 --wipe_data 原样留给 S7b（不清、不擦）" test "$($FX misc-dump "$W/a.img" "$MA" | sed -n 's/^bcb_sha256=//p')" = "$W1"
 $FX misc "$W/a.img" "$MA" --bcb none
 
+group "重启类：分派关（没有 gk3.dispatch=1）⇒ 原地，不写 BCB"
+$FX misc "$W/a.img" "$MA" --bcb none
+start_daemon "$CL_OFF" --disks="$LA" || exit 1
+B0=$($FX misc-dump "$W/a.img" "$MA" | sed -n 's/^bcb_sha256=//p')
+fb reboot bootloader
+check "reboot bootloader → 意图 restart（原地重起）" test "$(tail -1 "$W/reboot.txt")" = restart
+check "主机看到 INFO：分派关着、不写 BCB" out_has "BCB dispatch is off"
+fbc reboot-fastboot
+check "reboot-fastboot → 意图 restart" test "$(tail -1 "$W/reboot.txt")" = restart
+fb reboot recovery
+check "reboot recovery → 意图 menu（原地切菜单）" test "$(tail -1 "$W/reboot.txt")" = menu
+check "BCB 一字节没动" test "$($FX misc-dump "$W/a.img" "$MA" | sed -n 's/^bcb_sha256=//p')" = "$B0"
+stop_daemon
+
+# rc_daemon <cmdline> <命令…>：不带 --test-reboot 起守护进程，发一条命令，等它自己退出，退出码放进 RC
+rc_daemon() {
+    local cl=$1 p i
+    shift
+    stop_daemon
+    echo "$cl" > "$W/cmdline"
+    rm -f "$W/status"
+    "$BIN" --no-usb --tcp="$PORT" --cmdline="$W/cmdline" --rundir="$W/run" --status="$W/status" --log="$W/daemon.log" \
+        --disks="$LA" 2>>"$W/daemon.stderr" &
+    p=$!
+    for i in $(seq 1 100); do grep -q ' ready$' "$W/daemon.log" 2>/dev/null && break; sleep 0.05; done
+    "$@" > "$W/out" 2>&1
+    for i in $(seq 1 100); do kill -0 "$p" 2>/dev/null || break; sleep 0.05; done
+    if kill -0 "$p" 2>/dev/null; then kill -9 "$p"; wait "$p" 2>/dev/null; RC=timeout; else wait "$p"; RC=$?; fi
+    cat "$W/daemon.log" >> "$W/daemon-all.log" 2>/dev/null
+    : > "$W/daemon.log"
+}
+group "退出码（守护进程不调 reboot(2)，把意图交给 /init）"
+$FX misc "$W/a.img" "$MA" --bcb none
+rc_daemon "$CL_A" $F reboot
+check "fastboot reboot → 退出码 0（得到 $RC）" test "$RC" = 0
+check "状态文件写明 rebooting" grep -q 'rebooting (host request)' "$W/status"
+check "BCB 仍为空" test "$($FX misc-dump "$W/a.img" "$MA" | sed -n 's/^bcb_command=//p')" = ""
+rc_daemon "$CL_A" $F reboot bootloader
+check "分派开：reboot bootloader → 退出码 0（得到 $RC）" test "$RC" = 0
+check "  且 BCB = bootonce-bootloader（重启后 gk3boot 送回执行端）" test "$($FX misc-dump "$W/a.img" "$MA" | sed -n 's/^bcb_sha256=//p')" = "$($FX bcb-expect bootloader)"
+$FX misc "$W/a.img" "$MA" --bcb none
+rc_daemon "$CL_OFF" $F reboot bootloader
+check "分派关：reboot bootloader → 退出码 11（得到 $RC）" test "$RC" = 11
+rc_daemon "$CL_OFF" fbc reboot-fastboot
+check "分派关：reboot-fastboot → 退出码 11（得到 $RC）" test "$RC" = 11
+rc_daemon "$CL_OFF" $F reboot recovery
+check "分派关：reboot recovery → 退出码 12（得到 $RC）" test "$RC" = 12
+check "  BCB 仍为空" test "$($FX misc-dump "$W/a.img" "$MA" | sed -n 's/^bcb_command=//p')" = ""
+rc_daemon "$CL_A" fbc shutdown
+check "shutdown → 退出码 10（得到 $RC）" test "$RC" = 10
+stop_daemon
+echo "$CL_A" > "$W/cmdline"
+"$BIN" --no-usb --tcp="$PORT" --cmdline="$W/cmdline" --rundir="$W/run" --status="$W/status" --log="$W/daemon.log" \
+    --disks="$LA" 2>>"$W/daemon.stderr" &
+tp=$!
+for i in $(seq 1 100); do grep -q ' ready$' "$W/daemon.log" 2>/dev/null && break; sleep 0.05; done
+check "状态文件写明 ready" grep -q '^ready: waiting for a host (tcp)' "$W/status"
+kill -TERM "$tp"; wait "$tp"; RC=$?
+check "SIGTERM → 等命令锁后退出 143（得到 $RC）" test "$RC" = 143
+check "状态文件写明 stopped" grep -q 'stopped (signal 15)' "$W/status"
+cat "$W/daemon.log" >> "$W/daemon-all.log"; : > "$W/daemon.log"
+
+# 子命令：/init 停掉常驻实例之后才调，所以这里不起常驻进程
+fill_ud_md() {   # userdata / metadata 填满 0x5a（擦没擦一眼可辨）
+    python3 - "$W/a.img" "$MA" <<'EOF'
+import json, sys
+disk, man = sys.argv[1], json.load(open(sys.argv[2]))
+with open(disk, "r+b") as f:
+    for p in man["parts"]:
+        if p["name"] in ("userdata", "metadata"):
+            n = (p["last"] - p["first"] + 1) * 512
+            f.seek(p["first"] * 512); f.write(b"\x5a" * n)
+EOF
+}
+ud_md_state() {  # 打印 wiped / untouched / mixed
+    $FX part "$W/a.img" "$MA" userdata "$W/ud"
+    $FX part "$W/a.img" "$MA" metadata "$W/md"
+    python3 - "$W/ud" "$W/md" <<'EOF'
+import sys
+ud, md = open(sys.argv[1], "rb").read(), open(sys.argv[2], "rb").read()
+M = 1 << 20
+if ud[:M] == bytes(M) and ud[-M:] == bytes(M) and md == bytes(len(md)):
+    print("wiped")
+elif ud[:4096] == b"\x5a" * 4096 and md == b"\x5a" * len(md):
+    print("untouched")
+else:
+    print("mixed")
+EOF
+}
+sub() {   # sub <cmdline> <子命令参数…>：退出码放进 RC，stdout 在 $W/out
+    local cl=$1
+    shift
+    echo "$cl" > "$W/cmdline"
+    "$BIN" --cmdline="$W/cmdline" --rundir="$W/run" --disks="$LA" --log="$W/daemon.log" "$@" > "$W/out" 2>>"$W/daemon.stderr"
+    RC=$?
+    cat "$W/daemon.log" >> "$W/daemon-all.log" 2>/dev/null
+    : > "$W/daemon.log"
+}
+ZERO_BCB=$(head -c 2048 /dev/zero | sha256sum | cut -d' ' -f1)
+bcb_sha() { $FX misc-dump "$W/a.img" "$MA" | sed -n 's/^bcb_sha256=//p'; }
+CL_W="console=tty0 gk3.mode=fastboot gk3.why=wipe gk3.slot=a gk3.bootver=gk3boot-test gk3.disk=$MISC_A gk3.dispatch=1"
+
+group "子命令 --wipe-data：免二次确认的判据（boot-entry-design §4.4.3）"
+sums "$W/a.img" "$MA" "$W/w0.json"
+fill_ud_md
+$FX misc "$W/a.img" "$MA" --bcb wipe --rec plain --vab none
+WB=$(bcb_sha)
+sub "$CL_W" --wipe-data
+check "没有迁移标记 ⇒ 退出码 3（得到 $RC）" test "$RC" = 3
+check "  stdout 说明原因" out_has "no migration marker"
+check "  BCB 原样" test "$(bcb_sha)" = "$WB"
+check "  userdata / metadata 未动" test "$(ud_md_state)" = untouched
+$FX misc "$W/a.img" "$MA" --rec migrated
+sub "$CL_W" --wipe-data
+check "迁移了但入口没记这份 BCB ⇒ 3（得到 $RC）" test "$RC" = 3
+check "  stdout：does not match" out_has "does not match"
+$FX misc "$W/a.img" "$MA" --bcb wipe --rec dispatched
+$FX misc "$W/a.img" "$MA" --bcb wipe2
+sub "$CL_W" --wipe-data
+check "入口记的是另一份 wipe（摘要不同）⇒ 3（得到 $RC）" test "$RC" = 3
+$FX misc "$W/a.img" "$MA" --bcb wipe --rec dispatched
+GK3_WHY=bootloader sub "$CL_W" --wipe-data
+check "环境变量 GK3_WHY 覆盖 cmdline（why=bootloader）⇒ 3（得到 $RC）" test "$RC" = 3
+check "  stdout：not entered for a factory reset" out_has "not entered for a factory reset"
+check "  到这里仍然一个字节没擦" test "$(ud_md_state)" = untouched
+sub "$CL_W" --wipe-data
+check "迁移 + why=wipe + 摘要一致 ⇒ 免确认擦除，退出码 0（得到 $RC）" test "$RC" = 0
+check "  userdata 开头 / 末尾 1 MiB、metadata 整块全零" test "$(ud_md_state)" = wiped
+check "  BCB 整份清零" test "$(bcb_sha)" = "$ZERO_BCB"
+check "  stdout：User data erased" out_has "User data erased"
+sums "$W/a.img" "$MA" "$W/w1.json"
+check "  只动了 userdata / misc / metadata" same_except "$W/w0.json" "$W/w1.json" '^p(2:userdata|4:misc|8:metadata)$'
+sub "$CL_W" --wipe-data
+check "再来一次（BCB 已空）⇒ 3，不重复擦" test "$RC" = 3
+
+group "子命令 --wipe-data --confirm（确认页 / 菜单里的恢复出厂）"
+fill_ud_md
+$FX misc "$W/a.img" "$MA" --bcb none --rec none
+sub "$CL_OFF" --wipe-data --confirm
+check "BCB 空、没有记录、why=bootloader ⇒ 照擦，退出码 0（得到 $RC）" test "$RC" = 0
+check "  擦了" test "$(ud_md_state)" = wiped
+fill_ud_md
+$FX misc "$W/a.img" "$MA" --bcb prompt
+sub "$CL_W" --wipe-data --confirm
+check "RescueParty（prompt_wipe）确认后 ⇒ 0（得到 $RC）" test "$RC" = 0
+check "  BCB 清掉" test "$(bcb_sha)" = "$ZERO_BCB"
+sub "$CL_W" --confirm
+check "--confirm 不跟 --wipe-data ⇒ 用法错 2（得到 $RC）" test "$RC" = 2
+
+group "子命令 --wipe-data 的 VAB 守卫（fastboot-design §4.6.2）"
+fill_ud_md
+$FX misc "$W/a.img" "$MA" --bcb wipe --rec dispatched --vab merging
+sub "$CL_W" --wipe-data
+check "合并中 ⇒ 拒绝，退出码 4（得到 $RC）" test "$RC" = 4
+check "  stdout：being merged" out_has "being merged"
+check "  一个字节没擦" test "$(ud_md_state)" = untouched
+check "  不保留延期的清除：BCB 清掉" test "$(bcb_sha)" = "$ZERO_BCB"
+check "  GK3 记了 refused_merging（aux 3 = MERGING）" sh -c "$FX misc-dump '$W/a.img' '$MA' | grep -q '^rec_events=.*refused_merging:3'"
+$FX misc "$W/a.img" "$MA" --bcb wipe --rec dispatched --vab merging
+sub "$CL_W" --wipe-data --confirm
+check "合并中、用户确认过也拒绝 ⇒ 4（得到 $RC）" test "$RC" = 4
+# 夹具的 VAB source_slot = 0：在 _b 上 SNAPSHOTTED 才是"更新待验证"（在源槽 _a 上视为 none，libboot_control.cpp:422-440）
+$FX misc "$W/a.img" "$MA" --bcb wipe --rec dispatched --vab snapshotted
+sub "${CL_W/gk3.slot=a/gk3.slot=b}" --wipe-data
+check "当前槽 _b、SNAPSHOTTED ⇒ 拒绝 4（得到 $RC）" test "$RC" = 4
+check "  stdout：not yet verified" out_has "not yet verified"
+check "  一个字节没擦" test "$(ud_md_state)" = untouched
+$FX misc "$W/a.img" "$MA" --bcb wipe --rec dispatched --vab snapshotted
+sub "$CL_W" --wipe-data
+check "当前槽 = 源槽 _a、SNAPSHOTTED ⇒ 视为 none，照擦 0（得到 $RC）" test "$RC" = 0
+$FX misc "$W/a.img" "$MA" --vab none
+
+group "子命令 --clear-bcb；没有目标盘"
+$FX misc "$W/a.img" "$MA" --bcb recovery
+sub "$CL_A" --clear-bcb
+check "--clear-bcb ⇒ 0（得到 $RC）" test "$RC" = 0
+check "  BCB 整份清零" test "$(bcb_sha)" = "$ZERO_BCB"
+check "  stdout：cleared" out_has "cleared"
+sub "$CL_A" --clear-bcb
+check "已经空了 ⇒ 仍是 0（得到 $RC）" test "$RC" = 0
+echo "console=tty0 gk3.why=wipe" > "$W/cmdline"
+"$BIN" --cmdline="$W/cmdline" --rundir="$W/run" --disks="$LX" --wipe-data > "$W/out" 2>>"$W/daemon.stderr"; RC=$?
+check "坏盘（重名）上 --wipe-data ⇒ 5（得到 $RC）" test "$RC" = 5
+"$BIN" --cmdline="$W/cmdline" --rundir="$W/run" --disks="$LX" --clear-bcb > "$W/out" 2>>"$W/daemon.stderr"; RC=$?
+check "坏盘上 --clear-bcb ⇒ 5（得到 $RC）" test "$RC" = 5
+$FX misc "$W/a.img" "$MA" --bcb none --rec none --vab none
+# 后面几组接着用一个常驻实例（原来是"进入时的 BCB"那一组留下的那个）
+start_daemon "$CL_A" --disks="$LA" || exit 1
+
 # ======================================================================== 其他命令
 group "flashing / oem / 不支持的命令"
 fb flashing get_unlock_ability; check "get_unlock_ability: 1" out_has "get_unlock_ability: 1"
@@ -466,7 +657,7 @@ for lay in dup missing; do
     fb erase userdata; check "erase userdata → FAIL" grep -q FAILED "$W/out"
     fb set_active a; check "set_active → FAIL" grep -q FAILED "$W/out"
     fb -w; check "-w → 不擦（主机报错或 FAIL）" sh -c "! grep -q 'Erasing succeeded' '$W/out'"
-    fb reboot bootloader; check "reboot bootloader 仍然重启（没有可信 misc，意图丢掉）" test "$(tail -1 "$W/reboot.txt")" = bootloader
+    fb reboot bootloader; check "reboot bootloader → 原地重起 fastboot（没有可信 misc，不写 BCB）" test "$(tail -1 "$W/reboot.txt")" = restart
     sums "$IMG" "$MM" "$W/$lay-1.json"
     check "整盘一字节不变（含 misc）" same_except "$W/$lay-0.json" "$W/$lay-1.json" ''
     stop_daemon

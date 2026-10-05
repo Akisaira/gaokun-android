@@ -601,6 +601,7 @@ int fb_misc_write(fb_disk *d, uint32_t off, const void *data, size_t len)
     ssize_t r;
     bool ok = (off == GK3_MISC_BCB_OFF && len <= GK3_MISC_BCB_SIZE) ||
               (off == GK3_MISC_BCAB_OFF && len == GK3_MISC_BCAB_SIZE) ||
+              (off == GK3_MISC_GK3_OFF && len == GK3_MISC_GK3_SIZE) ||
               (off == GK3_MISC_SYSTEM_OFF && len <= 64);
     if (!ok || !d->ok) {
         fb_log("BUG: refused misc write off=%u len=%zu", off, len);

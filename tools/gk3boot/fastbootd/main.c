@@ -1,24 +1,40 @@
 /* gk3-fastbootd：入口。
  *
+ * 在执行端 initramfs 里由 /init（PID 1，管生命周期与界面）这样调（README §13.3，唯一的约定写法）：
+ *   常驻：   gk3-fastbootd --usb-nosetup               gadget / UDC / role 归 /init；本进程只往 $GK3_FFS/ep0 写描述符
+ *   子命令： gk3-fastbootd --wipe-data [--confirm]     恢复出厂（/init 先停掉常驻实例：同一块盘只有一个写者）
+ *            gk3-fastbootd --clear-bcb                 只清 BCB
+ * 参数之外的输入：/init 导出的环境变量 GK3_WHY GK3_SLOT GK3_DISK GK3_BOOTVER GK3_FFS GK3_UDC GK3_RUN
+ * （前四个 = cmdline 里的同名值；GK3_RUN 决定状态文件 $GK3_RUN/fastbootd.status），其余键自己读 /proc/cmdline。
+ * 优先级：命令行选项 > 环境变量 > /proc/cmdline。
+ * 常驻模式不调 reboot(2)：重启 / 关机 / 原地重起 / 切菜单都用退出码交给 /init（fbd.h 的 FB_EXIT_*）。
+ * SIGTERM / SIGINT：等手上那条命令做完（拿命令锁）再以 128+信号 退出，不在写盘中途停下（/init 3 秒后才 SIGKILL）。
+ *
  *   gk3-fastbootd [选项]
- *     --usb               起 USB 传输：建 configfs gadget g1（18D1:4EE0）+ functionfs + 绑 UDC（缺省开）
+ *     --wipe-data [--confirm]  子命令：恢复出厂（boot-entry-design §4.4.3）。不带 --confirm 时自己判"免二次确认"
+ *     --clear-bcb         子命令：只清 BCB（0–2 KiB），写后读回
+ *     --usb               起 USB 传输（缺省开）；不带 --usb-nosetup 时本进程自己建 configfs gadget g1 + 绑 UDC（开发用）
  *     --no-usb            不起 USB
- *     --usb-nosetup       gadget 与 functionfs 已由 /init 建好（/dev/usb-ffs/fastboot），只写描述符
- *     --udc=<名字>        缺省 a600000.usb（boot-entry-design §4.4.1：只用 port0）
+ *     --usb-nosetup       gadget 与 functionfs 已由 /init 建好：只写描述符，不碰 UDC、不碰 role
+ *     --ffs=<目录>        FunctionFS 挂载点（缺省 $GK3_FFS，再缺省 /dev/usb-ffs/fastboot）
+ *     --udc=<名字>        缺省 $GK3_UDC，再缺省 a600000.usb（boot-entry-design §4.4.1：只用 port0；只在自己建 gadget 时用）
  *     --tcp[=<端口>]      起 TCP 传输（缺省 5554）。不给时看 cmdline 的 gk3.fbtcp=1；发布默认关
  *     --cmdline=<文件>    代替 /proc/cmdline（测试）
  *     --disk=<路径>       直接指定目标盘（整盘节点或镜像文件；测试 / 开发）。仍要过六个名字的唯一性检查
  *     --disks=<a,b,…>     扫描时只看这些盘（测试隔离：容器里还有别的 loop 盘）
  *     --esp-dir=<目录>    把一个已有目录当 ESP 根（不挂载；只给没有 loop 设备的主机测试用）
  *     --rundir=<目录>     私有目录（mknod 的节点、ESP 挂载点），缺省 /run/gk3-fastbootd
+ *     --status=<文件>     状态文件（缺省 $GK3_RUN/fastbootd.status；都没有就不写）
  *     --max-download=<字节> 缺省 0x20000000（512 MiB，fastboot-design §4.5）
- *     --test-reboot=<文件> 重启类命令只把意图（reboot / bootloader / fastboot / recovery / poweroff）追加进文件、不真重启
+ *     --test-reboot=<文件> 重启类命令只把意图（reboot / bootloader / fastboot / recovery / poweroff / restart / menu）
+ *                         追加进文件、不退出（离线测试）
  *     --log=<文件>        日志另写一份文件；--kmsg 写 /dev/kmsg
  *     --no-entry          不处理进入时的 BCB（测试）
  *     --version
- *   读的 cmdline 键（boot-entry-design §4.4.1，由 gk3boot 拼）：
- *     gk3.why=<…>  gk3.slot=<a|b|0|1>  gk3.bootver=<…>  gk3.disk=<misc 的 PARTUUID>
- *     gk3.esp=<ESP 的 PARTUUID>（S7c 新增，可选）  gk3.fbtcp=1（打开 TCP）  gk3.serialno=<…>（可选，缺省 gaokun3）
+ *   读的 cmdline 键（boot-entry-design §4.4.1，由 gk3boot 的 gk3_cmdline_fastboot 拼）：
+ *     gk3.why=<…>  gk3.slot=<a|b|0|1>  gk3.bootver=<…>  gk3.disk=<misc 的 PARTUUID>  gk3.esp=<ESP 的 PARTUUID>
+ *     gk3.dispatch=1（拉起本执行端的 gk3boot 开着 BCB 分派 ⇒ 重启类命令写 BCB + 冷重启；否则原地）
+ *     gk3.fbtcp=1（打开 TCP）  gk3.serialno=<…>（可选，缺省 gaokun3）
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -59,6 +75,36 @@ static bool safe_val(const char *s)
     return true;
 }
 
+/* 环境变量：没设、空串、含不合规字符 ⇒ 当作没给 */
+static const char *env(const char *k)
+{
+    const char *v = getenv(k);
+    return v && v[0] && safe_val(v) ? v : NULL;
+}
+
+static int parse_slot(const char *v)
+{
+    if (!strcmp(v, "a") || !strcmp(v, "0") || !strcmp(v, "_a"))
+        return 0;
+    if (!strcmp(v, "b") || !strcmp(v, "1") || !strcmp(v, "_b"))
+        return 1;
+    return -1;
+}
+
+/* SIGTERM / SIGINT：拿到命令锁（= 手上的命令做完）再退出。信号在所有线程里都屏蔽，只由这个线程 sigwait。 */
+static void *signal_thread(void *arg)
+{
+    sigset_t *set = arg;
+    int sig = 0;
+    if (sigwait(set, &sig))
+        return NULL;
+    fb_log("signal %d: waiting for the running command, then exiting", sig);
+    fb_cmd_lock(true);
+    fb_status("stopped (signal %d)", sig);
+    fb_log("exiting on signal %d", sig);
+    _exit(128 + sig);
+}
+
 static void *serve_thread(void *arg)
 {
     fb_transport *t = arg;
@@ -67,14 +113,16 @@ static void *serve_thread(void *arg)
         if (t->open_session(t))
             continue;
         fb_log("%s: host connected", t->name);
+        fb_status("%s: host connected", t->name);
         r = fb_serve(t);
         t->close_session(t);
         fb_session_end();
         fb_log("%s: session closed", t->name);
+        fb_status("%s: session closed, waiting for a host", t->name);
         if (r == 1) {
             fb_cmd_lock(true);
-            fb_do_reboot(fb_pending_reboot);
-            fb_cmd_lock(false);     /* 只有 --test-reboot 才会走到这里 */
+            fb_do_reboot(fb_pending_reboot);    /* 不是 --test-reboot 时不返回（exit 退出码给 /init） */
+            fb_cmd_lock(false);
         }
     }
     return NULL;
@@ -82,12 +130,13 @@ static void *serve_thread(void *arg)
 
 int main(int argc, char **argv)
 {
-    bool usb = true, usb_setup = true, tcp = false, kmsg = false, entry = true;
-    int tcp_port = 5554;
-    const char *udc = "a600000.usb", *cmdline_file = "/proc/cmdline", *logfile = NULL;
-    static char cl[8192], v[256], disk_uuid[64], esp_uuid[64];
-    pthread_t th[2];
-    int nth = 0;
+    bool usb = true, usb_setup = true, tcp = false, kmsg = false, entry = true, confirm = false;
+    int tcp_port = 5554, sub = 0;   /* sub：0 常驻 / 1 --wipe-data / 2 --clear-bcb */
+    const char *udc = NULL, *ffs = NULL, *cmdline_file = "/proc/cmdline", *logfile = NULL, *status = NULL;
+    static char cl[8192], v[256], disk_uuid[64], esp_uuid[64], status_buf[300];
+    pthread_t th[3];
+    int nth = 0, ntr = 0;
+    sigset_t sigs;
 
     memset(&G, 0, sizeof(G));
     G.max_download = 0x20000000;
@@ -103,7 +152,13 @@ int main(int argc, char **argv)
         if (!strcmp(a, "--version")) {
             printf("gk3-fastbootd %s\n", GK3FB_VERSION);
             return 0;
-        } else if (!strcmp(a, "--usb"))
+        } else if (!strcmp(a, "--wipe-data"))
+            sub = 1;
+        else if (!strcmp(a, "--confirm"))
+            confirm = true;
+        else if (!strcmp(a, "--clear-bcb"))
+            sub = 2;
+        else if (!strcmp(a, "--usb"))
             usb = true;
         else if (!strcmp(a, "--no-usb"))
             usb = false;
@@ -111,6 +166,8 @@ int main(int argc, char **argv)
             usb_setup = false;
         else if ((x = OPT("--udc")))
             udc = x;
+        else if ((x = OPT("--ffs")))
+            ffs = x;
         else if (!strcmp(a, "--tcp"))
             tcp = true;
         else if ((x = OPT("--tcp"))) {
@@ -126,6 +183,8 @@ int main(int argc, char **argv)
             G.eopt.esp_dir_override = x;
         else if ((x = OPT("--rundir")))
             G.dopt.rundir = G.eopt.rundir = x;
+        else if ((x = OPT("--status")))
+            status = x;
         else if ((x = OPT("--max-download")))
             G.max_download = strtoull(x, NULL, 0);
         else if ((x = OPT("--test-reboot")))
@@ -138,13 +197,17 @@ int main(int argc, char **argv)
             entry = false;
         else {
             fprintf(stderr, "gk3-fastbootd: unknown option %s\n", a);
-            return 2;
+            return FB_EXIT_USAGE;
         }
 #undef OPT
     }
+    if (confirm && sub != 1) {
+        fprintf(stderr, "gk3-fastbootd: --confirm only goes with --wipe-data\n");
+        return FB_EXIT_USAGE;
+    }
     if (G.max_download < 4096 || G.max_download > 0xFFFFFFFFull) {
         fprintf(stderr, "gk3-fastbootd: --max-download out of range\n");
-        return 2;
+        return FB_EXIT_USAGE;
     }
     signal(SIGPIPE, SIG_IGN);
     fb_log_init(kmsg, logfile);
@@ -156,38 +219,46 @@ int main(int argc, char **argv)
             close(fd);
         cl[n > 0 ? n : 0] = 0;
     }
+    /* cmdline 打底，/init 的环境变量覆盖（它们本来就是从 cmdline 抄来的同一份值） */
     if (cmdline_get(cl, "gk3.why", v, sizeof(v)) && safe_val(v))
         snprintf(G.why, sizeof(G.why), "%s", v);
-    if (cmdline_get(cl, "gk3.slot", v, sizeof(v))) {
-        if (!strcmp(v, "a") || !strcmp(v, "0") || !strcmp(v, "_a"))
-            G.slot_hint = 0;
-        else if (!strcmp(v, "b") || !strcmp(v, "1") || !strcmp(v, "_b"))
-            G.slot_hint = 1;
-    }
+    if (env("GK3_WHY"))
+        snprintf(G.why, sizeof(G.why), "%s", env("GK3_WHY"));
+    if (cmdline_get(cl, "gk3.slot", v, sizeof(v)))
+        G.slot_hint = parse_slot(v);
+    if (env("GK3_SLOT") && parse_slot(env("GK3_SLOT")) >= 0)      /* /init 认不出的槽写成 "?"：不覆盖 */
+        G.slot_hint = parse_slot(env("GK3_SLOT"));
     if (cmdline_get(cl, "gk3.bootver", v, sizeof(v)) && safe_val(v))
         snprintf(G.bootver, sizeof(G.bootver), "%s", v);
+    if (env("GK3_BOOTVER"))
+        snprintf(G.bootver, sizeof(G.bootver), "%s", env("GK3_BOOTVER"));
     if (cmdline_get(cl, "gk3.serialno", v, sizeof(v)) && safe_val(v) && v[0])
         snprintf(G.serial, sizeof(G.serial), "%s", v);
-    if (cmdline_get(cl, "gk3.disk", disk_uuid, sizeof(disk_uuid)))
+    cmdline_get(cl, "gk3.disk", disk_uuid, sizeof(disk_uuid));
+    if (env("GK3_DISK"))
+        snprintf(disk_uuid, sizeof(disk_uuid), "%s", env("GK3_DISK"));
+    if (disk_uuid[0])
         G.dopt.want_misc_uuid = disk_uuid;
     if (cmdline_get(cl, "gk3.esp", esp_uuid, sizeof(esp_uuid)))
         G.eopt.want_esp_uuid = esp_uuid;
     if (cmdline_get(cl, "gk3.fbtcp", v, sizeof(v)) && !strcmp(v, "1"))
         tcp = true;
-
-    fb_log("gk3-fastbootd %s starting: why=%s slot=%d bootver=%s disk=%s esp=%s usb=%d tcp=%d", GK3FB_VERSION,
-           G.why[0] ? G.why : "-", G.slot_hint, G.bootver[0] ? G.bootver : "-", disk_uuid[0] ? disk_uuid : "(scan)",
-           esp_uuid[0] ? esp_uuid : "(probe)", usb, tcp);
-
-    /* 不挂起（fastboot-design §4.7）：initramfs 里本来没人写 /sys/power/state，这里再拿一把 wakelock 作保险 */
-    {
-        int fd = open("/sys/power/wake_lock", O_WRONLY | O_CLOEXEC);
-        if (fd >= 0) {
-            if (write(fd, "gk3fastboot", 11) != 11)
-                fb_log("wake_lock: %s", strerror(errno));
-            close(fd);
-        }
+    if (cmdline_get(cl, "gk3.dispatch", v, sizeof(v)) && !strcmp(v, "1"))
+        G.dispatch = true;
+    if (!udc)
+        udc = env("GK3_UDC") ? env("GK3_UDC") : "a600000.usb";
+    if (!ffs)
+        ffs = env("GK3_FFS");
+    if (!status && env("GK3_RUN")) {
+        snprintf(status_buf, sizeof(status_buf), "%s/fastbootd.status", env("GK3_RUN"));
+        status = status_buf;
     }
+    G.status_file = status;
+
+    fb_log("gk3-fastbootd %s %s: why=%s slot=%d bootver=%s disk=%s esp=%s dispatch=%d usb=%d%s tcp=%d", GK3FB_VERSION,
+           sub == 1 ? (confirm ? "--wipe-data --confirm" : "--wipe-data") : sub == 2 ? "--clear-bcb" : "starting",
+           G.why[0] ? G.why : "-", G.slot_hint, G.bootver[0] ? G.bootver : "-", disk_uuid[0] ? disk_uuid : "(scan)",
+           esp_uuid[0] ? esp_uuid : "(probe)", G.dispatch, usb, usb_setup ? "" : " (nosetup)", tcp);
 
     fb_disk_open(&G.disk, &G.dopt);
     if (!G.disk.ok)
@@ -206,29 +277,58 @@ int main(int argc, char **argv)
             G.cur_slot = b.priority > a.priority;
         }
     }
+
+    if (sub == 1)
+        return fb_sub_wipe(confirm);
+    if (sub == 2)
+        return fb_sub_clear_bcb();
+
+    /* 常驻。信号由专门的线程收：先屏蔽，再起其他线程（它们继承屏蔽字） */
+    sigemptyset(&sigs);
+    sigaddset(&sigs, SIGTERM);
+    sigaddset(&sigs, SIGINT);
+    pthread_sigmask(SIG_BLOCK, &sigs, NULL);
+    pthread_create(&th[nth++], NULL, signal_thread, &sigs);
+    fb_status("starting");
+
+    /* 不挂起（fastboot-design §4.7）：initramfs 里本来没人写 /sys/power/state，这里再拿一把 wakelock 作保险 */
+    {
+        int fd = open("/sys/power/wake_lock", O_WRONLY | O_CLOEXEC);
+        if (fd >= 0) {
+            if (write(fd, "gk3fastboot", 11) != 11)
+                fb_log("wake_lock: %s", strerror(errno));
+            close(fd);
+        }
+    }
     if (entry)
         fb_entry();
 
     if (usb) {
-        fb_transport *t = fb_usb_new(udc, usb_setup);
-        if (t)
+        fb_transport *t = fb_usb_new(udc, usb_setup, ffs);
+        if (t) {
             pthread_create(&th[nth++], NULL, serve_thread, t);
-        else
+            ntr++;
+        } else {
             fb_log("USB transport unavailable");
+        }
     }
     if (tcp) {
         fb_transport *t = fb_tcp_new(tcp_port);
-        if (t)
+        if (t) {
             pthread_create(&th[nth++], NULL, serve_thread, t);
-        else
+            ntr++;
+        } else {
             fb_log("TCP transport unavailable");
+        }
     }
-    if (!nth) {
+    if (!ntr) {
         fb_log("no transport could be started — exiting");
-        return 1;
+        fb_status("no transport could be started (see log)");
+        return FB_EXIT_FATAL;
     }
     fb_log("ready");
-    for (int i = 0; i < nth; i++)
+    fb_status("ready: waiting for a host (%s%s%s)", usb ? "usb" : "", usb && tcp ? " + " : "", tcp ? "tcp" : "");
+    for (int i = 1; i < nth; i++)
         pthread_join(th[i], NULL);
-    return 0;
+    return FB_EXIT_FATAL;
 }

@@ -16,9 +16,10 @@
 #include "fbd.h"
 
 struct fb_ctx {
-    fb_transport *t;
+    fb_transport *t;    /* NULL = 本地上下文（子命令）：回应只进日志 */
     bool done;      /* 已回 OKAY / FAIL */
     bool io_err;    /* 写回应失败 ⇒ 会话断了 */
+    char last_fail[FB_MSG_MAX + 1];
 };
 
 static pthread_mutex_t cmd_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -27,6 +28,11 @@ static void send_pkt(fb_ctx *c, const char *tag, const char *msg)
 {
     char pkt[FB_RESP_MAX + 1];
     size_t n;
+    if (!c->t) {
+        if (!strcmp(tag, "FAIL"))
+            snprintf(c->last_fail, sizeof(c->last_fail), "%s", msg);
+        return;
+    }
     if (c->io_err)
         return;
     n = (size_t)snprintf(pkt, sizeof(pkt), "%s%.*s", tag, (int)FB_MSG_MAX, msg);
@@ -93,6 +99,18 @@ void fb_fail(fb_ctx *c, const char *fmt, ...)
 void fb_info_cb(void *c, const char *msg)
 {
     fb_info(c, "%s", msg);
+}
+
+fb_ctx *fb_ctx_local(void)
+{
+    static fb_ctx lc;
+    memset(&lc, 0, sizeof(lc));
+    return &lc;
+}
+
+const char *fb_ctx_last_fail(fb_ctx *c)
+{
+    return c->last_fail;
 }
 
 static int parse_hex8(const char *s, uint32_t *out)
@@ -181,7 +199,7 @@ int fb_serve(fb_transport *t)
 {
     char cmd[FB_CMD_MAX + 1];
     for (;;) {
-        fb_ctx c = {t, false, false};
+        fb_ctx c = {t, false, false, ""};
         long n = t->read_cmd(t, cmd, FB_CMD_MAX);
         if (n < 0)
             return 0;
@@ -194,6 +212,8 @@ int fb_serve(fb_transport *t)
         }
         pthread_mutex_lock(&cmd_lock);
         fb_log("%s> %s", t->name, cmd);
+        /* 状态文件：当前命令（/init 显示，并据此重置空闲计时） */
+        fb_status("%s: %.80s", t->name, cmd);
         if (!strncmp(cmd, "download:", 9))
             do_download(&c, cmd + 9);
         else

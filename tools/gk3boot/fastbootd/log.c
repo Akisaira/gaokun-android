@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -103,4 +104,32 @@ void fb_log_foreach(unsigned max_lines, void (*cb)(void *ctx, const char *line),
             cb(ctx, p);
         p = nl + 1;
     }
+}
+
+/* 状态文件：/init 显示第一行（"flash boot_a"、"tcp: host connected"…），并把 mtime 的变化当作"有活干"
+ * （空闲关机重新计时）。整份替换（写 .tmp 再 rename），/init 读到的永远是完整的一行。 */
+void fb_status(const char *fmt, ...)
+{
+    char line[256], tmp[300];
+    va_list ap;
+    int fd;
+    size_t n;
+    if (!G.status_file)
+        return;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line) - 1, fmt, ap);
+    va_end(ap);
+    n = strcspn(line, "\n");
+    line[n++] = '\n';
+    line[n] = 0;
+    snprintf(tmp, sizeof(tmp), "%s.tmp", G.status_file);
+    pthread_mutex_lock(&mu);
+    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd >= 0) {
+        bool ok = write(fd, line, n) == (ssize_t)n;
+        close(fd);
+        if (!ok || rename(tmp, G.status_file))
+            unlink(tmp);
+    }
+    pthread_mutex_unlock(&mu);
 }

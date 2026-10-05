@@ -14,7 +14,7 @@
 # 产物：tools/gk3boot/build/efi/gk3boot.efi（上机用的就是这一份）；串口与日志在 tools/gk3boot/build/qemu-boot/。
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-IMG=gk3boot-build
+IMG=${GK3_DOCKER_PREFIX:-}gk3boot-build   # GK3_DOCKER_PREFIX：与别的会话共用 colima 时加前缀
 
 docker info >/dev/null 2>&1 || { echo "✗ docker 不通 —— 本机先 colima start" >&2; exit 2; }
 

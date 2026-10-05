@@ -13,5 +13,5 @@
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 bash "$ROOT/scripts/gk3boot/build-fastboot-img.sh" || exit 1
-docker run --rm --name "fbi-test-$$" -v "$ROOT:/src" ${GK3_DEBIAN_MIRROR:+-e GK3_DEBIAN_MIRROR=$GK3_DEBIAN_MIRROR} \
-    -w /src fbi-gk3boot-build bash tools/gk3boot/initramfs/test/run-tests.sh "$@"
+docker run --rm --name "${GK3_DOCKER_PREFIX:-}fbi-test-$$" -v "$ROOT:/src" ${GK3_DEBIAN_MIRROR:+-e GK3_DEBIAN_MIRROR=$GK3_DEBIAN_MIRROR} \
+    -w /src "${GK3_DOCKER_PREFIX:-}fbi-gk3boot-build" bash tools/gk3boot/initramfs/test/run-tests.sh "$@"

@@ -17,8 +17,9 @@ macOS 上不带 ESP 镜像也能跑（只出 ESP 目录树，给 --esp-dir 用�
   fbd_fixture.py sparse-expect --kind ok --base PARTFILE --out F   ok 样本写到一份旧分区内容上之后应有的样子
   fbd_fixture.py part    DISK MANIFEST NAME OUT     取一个分区（按 manifest 的 LBA）
   fbd_fixture.py sums    DISK MANIFEST [--skip a,b] 每个分区（含 GPT 区、分区之间的空隙）的 sha256，JSON
-  fbd_fixture.py misc    DISK MANIFEST [--bcb none|bootloader|fastboot|recovery|wipe] [--vab none|snapshotted|merging]
-                         [--bcab real|b-unbootable|both|invalid]      改 misc 再写回盘
+  fbd_fixture.py misc    DISK MANIFEST [--bcb none|bootloader|fastboot|recovery|wipe|wipe2|prompt]
+                         [--vab none|snapshotted|merging] [--bcab real|b-unbootable|both|invalid]
+                         [--rec none|plain|migrated|dispatched]       改 misc 再写回盘（--rec 在 --bcb 之后算摘要）
   fbd_fixture.py misc-dump DISK MANIFEST            打印 BCB command / recovery、BCAB 32 字节十六进制、VAB 状态
   fbd_fixture.py bcab-set-active HEX32 SLOT CUR     libboot_control SetActiveBootSlot 的 Python 版（hardware/interfaces
                                                     libboot_control.cpp:282-314），给"字节对"当独立的期望值
@@ -409,10 +410,13 @@ def cmd_misc(a):
         m[0:2048] = b"\0" * 2048
         if a.bcb == "bootloader":
             m[0:19] = b"bootonce-bootloader"
-        elif a.bcb in ("fastboot", "recovery", "wipe"):
+        elif a.bcb in ("fastboot", "recovery", "wipe", "wipe2", "prompt"):
             m[0:13] = b"boot-recovery"
             args = {"fastboot": "recovery\n--fastboot\n", "recovery": "recovery\n",
-                    "wipe": "recovery\n--wipe_data\n--reason=MainClearConfirm\n"}[a.bcb]
+                    "wipe": "recovery\n--wipe_data\n--reason=MainClearConfirm\n",
+                    # 另一份 wipe（原因不同 ⇒ 摘要不同）：模拟"入口记的不是这一份"
+                    "wipe2": "recovery\n--wipe_data\n--reason=SomethingElse\n",
+                    "prompt": "recovery\n--prompt_and_wipe_data\n--reason=RescueParty\n"}[a.bcb]
             m[64:64 + len(args)] = args.encode()
     if a.vab:
         st = {"none": 0, "snapshotted": 2, "merging": 3}[a.vab]
@@ -431,7 +435,38 @@ def cmd_misc(a):
         if a.bcab == "invalid":
             b[28] ^= 0xff
         m[2048:2080] = b
+    if a.rec:
+        # GK3 记录 v1（gk3core.h 的布局）：none = 全零；plain = 有效、未迁移；migrated = 置迁移标记；
+        # dispatched = 迁移 + 入口按【当前这份】BCB 分派过一次 wipe（why=3、count=1、摘要 = SHA-1(BCB 2048 字节)）
+        r = bytearray(2048)
+        if a.rec != "none":
+            struct.pack_into("<IHHII", r, 0, 0x52334B47, 1, 2048, 0 if a.rec == "plain" else 1,
+                             0 if a.rec == "plain" else 1)
+            if a.rec == "dispatched":
+                r[23] = 3          # dispatch_why = GK3_BCB_WIPE
+                r[24] = 0          # dispatch_slot
+                r[25] = 1          # dispatch_count
+                r[28:48] = hashlib.sha1(bytes(m[0:2048])).digest()
+            struct.pack_into("<I", r, 2044, zlib.crc32(bytes(r[:2044])) & 0xffffffff)
+        m[8192:8192 + 2048] = r
     write_part(a.disk, p, 0, bytes(m))
+
+
+EV_NAMES = ["none", "fallback", "boot_corrupt", "bcb_dropped", "wipe_failed", "refused_merging", "bootloop",
+            "noslot", "migrated", "bcb_ignored"]
+
+
+def rec_events(r):
+    """GK3 记录的事件环，按 seq 从旧到新：["refused_merging:3", …]（名字:aux）"""
+    if struct.unpack_from("<I", r, 0)[0] != 0x52334B47 or \
+            struct.unpack_from("<I", r, 2044)[0] != zlib.crc32(bytes(r[:2044])) & 0xffffffff:
+        return None
+    ev = []
+    for i in range(32):
+        seq, code, slot, flags, aux = struct.unpack_from("<IHBBI", r, 1024 + 16 * i)
+        if seq:
+            ev.append((seq, "%s:%d" % (EV_NAMES[code] if code < len(EV_NAMES) else str(code), aux)))
+    return [e for _, e in sorted(ev)]
 
 
 def cmd_misc_dump(a):
@@ -445,6 +480,9 @@ def cmd_misc_dump(a):
     print("bcb_sha256=%s" % hashlib.sha256(m[:2048]).hexdigest())
     print("bcab=%s" % m[2048:2080].hex())
     print("vab_status=%d" % vab[2])
+    ev = rec_events(m[8192:8192 + 2048])
+    print("rec=%s" % ("invalid" if ev is None else "valid"))
+    print("rec_events=%s" % ("" if ev is None else ",".join(ev)))
 
 
 def cmd_bcb_expect(a):
@@ -570,6 +608,7 @@ def main():
     p.add_argument("--bcb")
     p.add_argument("--vab")
     p.add_argument("--bcab")
+    p.add_argument("--rec", choices=["none", "plain", "migrated", "dispatched"])
     p = sp.add_parser("misc-dump")
     p.add_argument("disk")
     p.add_argument("manifest")
