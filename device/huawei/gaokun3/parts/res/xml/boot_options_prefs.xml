@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动选项（统一启动入口 S15）。哪一项显示由 BootOptionsActivity 按 HAL 导出的属性决定。 -->
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+    <Preference
+        android:key="boot_to_windows"
+        android:title="@string/boot_options_windows_title"
+        android:summary="@string/boot_options_windows_summary" />
+    <ListPreference
+        android:key="boot_default_os"
+        android:title="@string/boot_options_default_title"
+        android:dialogTitle="@string/boot_options_default_title"
+        android:entries="@array/boot_options_os_entries"
+        android:entryValues="@array/boot_options_os_values"
+        android:persistent="false" />
+    <Preference
+        android:key="boot_to_menu"
+        android:title="@string/boot_options_menu_title"
+        android:summary="@string/boot_options_menu_summary" />
+    <Preference
+        android:key="boot_options_none"
+        android:title="@string/boot_options_none"
+        android:selectable="false" />
+    <com.android.settingslib.widget.FooterPreference
+        android:key="boot_options_note"
+        android:title="@string/boot_options_note"
+        android:selectable="false" />
+</PreferenceScreen>

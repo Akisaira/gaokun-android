@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动选项页（BootOptionsActivity）与双系统相关通知（BootEntryNotifier）的字符串。统一启动入口 S15，2026-10-05。
+     单独一个文件：不和别的页面的 strings.xml 抢同一段。 -->
+<resources>
+    <string name="boot_options_title">Startup options</string>
+    <string name="boot_options_summary">Restart to Windows, default system, boot menu</string>
+    <string name="boot_options_windows_title">Restart to Windows</string>
+    <string name="boot_options_windows_summary">Start Windows once. The start-up after that follows the default system.</string>
+    <string name="boot_options_windows_confirm">Restart to Windows now? The start-up logo will appear twice; this is normal.</string>
+    <string name="boot_options_default_title">Start by default</string>
+    <string name="boot_options_os_android">Android</string>
+    <string name="boot_options_os_windows">Windows</string>
+    <string name="boot_options_os_unknown">Not known yet (restart once)</string>
+    <string name="boot_options_default_pending">%1$s (takes effect at the next start-up)</string>
+    <string name="boot_options_default_saved">Saved. It takes effect at the next start-up.</string>
+    <string name="boot_options_menu_title">Restart to boot menu</string>
+    <string name="boot_options_menu_summary">Opens the boot menu (fastboot, other slot, other systems, factory reset). Volume keys move, the power key selects.</string>
+    <string name="boot_options_menu_confirm">Restart to the boot menu now?</string>
+    <string name="boot_options_failed">Could not do that (%1$s). Nothing was changed.</string>
+    <string name="boot_options_none">No startup options are available on this device right now.</string>
+    <string name="boot_options_note">When Windows is the default, restarting from Android still comes back to Android; only starting up after shutting down from Android goes to Windows. If, right after shutting down from Android, you pick another system in the boot menu, the next time you choose Android it may first go to Windows once.</string>
+    <string-array name="boot_options_os_entries">
+        <item>@string/boot_options_os_android</item>
+        <item>@string/boot_options_os_windows</item>
+    </string-array>
+    <string-array name="boot_options_os_values" translatable="false">
+        <item>android</item>
+        <item>windows</item>
+    </string-array>
+
+    <!-- BootEntryNotifier：入口记下的双系统事件 -->
+    <string name="boot_entry_intent_dropped_title">Windows was not started</string>
+    <string name="boot_entry_intent_dropped_text">Android had something to finish first (for example a system update, or the last start-up did not complete), so this start-up went to Android. Please choose “Restart to Windows” again.</string>
+    <string name="boot_entry_default_reset_title">The default system was reset to Android</string>
+    <string name="boot_entry_default_reset_text">The boot menu had been set to always start one particular Android item, which stops automatic rollback from working. It was cleared and the default is Android again. To make Windows the default, use Startup options.</string>
+    <string name="boot_entry_loader_replaced_title">Windows replaced the boot menu</string>
+    <string name="boot_entry_loader_replaced_text">The start-up file that opens the boot menu is no longer the one Android installed (usually after a Windows update or repair). The computer may start straight into Windows. Use “Repair boot” in the Windows companion tool or the USB installer. Nothing was changed automatically.</string>
+</resources>

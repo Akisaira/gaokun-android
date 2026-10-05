@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="boot_options_title">启动选项</string>
+    <string name="boot_options_summary">重启到 Windows、默认系统、引导菜单</string>
+    <string name="boot_options_windows_title">重启到 Windows</string>
+    <string name="boot_options_windows_summary">进一次 Windows；再之后的开机按默认系统。</string>
+    <string name="boot_options_windows_confirm">现在重启到 Windows？会出现两次开机画面，这是正常的。</string>
+    <string name="boot_options_default_title">开机默认进入</string>
+    <string name="boot_options_os_android">Android</string>
+    <string name="boot_options_os_windows">Windows</string>
+    <string name="boot_options_os_unknown">还不知道（重启一次后显示）</string>
+    <string name="boot_options_default_pending">%1$s（下次开机生效）</string>
+    <string name="boot_options_default_saved">已保存，下次开机生效。</string>
+    <string name="boot_options_menu_title">重启到引导菜单</string>
+    <string name="boot_options_menu_summary">打开引导菜单（fastboot、另一个槽、其他系统、恢复出厂）。音量键移动，电源键确认。</string>
+    <string name="boot_options_menu_confirm">现在重启到引导菜单？</string>
+    <string name="boot_options_failed">没能完成（%1$s），什么都没改。</string>
+    <string name="boot_options_none">这台设备现在没有可用的启动选项。</string>
+    <string name="boot_options_note">Windows 为默认时，在 Android 里重启仍然回到 Android；只有从 Android 关机之后再开机才进 Windows。如果从 Android 关机后、下次开机在引导菜单里改选了别的系统，之后再选 Android 时可能会先进一次 Windows。</string>
+
+    <string name="boot_entry_intent_dropped_title">没有进 Windows</string>
+    <string name="boot_entry_intent_dropped_text">Android 有事要先做完（比如系统更新，或上次开机没有完成），这次先进了 Android。请再选一次“重启到 Windows”。</string>
+    <string name="boot_entry_default_reset_title">默认系统已恢复为 Android</string>
+    <string name="boot_entry_default_reset_text">引导菜单曾被设成固定启动某一个 Android 项，这会让更新失败后的自动回退失效，已清除，默认回到 Android。想让 Windows 作为默认，请在“启动选项”里设置。</string>
+    <string name="boot_entry_loader_replaced_title">Windows 替换了引导菜单</string>
+    <string name="boot_entry_loader_replaced_text">负责打开引导菜单的启动文件已不是 Android 装的那一份（通常是 Windows 更新或修复之后），开机可能直接进 Windows。请用 Windows 伴随工具或 U 盘安装器里的“修复启动”。这里没有自动改动任何东西。</string>
+</resources>
