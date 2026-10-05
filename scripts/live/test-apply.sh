@@ -721,6 +721,85 @@ gk3_apply --disk "$DN" --mode wipe --rescue no --release "$DL" >"$W/n.log" 2>&1;
 [ "$rc" = 0 ] && [ "$(sha_head "$(gk3__bylabel "$DN" super)" "$RAWSZ")" = "$(sha "$W/expect/super.raw")" ] \
     && ok "用下载下来的目录真装一遍：成功，super 逐字节正确" || { bad "网络安装的 apply 失败 rc=$rc"; tail -5 "$W/n.log"; }
 
+# ── J. 写盘进程脱离界面（v1.0 计划 GUI-11）──────────────────────────────────
+echo "═══ J. gk3_job_run：写盘放进独立单元，界面死了它照样写完 ═══"
+export GK3_JOBDIR=$W/jobs GK3_JOB_POLL=0.1
+# 启动介质（ESP 类型的 FAT，像 U 盘那样）：job 结束时要把输出存一份到它的 gaokun3/diag/
+DM=$(new_disk m 1G); sgdisk -o -n 1:2048:0 -t 1:ef00 -c 1:esp "$DM" >/dev/null 2>&1; partprobe "$DM"; udevadm settle 2>/dev/null; sleep 1
+mkfs.vfat -F 32 -n GK3LIVE "${DM}p1" >/dev/null; mkdir -p /media/gk3; mount "${DM}p1" /media/gk3; mkdir -p /media/gk3/gaokun3/diag
+echo "安装器会话日志" > /media/gk3/gaokun3/diag/installer.log; mount -o remount,ro /media/gk3
+WANT=$(gk3_release_info "$REL" 2>/dev/null)
+GOT=$(gk3_job_run gk3_release_info "$REL" 2>"$W/j1.err"); rc=$?
+[ "$rc" = 0 ] && [ "$GOT" = "$WANT" ] && grep -q '^JOB id=.* mode=setsid ' "$W/j1.err" \
+    && ok "gk3_job_run gk3_release_info：stdout 与直接调用逐行相同、退出码 0（容器里没有 systemd ⇒ setsid）" || { bad "job 的输出不对（rc=${rc}）：$GOT"; tail -3 "$W/j1.err"; }
+gk3_apply --disk /dev/nonexistent >/dev/null 2>"$W/j2a.err"; rc0=$?
+gk3_job_run gk3_apply --disk /dev/nonexistent >/dev/null 2>"$W/j2.err"; rc=$?
+[ "$rc" = "$rc0" ] && [ "$rc" != 0 ] && grep -q "$(grep '^!!' "$W/j2a.err" | head -1)" "$W/j2.err" \
+    && ok "失败的调用：退出码（${rc}）与 !! 那行与直接调用相同" || bad "失败的调用转发得不对（rc=$rc，直接调用 rc=${rc0}）"
+# 界面崩了：跟读的那个进程被 kill -9，job 照样跑完；重新起来的界面按 id 接着跟，从头拿到全部输出与退出码
+( gk3_job_run bash -c 'echo "REC a=1"; echo "PROGRESS 10 写一半" >&2; sleep 3; echo "REC b=2"; exit 3' >"$W/j3.out" 2>"$W/j3.err" ) & FP=$!
+sleep 1.5; kill -9 $FP 2>/dev/null; wait $FP 2>/dev/null
+JID=$(sed -n 's/^JOB id=\([^ ]*\).*/\1/p' "$W/j3.err" | head -1)
+grep -q '^REC a=1$' "$W/j3.out" && [ "$(gk3_job_status "$JID" | sed -n 's/.* state=\([a-z]*\).*/\1/p')" = running ] \
+    && ok "跟读的进程（界面）被杀时：已经转发了前半段，job 还在跑（state=running）" || bad "界面被杀前后的状态不对：$(gk3_job_status "$JID")"
+for _ in $(seq 50); do [ -f "$GK3_JOBDIR/$JID/rc" ] && break; sleep 0.2; done
+OUT=$(gk3_job_follow "$JID" 2>"$W/j3b.err"); rc=$?
+[ "$rc" = 3 ] && [ "$OUT" = "$(printf 'REC a=1\nREC b=2')" ] && grep -q '^PROGRESS 10 写一半$' "$W/j3b.err" \
+    && gk3_job_status "$JID" | grep -q ' state=done rc=3 ' \
+    && ok "界面重新起来后 gk3_job_follow：拿到全部输出（含被杀之后才写的 REC b=2）、退出码 3、状态 done" || { bad "重新跟读不对（rc=${rc}）：$OUT"; gk3_job_status "$JID"; }
+grep -q '^REC b=2$' "/media/gk3/gaokun3/diag/job-$JID.log" && findmnt -rno OPTIONS /media/gk3 | grep -q '^ro' \
+    && ok "job 的输出存了一份到介质 gaokun3/diag/job-<id>.log，介质改回只读" || bad "介质上没有 job 的日志，或没改回只读"
+# 有 systemd 时走 systemd-run：参数（独立单元、--collect、Type=exec、GK3_* 环境、工作目录）
+cat > "$W/fake-systemd-run" <<'FSR'
+#!/bin/bash
+printf '%s\n' "$@" > "$GK3_TEST_SRLOG"
+while [ $# -gt 0 ]; do case "$1" in --*) shift ;; *) break ;; esac; done
+setsid -f "$@" </dev/null >/dev/null 2>&1
+FSR
+chmod +x "$W/fake-systemd-run"
+GOT=$(cd "$W" && GK3_TEST_SRLOG=$W/sr.args GK3_SYSTEMD_RUN=$W/fake-systemd-run gk3_job_run gk3_release_info "$REL" 2>"$W/j4.err"); rc=$?
+[ "$rc" = 0 ] && [ "$GOT" = "$WANT" ] && grep -q '^JOB id=.* mode=systemd-run unit=gk3-job-' "$W/j4.err" \
+  && grep -qx -- '--collect' "$W/sr.args" && grep -qx -- '--service-type=exec' "$W/sr.args" && grep -q -- '^--unit=gk3-job-' "$W/sr.args" \
+  && grep -qx -- '--setenv=GK3_MACHINE_ID' "$W/sr.args" && grep -qx -- "--working-directory=$W" "$W/sr.args" \
+    && ok "有 systemd 时：systemd-run --unit=gk3-job-… --collect --service-type=exec，GK3_* 用 --setenv 带过去，工作目录带过去；输出照样一致" \
+    || { bad "systemd-run 那条路不对（rc=${rc}）"; sed 's/^/      /' "$W/sr.args"; }
+# job 没写状态就没了（单元被杀 / 机器出错）：follow 不能永远等
+mkdir -p "$GK3_JOBDIR/lost-1"; echo gk3_apply > "$GK3_JOBDIR/lost-1/fn"; date +%s > "$GK3_JOBDIR/lost-1/started"
+bash -c 'exit 0' & wait $!; echo $! > "$GK3_JOBDIR/lost-1/pid"
+OUT=$(gk3_job_follow lost-1 2>&1); rc=$?
+[ "$rc" = 125 ] && printf '%s' "$OUT" | grep -q '没写完成状态就没了' && gk3_job_status lost-1 | grep -q ' state=lost ' \
+    && ok "进程没了又没写状态：follow 返回 125 并说明，状态 lost" || bad "lost 的处理不对（rc=${rc}）：$OUT"
+
+# ── L. 失败时把日志另存到用户拿得到的地方（v1.0 计划 GUI-12 的后端）─────────────────
+echo "═══ L. gk3_save_logs ═══"
+DLG=$(new_disk l 2G); sgdisk -o -n 1:2048:+512M -t 1:0700 -c 1:"Basic data partition" -n 2:0:+512M -t 2:8300 "$DLG" >/dev/null 2>&1
+partprobe "$DLG"; udevadm settle 2>/dev/null; sleep 1
+mkfs.vfat -F 32 -n STICK "${DLG}p1" >/dev/null; mkfs.ext4 -q -F "${DLG}p2"
+TG=$(gk3_log_targets)
+printf '%s\n' "$TG" | grep -q "^LOGTARGET part=${DLG}p1 fs=vfat .*removable=yes medium=no esp=no" \
+  && ! printf '%s\n' "$TG" | grep -q "part=${DLG}p2 " \
+  && [ "$(printf '%s\n' "$TG" | tail -1 | cut -d' ' -f2)" = "part=${DM}p1" ] && printf '%s\n' "$TG" | tail -1 | grep -q 'medium=yes esp=yes' \
+    && ok "gk3_log_targets：另插的 FAT 盘在前、ext4 不列、启动介质（ESP 类型）排最后并标 esp=yes" || { bad "gk3_log_targets 不对"; printf '%s\n' "$TG" | sed 's/^/      /'; }
+OUT=$(gk3_save_logs "${DLG}p1" 2>&1); rc=$?
+mk=$W/mnt-l; mkdir -p "$mk"; mount -o ro "${DLG}p1" "$mk"
+LD=$(ls -d "$mk"/gaokun3-logs-* 2>/dev/null | head -1)
+[ "$rc" = 0 ] && printf '%s' "$OUT" | grep -q "^LOGSAVED dir=gaokun3-logs-[0-9-]* part=${DLG}p1 files=[1-9][0-9]* esp=no" \
+  && [ -s "$LD/dmesg.txt" ] && [ -s "$LD/probe.txt" ] && grep -q '安装器会话日志' "$LD/diag-installer.log" \
+  && grep -q 'REC b=2' "$LD/jobs/$JID.log" && ! ls -R "$LD" | grep -q wpa_supplicant \
+    && ok "存到另插的 U 盘：dmesg、磁盘探测、会话日志、各 job 的输出都在（$(printf '%s' "$OUT" | sed -n 's/.*files=\([0-9]*\).*/\1/p') 个），没带 WiFi 配置" \
+    || { bad "存日志不对（rc=${rc}）：$OUT"; ls -R "$mk" | head -20; }
+umount "$mk"
+findmnt -rn -S "${DLG}p1" >/dev/null && bad "存完没卸下 ${DLG}p1" || ok "存完卸下了（不留挂载）"
+OUT=$(gk3_save_logs "${DLG}p2" 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '不是 FAT' && ok "ext4 分区：拒绝（只往 FAT / exFAT 写）" || bad "往 ext4 写日志没被拒（rc=${rc}）"
+mkdir -p "$W/logdir"; OUT=$(gk3_save_logs "$W/logdir" 2>&1); rc=$?
+[ "$rc" = 0 ] && ls -d "$W"/logdir/gaokun3-logs-* >/dev/null 2>&1 && printf '%s' "$OUT" | grep -q ' part=- ' \
+    && ok "给目录：直接写进去（part=-）" || bad "写进目录不对（rc=${rc}）：$OUT"
+OUT=$(gk3_save_logs "${DM}p1" 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s' "$OUT" | grep -q 'esp=yes' && findmnt -rno OPTIONS /media/gk3 | grep -q '^ro' \
+    && ok "存到启动介质本身：esp=yes（电脑上不好读，界面要说一句），介质改回只读" || bad "存到介质不对（rc=${rc}）：$OUT"
+umount /media/gk3; unset GK3_JOBDIR GK3_JOB_POLL
+
 echo
 echo "═══ 通过 $PASS · 失败 $FAIL ═══"
 [ "$FAIL" -eq 0 ]

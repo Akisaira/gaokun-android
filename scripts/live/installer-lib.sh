@@ -28,6 +28,8 @@
 #   gk3_net_release <url> <目录>   # 网络安装：下载一整套发布文件并逐个校验
 #   gk3_plan  <参数…>              # 算出分区方案（纯计算，不碰磁盘）
 #   gk3_apply <参数…>              # 执行（唯一会写盘的函数）
+#   gk3_job_run <函数> <参数…>     # 同上，但放进独立的 systemd 单元跑：界面崩了它照样写完（GUI-11，见文件末尾）
+#   gk3_save_logs [分区|目录]      # 把日志另存一份到用户拿得到的地方（GUI-12，见文件末尾）
 
 if [ -z "${BASH_VERSION:-}" ]; then
     echo "!! installer-lib.sh 需要 bash" >&2
@@ -2081,4 +2083,272 @@ gk3__grow() {
         || { gk3_die "PARTUUID 变了 —— Windows 会起不来"; return 1; }
     gk3_prog 100 "完成"
     echo "RESULT op=grow part=$part size_mib=$target"
+}
+
+# ── 写盘进程脱离界面（v1.0 计划 GUI-11）──────────────────────────────────────
+# 问题：图形安装器起的子进程全在 gk3-installer.service 的 cgroup 里（cage → gk3-installer-session → Flutter → bash）。
+#   Flutter 一崩，cage 退出，服务停下，systemd 按默认的 KillMode=control-group 把整个 cgroup 杀掉 ——
+#   正在写 super、正在缩 NTFS 的那个 bash 一起死，留下半块盘。
+# 做法：写盘的那一次调用放进一个【独立的临时单元】（systemd-run），输出写进文件、结束时写状态文件；
+#   界面只是"跟着读"。界面死了，单元照样跑完；界面重新起来，按 id 接着跟（gk3_job_status 找得到它）。
+#
+#   gk3_job_run <函数> [参数…]    = gk3_job_start + gk3_job_follow。★ 前端要做的只有一件事：写盘的调用把
+#                                   `… "$0" gk3_apply …` 换成 `… "$0" gk3_job_run gk3_apply …`。stdout / stderr / 退出码
+#                                   与直接调用逐行相同（JOB 记录打在 stderr 上，不混进 stdout 的记录流）
+#   gk3_job_start <函数> [参数…]  起单元，立刻返回。stdout：JOB id=… state=running mode=systemd-run|setsid unit=…
+#   gk3_job_follow <id>           转发这个 job 的输出（从头），等它结束，退出码 = job 的退出码；
+#                                   job 没写状态就没了（被杀 / 机器出错）⇒ 125，stderr 有一行 `!! …`
+#   gk3_job_status [id]           每个 job 一行：JOB id=… fn=… state=running|done|lost rc=… mode=… unit=…
+#
+# ★ systemd-inhibit 套在【单元里面】：锁跟着写盘进程活，不跟着界面活（ShellBackend 自己套的那层在界面死时就放掉了）。
+#   前端那一层可以留着（两把锁无害），也可以去掉。
+# ★ 单元拿不到调用者的环境：GK3_* 一律用 --setenv 带过去（GK3_DRYRUN、GK3_MACHINE_ID、GK3_SDBOOT……）；
+#   工作目录用 --working-directory 带过去（发布目录一般是绝对路径，带上更稳）。
+# ★ 不是 systemd 当 PID 1 的环境（容器、别的 live）：退回 setsid -f，只脱离进程组与终端 —— 那样界面所在的 cgroup
+#   被整个杀掉时它仍会被连带，stderr 上会说一句。判据与 sd_booted(3) 相同：/run/systemd/system/ 在不在
+#   （refs/systemd-v257/man/sd_booted.xml:55）。
+# ★ 结束时把 job 的输出另存一份到启动介质的 gaokun3/diag/job-<id>.log：/run 在内存里，重启就没了；
+#   界面要是在写盘途中死掉，installer.log 里也就没有后半段。
+#   systemd-run 的选项都在 refs/systemd-v257/man/systemd-run.xml 里（--unit :121、--service-type :238、
+#   --working-directory :275、--setenv :297、--quiet :376、--collect :477）；Type=exec 见 systemd.service.xml:159-182。
+# ⓘ 测试用：GK3_SYSTEMD_RUN=<假的 systemd-run>（同时当作"systemd 在跑"）。
+GK3_JOBDIR=${GK3_JOBDIR:-$GK3_RUNDIR/jobs}
+GK3_INHIBIT_WHAT=shutdown:sleep:handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch
+
+# job 单元里跑的那段：source 库、跑、写状态、存一份到介质。$1=job 目录 $2=库 $3…=命令
+# shellcheck disable=SC2016
+GK3__JOB_BODY='d=$1; lib=$2; shift 2
+echo $$ > "$d/pid"
+if . "$lib" >/dev/null 2>"$d/err"; then
+    "$@" > "$d/out" 2>> "$d/err"; rc=$?
+else
+    echo "!! 加载不了 $lib" >> "$d/err"; rc=127
+fi
+echo "$rc" > "$d/rc.tmp" && mv -f "$d/rc.tmp" "$d/rc"
+gk3__job_keep "$d" 2>/dev/null
+exit "$rc"'
+
+gk3_job_start() {
+    [ $# -ge 1 ] || { gk3_die "用法：gk3_job_start <函数> [参数…]"; return 1; }
+    local id d mode unit="" sr v
+    local -a pre=() env=()
+    id=$(date +%Y%m%d-%H%M%S)-$$-$RANDOM
+    d=$GK3_JOBDIR/$id
+    mkdir -p "$d" || { gk3_die "建不了 $d"; return 1; }
+    printf '%s\n' "$1" > "$d/fn"
+    printf '%s\n' "$PWD" > "$d/cwd"
+    date +%s > "$d/started"
+    # 写盘期间不许关机 / 睡 / 按键关机（B5 的第三层）。先试拿一次：logind 没在跑时 systemd-inhibit 直接失败
+    if command -v systemd-inhibit >/dev/null 2>&1 \
+       && systemd-inhibit --what="$GK3_INHIBIT_WHAT" --who="gaokun3 installer" --why=probe true >/dev/null 2>&1; then
+        pre=("$(command -v systemd-inhibit)" --what="$GK3_INHIBIT_WHAT" --who="gaokun3 installer" --why="writing the disk ($1)" --mode=block)
+    else
+        echo "⚠️ 拿不到 systemd-inhibit（logind 没在跑？）—— 照样执行；电源键与合盖仍由 logind.conf.d 屏蔽、睡眠 target 已 mask" >&2
+    fi
+    sr=${GK3_SYSTEMD_RUN:-systemd-run}
+    if command -v "$sr" >/dev/null 2>&1 && { [ -n "${GK3_SYSTEMD_RUN:-}" ] || [ -d /run/systemd/system ]; }; then
+        mode=systemd-run; unit=gk3-job-$id
+        while IFS='=' read -r v _; do env+=(--setenv="$v"); done < <(env | grep '^GK3_[A-Za-z0-9_]*=' || true)
+        "$sr" --quiet --collect --unit="$unit" --service-type=exec --description="gaokun3 installer: $1" \
+              --working-directory="$PWD" "${env[@]}" \
+              ${pre[@]+"${pre[@]}"} "$(command -v bash)" -c "$GK3__JOB_BODY" gk3-job "$d" "$GK3_LIBDIR/installer-lib.sh" "$@" >&2 \
+            || { echo "systemd-run 起不来 $unit" > "$d/start-error"; gk3_die "systemd-run 起不来写盘单元（$unit）"; return 1; }
+    else
+        mode=setsid
+        echo "⚠️ 不是 systemd 系统（或没有 systemd-run）：写盘进程只用 setsid 脱离 —— 界面所在的 cgroup 被整个杀掉时它仍会被连带" >&2
+        command -v setsid >/dev/null 2>&1 || { gk3_die "没有 setsid"; return 1; }
+        setsid -f ${pre[@]+"${pre[@]}"} bash -c "$GK3__JOB_BODY" gk3-job "$d" "$GK3_LIBDIR/installer-lib.sh" "$@" \
+            </dev/null >/dev/null 2>&1 || { gk3_die "setsid 起不来写盘进程"; return 1; }
+    fi
+    printf '%s\n' "$mode" > "$d/mode"; printf '%s\n' "${unit:--}" > "$d/unit"
+    echo "JOB id=$id state=running mode=$mode unit=${unit:--}"
+}
+
+gk3__job_state() {   # $1=job 目录 → running|done|lost
+    local d=$1 pid
+    [ -f "$d/rc" ] && { echo done; return; }
+    [ -f "$d/start-error" ] && { echo lost; return; }
+    pid=$(cat "$d/pid" 2>/dev/null)
+    if [ -z "$pid" ]; then
+        # 刚起、还没写 pid：给 30 秒，过了还没有就算没起来
+        [ $(( $(date +%s) - $(cat "$d/started" 2>/dev/null || echo 0) )) -lt 30 ] && echo running || echo lost
+        return
+    fi
+    kill -0 "$pid" 2>/dev/null && { echo running; return; }
+    [ -f "$d/rc" ] && echo done || echo lost      # 进程刚好在这两步之间写完
+}
+
+gk3_job_status() {
+    local d id
+    for d in "$GK3_JOBDIR"/${1:-*}; do
+        [ -d "$d" ] && [ -f "$d/fn" ] || continue
+        id=${d##*/}
+        echo "JOB id=$id fn=$(gk3__enc "$(cat "$d/fn")") state=$(gk3__job_state "$d") rc=$(cat "$d/rc" 2>/dev/null || echo -)" \
+             "mode=$(cat "$d/mode" 2>/dev/null || echo -) unit=$(cat "$d/unit" 2>/dev/null || echo -)"
+    done
+}
+
+# 跟着读：只转发【完整的行】（写盘进程写到一半的那行等它写完），stdout 对 stdout、stderr 对 stderr。
+# 用 python3（预检本来就要它）：bash 按字节偏移读文件要绕很多弯，而这里错一个字节就是一条被切开的协议记录。
+gk3_job_follow() {
+    local d=$GK3_JOBDIR/${1:-}
+    [ -n "${1:-}" ] && [ -f "$d/fn" ] || { gk3_die "没有这个 job：${1:-（没给 id）}"; return 1; }
+    # 已转发到哪个字节：记在跟读者自己的临时目录里 —— 同一个 job 可以有几个人同时跟（界面崩了又起来），各记各的
+    local st od rc
+    od=$(mktemp -d) || return 1
+    while :; do
+        st=$(gk3__job_state "$d")
+        python3 - "$d" "$st" "$od" <<'PY' || { rc=$?; rm -rf "$od"; return "$rc"; }
+import os, sys
+d, st, od = sys.argv[1], sys.argv[2], sys.argv[3]
+final = st != "running"
+for name, out in (("out", sys.stdout), ("err", sys.stderr)):
+    off_f = os.path.join(od, name)
+    try: off = int(open(off_f).read() or 0)
+    except (OSError, ValueError): off = 0
+    try:
+        with open(os.path.join(d, name), "rb") as f:
+            f.seek(off); data = f.read()
+    except OSError:
+        data = b""
+    if not final:
+        cut = data.rfind(b"\n") + 1      # 只吐完整的行
+        data = data[:cut]
+    elif data and not data.endswith(b"\n"):
+        data += b"\n"; off -= 1          # 最后一行没换行：补一个（off 少记一个，免得下次重读时错位）
+    if data:
+        out.buffer.write(data); out.flush()
+        open(off_f, "w").write(str(off + len(data)))
+sys.exit(0)
+PY
+        case "$st" in
+            done) rm -rf "$od"; return "$(cat "$d/rc")" ;;
+            lost) rm -rf "$od"; gk3_die "写盘进程（job ${1}）没写完成状态就没了（被杀？机器出错？）—— 盘可能只写了一半；日志在 $d/"; return 125 ;;
+        esac
+        sleep "${GK3_JOB_POLL:-0.3}"
+    done
+}
+
+gk3_job_run() {
+    local rec id
+    rec=$(gk3_job_start "$@") || return $?
+    echo "$rec" >&2
+    id=$(gk3__f "$rec" id)
+    gk3_job_follow "$id"
+}
+
+# job 结束时存一份到介质（由单元里那段调用；介质只读挂着就临时改成读写，写完改回去 —— 与 gk3-diag 同一个规矩）
+gk3__job_keep() {
+    local d=$1 m=/media/gk3 was f
+    [ -d "$m/gaokun3" ] || return 0
+    was=$(awk -v m="$m" '$2 == m { split($4, o, ","); r = o[1] } END { print r }' /proc/mounts 2>/dev/null)
+    mount -o remount,rw "$m" 2>/dev/null || return 0
+    mkdir -p "$m/gaokun3/diag" && f=$m/gaokun3/diag/job-${d##*/}.log && {
+        echo "=== job ${d##*/}：$(cat "$d/fn") · 退出码 $(cat "$d/rc" 2>/dev/null) · 方式 $(cat "$d/mode" 2>/dev/null)"
+        echo "--- stdout"; cat "$d/out" 2>/dev/null
+        echo "--- stderr"; cat "$d/err" 2>/dev/null
+    } > "$f"
+    sync
+    [ "$was" = ro ] && mount -o remount,ro "$m" 2>/dev/null
+    return 0
+}
+
+# ── 把日志另存到用户拿得到的地方（v1.0 计划 GUI-12 的后端）──────────────────────
+# 问题：安装 U 盘只有一个分区，类型是 EFI System（build-usb.sh 的 sgdisk -t 1:ef00），日志写在它的 gaokun3/diag/ 下。
+#   Windows 与 macOS 默认都不给 ESP 分配盘符 / 不自动挂载 —— 装失败的人把 U 盘插回电脑，看不到日志。
+#   （把 U 盘的分区类型改成 0700 要先实测华为固件能不能从那种分区回落启动，那是 GUI-12 的另一半，要上机。）
+#   Windows 安装包那条路上，介质是内置盘上的 GK3LIVE（Basic data、有盘符），回 Windows 就能看到 gaokun3\diag\。
+#
+#   gk3_log_targets               能存日志的地方，一行一个（第一个是默认）：
+#     LOGTARGET part=/dev/sda1 fs=vfat size_mib=… label=… removable=yes medium=no esp=no
+#     只列 FAT / exFAT：不往 NTFS 写（Windows 休眠 / 快速启动时写它会损坏数据，见 gk3__ntfs_hibernated 那段）。
+#     顺序：另插的 U 盘（可移动、不是启动介质）→ 启动介质本身（esp=yes 的话电脑上不好读）
+#   gk3_save_logs [分区|目录]      不给就用 gk3_log_targets 的第一个；给目录就直接写进去（测试 / 高级用法）。
+#     写一个 gaokun3-logs-<时间>/：installer.log、各 job 的输出、dmesg、本次启动的 journal、磁盘探测、
+#     sgdisk -p、分区表备份（gpt-before-*.bin）、/etc/gaokun3-release、最近的 gk3-diag 报告。
+#     stdout：LOGSAVED dir=… part=…|- files=N esp=yes|no
+#     ⓘ 不含 WiFi 密码：wpa_supplicant.conf 不拷；installer.log 里 ShellBackend 已经把密码遮掉了。
+gk3__log_removable() {   # $1=整块盘（/dev/sda）→ 0 = 可移动（removable=1 或走 USB；测试时 GK3_ALLOW_LOOP=1 的 loop 也算）
+    local n=${1##*/}
+    [ "$(cat "/sys/block/$n/removable" 2>/dev/null)" = 1 ] && return 0
+    [ "$(lsblk -dno TRAN "$1" 2>/dev/null | tr -d ' ')" = usb ] && return 0
+    case "$n" in loop*) [ "${GK3_ALLOW_LOOP:-0}" = 1 ] && return 0 ;; esac
+    return 1
+}
+
+gk3_log_targets() {
+    local medium s dev disk fs rem esp lab sz line first="" rest="" mdev
+    mdev=$(findmnt -no SOURCE /media/gk3 2>/dev/null || echo "")
+    for s in /sys/class/block/*; do
+        [ -f "$s/partition" ] || continue
+        dev=/dev/${s##*/}; [ -b "$dev" ] || continue
+        fs=$(blkid -p -o value -s TYPE "$dev" 2>/dev/null)
+        case "$fs" in vfat|exfat) ;; *) continue ;; esac
+        disk=$(gk3__disk_of "$dev") || continue
+        medium=no; [ -n "$mdev" ] && [ "$(readlink -f "$mdev")" = "$(readlink -f "$dev")" ] && medium=yes
+        rem=no; gk3__log_removable "$disk" && rem=yes
+        # 内置盘上的分区（ESP、Windows 的分区）不当存日志的地方 —— 除非它就是启动介质（免 U 盘时的 GK3LIVE）
+        [ "$rem" = yes ] || [ "$medium" = yes ] || continue
+        esp=no; [ "$(blkid -p -o value -s PART_ENTRY_TYPE "$dev" 2>/dev/null | tr 'A-F' 'a-f')" = c12a7328-f81f-11d2-ba4b-00a0c93ec93b ] && esp=yes
+        lab=$(blkid -o value -s LABEL "$dev" 2>/dev/null)
+        sz=$(( $(blockdev --getsize64 "$dev" 2>/dev/null || echo 0) / 1048576 ))
+        line="LOGTARGET part=$dev fs=$fs size_mib=$sz label=$(gk3__enc "$lab") removable=$rem medium=$medium esp=$esp"
+        if [ "$medium" = no ]; then first="$first$line"$'\n'; else rest="$rest$line"$'\n'; fi
+    done
+    printf '%s%s' "$first" "$rest"
+}
+
+gk3_save_logs() {
+    local tgt=${1:-} part="-" m="" own="" was="" esp=no dir n=0 f
+    if [ -z "$tgt" ]; then
+        tgt=$(gk3_log_targets | head -1 | sed -n 's/^LOGTARGET part=\([^ ]*\).*/\1/p')
+        [ -n "$tgt" ] || { gk3_die "找不到能存日志的地方：插一个 FAT / exFAT 的 U 盘再试"; return 1; }
+    fi
+    if [ -d "$tgt" ]; then
+        m=$tgt
+    elif [ -b "$tgt" ]; then
+        part=$tgt
+        case "$(blkid -p -o value -s TYPE "$part" 2>/dev/null)" in vfat|exfat) ;; *) gk3_die "$part 不是 FAT / exFAT —— 不往别的文件系统写日志"; return 1 ;; esac
+        [ "$(blkid -p -o value -s PART_ENTRY_TYPE "$part" 2>/dev/null | tr 'A-F' 'a-f')" = c12a7328-f81f-11d2-ba4b-00a0c93ec93b ] && esp=yes
+        m=$(findmnt -rno TARGET -S "$part" 2>/dev/null | head -1)
+        if [ -n "$m" ]; then
+            was=$(findmnt -rno OPTIONS -S "$part" 2>/dev/null | head -1 | cut -d, -f1)
+            [ "$was" = rw ] || mount -o remount,rw "$m" 2>/dev/null || { gk3_die "$part 改不成读写（写保护？）"; return 1; }
+        else
+            m=$(mktemp -d /tmp/gk3-logs.XXXX); own=1
+            mount "$part" "$m" 2>/dev/null || { rmdir "$m"; gk3_die "挂不上 $part"; return 1; }
+        fi
+    else
+        gk3_die "不是分区也不是目录：$tgt"; return 1
+    fi
+    dir=$m/gaokun3-logs-$(date +%Y%m%d-%H%M%S)
+    if mkdir -p "$dir/jobs"; then
+        for f in /media/gk3/gaokun3/diag/installer.log /run/gk3-installer/installer.log /etc/gaokun3-release \
+                 /media/gk3/gaokun3/release.txt; do
+            [ -f "$f" ] && cp "$f" "$dir/$(basename "$(dirname "$f")")-$(basename "$f")" 2>/dev/null && n=$((n + 1))
+        done
+        f=$(ls -t /media/gk3/gaokun3/diag/boot-*.log 2>/dev/null | head -1)
+        [ -n "$f" ] && cp "$f" "$dir/" && n=$((n + 1))
+        for f in "$GK3_JOBDIR"/*/; do
+            [ -f "$f/fn" ] || continue
+            { echo "=== $(cat "$f/fn") 退出码 $(cat "$f/rc" 2>/dev/null || echo 没有)"; echo "--- stdout"; cat "$f/out" 2>/dev/null
+              echo "--- stderr"; cat "$f/err" 2>/dev/null; } > "$dir/jobs/$(basename "$f").log" && n=$((n + 1))
+        done
+        for f in /media/gk3/gaokun3/gpt-before-*.bin /tmp/gpt-before-*.bin; do
+            [ -f "$f" ] && cp "$f" "$dir/" && n=$((n + 1))
+        done
+        dmesg > "$dir/dmesg.txt" 2>&1 && n=$((n + 1))
+        command -v journalctl >/dev/null && journalctl -b --no-pager 2>&1 | tail -5000 > "$dir/journal.txt" && n=$((n + 1))
+        gk3_probe > "$dir/probe.txt" 2>&1 && n=$((n + 1))
+        for f in /sys/block/*; do
+            case "${f##*/}" in nvme*|sd*|mmcblk*) sgdisk -p "/dev/${f##*/}" ;; esac
+        done > "$dir/sgdisk.txt" 2>&1 && n=$((n + 1))
+        sync
+    else
+        n=-1
+    fi
+    if [ -n "$own" ]; then umount "$m" 2>/dev/null; rmdir "$m" 2>/dev/null
+    elif [ -n "$part" ] && [ "$part" != - ] && [ "$was" = ro ]; then mount -o remount,ro "$m" 2>/dev/null; fi
+    [ "$n" -ge 0 ] || { gk3_die "在 $tgt 上建不了目录（满了？）"; return 1; }
+    echo "LOGSAVED dir=$(gk3__enc "${dir#"$m"/}") part=$part files=$n esp=$esp"
 }
