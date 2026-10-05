@@ -170,10 +170,10 @@ else
         echo "· prebuilt-gk3boot 里没有 fastboot.img —— 这一版不带执行端（gk3boot 照常启动 Android，菜单里没有 fastboot 项）"
     else
         FBS=${FB%%|*}; rest=${FB#*|}; FBM=${rest%%|*}; rest=${rest#*|}; FBT=${rest%%|*}; FBH=${rest#*|}
-        [ "$FBM" = 1f8b ] || die "prebuilt-gk3boot/fastboot.img 不是 gzip（开头 $FBM）—— 放错文件了？见 prebuilt-gk3boot/README.md"
+        [ "$FBM" = 1f8b ] || die "prebuilt-gk3boot/fastboot.img 不是 gzip（开头 ${FBM}）—— 放错文件了？见 prebuilt-gk3boot/README.md"
         [ "$FBS" -le 4194304 ] || die "prebuilt-gk3boot/fastboot.img ${FBS} 字节，超过 4 MiB 预算（ESP 上要容得下三版，设计稿 §4.1）"
         [ "$FBT" = ok ] || die "prebuilt-gk3boot/fastboot.img 没过 gzip -t —— 截断了？（传输完要核字节数与 sha256）"
-        ok "fastboot.img 在：${FBS} 字节，gzip -t 通过，sha256 $FBH（与 gk3boot.efi 同属版本 ${GV}）"
+        ok "fastboot.img 在：${FBS} 字节，gzip -t 通过，sha256 ${FBH}（与 gk3boot.efi 同属版本 ${GV}）"
     fi
 fi
 
