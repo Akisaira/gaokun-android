@@ -25,6 +25,8 @@
 persist.vendor.gaokun3.  u:object_r:vendor_gaokun3_prop:s0
 # 非持久的 vendor.gaokun3.*（2026-09-26 起）：扬声器增强总开关的镜像 vendor.gaokun3.histen.on，
 # 由 etc/histen.rc 在 vendor_init 里 setprop、音频 HAL 读。`vendor.` 也在允许的前缀清单里。
+# 2026-10-05 起还有统一启动入口的 vendor.gaokun3.boot.done（boot HAL 的 rc 设）与 vendor.gaokun3.bootentry.*
+# （boot HAL 设、Parts 读），以及 persist.vendor.gaokun3.gk3boot（上一行覆盖）—— 语义见 boot_control/Gk3Boot.cpp 顶部。
 vendor.gaokun3.          u:object_r:vendor_gaokun3_prop:s0
 # 只读的 ro.vendor.gaokun3.*（2026-10-05 起，REL-5）：目前只有 ro.vendor.gaokun3.version，
 # 值在 device.mk 里由构建环境变量 GK3_VERSION 注入、落进 /vendor/build.prop。⬜ 未编译、未上机。

@@ -1,0 +1,792 @@
+/*
+ * 统一启动入口（gk3boot.efi）的 Android 侧：开机完成线程（docs/boot-entry-design.md §4.6.1、S9）。
+ *
+ * ── 为什么放在 boot_control HAL 里 ────────────────────────────────────────────
+ *   要做的三件事正好是这个 HAL 已经有权限的：挂 ESP 改文件（EspSlot.cpp，sepolicy/hal_bootctl_default.te）、
+ *   读写 misc（AOSP vendor/hal_bootctl_default.te:15-16 的 misc_block_device rw）。另起一个 vendor 小程序
+ *   就要再开一个域、再给一遍 ESP 与 misc 的权限，还要和 HAL 抢同一个挂载点。所以是 HAL 里的一个线程。
+ *
+ * ── 触发 ──────────────────────────────────────────────────────────────────────
+ *   android.hardware.boot-service.gaokun3.rc：on property:sys.boot_completed=1 → setprop vendor.gaokun3.boot.done 1
+ *   （vendor_init 读得到 boot_status_prop：refs/lineage-sepolicy/private/vendor_init.te:316）。
+ *   HAL 只等自己的 vendor 属性（WaitForProperty，用法见 refs/lineage-system-core/init/subcontext_test.cpp:76），
+ *   不直接读 sys.boot_completed（boot_status_prop 是 system_restricted_prop，设计稿 §4.6.1 说的"走 vendor 属性中转"）。
+ *   每次开机只做一次；HAL 中途重启时看到 vendor.gaokun3.bootentry.done 已有值就不再做。
+ *
+ * ── 做什么（顺序有意义）──────────────────────────────────────────────────────
+ *   1. GK3 记录（misc+8 KiB，tools/gk3boot/README.md §5）：boot_streak 清零；把没通知过的事件取出来、置"已通知"；
+ *      写后读回（gk3_blk_write_bytes_verify，O_DIRECT 读的是盘上内容，不是页缓存）。记录无效 = 入口没在动作模式下
+ *      跑过 = 什么都不写（不替入口建记录）。
+ *   2. bless：ro.boot.gk3boot.entry（入口把 LoaderBootCountPath 的文件名报在 cmdline 里）带 +N[-M] 计数的话，
+ *      改名成不带计数的 gk3boot-android-<x>.conf。计数是 systemd-boot 每次开机递减的，开机完成才祝福 ⇒
+ *      新部署 / 新激活的入口连续 3 次没走到这里，systemd-boot 就自己改走直连条目（E6 实测）。
+ *   3. 按 persist.vendor.gaokun3.gk3boot 对齐 ESP（见下面"部署"）。
+ *      2、3 两步先【只读】挂 ESP 算一遍（dry），真有事要做才读写挂第二遍 —— 正常开机对 ESP 零写入
+ *      （vfat 读写挂载本身就会写"脏"位；设计稿 §4.12、U5）。
+ *   4. 导出 vendor.gaokun3.bootentry.*（Parts 据此发通知），最后写 .done（Parts 等它）。
+ *
+ * ── 部署（persist.vendor.gaokun3.gk3boot）────────────────────────────────────
+ *   off（缺省）：删掉全部 gk3boot / gk3prev 条目（含 .staged）和 EFI/gk3boot/<ver>/ 目录（log/ 留着）⇒ 下次开机走直连条目。
+ *   observe / action：让"现役入口"= 本槽 vendor 里那一版（/vendor/boot/gk3boot/{gk3boot.efi,version}），模式 = 属性：
+ *     · 二进制不同或没有 → 拷到 EFI/gk3boot/<ver>/gk3boot.efi（.new → fsync → 读回比对 → rename）；
+ *     · 现役条目（gk3boot-android-{a,b}[+N].conf）已是这一版、这个模式 → 不动（只清掉过期的 .staged）；
+ *     · 否则：现役条目是【另一版】且【被祝福过】（至少一个不带计数 = 那一版在这台机器上起来过）→ 改写成
+ *       gk3prev-android-{a,b}.conf（上一版入口，sort-key 0gk3prev，设计稿 §4.11 第 3 步）；
+ *       然后写新的 gk3boot-android-{a,b}+3.conf（带计数 = 新激活的入口要靠开机完成来证明），删旧的现役条目与 .staged；
+ *     · 最后删掉没有任何条目（任何 .conf 的 efi 行）引用的 EFI/gk3boot/<ver>/。
+ *   postinstall（OTA 时，新 vendor 的脚本）在 ESP 上还没有入口时直接部署 +3，已有入口时只铺新版本目录 + .staged；
+ *   .staged 在这里被"激活"（就是上面的对齐：vendor 版本 = staged 版本）。OTA 回滚到旧槽时 vendor 版本 ≠ staged 版本，
+ *   .staged 被删、现役入口留在旧槽那一版 —— "入口的版本跟着正在跑的系统走"。
+ *   ⚠️ 属性改了要【下一次开机完成】才生效（这里只在开机完成时做一次）。
+ *   ⚠️ 入口条目计数用完（+0-N）不会被这里重新武装：那说明入口这一版在这台机器上连续起不来，留给人看
+ *      （bypassed 通知）；要重来就 setprop off → 重启 → setprop observe|action → 重启。
+ *
+ * ── 导出的属性（vendor_gaokun3_prop，Parts = system_app 能读：sepolicy/vendor_gaokun3_props.te）──
+ *   vendor.gaokun3.bootentry.via       gk3boot | gk3prev | direct（这次开机经过谁）
+ *   vendor.gaokun3.bootentry.event     ro.boot.gk3boot.event 原样（none / fallback / bcab_invalid / forced）
+ *   vendor.gaokun3.bootentry.notify    要通知的事件，逗号分隔（fallback、boot_corrupt、bcb_dropped、wipe_failed、
+ *                                      refused_merging、bootloop、noslot）；取自 GK3 事件环里没通知过的，
+ *                                      记录无效（观察模式）时退回 cmdline 的 event
+ *   vendor.gaokun3.bootentry.bypassed  1 = 入口已部署、这次却没经过它（计数用完回落直连 / 菜单里手选直连 / fail-open）
+ *   vendor.gaokun3.bootentry.streak    清零之前的 boot_streak（没有记录时为空）
+ *   vendor.gaokun3.bootentry.mode      对齐之后 ESP 上现役入口的模式：off / observe / action / unknown
+ *   vendor.gaokun3.bootentry.version   对齐之后现役入口的版本（off 时为空）
+ *   vendor.gaokun3.bootentry.error     出错时一句话（≤ 91 字节），没错为空
+ *   vendor.gaokun3.bootentry.done      本次开机的令牌（时间戳-pid），最后写；Parts 按它去重
+ *
+ * ⬜ 未编译、未上机（2026-10-05）。
+ *
+ * Copyright 2026 The gaokun-android contributors
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#include "Gk3Boot.h"
+
+#include <ctype.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <memory>
+#include <set>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include <android-base/file.h>
+#include <android-base/logging.h>
+#include <android-base/properties.h>
+#include <android-base/strings.h>
+#include <android-base/unique_fd.h>
+
+#include <gk3core.h>
+
+#include "EspSlot.h"
+
+namespace gaokun3 {
+namespace {
+
+using android::base::EndsWith;
+using android::base::GetProperty;
+using android::base::SetProperty;
+using android::base::StartsWith;
+
+constexpr char kTrigger[] = "vendor.gaokun3.boot.done";
+constexpr char kModeProp[] = "persist.vendor.gaokun3.gk3boot";
+constexpr char kOutPrefix[] = "vendor.gaokun3.bootentry.";
+constexpr char kVendorEfi[] = "/vendor/boot/gk3boot/gk3boot.efi";
+constexpr char kVendorVer[] = "/vendor/boot/gk3boot/version";
+constexpr char kMiscDev[] = "/dev/block/by-name/misc";
+constexpr char kActivePrefix[] = "gk3boot-android-";
+constexpr char kPrevPrefix[] = "gk3prev-android-";
+constexpr size_t kPropMax = 91;  // PROP_VALUE_MAX - 1
+
+void Out(const char* key, const std::string& value) {
+    std::string v = value.substr(0, kPropMax);
+    if (!SetProperty(std::string(kOutPrefix) + key, v))
+        LOG(WARNING) << "gk3boot: setprop " << kOutPrefix << key << "=" << v << " failed";
+}
+
+// ──────────────────────────────────────────────────────────────── misc：GK3 记录
+
+// O_DIRECT 要求缓冲区、偏移、长度都按逻辑块对齐；NVMe 的逻辑块是 512 或 4096，统一按 4096 走两者都满足。
+constexpr uint32_t kBlk = 4096;
+
+int BlkRead(void* ctx, uint64_t lba, uint32_t count, void* buf) {
+    int fd = *static_cast<int*>(ctx);
+    ssize_t n = static_cast<ssize_t>(count) * kBlk;
+    return TEMP_FAILURE_RETRY(pread(fd, buf, n, static_cast<off_t>(lba * kBlk))) == n ? 0 : -1;
+}
+int BlkWrite(void* ctx, uint64_t lba, uint32_t count, const void* buf) {
+    int fd = *static_cast<int*>(ctx);
+    ssize_t n = static_cast<ssize_t>(count) * kBlk;
+    return TEMP_FAILURE_RETRY(pwrite(fd, buf, n, static_cast<off_t>(lba * kBlk))) == n ? 0 : -1;
+}
+int BlkFlush(void* ctx) {
+    return fsync(*static_cast<int*>(ctx)) == 0 ? 0 : -1;
+}
+
+bool Interesting(uint16_t code) {
+    switch (code) {
+        case GK3_EV_FALLBACK:
+        case GK3_EV_BOOT_CORRUPT:
+        case GK3_EV_BCB_DROPPED:
+        case GK3_EV_WIPE_FAILED:
+        case GK3_EV_REFUSED_MERGING:
+        case GK3_EV_BOOTLOOP:
+        case GK3_EV_NOSLOT:
+            return true;
+        default:  // migrated / bcb_ignored 只是记录（后者在分派开关关着时每份新 BCB 都有一条），不打扰用户
+            return false;
+    }
+}
+
+struct RecResult {
+    bool valid = false;               // misc 里有有效的 GK3 记录
+    int streak = -1;                  // 清零之前的值
+    std::vector<std::string> notify;  // 没通知过、值得通知的事件名（去重，从旧到新）
+    std::string error;
+};
+
+RecResult ClearStreakAndTakeEvents() {
+    RecResult r;
+    android::base::unique_fd fd(TEMP_FAILURE_RETRY(open(kMiscDev, O_RDWR | O_DIRECT | O_CLOEXEC)));
+    if (fd < 0) {
+        r.error = std::string("open misc: ") + strerror(errno);
+        return r;
+    }
+    off_t size = lseek(fd.get(), 0, SEEK_END);
+    if (size < static_cast<off_t>(GK3_MISC_GK3_OFF + GK3_REC_SIZE)) {
+        r.error = "misc too small";
+        return r;
+    }
+    int raw = fd.get();
+    gk3_blk dev = {&raw, kBlk, static_cast<uint64_t>(size) / kBlk, BlkRead, BlkWrite, BlkFlush};
+
+    void* scratch = nullptr;
+    if (posix_memalign(&scratch, kBlk, 2 * kBlk) != 0) {
+        r.error = "posix_memalign failed";
+        return r;
+    }
+    std::unique_ptr<void, decltype(&free)> scratch_guard(scratch, &free);
+
+    uint8_t rec[GK3_REC_SIZE];
+    gk3_err e = gk3_blk_read_bytes(&dev, 0, dev.num_blocks, GK3_MISC_GK3_OFF, rec, sizeof(rec), scratch,
+                                   2 * kBlk);
+    if (e != GK3_OK) {
+        r.error = std::string("read GK3 record: ") + gk3_strerror(e);
+        return r;
+    }
+    if (gk3_rec_validate(rec) != GK3_OK) {
+        // 无记录 = 入口没在动作模式下跑过（或者记录被断电写坏了 —— 入口下次会重建，§4.5）。不替它建。
+        LOG(INFO) << "gk3boot: no valid GK3 record at misc+8KiB (" << gk3_strerror(gk3_rec_validate(rec))
+                  << "), nothing to clear";
+        return r;
+    }
+    r.valid = true;
+    r.streak = gk3_rec_boot_streak(rec);
+
+    gk3_event ev[GK3_EV_N];
+    uint32_t n = std::min<uint32_t>(gk3_rec_events(rec, ev, GK3_EV_N), GK3_EV_N);
+    uint32_t upto = 0;
+    bool pending = false;
+    for (uint32_t i = 0; i < n; i++) {
+        if (ev[i].flags & GK3_EVF_NOTIFIED) continue;
+        pending = true;
+        upto = std::max(upto, ev[i].seq);
+        if (!Interesting(ev[i].code)) continue;
+        std::string name = gk3_ev_name(static_cast<gk3_ev_code>(ev[i].code));
+        if (std::find(r.notify.begin(), r.notify.end(), name) == r.notify.end()) r.notify.push_back(name);
+        LOG(INFO) << "gk3boot: event seq=" << ev[i].seq << " " << name << " slot=_"
+                  << static_cast<char>('a' + (ev[i].slot & 1)) << " aux=" << ev[i].aux;
+    }
+    if (r.streak == 0 && !pending) return r;  // 正常开机的常态：一个字节都不写
+
+    gk3_rec_set_boot_streak(rec, 0);
+    if (pending) gk3_rec_events_mark_notified(rec, upto);
+    gk3_rec_seal(rec);
+    e = gk3_blk_write_bytes_verify(&dev, 0, dev.num_blocks, GK3_MISC_GK3_OFF, rec, sizeof(rec), scratch,
+                                   2 * kBlk);
+    if (e != GK3_OK) {
+        r.error = std::string("write GK3 record: ") + gk3_strerror(e);
+        return r;
+    }
+    // 再按字节读一遍、过一遍 CRC（write_verify 比的是整块，这里确认读回来的是一份有效记录、streak 真的是 0）
+    uint8_t back[GK3_REC_SIZE];
+    e = gk3_blk_read_bytes(&dev, 0, dev.num_blocks, GK3_MISC_GK3_OFF, back, sizeof(back), scratch, 2 * kBlk);
+    if (e != GK3_OK || gk3_rec_validate(back) != GK3_OK || gk3_rec_boot_streak(back) != 0) {
+        r.error = "GK3 record read-back mismatch";
+        return r;
+    }
+    LOG(INFO) << "gk3boot: GK3 record: boot_streak " << r.streak << " -> 0"
+              << (pending ? ", events up to seq " + std::to_string(upto) + " marked notified" : "")
+              << " (written, read back OK)";
+    return r;
+}
+
+// ──────────────────────────────────────────────────────────────── ESP：条目
+
+enum class Kind { kActive, kStaged, kPrev };
+
+struct Gk3Entry {
+    std::string file;      // loader/entries 下的文件名
+    Kind kind = Kind::kActive;
+    char slot = 'a';
+    bool counted = false;  // 文件名带 +N[-M]
+    std::string version;   // efi 行 /EFI/gk3boot/<ver>/gk3boot.efi 里的 <ver>；解析不出为空
+    bool observe = false;  // options 里有 gk3.observe=1
+};
+
+std::string EntriesDir() { return std::string(kEspRoot) + "/loader/entries"; }
+std::string Gk3Dir() { return std::string(kEspRoot) + "/EFI/gk3boot"; }
+
+bool AllDigits(const std::string& s) {
+    return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) { return c >= '0' && c <= '9'; });
+}
+
+// 版本串：与 tools/gk3boot/efi/Makefile 的 BOOT_VERSION 同一个字符集（[A-Za-z0-9._+-]），≤ 64；
+// 另外不能是 log（EFI/gk3boot/log 是入口的日志目录）、. 或 ..
+bool ValidVersion(const std::string& v) {
+    if (v.empty() || v.size() > 64 || v == "." || v == ".." || strcasecmp(v.c_str(), "log") == 0) return false;
+    return std::all_of(v.begin(), v.end(), [](char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' ||
+               c == '_' || c == '+' || c == '-';
+    });
+}
+
+// <32 位小写十六进制>-android-<x>.conf：直连条目（与 postinstall 的 is_direct_entry、gk3boot.c 的 direct_cb 同规则）
+bool IsDirectEntry(const std::string& n, char* slot) {
+    if (n.size() != 32 + 9 + 1 + 5) return false;
+    for (size_t i = 0; i < 32; i++)
+        if (!((n[i] >= '0' && n[i] <= '9') || (n[i] >= 'a' && n[i] <= 'f'))) return false;
+    if (n.compare(32, 9, "-android-") != 0 || (n[41] != 'a' && n[41] != 'b') || n.compare(42, 5, ".conf") != 0)
+        return false;
+    *slot = n[41];
+    return true;
+}
+
+// gk3boot-android-<x>.conf / gk3boot-android-<x>+N[-M].conf / gk3boot-android-<x>.conf.staged / gk3prev-android-<x>.conf
+bool ParseEntryName(const std::string& n, Gk3Entry* e) {
+    std::string rest;
+    if (StartsWith(n, kActivePrefix)) {
+        e->kind = Kind::kActive;
+        rest = n.substr(strlen(kActivePrefix));
+    } else if (StartsWith(n, kPrevPrefix)) {
+        e->kind = Kind::kPrev;
+        rest = n.substr(strlen(kPrevPrefix));
+    } else {
+        return false;
+    }
+    if (rest.empty() || (rest[0] != 'a' && rest[0] != 'b')) return false;
+    e->slot = rest[0];
+    rest = rest.substr(1);
+    e->file = n;
+    e->counted = false;
+    if (rest == ".conf") return true;
+    if (e->kind == Kind::kActive && rest == ".conf.staged") {
+        e->kind = Kind::kStaged;
+        return true;
+    }
+    // systemd-boot 的计数：+LEFT[-DONE]（boot.c 的 boot_entry_parse_tries）；只有现役条目会带
+    if (e->kind != Kind::kActive || rest.size() < 7 || rest[0] != '+' || !EndsWith(rest, ".conf")) return false;
+    std::string c = rest.substr(1, rest.size() - 1 - 5);
+    size_t dash = c.find('-');
+    if (dash == std::string::npos ? !AllDigits(c) : (!AllDigits(c.substr(0, dash)) || !AllDigits(c.substr(dash + 1))))
+        return false;
+    e->counted = true;
+    return true;
+}
+
+// 条目里 efi 行指向 /EFI/gk3boot/<ver>/… 时返回 <ver>（不限文件名：手放的实验条目也算"引用"了那个目录）
+std::string EfiDirOf(const std::string& content) {
+    for (const auto& raw : android::base::Split(content, "\n")) {
+        std::string line = android::base::Trim(raw);
+        if (!StartsWith(line, "efi") || line.size() < 4 || (line[3] != ' ' && line[3] != '\t')) continue;
+        std::string path = android::base::Trim(line.substr(3));
+        std::replace(path.begin(), path.end(), '\\', '/');
+        // systemd-boot 比较路径不分大小写（vfat），这里也按不分大小写认前缀
+        static const std::string kPfx = "/EFI/gk3boot/";
+        if (path.size() <= kPfx.size() || strncasecmp(path.c_str(), kPfx.c_str(), kPfx.size()) != 0) return "";
+        std::string rest = path.substr(kPfx.size());
+        size_t slash = rest.find('/');
+        return slash == std::string::npos ? "" : rest.substr(0, slash);
+    }
+    return "";
+}
+
+bool OptionsObserve(const std::string& content) {
+    for (const auto& raw : android::base::Split(content, "\n")) {
+        std::string line = android::base::Trim(raw);
+        if (!StartsWith(line, "options")) continue;
+        for (const auto& tok : android::base::Split(line, " \t"))
+            if (tok == "gk3.observe=1") return true;
+    }
+    return false;
+}
+
+struct EspScan {
+    std::vector<Gk3Entry> gk3;     // 我们的入口条目
+    bool direct[2] = {false, false};
+    std::set<std::string> referenced;  // 任何 .conf / .conf.staged 的 efi 行引用的 EFI/gk3boot/<d>（小写比较）
+    bool ok = false;
+};
+
+std::string Lower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(tolower(c)); });
+    return s;
+}
+
+EspScan ScanEsp() {
+    EspScan s;
+    std::unique_ptr<DIR, decltype(&closedir)> d(opendir(EntriesDir().c_str()), &closedir);
+    if (!d) {
+        PLOG(ERROR) << "gk3boot: opendir " << EntriesDir();
+        return s;
+    }
+    while (struct dirent* de = readdir(d.get())) {
+        std::string n = de->d_name;
+        char slot;
+        if (IsDirectEntry(n, &slot)) {
+            s.direct[slot - 'a'] = true;
+            continue;
+        }
+        if (!EndsWith(n, ".conf") && !EndsWith(n, ".conf.staged")) continue;
+        std::string content;
+        if (!android::base::ReadFileToString(EntriesDir() + "/" + n, &content)) {
+            PLOG(WARNING) << "gk3boot: read " << n;
+            continue;
+        }
+        std::string dir = EfiDirOf(content);
+        if (!dir.empty()) s.referenced.insert(Lower(dir));
+        Gk3Entry e;
+        if (!ParseEntryName(n, &e)) continue;
+        e.version = dir;
+        e.observe = OptionsObserve(content);
+        s.gk3.push_back(e);
+    }
+    s.ok = true;
+    return s;
+}
+
+
+// ──────────────────────────────────────────────────────────────── ESP：两遍走
+
+// ★ 正常开机对 ESP 零写入（设计稿 §4.12、U5 的理由）：vfat 以读写方式挂上就会在盘上置"脏"位、卸载时再清，
+//   哪怕一个文件都没改。所以先【只读】挂上把要做的事算一遍（dry），确实有事要做才读写挂第二遍。
+//   下面每个会改 ESP 的函数都接一个 Pass：dry 时只记 changed、不动盘。
+struct Pass {
+    bool dry = true;
+    bool changed = false;
+};
+
+// 写一个小文件：<path>.new → fsync → rename。vfat 上 rename 不保证原子，但能把"截断的条目"窗口缩到最小
+// （与 EspSlot.cpp 写 loader.conf 同一个做法）。
+bool WriteFileAtomic(Pass* p, const std::string& path, const std::string& data) {
+    std::string have;
+    if (android::base::ReadFileToString(path, &have) && have == data) return true;
+    p->changed = true;
+    if (p->dry) return true;
+    const std::string tmp = path + ".new";
+    {
+        android::base::unique_fd fd(
+                TEMP_FAILURE_RETRY(open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644)));
+        if (fd < 0 || !android::base::WriteFully(fd.get(), data.data(), data.size()) || fsync(fd.get()) != 0) {
+            PLOG(ERROR) << "gk3boot: write " << tmp;
+            unlink(tmp.c_str());
+            return false;
+        }
+    }
+    if (rename(tmp.c_str(), path.c_str()) != 0) {
+        PLOG(ERROR) << "gk3boot: rename " << tmp << " -> " << path;
+        unlink(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool MkdirP(const std::string& path) {
+    std::string cur;
+    for (const auto& part : android::base::Split(path, "/")) {
+        if (part.empty()) continue;
+        cur += "/" + part;
+        if (mkdir(cur.c_str(), 0755) != 0 && errno != EEXIST) {
+            PLOG(ERROR) << "gk3boot: mkdir " << cur;
+            return false;
+        }
+    }
+    return true;
+}
+
+bool RemoveTree(const std::string& path) {
+    std::unique_ptr<DIR, decltype(&closedir)> d(opendir(path.c_str()), &closedir);
+    if (!d) return unlink(path.c_str()) == 0;
+    bool ok = true;
+    while (struct dirent* de = readdir(d.get())) {
+        std::string n = de->d_name;
+        if (n == "." || n == "..") continue;
+        std::string p = path + "/" + n;
+        struct stat st;
+        if (lstat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+            ok = RemoveTree(p) && ok;
+        } else if (unlink(p.c_str()) != 0) {
+            PLOG(WARNING) << "gk3boot: unlink " << p;
+            ok = false;
+        }
+    }
+    d.reset();
+    if (rmdir(path.c_str()) != 0) {
+        PLOG(WARNING) << "gk3boot: rmdir " << path;
+        return false;
+    }
+    return ok;
+}
+
+// vendor 里那一版的二进制拷到 EFI/gk3boot/<ver>/gk3boot.efi：已经逐字节相同就不写；否则 .new → fsync →
+// 读回比对 → rename（与安装器 / postinstall"写完 cmp"同一条规矩，M4b 的教训）。
+bool InstallBinary(Pass* p, const std::string& ver, std::string* err) {
+    std::string want;
+    if (!android::base::ReadFileToString(kVendorEfi, &want) || want.size() < 1024 || want.compare(0, 2, "MZ") != 0) {
+        *err = "vendor gk3boot.efi unreadable or not a PE";
+        return false;
+    }
+    const std::string dir = Gk3Dir() + "/" + ver;
+    const std::string dst = dir + "/gk3boot.efi";
+    std::string have;
+    if (android::base::ReadFileToString(dst, &have) && have == want) return true;
+    p->changed = true;
+    if (p->dry) return true;
+    if (!MkdirP(dir)) {
+        *err = "mkdir EFI/gk3boot/" + ver + " failed";
+        return false;
+    }
+    const std::string tmp = dst + ".new";
+    {
+        android::base::unique_fd fd(
+                TEMP_FAILURE_RETRY(open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644)));
+        if (fd < 0 || !android::base::WriteFully(fd.get(), want.data(), want.size()) || fsync(fd.get()) != 0) {
+            PLOG(ERROR) << "gk3boot: write " << tmp;
+            unlink(tmp.c_str());
+            *err = "write gk3boot.efi failed (ESP full?)";
+            return false;
+        }
+    }
+    std::string back;
+    if (!android::base::ReadFileToString(tmp, &back) || back != want) {
+        unlink(tmp.c_str());
+        *err = "gk3boot.efi read-back mismatch";
+        return false;
+    }
+    if (rename(tmp.c_str(), dst.c_str()) != 0) {
+        PLOG(ERROR) << "gk3boot: rename " << tmp;
+        unlink(tmp.c_str());
+        *err = "rename gk3boot.efi failed";
+        return false;
+    }
+    LOG(INFO) << "gk3boot: installed " << dst << " (" << want.size() << " bytes)";
+    return true;
+}
+
+// 条目正文。postinstall（bin/gaokun3-ota-postinstall.sh 的 gk3_entry_text）写的是同一个格式，改一边要改另一边。
+// title 只用 ASCII（设计稿 §4.13：UEFI ConOut 的 CJK 字形没验证过）。
+std::string EntryText(Kind kind, char slot, const std::string& ver, bool observe) {
+    std::string title = kind == Kind::kPrev ? "Android (previous loader)"
+                                            : (observe ? "Android (gk3boot observe)" : "Android");
+    std::string sort = kind == Kind::kPrev ? "0gk3prev" : "0gk3";
+    return "title      " + title + "\n" +
+           "version    gk3boot-" + ver + "\n" +
+           "sort-key   " + sort + "\n" +
+           "efi        /EFI/gk3boot/" + ver + "/gk3boot.efi\n" +
+           "options    gk3.observe=" + (observe ? "1" : "0") + " gk3.hint=" + slot + "\n";
+}
+
+std::string ActiveName(char slot, bool counted) {
+    return std::string(kActivePrefix) + slot + (counted ? "+3" : "") + ".conf";
+}
+std::string PrevName(char slot) { return std::string(kPrevPrefix) + slot + ".conf"; }
+
+void RemoveEntry(Pass* p, const Gk3Entry& e) {
+    p->changed = true;
+    if (p->dry) return;
+    std::string path = EntriesDir() + "/" + e.file;
+    if (unlink(path.c_str()) != 0 && errno != ENOENT) PLOG(WARNING) << "gk3boot: unlink " << path;
+    else LOG(INFO) << "gk3boot: removed entry " << e.file;
+}
+
+// 删掉没有任何条目引用的 EFI/gk3boot/<d>/（log/ 除外）。dry 时 refs 由调用方给（盘上还没删的条目不能算引用）。
+void CollectGarbage(Pass* p, const std::set<std::string>& refs) {
+    std::unique_ptr<DIR, decltype(&closedir)> d(opendir(Gk3Dir().c_str()), &closedir);
+    if (!d) return;
+    std::vector<std::string> doomed;
+    while (struct dirent* de = readdir(d.get())) {
+        std::string n = de->d_name;
+        if (n == "." || n == ".." || strcasecmp(n.c_str(), "log") == 0) continue;
+        std::string path = Gk3Dir() + "/" + n;
+        struct stat st;
+        if (lstat(path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        if (refs.count(Lower(n))) continue;
+        doomed.push_back(path);
+    }
+    d.reset();
+    if (!doomed.empty()) p->changed = true;
+    if (p->dry) return;
+    for (const auto& path : doomed) {
+        if (RemoveTree(path)) LOG(INFO) << "gk3boot: removed unreferenced " << path;
+    }
+}
+
+// 对齐之后还会留在盘上的条目引用了哪些目录：其他人的条目（手放的实验条目等）照算，我们的只算 keep 里的
+std::set<std::string> RefsAfter(const EspScan& s, const std::vector<std::string>& keep_versions) {
+    std::set<std::string> refs = s.referenced;
+    for (const auto& e : s.gk3) refs.erase(Lower(e.version));  // 我们的条目全部重算
+    // 别人的条目可能与我们的条目指向同一目录：重扫一遍不是我们的 .conf
+    std::unique_ptr<DIR, decltype(&closedir)> d(opendir(EntriesDir().c_str()), &closedir);
+    if (d) {
+        while (struct dirent* de = readdir(d.get())) {
+            std::string n = de->d_name;
+            Gk3Entry tmp;
+            char slot;
+            if (ParseEntryName(n, &tmp) || IsDirectEntry(n, &slot)) continue;
+            if (!EndsWith(n, ".conf") && !EndsWith(n, ".conf.staged")) continue;
+            std::string content;
+            if (!android::base::ReadFileToString(EntriesDir() + "/" + n, &content)) continue;
+            std::string dir = EfiDirOf(content);
+            if (!dir.empty()) refs.insert(Lower(dir));
+        }
+    }
+    for (const auto& v : keep_versions)
+        if (!v.empty()) refs.insert(Lower(v));
+    return refs;
+}
+
+enum class Mode { kOff, kObserve, kAction, kUnknown };
+
+Mode ParseMode(const std::string& v) {
+    if (v.empty() || v == "off") return Mode::kOff;
+    if (v == "observe") return Mode::kObserve;
+    if (v == "action") return Mode::kAction;
+    return Mode::kUnknown;
+}
+
+struct EspResult {
+    std::string via;  // gk3boot / gk3prev / direct
+    bool bypassed = false;
+    std::string mode;  // 对齐之后：off / observe / action / unknown
+    std::string version;
+    std::string error;
+};
+
+// bless：去掉本次启动所用条目的 +N[-M]
+void Bless(Pass* p, const std::string& entry) {
+    Gk3Entry e;
+    if (!ParseEntryName(entry, &e) || e.kind != Kind::kActive || !e.counted) return;
+    const std::string from = EntriesDir() + "/" + entry;
+    const std::string to = EntriesDir() + "/" + ActiveName(e.slot, false);
+    if (access(from.c_str(), F_OK) != 0) {
+        if (!p->dry) LOG(WARNING) << "gk3boot: bless: " << entry << " is not on the ESP (renamed meanwhile?)";
+        return;
+    }
+    p->changed = true;
+    if (p->dry) return;
+    if (rename(from.c_str(), to.c_str()) != 0) {
+        PLOG(ERROR) << "gk3boot: bless: rename " << from << " -> " << to;
+        return;
+    }
+    LOG(INFO) << "gk3boot: blessed " << entry << " -> " << ActiveName(e.slot, false);
+}
+
+void Reconcile(Pass* p, Mode mode, EspResult* r) {
+    EspScan s = ScanEsp();
+    if (!s.ok) {
+        r->error = "cannot list loader/entries";
+        r->mode = "unknown";
+        return;
+    }
+    std::vector<Gk3Entry> active, staged, prev;
+    for (const auto& e : s.gk3) {
+        (e.kind == Kind::kActive ? active : e.kind == Kind::kStaged ? staged : prev).push_back(e);
+    }
+    auto keep_as_is = [&]() {
+        r->mode = active.empty() ? "off" : (active[0].observe ? "observe" : "action");
+        r->version = active.empty() ? "" : active[0].version;
+    };
+
+    if (mode == Mode::kUnknown) {
+        if (!p->dry)
+            LOG(ERROR) << "gk3boot: " << kModeProp << "=" << GetProperty(kModeProp, "")
+                       << " is not off|observe|action; leaving the ESP as it is";
+        r->error = std::string(kModeProp) + " invalid";
+        keep_as_is();
+        return;
+    }
+    if (mode == Mode::kOff) {
+        for (const auto& e : s.gk3) RemoveEntry(p, e);
+        CollectGarbage(p, RefsAfter(s, {}));
+        r->mode = "off";
+        return;
+    }
+
+    const bool observe = mode == Mode::kObserve;
+    std::string ver;
+    if (!android::base::ReadFileToString(kVendorVer, &ver)) {
+        r->error = "no /vendor/boot/gk3boot in this build";
+        keep_as_is();
+        return;
+    }
+    ver = android::base::Trim(ver);
+    if (!ValidVersion(ver)) {
+        r->error = "bad /vendor/boot/gk3boot/version";
+        keep_as_is();
+        return;
+    }
+    // 入口 fail-open 的去处是直连条目（gk3boot.c 的 oneshot_direct：本槽没有就用另一槽的）—— 一个都没有就不部署
+    if (!s.direct[0] && !s.direct[1]) {
+        r->error = "no <machine-id>-android-x.conf on ESP";
+        keep_as_is();
+        return;
+    }
+    if (!InstallBinary(p, ver, &r->error)) {
+        keep_as_is();
+        return;
+    }
+
+    bool have[2] = {false, false}, up_to_date = !active.empty(), proven = false;
+    std::string old_ver = active.empty() ? "" : active[0].version;
+    bool old_observe = !active.empty() && active[0].observe;
+    for (const auto& e : active) {
+        have[e.slot - 'a'] = true;
+        if (e.version != ver || e.observe != observe) up_to_date = false;
+        if (e.version != old_ver) old_ver.clear();  // 两个条目版本不一致：不当成一个"已知可用的上一版"
+        if (!e.counted) proven = true;
+    }
+    if (!have[0] || !have[1]) up_to_date = false;
+
+    std::string prev_ver = prev.empty() ? "" : prev[0].version;
+    if (up_to_date) {
+        for (const auto& e : staged) RemoveEntry(p, e);
+        CollectGarbage(p, RefsAfter(s, {ver, prev_ver}));
+        r->mode = observe ? "observe" : "action";
+        r->version = ver;
+        return;
+    }
+
+    // 现役入口是另一版、且在这台机器上被祝福过 ⇒ 它就是"已知可用的上一版"，改成 gk3prev（§4.11 第 3 步）。
+    // 没被祝福过（全带计数）的旧版不升格：留着原来的 gk3prev（若有）。
+    if (!old_ver.empty() && old_ver != ver && proven && ValidVersion(old_ver)) {
+        for (const auto& e : prev) RemoveEntry(p, e);
+        for (char x : {'a', 'b'}) {
+            if (!WriteFileAtomic(p, EntriesDir() + "/" + PrevName(x), EntryText(Kind::kPrev, x, old_ver, old_observe)))
+                r->error = "write " + PrevName(x) + " failed";
+        }
+        prev_ver = old_ver;
+        if (!p->dry) LOG(INFO) << "gk3boot: previous loader " << old_ver << " kept as gk3prev-android-{a,b}.conf";
+    }
+
+    // 新的现役条目（带 +3）：先写新的、再删旧的 —— 中途断电最坏是新旧并存，systemd-boot 照样能选
+    for (char x : {'a', 'b'}) {
+        if (!WriteFileAtomic(p, EntriesDir() + "/" + ActiveName(x, true), EntryText(Kind::kActive, x, ver, observe))) {
+            r->error = "write " + ActiveName(x, true) + " failed";
+            keep_as_is();
+            return;  // 旧条目不删：至少还有原来那一套
+        }
+    }
+    for (const auto& e : active) {
+        if (e.file != ActiveName(e.slot, true)) RemoveEntry(p, e);
+    }
+    for (const auto& e : staged) RemoveEntry(p, e);
+    CollectGarbage(p, RefsAfter(s, {ver, prev_ver}));
+    if (!p->dry)
+        LOG(INFO) << "gk3boot: active loader now " << ver << " (" << (observe ? "observe" : "action")
+                  << "), entries gk3boot-android-{a,b}+3.conf";
+    r->mode = observe ? "observe" : "action";
+    r->version = ver;
+}
+
+// 一遍：bless + 对齐。返回这一遍里算出来的结果；p->changed 表示（dry 时）还有事要做
+EspResult OnePass(Pass* p, const std::string& entry, Mode mode) {
+    EspResult r;
+    r.via = entry.empty() ? "direct" : StartsWith(entry, kPrevPrefix) ? "gk3prev" : "gk3boot";
+    MountedEsp esp(p->dry);
+    if (!esp.ok()) {
+        r.error = "cannot mount ESP";
+        r.mode = "unknown";
+        return r;
+    }
+    // bypassed：入口（现役条目）在 ESP 上，这次却是直连开机。在对齐之前看（对齐可能刚把入口装上）
+    EspScan before = ScanEsp();
+    bool had_active = false;
+    for (const auto& e : before.gk3) had_active |= e.kind == Kind::kActive;
+    r.bypassed = mode != Mode::kOff && had_active && entry.empty();
+
+    if (!entry.empty()) Bless(p, entry);
+    Reconcile(p, mode, &r);
+    return r;
+}
+
+EspResult DoEsp(const std::string& entry, Mode mode) {
+    Pass dry;
+    EspResult r = OnePass(&dry, entry, mode);
+    if (r.bypassed)
+        LOG(WARNING) << "gk3boot: loader entries are on the ESP but this boot did not go through gk3boot "
+                        "(entry counter used up, direct entry picked in the menu, or fail-open)";
+    if (!dry.changed) {
+        LOG(INFO) << "gk3boot: ESP already in the wanted state (mode=" << r.mode << " version=" << r.version
+                  << "), mounted read-only, nothing written";
+        return r;
+    }
+    Pass real;
+    real.dry = false;
+    EspResult w = OnePass(&real, entry, mode);
+    w.bypassed = r.bypassed;  // 第二遍时入口可能已经被第一遍之后的谁改了；以第一遍（开机时的样子）为准
+    return w;
+}
+
+void Worker() {
+    if (!GetProperty(std::string(kOutPrefix) + "done", "").empty()) {
+        LOG(INFO) << "gk3boot: boot-completed work already done this boot (HAL restarted?)";
+        return;
+    }
+    android::base::WaitForProperty(kTrigger, "1");
+
+    const std::string entry = GetProperty("ro.boot.gk3boot.entry", "");
+    const std::string event = GetProperty("ro.boot.gk3boot.event", "");
+    const Mode mode = ParseMode(GetProperty(kModeProp, ""));
+    LOG(INFO) << "gk3boot: boot completed; entry=" << (entry.empty() ? "<direct>" : entry)
+              << " event=" << (event.empty() ? "-" : event) << " " << kModeProp << "="
+              << GetProperty(kModeProp, "<unset>");
+
+    RecResult rec = ClearStreakAndTakeEvents();
+    std::vector<std::string> notify = rec.notify;
+    // 记录无效（观察模式不写 misc）时退回 cmdline 的 event；有记录时只认事件环（同一件事只通知一次）
+    if (!rec.valid && event == "fallback") notify.push_back(event);
+
+    EspResult esp = DoEsp(entry, mode);
+
+    std::string err = rec.error;
+    if (!esp.error.empty()) err += (err.empty() ? "" : "; ") + esp.error;
+    if (!err.empty()) LOG(ERROR) << "gk3boot: " << err;
+
+    Out("via", esp.via);
+    Out("event", event);
+    Out("notify", android::base::Join(notify, ","));
+    Out("bypassed", esp.bypassed ? "1" : "0");
+    Out("streak", rec.streak < 0 ? "" : std::to_string(rec.streak));
+    Out("mode", esp.mode);
+    Out("version", esp.version);
+    Out("error", err);
+    Out("done", std::to_string(time(nullptr)) + "-" + std::to_string(getpid()));
+}
+
+}  // namespace
+
+void StartBootCompletedWorker() {
+    std::thread(Worker).detach();
+}
+
+}  // namespace gaokun3

@@ -4,6 +4,7 @@
 #   make upstream        与真正的 libboot_control.cpp 逐字节对拍（要 refs/，先跑 scripts/clone-refs.sh）
 #   make freestanding    按 UEFI 的条件编 aarch64 目标文件，并断言没有任何外部符号依赖（T9）
 #   make gk3-misc        主机版只读 CLI（dump misc / gpt / boot.img）
+#   make hal-test        boot_control HAL 开机完成线程（device/…/boot_control/Gk3Boot.cpp）的主机场景测试（test/hal/run.sh）
 #   make check           以上全部
 #
 # 可覆盖：REFS=<refs 目录>  BOOTIMG=<完整 boot.img，用来复算整份 SHA1(id)>
@@ -22,7 +23,7 @@ HOSTFLAGS:= -std=c11 -O1 -g $(WARN) -Werror -Icore/include $(SAN)
 
 TEST_SRC := $(wildcard test/*.c)
 
-.PHONY: all test upstream freestanding check clean
+.PHONY: all test upstream freestanding check clean hal-test
 all: check
 
 $(B):
@@ -81,6 +82,9 @@ $(B)/gk3-misc: misc/gk3-misc.c $(CORE_SRC) core/include/gk3core.h | $(B)
 gk3-misc: $(B)/gk3-misc
 
 check: test upstream freestanding gk3-misc
+
+hal-test:
+	bash test/hal/run.sh
 
 clean:
 	rm -rf $(B)

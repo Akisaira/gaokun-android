@@ -41,3 +41,15 @@ allow hal_bootctl_default gaokun3_esp_block_device:blk_file rw_file_perms;
 # 2026-09-27：`hal_bootctl_default boot_block_device:blk_file getattr  path=/dev/block/nvme0n1p5`
 # （boot_a；HAL 开机时 stat 两个 boot 槽）。只 getattr，不给读写。
 allow hal_bootctl_default boot_block_device:blk_file getattr;
+
+# ── 2026-10-05：统一启动入口的开机完成线程（boot_control/Gk3Boot.cpp，S9）────────────
+# 部署入口要建 EFI/gk3boot/<ver>/（create）、回收没人引用的旧版本目录（rmdir）、
+# 判断一个名字是不是目录（lstat → getattr）。文件那一半（create / write / rename / unlink）上面已经有了。
+# ⬜ 未编译、未上机；随下一轮 SELinux 在 enforcing 下验证（设计稿 §4.14）。
+allow hal_bootctl_default vfat:dir { create rmdir getattr };
+# misc：Gk3Boot.cpp 用 O_DIRECT 读写偏移 8 KiB 的 GK3 记录 —— 走的就是 AOSP 已给的
+#   misc_block_device rw_file_perms（refs/lineage-sepolicy/vendor/hal_bootctl_default.te:15-16），不用另写。
+# /vendor/boot/gk3boot/{gk3boot.efi,version}：vendor_file，非 coredomain 本来就能读
+#   （refs/lineage-sepolicy/private/domain.te:191-192）。
+# ro.boot.gk3boot.*：bootloader_prop，所有域都能读（private/domain.te:481）。
+# vendor.gaokun3.* 的读写见 sepolicy/vendor_gaokun3_props.te。

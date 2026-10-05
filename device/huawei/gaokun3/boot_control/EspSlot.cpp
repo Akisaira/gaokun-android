@@ -36,7 +36,7 @@ namespace {
 // block_device, and domain.te:705 forbids opening that.
 constexpr const char* kEspDevices[] = {"/dev/block/by-name/esp",
                                        "/dev/block/by-name/EFI_system_partition"};
-constexpr char kMountPoint[] = "/mnt/gaokun3_esp";
+constexpr const char* kMountPoint = kEspRoot;
 constexpr char kLoaderConf[] = "/mnt/gaokun3_esp/loader/loader.conf";
 
 // The BLS entry filenames are prefixed with the systemd machine-id, which this
@@ -115,37 +115,34 @@ std::string FindEspDevice() {
     return result;
 }
 
-class MountedEsp {
-  public:
-    MountedEsp() {
-        if (mkdir(kMountPoint, 0700) != 0 && errno != EEXIST) {
-            PLOG(ERROR) << "mkdir " << kMountPoint;
-            return;
-        }
-        std::string dev = FindEspDevice();
-        if (dev.empty()) return;
-        if (mount(dev.c_str(), kMountPoint, "vfat", MS_NOATIME, nullptr) != 0) {
-            PLOG(ERROR) << "mount " << dev << " -> " << kMountPoint;
-            return;
-        }
-        mounted_ = true;
-    }
-    ~MountedEsp() {
-        if (mounted_) {
-            sync();
-            if (umount(kMountPoint) != 0) PLOG(WARNING) << "umount " << kMountPoint;
-        }
-    }
-    bool ok() const { return mounted_; }
-
-    MountedEsp(const MountedEsp&) = delete;
-    MountedEsp& operator=(const MountedEsp&) = delete;
-
-  private:
-    bool mounted_ = false;
-};
+// 挂载点与探测挂载点都是进程内共享的（见 EspSlot.h 里 MountedEsp 的说明）。
+std::mutex& EspMutex() {
+    static std::mutex m;
+    return m;
+}
 
 }  // namespace
+
+MountedEsp::MountedEsp(bool read_only) : lock_(EspMutex()) {
+    if (mkdir(kMountPoint, 0700) != 0 && errno != EEXIST) {
+        PLOG(ERROR) << "mkdir " << kMountPoint;
+        return;
+    }
+    std::string dev = FindEspDevice();
+    if (dev.empty()) return;
+    if (mount(dev.c_str(), kMountPoint, "vfat", MS_NOATIME | (read_only ? MS_RDONLY : 0), nullptr) != 0) {
+        PLOG(ERROR) << "mount " << dev << " -> " << kMountPoint;
+        return;
+    }
+    mounted_ = true;
+}
+
+MountedEsp::~MountedEsp() {
+    if (mounted_) {
+        sync();
+        if (umount(kMountPoint) != 0) PLOG(WARNING) << "umount " << kMountPoint;
+    }
+}
 
 bool SetEspDefaultSlot(int slot) {
     if (slot != 0 && slot != 1) {

@@ -9,6 +9,7 @@
  */
 
 #include "BootControl.h"
+#include "Gk3Boot.h"
 
 #include <unistd.h>
 
@@ -58,6 +59,11 @@ int main(int, char* argv[]) {
     auto status = AServiceManager_addService(service->asBinder().get(), instance.c_str());
     CHECK_EQ(status, STATUS_OK) << "Failed to add service " << instance << " " << status;
     LOG(INFO) << "IBootControl AIDL service running with " << slots << " slots";
+
+    // ★ 统一启动入口（2026-10-05，S9）：开机完成线程 —— bless 入口条目、清 GK3 的 boot_streak、
+    //   导出事件给 Parts、按 persist.vendor.gaokun3.gk3boot 部署 / 撤掉入口（Gk3Boot.cpp）。
+    //   放在 addService 之后：它只等属性、不碰 impl_，不能拖慢 update_verifier 等 HAL 的那几秒。
+    gaokun3::StartBootCompletedWorker();
 
     ABinderProcess_joinThreadPool();
     return EXIT_FAILURE;  // should not reach

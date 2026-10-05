@@ -61,3 +61,13 @@ get_prop(system_app, vendor_gaokun3_prop)
 #   （private/vendor_init.te:258-264），本机是兼容属性模式 ⇒ 要显式给。
 #   neverallow 那边只拦 coredomain 写 vendor 属性，vendor_init 不是 coredomain。
 set_prop(vendor_init, vendor_gaokun3_prop)
+# ↑ 2026-10-05 起也用于 boot HAL 的 rc：on property:sys.boot_completed=1 → setprop vendor.gaokun3.boot.done 1
+#   （触发器那一半：vendor_init 读 boot_status_prop，refs/lineage-sepolicy/private/vendor_init.te:316）。
+
+# ★ 统一启动入口（2026-10-05，S9；boot_control/Gk3Boot.cpp）：boot_control HAL 要
+#   读：vendor.gaokun3.boot.done（上面那条 rc 设）、persist.vendor.gaokun3.gk3boot（off / observe / action，部署开关）；
+#   写：vendor.gaokun3.bootentry.*（via / event / notify / bypassed / streak / mode / version / error / done）——
+#       Parts（system_app）读它们发通知，上面那条 get_prop(system_app, …) 已经覆盖。
+#   hal_bootctl_default 不是 coredomain，property.te 里拦 coredomain 写 vendor 属性的那条 neverallow 管不到它。⬜ 未编译。
+get_prop(hal_bootctl_default, vendor_gaokun3_prop)
+set_prop(hal_bootctl_default, vendor_gaokun3_prop)
