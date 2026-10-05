@@ -33,6 +33,8 @@
 
 ### ▶ 1.0 批 0/1 已合并、待构建与验证（2026-10-05）
 
+> **⚠️ 2026-10-05 11:0x 开发机屏幕硬件故障（不是软件回归）**：用户醒来发现开机半屏竖条纹 → 新内核下全黑 → #15 内核（v0.7.1，睡前正常）下仍半屏条纹 → **华为 logo（固件阶段）就有条纹**，断电后仍在 → 最后连 logo 都不显示。Android 照常运行（`screencap` 锁屏完整、SurfaceFlinger powerMode=On、两路 DSI 无报错）。今晚没有任何写操作碰得到固件画 logo 的路径（只写过 systemd-boot 的 OneShot、我们自己的 ESP 条目、misc 已复原；触摸驱动无 TDDI flash 写路径）⇒ 判为面板 / 排线 / 屏幕总成故障，用户已订新屏。在新屏到之前：一切靠 adb；需要目视的验收（V10–V13 等）挂起；**新屏装上后先用 v0.7.1 #15 与 7.2.9 各开一次机确认显示**（7.2.9 下"全黑"与 #15 下"半屏条纹"的差异当时无法区分是面板状态还是内核）。ESP 上留有非默认测试条目 `gaokun3-k15-test.conf`（#15 内核 + slot_b ramdisk），用完可删。
+
 > **★★ 2026-10-05 09:5x 第五个 1.0 发布构建：`1.0.0-dev.5`，构建戳 `1791163499`，槽 `_b`**（`out/v1dev5-1791163499/`）= dev.4 + **统一启动入口 S9（Android 侧）**（`df1b32d`…`d15fa3e`，vendor 带 `gk3boot.efi` `0.2.0-e5.gd15fa3eca4b2` sha256 `6a403c81…`）。编译一次过（HAL C++ / Parts Java / sepolicy），release.sh 断言 vendor 里的入口与 prebuilt 逐字节相同。
 > * 上机把开关三档走了一遍：`off`（默认）→ HAL 只读挂 ESP、nothing written、`via=direct`；`observe` → 第 1 次直连开机后 HAL 部署 `EFI/gk3boot/<ver>/` + `gk3boot-android-{a,b}+3.conf`，第 2 次经入口起来并 **bless** `+2-1 → gk3boot-android-b.conf`；`action` → HAL 把条目重写成动作模式，下一次经入口 `streak=1`，开机完成后 **GK3 记录 boot_streak 1 → 0（写后读回 OK）** 并 bless。⇒ 入口 + Android 侧整条链真机闭环。
 > * ★ **开发机现在留在 `persist.vendor.gaokun3.gk3boot=action`**（日常使用即长测）：每次开机经 gk3boot 动作模式、开机完成后 bless + 清 streak。退回：`setprop persist.vendor.gaokun3.gk3boot off` 后重启一次（HAL 撤条目）。用 `install-ota-local.sh --go` 装 OTA 时要 `GK3_TRUST_GK3BOOT=1`。
