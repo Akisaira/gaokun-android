@@ -94,7 +94,6 @@ CLAUDE.md「环境」一节有简版；本文是细则与依据。
 |---|---|---|---|---|---|
 | 2026-09-26 | D32as_v5 | P20 | 独立 `OUT_DIR` 冷编 4 个模块 + selinux_policy | 9.5 分钟跑到 71%（sepolicy 处失败），补完 13 分钟 | PR #7 编译验证 |
 | 2026-09-29 | D32as_v5 | StandardSSD | 整包增量 `m bacon superimage`（改动只在 device/ 与 sepolicy；机器刚开、lunch 冷缓存约 2 分钟） | **16 分 46 秒**（+ release.sh --dry-run 打包约 2 分钟） | SELinux 第七轮 ROM，戳 1790702971（#129） |
-| 2026-10-05 | D16as_v5 | StandardSSD | 新内核树 `~/gk3-kernel-72y` 冷编 `vmlinuz.efi dtbs`（in-tree，全新 worktree，无旧对象） | **4 分 47 秒**（另：从 stable 取 v7.2.9 约 20 分钟，见 §6） | SEC-9，v7.2.9 内核 |
 
 要不要为大构建临时把盘切回 Premium（停机时 `az disk update --sku Premium_LRS`，数据不受影响）：等上表有了新盘的数据再定。
 
@@ -131,7 +130,7 @@ CLAUDE.md「环境」一节有简版；本文是细则与依据。
 | 变量 | 默认 | 用途 |
 |---|---|---|
 | `GAOKUN3_DEV_BUILD` | 不设（= 发布构建） | 见上。设成 `1` 只能 `--stage-only` |
-| `GK3_KTREE` | `~/gk3-kernel-72y`（2026-10-05 SEC-9 起；此前 `~/gk3-kernel-iris`） | 编发布内核的那棵树，生成内核的对应源码清单（REL-7）用。见 §6 |
+| `GK3_KTREE` | `~/gk3-kernel-iris` | 编发布内核的那棵树，生成内核的对应源码清单（REL-7）用。旧树 `~/gk3-kernel` 还打着 upstream-venus |
 | `GK3_REPO` | 脚本所在的仓库 | 本仓 checkout（要它的 `patches/`、`kernel-*.sh`、`out/accept/`）。**构建机上不是从本仓 checkout 跑 `release.sh` 就要设** |
 | `GK3_VERSION` | 无 | 项目版本号（如 `0.8.0-alpha`），构建时写进 vendor 属性 `ro.vendor.gaokun3.version`（REL-5）。非 `--stage-only` 必须设；**构建候选版时和用 `--no-build` 发它时要设同一个值** —— 属性是构建时烤进去的，发版时设的只用来核对 |
 | `GK3_ACCEPT_REPORT` | `$GK3_REPO/out/accept/<戳>-*/report.txt` 里最新的一份 | 这个戳的 A 档验收报告（REL-6 / G11）。`scripts/accept.sh` 在**维护者的 Mac** 上跑（走 adb），报告写在 Mac 的 `out/accept/<戳>-<时间>/report.txt`；`release.sh` 在构建机上跑 —— 两台机器，所以要先 `scp` 过去再设这个变量。正式发版（不带 `--dry-run` / `--stage-only`）时报告不过关就停；判据见 `release.sh` 头注释 |
@@ -152,27 +151,3 @@ GK3_VERSION=test get_build_var PRODUCT_VENDOR_PROPERTIES         # 应含 ro.ven
 
 两边一样就说明变量没传进去：开发构建会悄悄变成发布构建（`release.sh` 第 2 步看得出来），而 `GK3_VERSION` 会是空值（第 2 步的版本断言会停）。
 不管哪种，产物断言都兜得住，只是要白等一次构建 —— 所以先在 `light` 档上对照，别在 `rom` 档上试。
-
----
-
-## 6. 内核树（2026-10-05 起）
-
-| 树 | 基线 | 用途 |
-|---|---|---|
-| `~/gk3-kernel-72y` | **v7.2.9 stable** + buildbot 19 个提交（分支 `gk3-72y`）+ 本仓 `patches/` 全链（工作区） | **现役**：SEC-9 起编发布内核用这棵（`release.sh` 的 `GK3_KTREE` 默认值） |
-| `~/gk3-kernel-iris` | v7.2-rc2 + buildbot 20 个提交 + 本仓 c1062f2 时的补丁链 | #16（1.0.0-dev.3）及以前。**别改它**；新配方（0056 rebased、0075、去掉 0020/0022/0055/0057）在它上面 `--verify` 不过是预期的 |
-| `~/gk3-kernel` | v7.2-rc2，还打着 upstream-venus | 历史，脚本会拒绝 |
-
-三棵是**同一个对象库**（`~/gk3-kernel/.git`）的 worktree；`-72y` 用 `git -C ~/gk3-kernel worktree add -b gk3-72y ~/gk3-kernel-72y v7.2.9` 建。
-
-⚠️ **这个对象库是浅克隆**（`.git/shallow`，边界在 v7.2-rc2）。后果两条：
-* 从 git.kernel.org stable 取 `v7.2.9` tag 时协商不出共同祖先，**拉了约 1160 万个对象 / 2.9 GB**（本机到 kernel.org 约 20 分钟，大头在 index-pack）。
-  下次升 7.2.y 只差几个 tag，应该快得多，但别指望增量很小 —— 先看 `pack_header` 的对象数。
-* **跨 v7.2-rc2 的区间查询全都失真**：`git log v7.2-rc2..v7.2.9` 会把整部历史列出来（rc2 被当成无父提交），rc2 的父提交对象也不在库里。
-  要问"stable 动了哪些文件"用 `git diff v7.2-rc2 v7.2.9 -- <路径>`（比树，不走历史）；要问"某个提交在不在"用
-  `git merge-base --is-ancestor <提交> v7.2.9`。`release.sh` 的 `LINUX_BASE..HEAD` 现在是 `v7.2.9..HEAD`，不受影响。
-
-buildbot 层怎么重放到新的 stable 上（SEC-9 那次的做法）：
-`git -C ~/gk3-kernel-iris format-patch -o <目录> <旧基线>..HEAD`，在新 worktree 上逐个 `git am -3`，
-冲突逐个解决（v7.2.9 时只有两处：0008 的 PDC 表、0020 的 gaokun3.dts）；然后本仓
-`kernel-apply-patches.sh <树>` → `--verify`（必须 0 打不上 / 0 fuzz）→ 接 ReSukiSU → `kernel-config-android.sh .` → make。

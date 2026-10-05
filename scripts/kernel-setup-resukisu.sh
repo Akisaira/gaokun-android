@@ -10,7 +10,7 @@
 #   本仓自己的改动一律走 patches/resukisu/*.patch —— 这样"我们改了什么"
 #   永远一眼可见，而不是混在一万多行别人的代码里。
 #
-# ⚠️ 本机内核是 mainline（2026-10-05 起 v7.2.9 stable，此前 v7.2-rc2），不是 Android common kernel。
+# ⚠️ 本机内核是 mainline v7.2-rc2，不是 Android common kernel。
 #   ReSukiSU 自带 tools/kernel_compat.mk —— 它【grep 内核源码】来探测每个 API
 #   在不在，所以对非 ACK 的树友好得多。对照组很说明问题：SukiSU-Ultra 直接
 #   引用了 Android 私有的 policydb 字段（sepolicy.c），在主线上当场编不过；
