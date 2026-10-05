@@ -1057,3 +1057,100 @@ EFI_STATUS gk3_dir_each(EFI_HANDLE dev, const CHAR16 *path, gk3_dir_cb cb, void 
     d->Close(d);
     return st;
 }
+
+/* ------------------------------------------------------------------ 读文件 / 自己的路径（S7c） */
+
+EFI_STATUS gk3_file_read(EFI_HANDLE dev, const CHAR16 *path, void **out, size_t *out_len, size_t max)
+{
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
+    EFI_FILE_PROTOCOL *root = NULL, *f = NULL;
+    static union {
+        EFI_FILE_INFO fi;
+        uint64_t align;
+        uint8_t raw[1024];
+    } u;
+    UINTN isz = sizeof(u.raw), n;
+    EFI_STATUS st;
+    void *buf;
+
+    *out = NULL;
+    *out_len = 0;
+    if (!dev)
+        return EFI_INVALID_PARAMETER;
+    st = gk3_bs->HandleProtocol(dev, (EFI_GUID *)&gk3_guid_simple_fs, (void **)&fs);
+    if (EFI_ERROR(st) || !fs)
+        return EFI_ERROR(st) ? st : EFI_NOT_FOUND;
+    st = fs->OpenVolume(fs, &root);
+    if (EFI_ERROR(st) || !root)
+        return EFI_ERROR(st) ? st : EFI_NOT_FOUND;
+    st = root->Open(root, &f, (CHAR16 *)path, EFI_FILE_MODE_READ, 0);
+    root->Close(root);
+    if (EFI_ERROR(st) || !f)
+        return EFI_ERROR(st) ? st : EFI_NOT_FOUND;
+    st = f->GetInfo(f, (EFI_GUID *)&gk3_guid_file_info, &isz, u.raw);
+    if (EFI_ERROR(st)) {
+        f->Close(f);
+        return st;
+    }
+    if (u.fi.Attribute & EFI_FILE_DIRECTORY) {
+        f->Close(f);
+        return EFI_NOT_FOUND;
+    }
+    if (u.fi.FileSize == 0 || u.fi.FileSize > max) {
+        f->Close(f);
+        return EFI_BAD_BUFFER_SIZE;
+    }
+    n = (UINTN)u.fi.FileSize;
+    if (!(buf = gk3_alloc_pages(n))) {
+        f->Close(f);
+        return EFI_OUT_OF_RESOURCES;
+    }
+    for (UINTN done = 0; done < n;) {
+        UINTN k = n - done;
+        st = f->Read(f, &k, (uint8_t *)buf + done);
+        if (EFI_ERROR(st) || k == 0) {
+            f->Close(f);
+            gk3_free_pages(buf, n);
+            return EFI_ERROR(st) ? st : EFI_END_OF_FILE;
+        }
+        done += k;
+    }
+    f->Close(f);
+    *out = buf;
+    *out_len = n;
+    return EFI_SUCCESS;
+}
+
+bool gk3_image_dir(const EFI_DEVICE_PATH_PROTOCOL *fp, CHAR16 *out, size_t cap)
+{
+    size_t o = 0, last = 0;
+    if (!cap || !gk3_dp_size(fp))
+        return false;
+    for (; !(fp->Type == 0x7f && fp->SubType == 0xff); fp = DP_NEXT(fp)) {
+        if (fp->Type != 4 || fp->SubType != 4)          /* Media / FilePath */
+            continue;
+        /* 设备路径节点不保证 2 字节对齐：按字节取 UCS-2 */
+        const uint8_t *s = (const uint8_t *)fp + 4;
+        size_t nch = (DP_LEN(fp) - 4) / 2;
+#define CH(i) ((CHAR16)(s[2 * (i)] | (s[2 * (i) + 1] << 8)))
+        /* 相邻两个 FilePath 节点之间补一个分隔符（规范允许把路径拆成多个节点） */
+        if (o && out[o - 1] != u'\\' && nch && CH(0) != u'\\' && CH(0) != u'/') {
+            if (o + 1 >= cap)
+                return false;
+            out[o++] = u'\\';
+        }
+        for (size_t i = 0; i < nch && CH(i); i++) {
+            if (o + 1 >= cap)
+                return false;
+            out[o++] = CH(i) == u'/' ? u'\\' : CH(i);
+        }
+#undef CH
+    }
+    for (size_t i = 0; i < o; i++)
+        if (out[i] == u'\\')
+            last = i;
+    if (!o || out[last] != u'\\')
+        return false;
+    out[last + 1] = 0;
+    return true;
+}

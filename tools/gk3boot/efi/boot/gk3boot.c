@@ -15,7 +15,12 @@
  *     - GK3 记录（misc+8 KiB）：boot_streak +1（开机完成由 Android 侧清零 —— S9 还没做），回落 / 看到 BCB 记事件；
  *       写后读回，写不进去只记日志、照常启动（记录是参考信息）。阈值动作（bootloop 进菜单）不启用：执行端没就绪；
  *     - BCB：分派开关默认关（E-K7：必须与执行端、迁移同版发布）—— 有命令只记录、不消费、不清除、照常启动 Android；
- *       gk3.dispatch=1 打开后按 gk3_dispatch_plan 决定去向，但去向目前只有"记录 + 继续启动"（执行端 S7 还没有）；
+ *       gk3.dispatch=1 打开后（S7c，README §15）：首跑迁移（没有迁移标记 ⇒ 清存量 BCB、只记录不执行）、
+ *       按 gk3_dispatch_plan 去执行端 / 清掉 / 3 次上限；两槽都不可启动、合并中不许换槽、已确认的槽连续
+ *       GK3_BOOTLOOP_THRESHOLD 次没开机完成 ⇒ 也去执行端（why=noslot / merging / bootloop）；
+ *     - 执行端（S7c）：同一个 boot_x 里的 zboot 内核 + 本目录的 fastboot.img 作 initrd（同一套 H2 交接），
+ *       cmdline 由 gk3_cmdline_fastboot 拼。执行端缺失 / 读不出 / 内核读不出 ⇒ 记日志、照常启动 Android（不消费 BCB）；
+ *       进执行端那一次不扣 tries、不加 boot_streak；bootloader / fastboot / recovery 类 BCB 进之前清掉，wipe 类留给执行端；
  *     - ESP 日志只在异常时写（正常路径对 ESP 零写入，§4.12），屏幕上也不打字（§4.3.1）。
  *
  * fail-open（§4.12 阶梯第 1 步）：任何一步失败 → 记日志 → 写 LoaderEntryOneShot = 本 ESP 上的直连条目
@@ -28,6 +33,8 @@
  * LoadOptions（条目的 options 行，空格分隔）：
  *   gk3.observe=0|1   1 = 观察模式；0 或不带 = 动作模式
  *   gk3.dispatch=0|1  BCB 分派开关（缺省 = 编译期 GK3BOOT_DISPATCH_DEFAULT，出厂 0）
+ *   gk3.action=fastboot|menu  直接进执行端（gk3boot-tools.conf 用，why=fastboot|menu；不看分派开关、不碰 BCB）
+ *   gk3.fbtcp=0|1     执行端打开 TCP 5554（开发用，不认证；原样传给执行端的 cmdline）
  *   gk3.slot=a|b      强制启动这一槽（测试用；决策照算照记；动作模式下不扣 tries）
  *   gk3.hint=a|b      BCAB 无效时按它启动（§4.3.2-1）、fail-open 在选槽之前发生时的目标槽；
  *                     缺省取自己条目名里的 -android-<x>，再没有就是 a
@@ -64,7 +71,9 @@ static struct {
     int hint;                  /* -1 = 没给 gk3.hint */
     unsigned hold;
     char mid[33];              /* gk3.mid，空 = 自己找 */
-} opt = {false, GK3BOOT_DISPATCH_DEFAULT, -1, -1, 5, ""};
+    char action[12];           /* gk3.action：fastboot / menu，空 = 不直接进执行端 */
+    bool fbtcp;                /* gk3.fbtcp=1 */
+} opt = {false, GK3BOOT_DISPATCH_DEFAULT, -1, -1, 5, "", "", false};
 
 static unsigned g_hint;                /* 生效的 hint */
 static unsigned g_target;              /* fail-open 写 OneShot 用的目标槽：先是 hint，选完槽后是要启动的槽 */
@@ -380,6 +389,16 @@ static void step_header(void)
             fail_open("options", "gk3.mid=%s is not 32 lowercase hex digits", v);
         gk3_memcpy(opt.mid, v, 33);
     }
+    if (opt_get(opts, "gk3.action=", v, sizeof(v))) {
+        if (str_cmp(v, "fastboot") && str_cmp(v, "menu"))
+            fail_open("options", "gk3.action=%s is not fastboot|menu", v);
+        gk3_memcpy(opt.action, v, gk3_strlen(v) + 1);
+    }
+    if (opt_get(opts, "gk3.fbtcp=", v, sizeof(v))) {
+        if ((b = opt_bool(v)) < 0)
+            fail_open("options", "gk3.fbtcp=%s is not 0|1", v);
+        opt.fbtcp = b;
+    }
     if (opt_get(opts, "gk3.hold=", v, sizeof(v))) {
         unsigned h = 0;
         for (const char *q = v; *q >= '0' && *q <= '9' && h < 1000; q++)
@@ -389,6 +408,8 @@ static void step_header(void)
     gk3_logf("mode: %s dispatch=%s force_slot=%c hint=_%c%s hold=%u s entry=%s\n", opt.observe ? "observe" : "action",
              opt.dispatch ? "on" : "off", opt.force_slot < 0 ? '-' : 'a' + opt.force_slot, 'a' + g_hint,
              opt.hint >= 0 ? "" : eb >= 0 ? " (from entry name)" : " (default)", opt.hold, g_entry ? g_entry : "-");
+    if (opt.action[0] || opt.fbtcp)
+        gk3_logf("executor options: action=%s fbtcp=%u\n", opt.action[0] ? opt.action : "-", opt.fbtcp);
     if (opt.observe) {
         /* 观察模式：上屏幕（把到这里为止的几行补打出来）、每次都留日志 */
         gk3_lg.screen = true;
@@ -409,6 +430,7 @@ static struct {
     gk3_blk dev;
     gk3_gpt gpt;
     uint8_t *entries;
+    char esp_uuid[37];         /* 自己 ESP 的 PARTUUID（HD 节点），执行端 cmdline 的 gk3.esp */
 } disk;
 
 static void step_disk(void)
@@ -488,6 +510,7 @@ static void step_disk(void)
     gk3_gpt_part ep;
     if (h[41] != 2 || gk3_gpt_get(&disk.gpt, gk3_le32(h + 4) - 1, &ep) || gk3_memcmp(ep.part_guid, h + 24, 16))
         fail_open("disk", "own ESP (partition %u) not found in this GPT", gk3_le32(h + 4));
+    gk3_guid_str(ep.part_guid, disk.esp_uuid);
     char g[37];
     gk3_guid_str(disk.gpt.disk_guid, g);
     gk3_logf("disk: gpt %s, %u partitions, misc/boot_a/boot_b/super/userdata unique, esp=p%u  [%llu.%llu ms]\n", g,
@@ -502,7 +525,7 @@ static void part(const char *name, gk3_gpt_part *p)
         fail_open("disk", "%s: %s", name, gk3_strerror(e));
 }
 
-/* ------------------------------------------------------------------ 2. misc：解码、选槽；动作模式下扣 tries、写 GK3 记录 */
+/* ------------------------------------------------------------------ 2. misc：解码、选槽；动作模式下扣 tries、写 GK3 记录、BCB 分派 */
 
 static const char *const selk[] = {"boot", "bcab_invalid", "noslot", "merging"};
 
@@ -511,11 +534,11 @@ static const char *bcb_would(gk3_bcb_kind k)
 {
     switch (k) {
     case GK3_BCB_NONE: return "normal boot";
-    case GK3_BCB_BOOTLOADER: return "clear command, then executor why=bootloader";
-    case GK3_BCB_FASTBOOT: return "clear command, then executor why=fastboot";
+    case GK3_BCB_BOOTLOADER: return "clear BCB, then executor why=bootloader";
+    case GK3_BCB_FASTBOOT: return "clear BCB, then executor why=fastboot";
     case GK3_BCB_WIPE: return "executor why=wipe (BCB cleared by executor after wiping; 3-entry cap)";
     case GK3_BCB_PROMPT_WIPE: return "executor why=prompt_wipe (never auto-cleared)";
-    case GK3_BCB_RECOVERY: return "executor recovery menu why=recovery";
+    case GK3_BCB_RECOVERY: return "clear BCB, then executor recovery menu why=recovery";
     case GK3_BCB_UNKNOWN: return "record in GK3, clear, boot normally";
     }
     return "?";
@@ -545,77 +568,349 @@ static gk3_err misc_write(uint32_t off, const uint8_t *data, size_t len, uint8_t
     return gk3_memcmp(back, data, len) ? GK3_EVERIFY : GK3_OK;
 }
 
-/* 动作模式：GK3 记录（§4.5）。写不进去只记日志、照常启动 —— 记录是参考信息，CRC 无效时视为"无记录"。 */
-static void action_rec(const uint8_t *m, const gk3_bcb_info *bi, const gk3_sel *s)
+/* 整份 BCB 清零写回（= clear_bootloader_message） */
+static gk3_err bcb_clear_write(void)
 {
-    static uint8_t rec[GK3_REC_SIZE], back[GK3_REC_SIZE];
+    static uint8_t z[GK3_MISC_BCB_SIZE], back[GK3_MISC_BCB_SIZE];
+    gk3_memset(z, 0, sizeof(z));
+    return misc_write(GK3_MISC_BCB_OFF, z, sizeof(z), back);
+}
+
+/* ------------------------------------------------------------------ 3. boot_<x>：整份读进来、校验、拆段 */
+
+static struct {
+    uint8_t *img;
+    size_t img_len;
+    gk3_bootimg b;
+    uint8_t hdr[4096];
+    unsigned slot;
+} boot;
+
+/* 读 boot_<slot> 整份、校验 SHA1(id)、内核是 PE、有 ramdisk、dtb 是 FDT。成功返回 NULL；失败返回原因（静态缓冲），
+ * 已分配的镜像缓冲释放掉。Android 与执行端共用（§4.4.1：执行端用同一个 boot_x 里的内核）。 */
+static const char *load_boot(unsigned slot)
+{
+    static char why[300];
+    gk3_gpt_part p;
+    char name[8] = "boot_a", hx[48], want[48];
+    name[5] = (char)('a' + slot);
+    if (boot.img) {
+        gk3_free_pages(boot.img, boot.img_len);
+        boot.img = NULL;
+    }
+    gk3_err e = gk3_gpt_find(&disk.gpt, name, &p);
+    if (e) {
+        gk3_snprintf(why, sizeof(why), "%s: %s", name, gk3_strerror(e));
+        return why;
+    }
+    uint32_t bs = disk.dev.block_size;
+    uint64_t pbytes = (p.last_lba - p.first_lba + 1) * bs;
+    uint8_t *h = gk3_alloc_pages(4096);
+    if (!h)
+        return "alloc";
+    if (disk.dev.read(disk.dev.ctx, p.first_lba, 4096 / bs, h)) {
+        gk3_free_pages(h, 4096);
+        gk3_snprintf(why, sizeof(why), "read %s header: %s", name, gk3_efi_strerror(disk.ctx.last_err));
+        return why;
+    }
+    gk3_memcpy(boot.hdr, h, 4096);
+    gk3_free_pages(h, 4096);
+    e = gk3_bootimg_parse(boot.hdr, sizeof(boot.hdr), pbytes, &boot.b);
+    if (e) {
+        gk3_snprintf(why, sizeof(why), "%s header: %s (first bytes %02x %02x %02x %02x)", name, gk3_strerror(e),
+                     boot.hdr[0], boot.hdr[1], boot.hdr[2], boot.hdr[3]);
+        return why;
+    }
+    gk3_bootimg *b = &boot.b;
+    if (b->version != 2) {
+        gk3_snprintf(why, sizeof(why), "%s: header v%u, this build expects v2 (kernel+ramdisk+dtb in one image, §2.2)",
+                     name, b->version);
+        return why;
+    }
+    if (b->total_size > BOOTIMG_MAX) {
+        gk3_snprintf(why, sizeof(why), "%s: total %llu bytes is implausible", name, (unsigned long long)b->total_size);
+        return why;
+    }
+    hex_str(b->id, 20, want, sizeof(want));
+    gk3_logf("%s: p%u v%u page=%u kernel=%u ramdisk=%u dtb=%u total=%llu id=%s\n", name, p.index, b->version,
+             b->page_size, b->kernel_size, b->ramdisk_size, b->dtb_size, (unsigned long long)b->total_size, want);
+
+    boot.img_len = (size_t)((b->total_size + bs - 1) / bs * bs);
+    if (!(boot.img = gk3_alloc_pages(boot.img_len))) {
+        gk3_snprintf(why, sizeof(why), "alloc %llu", (unsigned long long)boot.img_len);
+        return why;
+    }
+    uint64_t t = gk3_ticks();
+    if (disk.dev.read(disk.dev.ctx, p.first_lba, (uint32_t)(boot.img_len / bs), boot.img)) {
+        gk3_snprintf(why, sizeof(why), "read %s (%llu bytes): %s", name, (unsigned long long)boot.img_len,
+                     gk3_efi_strerror(disk.ctx.last_err));
+        goto bad;
+    }
+    uint64_t us_r = gk3_us_since(t);
+    uint8_t got[20];
+    t = gk3_ticks();
+    e = gk3_bootimg_verify_id(b, boot.img, boot.img_len, got);
+    uint64_t us_s = gk3_us_since(t);
+    hex_str(got, 20, hx, sizeof(hx));
+    /* §4.3.3：SHA1 不对时完整版会换另一个可启动的槽（不写 misc）、两个都坏走 H1；这一版 Android 路径直接 fail-open
+     * —— 直连条目启动的是 ESP 上那份内核，效果上就是 H1 */
+    if (e) {
+        gk3_snprintf(why, sizeof(why), "%s: SHA1(id) MISMATCH: header %s, computed %s", name, want, hx);
+        goto bad;
+    }
+    gk3_logf("%s: read %llu.%llu ms, sha1(id) %llu.%llu ms: OK\n", name, MSF(us_r), MSF(us_s));
+
+    const uint8_t *k = boot.img + b->kernel_off, *d = boot.img + b->dtb_off;
+    if (k[0] != 'M' || k[1] != 'Z') {
+        gk3_snprintf(why, sizeof(why), "%s: kernel is not a PE image (%02x %02x)", name, k[0], k[1]);
+        goto bad;
+    }
+    gk3_logf("%s: kernel %s\n", name, !gk3_memcmp(k + 4, "zimg", 4) ? "EFI zboot PE" : "PE (EFI stub)");
+    if (!b->ramdisk_size) {
+        gk3_snprintf(why, sizeof(why), "%s: no ramdisk", name);
+        goto bad;
+    }
+    /* FDT 头：magic 0xd00dfeed、totalsize（大端）不超过段长 */
+    uint32_t fdt_magic = (uint32_t)d[0] << 24 | (uint32_t)d[1] << 16 | (uint32_t)d[2] << 8 | d[3];
+    uint32_t fdt_size = (uint32_t)d[4] << 24 | (uint32_t)d[5] << 16 | (uint32_t)d[6] << 8 | d[7];
+    if (b->dtb_size < 40 || fdt_magic != 0xd00dfeedu || fdt_size > b->dtb_size || fdt_size < 40) {
+        gk3_snprintf(why, sizeof(why), "%s: dtb is not a valid FDT (magic %08x size %u / %u)", name, fdt_magic,
+                     fdt_size, b->dtb_size);
+        goto bad;
+    }
+    boot.slot = slot;
+    return NULL;
+bad:
+    gk3_free_pages(boot.img, boot.img_len);
+    boot.img = NULL;
+    return why;
+}
+
+/* ------------------------------------------------------------------ 执行端（S7c，§4.4.1） */
+
+#define FASTBOOT_IMG_MAX (16u * 1024 * 1024)   /* 预算 4 MiB（build.sh 断言）；读到离谱的大小就不用 */
+
+static struct {
+    const char *why;           /* 非 NULL = 这次进执行端 */
+    void *img;                 /* fastboot.img（initrd） */
+    size_t len;
+    CHAR16 *cmdline16;
+} ex;
+
+/* 准备执行端：读本目录的 fastboot.img、读同一个 boot_x 的内核（slot 不行就另一槽）、拼 cmdline。
+ * 只读，不写盘。成功返回 NULL；失败返回原因（调用方照常启动 Android / fail-open）。 */
+static const char *prepare_executor(const char *why, unsigned slot)
+{
+    static char err[400], base[GK3_BOOT_ARGS_SIZE + GK3_BOOT_EXTRA_ARGS_SIZE + 8], out[4096], mid[37];
+    static CHAR16 path[160];
+    char pa[200];
+    const char *e1;
+    EFI_STATUS st;
+
+    if (!self_li || !gk3_image_dir(self_li->FilePath, path, sizeof(path) / sizeof(path[0]) - 16))
+        return "cannot tell this loader's own directory (LoadedImage FilePath)";
+    {
+        static const CHAR16 fn[] = u"fastboot.img";
+        size_t n = gk3_strlen16(path);
+        for (size_t i = 0; i < sizeof(fn) / sizeof(fn[0]); i++)
+            path[n + i] = fn[i];
+    }
+    gk3_ucs2_to_ascii(path, sizeof(path) / sizeof(path[0]), pa, sizeof(pa));
+    uint64_t t = gk3_ticks();
+    st = gk3_file_read(self_li->DeviceHandle, path, &ex.img, &ex.len, FASTBOOT_IMG_MAX);
+    if (EFI_ERROR(st)) {
+        gk3_snprintf(err, sizeof(err), "%s: %s", pa, st == EFI_NOT_FOUND ? "not on the ESP (no executor in this "
+                     "deployment)" : gk3_efi_strerror(st));
+        return err;
+    }
+    const uint8_t *z = ex.img;
+    if (ex.len < 18 || z[0] != 0x1f || z[1] != 0x8b) {
+        gk3_snprintf(err, sizeof(err), "%s: not a gzip cpio (%02x %02x, %llu bytes)", pa, z[0], z[1],
+                     (unsigned long long)ex.len);
+        goto bad;
+    }
+    gk3_logf("executor: %s %llu bytes [%llu.%llu ms]\n", pa, (unsigned long long)ex.len, MSF(gk3_us_since(t)));
+    /* 内核：先 slot（Android 这次本来要启动的 / active 槽），不行就另一槽（§4.4.1 的三级回落，ESP 副本那一级没做） */
+    if ((e1 = load_boot(slot)) != NULL) {
+        const char *e2;
+        gk3_logf("executor: kernel from boot_%c failed (%s); trying boot_%c\n", 'a' + slot, e1, 'a' + (slot ^ 1));
+        if ((e2 = load_boot(slot ^ 1)) != NULL) {
+            gk3_snprintf(err, sizeof(err), "no usable kernel: boot_%c: %s / boot_%c: %s", 'a' + slot, e1,
+                         'a' + (slot ^ 1), e2);
+            goto bad;
+        }
+    }
+    long bn = gk3_bootimg_cmdline(&boot.b, base, sizeof(base));
+    if (bn < 0) {
+        gk3_snprintf(err, sizeof(err), "boot_%c cmdline does not fit", 'a' + boot.slot);
+        goto bad;
+    }
+    gk3_guid_str(misc.p.part_guid, mid);
+    gk3_fastboot_args fa = {why, slot, GK3BOOT_VERSION, mid, disk.esp_uuid[0] ? disk.esp_uuid : NULL, opt.dispatch,
+                            opt.fbtcp};
+    gk3_err ge = gk3_cmdline_fastboot(base, &fa, out, sizeof(out));
+    if (ge) {
+        gk3_snprintf(err, sizeof(err), "gk3_cmdline_fastboot: %s", gk3_strerror(ge));
+        goto bad;
+    }
+    size_t n = gk3_strlen(out);
+    if (!(ex.cmdline16 = gk3_alloc((n + 1) * sizeof(CHAR16))) ||
+        gk3_ascii_to_ucs2(out, (uint16_t *)ex.cmdline16, n + 1)) {
+        gk3_snprintf(err, sizeof(err), "cmdline alloc / ucs2");
+        goto bad;
+    }
+    gk3_logf("executor: kernel boot_%c, cmdline(%llu): %s\n", 'a' + boot.slot, (unsigned long long)n, out);
+    ex.why = why;
+    return NULL;
+bad:
+    if (ex.img)
+        gk3_free_pages(ex.img, ex.len);
+    ex.img = NULL;
+    ex.len = 0;
+    return err;
+}
+
+/* ------------------------------------------------------------------ 动作模式：GK3 记录 + 分派 */
+
+static uint8_t g_rec[GK3_REC_SIZE];
+
+static void rec_prepare(const uint8_t *m)
+{
     const uint8_t *old = m + GK3_MISC_GK3_OFF;
     gk3_err re = gk3_rec_validate(old);
-
     if (re) {
-        /* 不是迁移（迁移随分派开关打开的那一版做，§4.10）：只建一份空记录，不置迁移标记 */
-        gk3_rec_init(rec);
-        gk3_logf("gk3rec: new v1 record (was: %s%s); migration marker NOT set (dispatch build does that, §4.10)\n",
-                 gk3_strerror(re), gk3_is_zero(old, GK3_REC_SIZE) ? ", all zero" : ", NOT all zero");
+        /* 不是迁移（迁移要分派开关开着才做，§4.10）：只建一份空记录，不置迁移标记 */
+        gk3_rec_init(g_rec);
+        gk3_logf("gk3rec: new v1 record (was: %s%s); migration marker NOT set here\n", gk3_strerror(re),
+                 gk3_is_zero(old, GK3_REC_SIZE) ? ", all zero" : ", NOT all zero");
         if (!gk3_is_zero(old, GK3_REC_SIZE))
             notable("gk3rec: 8 KiB area held non-zero data that is not a valid GK3 record (%s); overwriting",
                     gk3_strerror(re));
     } else {
-        gk3_memcpy(rec, old, GK3_REC_SIZE);
+        gk3_memcpy(g_rec, old, GK3_REC_SIZE);
     }
-    uint8_t streak = gk3_rec_inc_boot_streak(rec);
+}
+
+static void rec_write(const char *what)
+{
+    static uint8_t back[GK3_REC_SIZE];
+    gk3_rec_seal(g_rec);
+    gk3_err e = misc_write(GK3_MISC_GK3_OFF, g_rec, GK3_REC_SIZE, back);
+    if (e)
+        anomaly("gk3rec: write misc+0x2000 failed: %s (efi %s); continuing (the record is advisory)", gk3_strerror(e),
+                gk3_efi_strerror(disk.ctx.last_err));
+    else
+        gk3_logf("gk3rec: written (%s), boot_streak=%u ok_streak=%u flags=0x%x (read back OK)\n", what,
+                 gk3_rec_boot_streak(g_rec), gk3_rec_ok_streak(g_rec), gk3_rec_flags(g_rec));
+}
+
+/* 启动 Android 的那一次（动作模式）：boot_streak +1、ok_streak、回落事件、分派关时的 BCB 记录。bcb_done = 这份 BCB
+ * 已被分派处理（清掉了），不再按"看到但没消费"记 */
+static void rec_android(const uint8_t *m, const gk3_bcb_info *bi, const gk3_sel *s, bool bcb_done)
+{
+    uint8_t prev = gk3_rec_boot_streak(g_rec);
+    uint8_t ok = prev ? gk3_rec_ok_streak(g_rec) : 0;   /* 上一次开机完成过（HAL 清了 boot_streak）⇒ 从 0 数 */
+    bool confirmed = opt.force_slot < 0 && s->kind == GK3_SEL_BOOT && !s->decremented;
+    gk3_rec_set_ok_streak(g_rec, confirmed ? (uint8_t)(ok == 255 ? 255 : ok + 1) : 0);
+    uint8_t streak = gk3_rec_inc_boot_streak(g_rec);
     gk3_snprintf(g_streak, sizeof(g_streak), "%u", streak);
 
     /* 回落：只在"进入回落"的那一次记事件、写 ESP 日志（之后 active 槽一直是那个 tries 0 的槽，每次都会算成回落） */
     bool fb = opt.force_slot < 0 && s->kind == GK3_SEL_BOOT && s->fallback;
-    if (fb && !(gk3_rec_flags(rec) & GK3_REC_F_IN_FALLBACK)) {
-        gk3_rec_event_add(rec, GK3_EV_FALLBACK, (uint8_t)g_slot, s->active);
-        gk3_rec_set_flag(rec, GK3_REC_F_IN_FALLBACK, true);
+    if (fb && !(gk3_rec_flags(g_rec) & GK3_REC_F_IN_FALLBACK)) {
+        gk3_rec_event_add(g_rec, GK3_EV_FALLBACK, (uint8_t)g_slot, s->active);
+        gk3_rec_set_flag(g_rec, GK3_REC_F_IN_FALLBACK, true);
         notable("fallback: active slot _%c is not bootable (tries exhausted, not marked successful) -> booting _%c; "
                 "GK3 event fallback recorded", 'a' + s->active, 'a' + g_slot);
     } else if (fb) {
         gk3_logf("fallback: still on _%c (active _%c unbootable); already recorded\n", 'a' + g_slot, 'a' + s->active);
     } else {
-        gk3_rec_set_flag(rec, GK3_REC_F_IN_FALLBACK, false);
+        gk3_rec_set_flag(g_rec, GK3_REC_F_IN_FALLBACK, false);
     }
 
-    /* BCB */
-    if (bi->kind == GK3_BCB_NONE) {
-        gk3_rec_set_bcb_seen(rec, 0);
-    } else if (!opt.dispatch) {
+    /* BCB 看到了但没消费（分派关，或分派开但执行端不在）：同一份只记一次事件、写一次日志 */
+    if (bi->kind == GK3_BCB_NONE || bcb_done) {
+        gk3_rec_set_bcb_seen(g_rec, 0);
+    } else {
         uint32_t crc = gk3_crc32(0, m, GK3_MISC_BCB_SIZE);
         if (!crc)
             crc = 1;                   /* 0 留给"没有" */
-        if (gk3_rec_bcb_seen(rec) != crc) {
-            gk3_rec_event_add(rec, GK3_EV_BCB_IGNORED, 0xff, (uint32_t)bi->kind);
-            gk3_rec_set_bcb_seen(rec, crc);
-            notable("bcb: kind=%s command=\"%s\" present; dispatch is off (E-K7): NOT consumed, NOT cleared, "
-                    "booting Android (dispatch would: %s)", gk3_bcb_kind_name(bi->kind), bi->command,
-                    bcb_would(bi->kind));
+        if (gk3_rec_bcb_seen(g_rec) != crc) {
+            gk3_rec_event_add(g_rec, GK3_EV_BCB_IGNORED, 0xff, (uint32_t)bi->kind);
+            gk3_rec_set_bcb_seen(g_rec, crc);
+            if (!opt.dispatch)
+                notable("bcb: kind=%s command=\"%s\" present; dispatch is off (E-K7): NOT consumed, NOT cleared, "
+                        "booting Android (dispatch would: %s)", gk3_bcb_kind_name(bi->kind), bi->command,
+                        bcb_would(bi->kind));
+            else
+                notable("bcb: kind=%s command=\"%s\" NOT consumed (executor unavailable), booting Android",
+                        gk3_bcb_kind_name(bi->kind), bi->command);
         } else {
             gk3_logf("bcb: same BCB as before (crc %08x), still not consumed; already recorded\n", crc);
         }
     }
-    if (opt.dispatch) {
-        gk3_disp_plan dp;
-        gk3_dispatch_plan(bi, rec, (uint8_t)g_slot, &dp);
-        if (dp.action != GK3_DISP_NONE)
-            notable("dispatch: action=%s why=%s count=%u%s -> this build has no executor (S7): recorded only, BCB left "
-                    "as is, booting Android", gk3_disp_name(dp.action), gk3_bcb_kind_name(dp.why), dp.count,
-                    dp.clear_command_first ? " clear_command_first" : "");
-        else
-            gk3_logf("dispatch: none\n");
-    }
-
-    gk3_rec_seal(rec);
-    gk3_err e = misc_write(GK3_MISC_GK3_OFF, rec, GK3_REC_SIZE, back);
-    if (e)
-        anomaly("gk3rec: write misc+0x2000 failed: %s (efi %s); continuing (the record is advisory)", gk3_strerror(e),
-                gk3_efi_strerror(disk.ctx.last_err));
-    else
-        gk3_logf("gk3rec: written, boot_streak=%u flags=0x%x (read back OK; bootloop threshold not enforced: "
-                 "no executor yet)\n", streak, gk3_rec_flags(rec));
+    rec_write("android");
 }
+
+/* 分派（动作模式、gk3.dispatch=1）对 BCB 的"清掉、照常启动"三种：迁移 / 未知命令 / wipe 上限。
+ * BCB 先清（写后读回），清成了才把相应的标记 / 事件记进 g_rec —— 尤其迁移：BCB 没清掉就置了迁移标记，
+ * 下一次会把一份存量 BCB 当成新请求执行，那正是迁移要防的事（§4.10）。返回 true = 清掉了。 */
+static bool dispatch_clear(const uint8_t *m, const gk3_bcb_info *bi, const gk3_disp_plan *dp)
+{
+    if (bi->kind != GK3_BCB_NONE) {
+        gk3_err e = bcb_clear_write();
+        if (e) {
+            anomaly("dispatch: clearing BCB \"%s\" (%s) failed: %s (efi %s); nothing recorded, booting Android",
+                    bi->command, gk3_disp_name(dp->action), gk3_strerror(e), gk3_efi_strerror(disk.ctx.last_err));
+            return false;
+        }
+    }
+    switch (dp->action) {
+    case GK3_DISP_MIGRATE:
+        gk3_rec_migrate(g_rec, m, GK3_DISPATCH_VER);
+        notable("migration (§4.10): first run with dispatch on; existing BCB \"%s\" (%s) %s, NOT executed; "
+                "marker set (dispatch_ver %u)", bi->command, gk3_bcb_kind_name(bi->kind),
+                bi->kind == GK3_BCB_NONE ? "was empty" : "cleared", GK3_DISPATCH_VER);
+        if (bi->kind != GK3_BCB_NONE)
+            g_event = "bcb_dropped";
+        break;
+    case GK3_DISP_CLEAR:
+        gk3_rec_event_add(g_rec, GK3_EV_BCB_DROPPED, 0xff, (uint32_t)bi->kind);
+        g_event = "bcb_dropped";
+        notable("dispatch: BCB \"%s\" (%s) is not a request we handle: cleared, booting Android", bi->command,
+                gk3_bcb_kind_name(bi->kind));
+        break;
+    case GK3_DISP_WIPE_CAP:
+        gk3_rec_event_add(g_rec, GK3_EV_WIPE_FAILED, 0xff, dp->count);
+        gk3_rec_dispatch_reset(g_rec);
+        g_event = "wipe_failed";
+        notable("dispatch: the same wipe BCB entered the executor %u times without being cleared: cleared it, "
+                "event wipe_failed, booting Android", dp->count - 1);
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+
+/* 进执行端之前的写：BCB（bootloader / fastboot / recovery 类先清）、GK3 记录（分派计数 / 事件）。
+ * 不扣 tries、不加 boot_streak（执行端那一次不算 Android 的启动尝试）。 */
+static void commit_executor(const gk3_bcb_info *bi, const gk3_disp_plan *dp, bool from_bcb)
+{
+    if (from_bcb && dp->clear_bcb_first) {
+        gk3_err e = bcb_clear_write();
+        if (e)
+            anomaly("executor: clearing BCB \"%s\" before entering failed: %s (efi %s); the executor clears it too",
+                    bi->command, gk3_strerror(e), gk3_efi_strerror(disk.ctx.last_err));
+        else
+            gk3_logf("executor: BCB \"%s\" (%s) cleared before entering (read back OK)\n", bi->command,
+                     gk3_bcb_kind_name(bi->kind));
+    }
+    gk3_rec_set_bcb_seen(g_rec, 0);
+    rec_write("executor");
+}
+
+/* ------------------------------------------------------------------ 2'. step_misc */
 
 static void step_misc(void)
 {
@@ -645,10 +940,12 @@ static void step_misc(void)
     if (re)
         gk3_logf("gk3rec: %s\n", gk3_strerror(re));
     else
-        gk3_logf("gk3rec: valid%s boot_streak=%u flags=0x%x\n", migrated ? " migrated" : " not-migrated",
-                 gk3_rec_boot_streak(rec), gk3_rec_flags(rec));
+        gk3_logf("gk3rec: valid%s boot_streak=%u ok_streak=%u flags=0x%x\n", migrated ? " migrated" : " not-migrated",
+                 gk3_rec_boot_streak(rec), gk3_rec_ok_streak(rec), gk3_rec_flags(rec));
     if (opt.observe) {
-        if (!migrated)
+        if (opt.action[0])
+            gk3_logf("would (action): gk3.action=%s -> executor (NOT done)\n", opt.action);
+        else if (!migrated)
             gk3_logf("would (action): first-run migration: %sset marker (NOT done)\n",
                      bi.kind == GK3_BCB_NONE ? "BCB empty, " : "clear BCB without executing it, ");
         else
@@ -691,38 +988,107 @@ static void step_misc(void)
         gk3_logf("would (action): GK3 boot_streak +1 (NOT written)\n");
     }
 
+    /* 要启动 / 进执行端的槽 */
     if (opt.force_slot >= 0) {
         g_slot = (unsigned)opt.force_slot;
         g_event = "forced";
         gk3_logf("slot: _%c (forced by gk3.slot; decision above is %s _%c)\n", 'a' + g_slot, selk[s.kind],
                  'a' + s.slot);
     } else {
-        switch (s.kind) {
-        case GK3_SEL_BOOT:
-            g_slot = s.slot;
-            g_event = s.fallback ? "fallback" : "none";
-            break;
-        case GK3_SEL_BCAB_INVALID:
-            g_slot = g_hint;
-            g_event = "bcab_invalid";
-            if (!opt.observe)
-                notable("bcab invalid (%s): booting hint _%c without writing misc (the HAL re-initialises it)",
-                        gk3_strerror(s.bcab_err), 'a' + g_hint);
-            break;
-        case GK3_SEL_NOSLOT:
-            /* 本该进执行端（why=noslot）；执行端还没有 → 直连条目（今天的路，不猜槽：用 active 槽） */
-            g_target = s.slot;
-            fail_open("decision", "noslot: neither slot is bootable; the executor (why=noslot) is not in this build");
-        case GK3_SEL_MERGING:
-            /* §4.3.2-4：合并中不换槽 —— 不回落到另一槽；执行端（why=merging）还没有 → active 槽的直连条目 */
-            g_target = s.slot;
-            fail_open("decision", "merging: active slot _%c is not bootable while a snapshot merge is in progress; "
-                      "refusing to fall back to _%c (§4.3.2-4); the executor (why=merging) is not in this build",
-                      'a' + s.slot, 'a' + (s.slot ^ 1));
-        }
-        gk3_logf("slot: _%c (event=%s)\n", 'a' + g_slot, g_event);
+        g_slot = s.kind == GK3_SEL_BCAB_INVALID ? g_hint : s.slot;
+        g_event = s.kind == GK3_SEL_BOOT && s.fallback ? "fallback" : s.kind == GK3_SEL_BCAB_INVALID ? "bcab_invalid"
+                                                                                                    : "none";
     }
     g_target = g_slot;
+
+    /* —— 动作模式：执行端的去向（S7c）—— */
+    bool bcb_done = false;
+    if (!opt.observe) {
+        static uint8_t rec_save[GK3_REC_SIZE];
+        gk3_disp_plan dp;
+        const char *why = NULL;
+        bool from_bcb = false;
+        uint8_t ok_prev = 0;
+
+        gk3_memset(&dp, 0, sizeof(dp));
+        rec_prepare(m);
+        gk3_memcpy(rec_save, g_rec, GK3_REC_SIZE);
+        if (opt.action[0]) {
+            why = opt.action;               /* gk3boot-tools.conf：用户在 systemd-boot 菜单里选的，不看分派开关、不碰 BCB */
+        } else if (opt.dispatch) {
+            gk3_dispatch_plan(&bi, g_rec, (uint8_t)g_slot, &dp);
+            gk3_logf("dispatch: action=%s why=%s count=%u%s\n", gk3_disp_name(dp.action), gk3_bcb_kind_name(dp.why),
+                     dp.count, dp.clear_bcb_first ? " clear_bcb_first" : "");
+            switch (dp.action) {
+            case GK3_DISP_MIGRATE:
+            case GK3_DISP_CLEAR:
+            case GK3_DISP_WIPE_CAP:
+                if (dispatch_clear(m, &bi, &dp))
+                    bcb_done = true;
+                else
+                    gk3_memcpy(g_rec, rec_save, GK3_REC_SIZE);
+                break;
+            case GK3_DISP_EXECUTOR:
+                why = gk3_bcb_kind_name(dp.why);
+                from_bcb = true;
+                break;
+            case GK3_DISP_NONE:
+                break;
+            }
+            if (!why && opt.force_slot < 0 && s.kind == GK3_SEL_NOSLOT)
+                why = "noslot";
+            if (!why && opt.force_slot < 0 && s.kind == GK3_SEL_MERGING)
+                why = "merging";
+            /* bootloop（§4.3.3）：已确认的槽连续 N 次没走到开机完成（HAL 没清 boot_streak）⇒ 这一次去执行端菜单 */
+            ok_prev = gk3_rec_boot_streak(g_rec) ? gk3_rec_ok_streak(g_rec) : 0;
+            if (!why && opt.force_slot < 0 && s.kind == GK3_SEL_BOOT && !s.decremented &&
+                ok_prev >= GK3_BOOTLOOP_THRESHOLD)
+                why = "bootloop";
+        }
+        if (why) {
+            const char *err = prepare_executor(why, g_slot);
+            if (!err) {
+                if (!str_cmp(why, "bootloop")) {
+                    gk3_rec_event_add(g_rec, GK3_EV_BOOTLOOP, (uint8_t)g_slot, ok_prev);
+                    gk3_rec_set_ok_streak(g_rec, 0);
+                } else if (!str_cmp(why, "noslot")) {
+                    gk3_rec_event_add(g_rec, GK3_EV_NOSLOT, 0xff, s.active);
+                } else if (!str_cmp(why, "merging")) {
+                    gk3_rec_event_add(g_rec, GK3_EV_REFUSED_MERGING, (uint8_t)s.slot, GK3_MERGE_MERGING);
+                }
+                notable("executor: why=%s%s slot=_%c (kernel boot_%c); tries NOT decremented, boot_streak NOT counted",
+                        why, from_bcb ? " (from BCB)" : opt.action[0] ? " (gk3.action)" : "", 'a' + g_slot,
+                        'a' + boot.slot);
+                commit_executor(&bi, &dp, from_bcb);
+                gk3_free_pages(m, GK3_MISC_READ_SIZE);
+                return;
+            }
+            /* 执行端缺失 / 读不出：照常启动 Android，不消费 BCB（分派计数也不记：用进来之前的那份记录） */
+            gk3_memcpy(g_rec, rec_save, GK3_REC_SIZE);
+            if (s.kind == GK3_SEL_NOSLOT || s.kind == GK3_SEL_MERGING)
+                fail_open("decision", "%s: the executor (why=%s) is unavailable: %s", selk[s.kind], why, err);
+            /* 按设计处理掉的情况（部署里没有执行端是合法状态）："note:" 而不是 "!!" */
+            notable("executor (why=%s) unavailable: %s -- booting Android instead%s", why, err,
+                    from_bcb ? " (BCB left as is)" : "");
+        }
+    }
+
+    /* 不进执行端：Android（两槽都不可启动 / 合并中不许换槽 → 直连条目） */
+    if (opt.force_slot < 0) {
+        if (s.kind == GK3_SEL_NOSLOT)
+            /* 本该进执行端（why=noslot）；分派关 / 观察模式 → 直连条目（今天的路，不猜槽：用 active 槽） */
+            fail_open("decision", "noslot: neither slot is bootable; executor not used (%s)",
+                      opt.observe ? "observe mode" : "dispatch off");
+        if (s.kind == GK3_SEL_MERGING)
+            /* §4.3.2-4：合并中不换槽 —— 不回落到另一槽 → active 槽的直连条目 */
+            fail_open("decision", "merging: active slot _%c is not bootable while a snapshot merge is in progress; "
+                      "refusing to fall back to _%c (§4.3.2-4); executor not used (%s)", 'a' + s.slot,
+                      'a' + (s.slot ^ 1), opt.observe ? "observe mode" : "dispatch off");
+        if (s.kind == GK3_SEL_BCAB_INVALID && !opt.observe)
+            notable("bcab invalid (%s): booting hint _%c without writing misc (the HAL re-initialises it)",
+                    gk3_strerror(s.bcab_err), 'a' + g_hint);
+        gk3_logf("slot: _%c (event=%s)\n", 'a' + g_slot, g_event);
+    }
 
     if (!opt.observe) {
         /* 1) 扣 tries（§4.3.2-3）：写 → Flush → 读回比对；写不进去就不启动这一槽（没扣到 tries 的未确认槽可能一直起不来） */
@@ -746,80 +1112,16 @@ static void step_misc(void)
                                                                                : "BCAB invalid");
         }
         /* 2) GK3 记录 */
-        action_rec(m, &bi, &s);
+        rec_android(m, &bi, &s, bcb_done);
     }
     gk3_free_pages(m, GK3_MISC_READ_SIZE);
 }
 
-/* ------------------------------------------------------------------ 3. boot_<x>：整份读进来、校验、拆段 */
-
-static struct {
-    uint8_t *img;
-    size_t img_len;
-    gk3_bootimg b;
-    uint8_t hdr[4096];
-} boot;
-
 static void step_boot(void)
 {
-    gk3_gpt_part p;
-    char name[8] = "boot_a", hx[48], want[48];
-    name[5] = (char)('a' + g_slot);
-    part(name, &p);
-    uint32_t bs = disk.dev.block_size;
-    uint64_t pbytes = (p.last_lba - p.first_lba + 1) * bs;
-    uint8_t *h = gk3_alloc_pages(4096);
-    if (!h)
-        fail_open("boot", "alloc");
-    if (disk.dev.read(disk.dev.ctx, p.first_lba, 4096 / bs, h))
-        fail_open("boot", "read %s header: %s", name, gk3_efi_strerror(disk.ctx.last_err));
-    gk3_memcpy(boot.hdr, h, 4096);
-    gk3_free_pages(h, 4096);
-    gk3_err e = gk3_bootimg_parse(boot.hdr, sizeof(boot.hdr), pbytes, &boot.b);
+    const char *e = load_boot(g_slot);
     if (e)
-        fail_open("boot", "%s header: %s (first bytes %02x %02x %02x %02x)", name, gk3_strerror(e), boot.hdr[0],
-                  boot.hdr[1], boot.hdr[2], boot.hdr[3]);
-    gk3_bootimg *b = &boot.b;
-    if (b->version != 2)
-        fail_open("boot", "%s: header v%u, this build expects v2 (kernel+ramdisk+dtb in one image, §2.2)", name,
-                  b->version);
-    if (b->total_size > BOOTIMG_MAX)
-        fail_open("boot", "%s: total %llu bytes is implausible", name, (unsigned long long)b->total_size);
-    hex_str(b->id, 20, want, sizeof(want));
-    gk3_logf("%s: p%u v%u page=%u kernel=%u ramdisk=%u dtb=%u total=%llu id=%s\n", name, p.index, b->version,
-             b->page_size, b->kernel_size, b->ramdisk_size, b->dtb_size, (unsigned long long)b->total_size, want);
-
-    boot.img_len = (size_t)((b->total_size + bs - 1) / bs * bs);
-    if (!(boot.img = gk3_alloc_pages(boot.img_len)))
-        fail_open("boot", "alloc %llu", (unsigned long long)boot.img_len);
-    uint64_t t = gk3_ticks();
-    if (disk.dev.read(disk.dev.ctx, p.first_lba, (uint32_t)(boot.img_len / bs), boot.img))
-        fail_open("boot", "read %s (%llu bytes): %s", name, (unsigned long long)boot.img_len,
-                  gk3_efi_strerror(disk.ctx.last_err));
-    uint64_t us_r = gk3_us_since(t);
-    uint8_t got[20];
-    t = gk3_ticks();
-    e = gk3_bootimg_verify_id(b, boot.img, boot.img_len, got);
-    uint64_t us_s = gk3_us_since(t);
-    hex_str(got, 20, hx, sizeof(hx));
-    /* §4.3.3：SHA1 不对时完整版会换另一个可启动的槽（不写 misc）、两个都坏走 H1；这一版直接 fail-open
-     * —— 直连条目启动的是 ESP 上那份内核，效果上就是 H1 */
-    if (e)
-        fail_open("boot", "%s: SHA1(id) MISMATCH: header %s, computed %s", name, want, hx);
-    gk3_logf("%s: read %llu.%llu ms, sha1(id) %llu.%llu ms: OK\n", name, MSF(us_r), MSF(us_s));
-
-    const uint8_t *k = boot.img + b->kernel_off, *d = boot.img + b->dtb_off;
-    if (k[0] != 'M' || k[1] != 'Z')
-        fail_open("boot", "%s: kernel is not a PE image (%02x %02x)", name, k[0], k[1]);
-    gk3_logf("%s: kernel %s\n", name, !gk3_memcmp(k + 4, "zimg", 4) ? "EFI zboot PE" : "PE (EFI stub)");
-    if (!b->ramdisk_size)
-        fail_open("boot", "%s: no ramdisk", name);
-    /* FDT 头：magic 0xd00dfeed、totalsize（大端）不超过段长 */
-    uint32_t fdt_magic = (uint32_t)d[0] << 24 | (uint32_t)d[1] << 16 | (uint32_t)d[2] << 8 | d[3];
-    uint32_t fdt_size = (uint32_t)d[4] << 24 | (uint32_t)d[5] << 16 | (uint32_t)d[6] << 8 | d[7];
-    if (b->dtb_size < 40 || fdt_magic != 0xd00dfeedu || fdt_size > b->dtb_size || fdt_size < 40)
-        fail_open("boot", "%s: dtb is not a valid FDT (magic %08x size %u / %u)", name, fdt_magic, fdt_size,
-                  b->dtb_size);
+        fail_open("boot", "%s", e);
 }
 
 /* ------------------------------------------------------------------ 4. cmdline（§4.3.1） */
@@ -858,20 +1160,35 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     step_header();
     step_disk();
     step_misc();
-    step_boot();
-    step_cmdline();
-
     gk3_bootimg *b = &boot.b;
     gk3_linux L = {
-        .kernel = boot.img + b->kernel_off,
-        .kernel_len = b->kernel_size,
-        .initrd = boot.img + b->ramdisk_off,
-        .initrd_len = b->ramdisk_size,
-        .dtb = boot.img + b->dtb_off,
-        .dtb_len = b->dtb_size,
-        .cmdline = g_cmdline16,
+        .dtb_len = 0,
     };
     const char *stage = "?";
+    if (ex.why) {
+        /* 执行端：同一个 boot_x 的内核与 dtb，initrd 换成 fastboot.img（§4.4.1） */
+        L.kernel = boot.img + b->kernel_off;
+        L.kernel_len = b->kernel_size;
+        L.initrd = ex.img;
+        L.initrd_len = ex.len;
+        L.dtb = boot.img + b->dtb_off;
+        L.dtb_len = b->dtb_size;
+        L.cmdline = ex.cmdline16;
+        gk3_logf("gk3boot: booting the executor (why=%s) with boot_%c's kernel via H2 (t=%llu ms)\n", ex.why,
+                 'a' + boot.slot, MS());
+        EFI_STATUS r = gk3_linux_boot(&L, pre_start, &stage);
+        /* BCB 可能已经清了；交接失败是入口内部错误 → fail-open 阶梯（§4.12） */
+        fail_open("handoff", "executor %s: %s", stage, gk3_efi_strerror(r));
+    }
+    step_boot();
+    step_cmdline();
+    L.kernel = boot.img + b->kernel_off;
+    L.kernel_len = b->kernel_size;
+    L.initrd = boot.img + b->ramdisk_off;
+    L.initrd_len = b->ramdisk_size;
+    L.dtb = boot.img + b->dtb_off;
+    L.dtb_len = b->dtb_size;
+    L.cmdline = g_cmdline16;
     gk3_logf("gk3boot: booting boot_%c via H2 (t=%llu ms)\n", 'a' + g_slot, MS());
     EFI_STATUS r = gk3_linux_boot(&L, pre_start, &stage);
     /* 只有失败才回到这里 */
