@@ -33,6 +33,9 @@
 
 ### ▶ 1.0 批 0/1 已合并、待构建与验证（2026-10-05）
 
+> **★★ 2026-10-05 15:1x 7.2.9 黑屏根因定案：v7.2.y stable 的 `5de981b7db` Revert "drm/msm: dsi: fix PLL init in bonded mode"（v7.2.6 进）**——撤掉了 93c97bc8d85d 对双 DSI 绑定 PLL 初始化的修复（上游撤它是因为非绑定屏回归）。判据（不用人看屏）：亮屏时 `himax-spi-ts` 触摸中断 ≈120/s = 面板在扫描。#16（rc2）120/s · v7.2.9 原版 0/s · **v7.2.9 + 撤回该提交 118/s**（经测试条目、`entry=TEST` 核对过）。⇒ `patches/0076` 撤回它（`ee81f67`），SEC-9 重新应用（`2333e2d`）；另一开发者说的"7.2 widebus 回归"是 7.1 前就进了的另一串（rc2 里已有），与本问题无关。候选内核与 diff 在 `out/k72y-bisect/`。屏幕彩线：用户散热后"比之前好多了" ⇒ 支持"排线受热"。⬜ dev.7（7.2.9 + 0076 + S7 执行端）构建中，装机后回归显示 / iris / 相机 / 待机。
+> **★ 同日 S7 fastboot 执行端合入 main（`c676eb1`…`99735de`，18 个提交）**：`gk3-fastbootd`（252/252）+ `fastboot.img` initramfs（11/11）接口统一（/init 管 gadget / UDC / 生命周期，守护进程管协议，退出码表意图），S7c gk3boot 拉起执行端（`gk3.dispatch=1` 时消费 BCB、首跑迁移；`gk3boot-tools.conf` 直进），QEMU 20 场景全过（含 exec-bootloader 真 fastboot getvar/reboot、exec-wipe）。分派开关默认仍关。⬜ 上机 E6（执行端、键码、port0、方向）→ E7（BCB 分派）→ E10（恢复出厂，要用户另行同意 + 备份）。
+
 > **❌→✅ 更正（2026-10-05 12:2x）：不是屏幕硬件故障，是 SEC-9 升 v7.2.9 带进的显示回归**（用户坚持"屏幕依旧可以驱动"，是对的）。二分：#15（v0.7.1，rc2）有画面（当时上半屏条纹）· **#16（dev.3，rc2 + 0072–0074 + 批 2 配置）有画面** · **v7.2.9（dev.4 / dev.5）全黑**——7.2.9 下软件侧一切正常（四路面板电源、偏压 GPIO 52/53、背光 GPIO 0 都拉高，DSI / PHY 上电，CRTC active，screencap 完整），面板却不出图、背光不亮。华为 logo 阶段也出现条纹 / 不显示：推断是 7.2.9 把面板（HX83121A TDDI）留在异常状态、热重启与 `reboot -p` 都没复位，换回 #15 / #16 正确初始化后恢复（推断，待验证）。此前写的"判为面板 / 排线故障"作废（用户已订的新屏可以不换）。⬜ 定位 rc2..v7.2.9 之间是哪个提交（先按子系统：drm/msm、dsi、panel、regulator / gpio / pinctrl-msm、dispcc）；在此之前**发布内核退回 #16**（prebuilt-boot 用 `out/prebuilt-boot-backup-k16/`），SEC-9 搁置。
 
 > **★★ 2026-10-05 09:5x 第五个 1.0 发布构建：`1.0.0-dev.5`，构建戳 `1791163499`，槽 `_b`**（`out/v1dev5-1791163499/`）= dev.4 + **统一启动入口 S9（Android 侧）**（`df1b32d`…`d15fa3e`，vendor 带 `gk3boot.efi` `0.2.0-e5.gd15fa3eca4b2` sha256 `6a403c81…`）。编译一次过（HAL C++ / Parts Java / sepolicy），release.sh 断言 vendor 里的入口与 prebuilt 逐字节相同。
