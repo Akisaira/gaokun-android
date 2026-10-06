@@ -3,7 +3,7 @@
   * 这份清单写的是"装上这个 ROM 之前应当知道的事"：长期存在的限制、不支持的功能、安全与许可上的取舍。
     某一版特有的缺陷写在那一版发版说明的 Known issues 里，不写在这里。
   * 每条后面的注释里写着它在 docs/v1.0-plan.md 里的条目 id。发版前逐条核对；修好了就删掉那一条，
-    取舍变了（例如 SELinux 切 enforcing、预装了中文输入法）就改写那一条。
+    取舍变了就改写那一条（例如 1.0.0-rc.1 时 SELinux 切成 enforcing、中文输入法真正预装进镜像，这两条就是那时改写的）。
   * 中英两份（known-limitations.md）内容必须一致，改一份就改另一份。
   * 依据（文件:行号 / 实机）写在注释里，不写在正文里。
 -->
@@ -94,15 +94,29 @@
   * 冒烟测试里，带 ACE 反作弊的《三角洲行动》和《卡拉彼丘》能正常运行；银行和支付类 App 还没有系统地测过，欢迎反馈。
 <!-- 冒烟测试出处：docs/TODO.md:136（10-06 之前的行号，那段现在在 archive/TODO-history-2026-10.md，按节内标注的原行号找）（v0.7.1 候选版 1791053208，App 冒烟 8/8）。APP-4 的金融 App 测试做完后在这里补结果。 -->
 
-### SELinux 处于 permissive（宽容）模式
-<!-- ⬜ 2026-10-06 D5：从 1.0.0-dev.10 起构建默认 enforcing（BoardConfig.mk），dev.9 上真 enforcing 回归全过。1.0 发版时把这一条改成"SELinux 处于 enforcing"并写明 OTA-5（ESP 名字不标准的手工分区机器 OTA 会失败，改名办法见 INSTALL）。现在这条描述的是 v0.7.1。 -->
-<!-- SEC-4 / D5（建议：批 2 的三项 enforcing 验收都过就切，否则披露）。证据：device/huawei/gaokun3/BoardConfig.mk:128
-     androidboot.selinux=permissive；实机 /sys/fs/selinux/enforce=0；perf_event_paranoid=-1。
-     ⚠️ 维护：哪一版默认切到 enforcing，就删掉这一条（或改成"从 vX 起 enforcing"）。 -->
-* **现象**：看不出来。
-* **原因**：Android 的应用沙箱有两层，一层是普通的用户权限，另一层是 SELinux。这台机器的 SELinux 规则还没写完，
-  所以它只记录违规、不拦截。后果是：一个 App 一旦找到漏洞，能做的事比在普通手机上多得多。例如任何 App 都能使用内核的性能计数器。
-* **替代办法**：只安装来源可信的 App。
+### 从 1.0.0-rc.1 起 SELinux 是 enforcing —— 手动分区的盘可能要给 EFI 分区改名
+<!-- SEC-4 / D5（用户 2026-10-06 定：切）。提交 137e8eb：device/huawei/gaokun3/BoardConfig.mk 的 cmdline androidboot.selinux=enforcing（:120-126 是注释），
+     1.0.0-dev.10 起默认，第一个对外发布的是 1.0.0-rc.1。证据：docs/TODO.md 总表 ① G9 行（dev.9 经 OneShot 真 enforcing 开机：普查只剩两类已知上游缺口
+     —— system_server 读键盘 country、com.android.se 的 oat 缓存；显示 / 触摸 / Wi-Fi / 传感器 / 音频 / iris 15/15 / 前后摄 / A 档 44 /
+     s2idle 11/11（含 USB 角色切换与回插）全过，out/sel-d5-*）；总表"设备现状"（dev.10 在 enforcing 下经 OTA 装上）。
+     v0.7.1 及以前：BoardConfig.mk 当时是 androidboot.selinux=permissive，实机 /sys/fs/selinux/enforce=0。
+     OTA-5（v1.0-plan.md:177）：BoardConfig.mk:125-126；sepolicy/file_contexts:155-160 只给 by-name 下的 esp 与 "EFI system partition" 打 ESP 标签
+     （整盘安装的 PARTLABEL 是 esp，双系统复用 Windows 的 ESP）；enforcing 下 postinstall 扫全盘找 ESP 被拒（通用 block_device，domain.te:705）；
+     安装器只警告不改名（scripts/live/installer-lib.sh:958-965）。HAL 的 ESP 认法另修了一处（309f735，进 rc.1）。
+     ⚠️ INSTALL 中英「更新」一节"从 v0.6.1 起两个组件会退而按内容找 ESP"在 enforcing 下不再成立，待另行更正。
+     ⚠️ 原条目里"任何 App 都能使用内核的性能计数器"（perf_event_paranoid=-1）在 enforcing 下是否仍成立没核实，新条目不写。
+     ⚠️ 维护：哪天策略又放宽（改回 permissive）就改写这一条；组件在 enforcing 下也能认出别的名字的 ESP 时，删掉 OTA-5 那一半。 -->
+* **现象**：大多数机器上看不出来。v0.7.1 及以前 SELinux 是 `permissive`（宽容）模式，规则不允许的事只记录、不拦截；
+  从 1.0.0-rc.1 起是 `enforcing`，会真的拦下来。**在你自己手动分区的盘上**，如果 EFI 分区的 GPT 分区*名*既不是 `esp`
+  也不是 `EFI system partition`，系统更新和切换槽位都会失败。
+* **原因**：Android 的应用沙箱有两层，一层是普通的用户权限，另一层是 SELinux；SELinux 拦截之后，一个 App 即使找到了漏洞，能做的事也少得多。
+  规则只允许更新组件和启动控制组件按这两个名字打开 EFI 分区：`esp` 是安装器"清除整个磁盘"建的名字，`EFI system partition`
+  是 Windows 建的名字（双系统用的就是它）。以前的版本找不到时会退而扫描所有块设备，enforcing 下不允许这样做。
+* **替代办法**：
+  * 如果你的 EFI 分区叫别的名字，在任意一个 Linux 里改一次名（安装器的终端或者救援系统都行）：
+    `sgdisk -c <N>:esp /dev/nvme0n1`，N 是 EFI 分区的分区号。UEFI 只看分区类型，改名无害。见[安装指南的"更新"一节](INSTALL.zh-CN.md#更新)。
+    安装器看到这种名字时会提醒。
+  * 这套规则是新的。如果某个功能在 v0.7.1 上好用、现在坏了，请报告，并附上 `adb shell dmesg | grep avc` 的输出。
 
 ### 启动链未上锁，系统分区不做完整性校验
 <!-- BoardConfig.mk:128 androidboot.veritymode=disabled；实机 ro.boot.verifiedbootstate=orange、ro.boot.flash.locked=0；
@@ -319,9 +333,12 @@
 * **替代办法**：暂时没有。请让别的设备直接连路由器。
 
 ### 中文输入法要自己打开一次
-<!-- DISP-3（D10）。2026-10-06：从 1.0.0-dev.9 之后的构建起预装 fcitx5-android 0.1.3（GitHub release 版，prebuilt-apps/fcitx5/README.md）。
-     ⬜ 还没上机核对实体键盘怎么切中英文，核对后改写这一条。 -->
+<!-- DISP-3（D10，用户 2026-10-06 定从 GitHub 取 fcitx5-android 0.1.3，prebuilt-apps/fcitx5/README.md；提交 f2fd400 / 7eb356c）。
+     从 1.0.0-rc.1 起预装 —— 它是第一个真正带上它的构建：1.0.0-dev.10 的镜像里，构建系统给 PRESIGNED 的 APK 解压 .so、重对齐，弄坏了 v2 签名，
+     PackageManager 拒装（docs/TODO.md 总表"设备现状"②）；5c48d08 改成原样安装（LOCAL_REPLACE_PREBUILT_APK_INSTALLED），dev.11 / rc.1 起带。
+     开发机上的 0.1.3 是作为普通应用装的，不能当镜像里带着它的证据。
+     ⬜ 还没上机核对：rc.1 的系统应用列表里有它、下面的菜单名、实体键盘怎么切中英文（与 Ctrl+Space 冲不冲突）；核对后改写这一条。 -->
 * **现象**：默认的键盘不支持中文。
-* **原因**：中文输入法（fcitx5，自带拼音 / 双拼 / 五笔）已经预装，但没有设成默认。
+* **原因**：从 1.0.0-rc.1 起预装了中文输入法（fcitx5，自带拼音 / 双拼 / 五笔），但没有设成默认。v0.7.1 及以前没有。
 * **替代办法**：设置 → 系统 → 键盘 → 屏幕键盘 → 打开 *Fcitx5*，再切换过去（菜单名还没在本机核对）。以后从项目的 GitHub release 更新
   （F-Droid 版签名不同，装不上覆盖）。实体键盘怎么切中英文还没核对过。

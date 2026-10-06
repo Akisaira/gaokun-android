@@ -3,7 +3,8 @@
   * This list is "what you should know before installing this ROM": long-standing limitations, unsupported features,
     and the security and licensing trade-offs. Bugs specific to one release go into that release's Known issues, not here.
   * The comment after each entry names its id in docs/v1.0-plan.md. Check every entry before a release; delete an entry
-    once it is fixed, rewrite it when the trade-off changes (e.g. SELinux goes enforcing, a Chinese IME is preinstalled).
+    once it is fixed, rewrite it when the trade-off changes (as the SELinux and Chinese-input entries were rewritten for
+    1.0.0-rc.1, when SELinux went enforcing and the IME was really preinstalled).
   * Keep this file and known-limitations.zh-CN.md in sync. Evidence (file:line / on-device checks) is in the
     comments of the Chinese file; it is the same for both.
 -->
@@ -90,14 +91,25 @@ Problems specific to one release are in that release's [release notes](relnotes/
   * In our smoke tests, *Delta Force* and *Strinova* (both protected by ACE anti-cheat) ran normally. Banking and payment
     apps have not been tested systematically. Reports are welcome.
 
-### SELinux runs in permissive mode
-<!-- ⬜ 2026-10-06 D5：从 1.0.0-dev.10 起构建默认 enforcing（BoardConfig.mk），dev.9 上真 enforcing 回归全过。1.0 发版时把这一条改成"SELinux 处于 enforcing"并写明 OTA-5（ESP 名字不标准的手工分区机器 OTA 会失败，改名办法见 INSTALL）。现在这条描述的是 v0.7.1。 -->
-<!-- SEC-4 / D5. Delete or rewrite this entry in the release that switches to enforcing. -->
-* **What you see**: nothing.
-* **Why**: Android sandboxes apps in two layers: ordinary user permissions, and SELinux. The SELinux rules for this
-  machine are not finished, so SELinux only logs violations and does not block them. So an app that finds a vulnerability
-  can do much more than it could on a normal phone. For example, any app can use the kernel's performance counters.
-* **What to do**: install apps only from sources you trust.
+### SELinux is enforcing from 1.0.0-rc.1 — but hand-partitioned disks may need their EFI partition renamed
+<!-- SEC-4 / D5 (user decision 2026-10-06: switch). Enforcing by default from 1.0.0-dev.10; the first published build with it
+     is 1.0.0-rc.1. Evidence in the Chinese file. Rewrite this entry if the policy is ever relaxed again, and drop the
+     OTA-5 half once the components can find a differently named ESP under enforcing. -->
+* **What you see**: on most machines, nothing. v0.7.1 and earlier ran SELinux in `permissive` mode (it only logged what its
+  rules did not allow); from 1.0.0-rc.1 it is `enforcing` and blocks those things. **On a disk you partitioned by hand**,
+  system updates and switching slots fail if the EFI partition's GPT partition *name* is neither `esp` nor
+  `EFI system partition`.
+* **Why**: Android's app sandbox has two layers, ordinary user permissions and SELinux; with SELinux enforcing, an app
+  that finds a vulnerability can do much less. The rules let the update and boot-control components open the EFI
+  partition only under those two names: `esp` is what the installer's *Erase the whole disk* creates, and
+  `EFI system partition` is what Windows creates (dual boot uses that one). Scanning every block device for it, as
+  earlier releases did as a fallback, is not allowed under enforcing.
+* **What to do**:
+  * If your EFI partition has another name, rename it once from any Linux (the installer's terminal or the rescue system):
+    `sgdisk -c <N>:esp /dev/nvme0n1`, where N is the EFI partition's number. UEFI only looks at the partition type,
+    so renaming is harmless. See [Updating](INSTALL.md#updating). The installer warns when it sees such a name.
+  * The rules are new. If something worked on v0.7.1 and is broken now, report it with the output of
+    `adb shell dmesg | grep avc`.
 
 ### The boot chain is unlocked, and system partitions are not verified
 * **What you see**: nothing at boot checks whether the system has been modified. Play Integrity never passes (see
@@ -330,11 +342,13 @@ These are bugs, not trade-offs, and they will be removed from this list once fix
 * **What to do**: nothing yet; connect your other devices to the router directly.
 
 ### The Chinese input method has to be turned on once
-<!-- DISP-3 (D10). 2026-10-06: fcitx5-android 0.1.3 (GitHub release build) is preinstalled from the build after
-     1.0.0-dev.9 (prebuilt-apps/fcitx5/README.md). ⬜ Not yet checked on the machine: how a hardware keyboard switches
-     between Chinese and English. Rewrite this entry once that is checked. -->
+<!-- DISP-3 (D10). fcitx5-android 0.1.3 (GitHub release build), preinstalled from 1.0.0-rc.1 — the first build that really
+     carries it (in 1.0.0-dev.10 Android refused to install it: the build system had damaged its v2 signature; fixed by
+     installing it unmodified). Evidence in the Chinese file. ⬜ Not yet checked on the machine: the menu names below, and
+     how a hardware keyboard switches between Chinese and English. Rewrite this entry once that is checked. -->
 * **What you see**: the default keyboard has no Chinese.
-* **Why**: the Chinese input method (fcitx5, pinyin / shuangpin / wubi built in) is preinstalled but not made the default.
+* **Why**: from 1.0.0-rc.1 a Chinese input method (fcitx5, pinyin / shuangpin / wubi built in) is preinstalled, but it is
+  not made the default. v0.7.1 and earlier had none.
 * **What to do**: Settings → System → Keyboard → On-screen keyboard → turn on *Fcitx5*, then switch to it (menu names not yet checked on the machine). Updates come
   from the project's GitHub releases (the F-Droid build is signed differently and will not install over it).
   How the hardware keyboard switches between Chinese and English has not been checked yet.
