@@ -5,6 +5,19 @@
 拆包脚本、分析脚本和逐模块清单（名字 / GUID / 大小 / sha256 / depex）。固件二进制本身不入库，
 README 写了从哪个安装包、怎么逐字节复现。见 [`bios-2.16/README.md`](bios-2.16/README.md)。
 
+## `gk3probe-e3-*.txt`、`gk3boot-e*-20261005.txt` —— 统一启动入口真机实验日志（2026-10-05）
+
+设计稿 `docs/boot-entry-design.md` §6 的实验 E3–E8 与执行端 / 分派（结果行在那一节）：
+
+| 文件 | 实验 |
+|---|---|
+| `gk3probe-e3-20261005.txt` | E3：只读探针 `gk3probe.efi` —— 缓冲区 LoadImage / StartImage、USB device 协议 |
+| `gk3boot-e4-20261005.txt` | E4：观察模式从 `boot_b` 分区直接起到 Android |
+| `gk3boot-e5-e6-20261005.txt` | E5：作默认条目 10/10；E6：计数兜底 + fail-open |
+| `gk3boot-e7-20261005.txt` | E7：动作模式 5/5、BCB 识别但不消费 |
+| `gk3boot-e8-20261005.txt` | E8：真 OTA 回滚演练（新槽 panic 6 次后自动回旧槽） |
+| `gk3boot-e6exec-e7dispatch-20261005.txt` | E6 执行端（fastboot getvar / reboot）+ E7 BCB 分派六步 |
+
 ## `ov13b10-module-eeprom-0x50.bin` —— 后摄模组 EEPROM（16 KiB，2026-09-14，#111）
 
 后摄模组（OV13B10，CCI 总线 0 = `/dev/i2c-1`）上 **0x50** 那颗 EEPROM 的完整内容，

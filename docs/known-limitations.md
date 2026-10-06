@@ -135,7 +135,9 @@ yourself, you should know that they contain these components.
 <!-- B6 / A5 (user decision D4: to be handled by a future fastboot; design in progress). Rewrite once fastboot ships. -->
 * **What you see**: the machine reboots and **all your data is still there**, with no message.
 * **Why**: that feature relies on recovery to carry it out, and recovery cannot boot on this machine, so after the reboot
-  nothing acts on the request. A fastboot-based factory reset is being designed.
+  nothing acts on the request. From 1.0 the request is handed to the boot entry's fastboot environment instead
+  (see [INSTALL](INSTALL.md#the-boot-entry-and-fastboot-from-10)), but that path has not been verified on the machine —
+  treat it as not working.
 * **What to do**: use the graphical installer's **Reinstall Android**, which wipes data by default. Steps in the
   [FAQ](FAQ.md#factory-reset--wiping-before-you-sell).
 

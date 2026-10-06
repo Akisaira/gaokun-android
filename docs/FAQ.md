@@ -200,8 +200,8 @@ network supports mDNS, `ssh root@gaokun3-live.local` may work as well (not yet t
 ## Factory reset / wiping before you sell
 
 **_Erase all data_ in Settings does nothing on this machine**: it reboots and all your data is still there. Why: see
-[known limitations](known-limitations.md#erase-all-data-factory-reset-in-settings-does-nothing). A fastboot-based
-factory reset is being designed.
+[known limitations](known-limitations.md#erase-all-data-factory-reset-in-settings-does-nothing). From 1.0 the request
+is handed to the boot entry's fastboot environment, but that path has not been verified on the machine — do not rely on it.
 
 For now, do this:
 

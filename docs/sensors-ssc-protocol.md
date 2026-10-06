@@ -5,6 +5,8 @@
 >
 > 状态（2026-08-20）：底层管道已在 Android 上实测打通（QRTR 服务 400 上线）；
 > 本文描述的 QMI/protobuf 客户端**尚未实现**，这是剩下的工程量。
+> ★ 2026-10-06 注：上面是 08-20 的状态。客户端早已实现并随版本发：`device/huawei/gaokun3/ssc/`（SSC 客户端）+ `sensors-hal/`（HAL），
+> 1.0 又加了按订阅开关、SLPI 崩溃后的恢复服务（v1.0-plan PWR-3、DISP-14）。本文仍是协议规格的依据。
 > 背景与实测数据见 `stage4-findings.md` #37。
 
 ## 为什么必须重写，不能移植 libssc
