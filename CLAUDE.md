@@ -4,7 +4,7 @@
 
 ## 现在（2026-10-06；每次开工更新，旧内容搬进 project-log）
 
-* **阶段：1.0 发版前。** 最新发布 v0.7.1-alpha（2026-10-04）。1.0 发布构建出到 `1.0.0-dev.9`（戳 `1791215652`），在机上、10-06 回归全过。剩什么看 `docs/TODO.md` 顶部「▶ 1.0」；发版标准 / 阻断项 / 待定决定看 `docs/v1.0-plan.md`。
+* **阶段：1.0 发版前。** 最新发布 v0.7.1-alpha（2026-10-04）。1.0 发布构建出到 `1.0.0-dev.10`（戳 `1791278550`，SELinux 默认 enforcing），在机上、10-06 回归全过。剩什么看 `docs/TODO.md` 顶部「▶ 1.0」；发版标准 / 阻断项 / 待定决定看 `docs/v1.0-plan.md`。
 * 内核 v7.2.9 stable + `patches/0076`（撤回 stable 撤掉的双 DSI 绑定 PLL 修复，否则黑屏）；dev.9 起发布内核不带指纹的 0050（D21，只进实验内核）。
 * 统一启动入口 `gk3boot.efi` + fastboot 执行端：E3–E8（含 OTA 自动回滚）、E6、E7 真机过；镜像默认动作模式 + BCB 分派开；E10 恢复出厂用户定不测（`docs/boot-entry-design.md`）。
 * 发布构建（dev.1 起）= 关免授权 adb、`ro.debuggable=0`，变体仍是 userdebug。SELinux 默认 permissive，1.0 切不切 enforcing 待定（v1.0-plan SEC-4 / D5）。
@@ -42,7 +42,7 @@
 > * **推仓库、发版要用户点头**；其余（本地提交、构建、staging、设备实验）直接做。
 >
 > ### 现在设备上跑的是什么（2026-10-06 16:0x 起；历次状态见 project-log）
-> * 槽 **`_b` = `1.0.0-dev.9`**（内核 `912f22c3` = 7.2.9 + 0076、无 0050），**经统一启动入口 `0.2.0-e5.g3d0cb032e81a` 开机**（动作模式 + 分派开，条目由 HAL 写、已祝福）；VAB 已合并 ⇒ `_a`（dev.7）不可回落。载荷 `out/v1dev9-1791215652/`。
+> * 槽 **`_a` = `1.0.0-dev.10`**（戳 `1791278550`，内核同 dev.9 `912f22c3`），**SELinux enforcing**（cmdline 默认，D5），经统一启动入口开机；`_b` = dev.9（可回落，合并完成前）。载荷 `out/v1dev10-1791278550/`。fcitx5 在 dev.10 镜像里因 v2 签名被拒，已作为普通应用装上（修法 `5c48d08` 进下一版）。
 > * ⚠️ 分派开着：**设置里的恢复出厂会真擦**（发布构建会丢 adb_keys ⇒ 连不上 adb）；`adb reboot bootloader|fastboot|recovery` 进 fastboot 执行端，Mac 上 `fastboot reboot` 回来。
 > * ESP 10-06 已清理（备份 `out/esp-backup-20261006/`）：菜单只剩 Android（入口 / 上一版入口 / fastboot / 两个直连槽）、`gaokun3 installer`（内置盘上的 live，能重装，安全网）、Ubuntu 救援。
 > * 10-06 Mac 与设备都在热点「Xiaomi 17」（设备 `10.146.153.115`）。
