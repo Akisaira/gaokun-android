@@ -299,7 +299,7 @@ These are bugs, not trade-offs, and they will be removed from this list once fix
 * **What to do**: keep your palm off the screen while you use it.
 
 ### *League of Legends: Wild Rift* closes right after launch
-<!-- #15 (docs/TODO.md:150). No log yet. -->
+<!-- #15 (docs/TODO.md:150（10-06 之前的行号，那段现在在 archive/TODO-history-2026-10.md，按节内标注的原行号找）). No log yet. -->
 * **What you see**: the game closes right after you open it.
 * **Why**: not known. It was reported in
   [#15](https://github.com/vahiru/gaokun-android/issues/15), and we have no log yet.

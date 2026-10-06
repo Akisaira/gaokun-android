@@ -36,7 +36,7 @@
 
 | 文档 | 讲什么 | 状态 | 面向 |
 |---|---|---|---|
-| [TODO.md](TODO.md) | 待办总表与各版验收记录 | 现行 | 维护者 · AI |
+| [TODO.md](TODO.md) | 还剩什么、下一步（按 1.0 发版路径分组的总表）；过程记录见 [archive/TODO-history-2026-10.md](archive/TODO-history-2026-10.md) | 现行 | 维护者 · AI |
 | [v1.0-plan.md](v1.0-plan.md) | 1.0.0 发版前修复计划：发版标准、阻断项、分批路线、待拍板的决定（D 编号） | 现行 | 维护者 · AI |
 | [release-checklist.md](release-checklist.md) | 发版回归清单（A 无人值守 / B 要人在场 / C 长稳与测量），每个候选版从这里抄 | 现行 | 维护者 |
 | [build-machine.md](build-machine.md) | 构建机（Azure VM）按负载选机型、停机规矩、盘的代价 | 现行 | 维护者 · AI |
@@ -84,6 +84,7 @@
 | [archive/stage2-plan.md](archive/stage2-plan.md) | Stage 2 引导链 + AOSP 启动方案 | 已取代 → [stage2-findings.md](stage2-findings.md) |
 | [archive/plan-2026-09-14.md](archive/plan-2026-09-14.md) | 09-14 收尾计划（相机内核 + v0.6.1 两批） | 已取代 → [TODO.md](TODO.md) |
 | [archive/touch-morning-runbook.md](archive/touch-morning-runbook.md) | 2026-09-16 触摸实机调参手册 | 已取代 → 案卷 #114–#116、[`scripts/touch/README.md`](../scripts/touch/README.md) |
+| [archive/TODO-history-2026-10.md](archive/TODO-history-2026-10.md) | TODO 截至 2026-10-06 的过程记录（dev.1–dev.9、已结案调查、v0.6/0.7 收口条目） | 历史 |
 | [archive/stage7-installer-roadmap.md](archive/stage7-installer-roadmap.md) | C 版安装器的需求排序与 08-23 搁置时的接手说明 | 已取代 → [stage7-flutter-debian.md](stage7-flutter-debian.md) |
 
 ## docs/ 以外的说明文档

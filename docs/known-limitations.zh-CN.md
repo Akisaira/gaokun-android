@@ -92,7 +92,7 @@
     <!-- 2026-10-05 在 1.0.0-dev.1/dev.2 发布构建上实测：adbd 在 u:r:ksu:s0，`adb shell id` = uid 0。 -->
   * 目前没有不带 root 的版本，内核里的 root 能力关不掉。
   * 冒烟测试里，带 ACE 反作弊的《三角洲行动》和《卡拉彼丘》能正常运行；银行和支付类 App 还没有系统地测过，欢迎反馈。
-<!-- 冒烟测试出处：docs/TODO.md:136（v0.7.1 候选版 1791053208，App 冒烟 8/8）。APP-4 的金融 App 测试做完后在这里补结果。 -->
+<!-- 冒烟测试出处：docs/TODO.md:136（10-06 之前的行号，那段现在在 archive/TODO-history-2026-10.md，按节内标注的原行号找）（v0.7.1 候选版 1791053208，App 冒烟 8/8）。APP-4 的金融 App 测试做完后在这里补结果。 -->
 
 ### SELinux 处于 permissive（宽容）模式
 <!-- SEC-4 / D5（建议：批 2 的三项 enforcing 验收都过就切，否则披露）。证据：device/huawei/gaokun3/BoardConfig.mk:128
@@ -116,7 +116,7 @@
 ## 二、随镜像一起分发的专有组件
 
 <!-- SEC-10 / REL-15（D20：披露 + 准备不带 Histen 的构建开关）。证据：device/huawei/gaokun3/firmware/README.md 清单表与
-     "不可公开再分发"一句（:36）；docs/TODO.md:86-96（Histen，用户 2026-09-28 定"带着发"）；TODO B23（zap shader 随
+     "不可公开再分发"一句（:36）；docs/TODO.md:86-96（10-06 之前的行号，那段现在在 archive/TODO-history-2026-10.md，按节内标注的原行号找）（Histen，用户 2026-09-28 定"带着发"）；TODO B23（zap shader 随
      live 镜像发，用户 2026-09-27 定）；device/huawei/gaokun3/lineage_gaokun3.mk:238-250（MindTheGapps）。
      ✅ NOTICE 已覆盖二进制发布（本次，2026-10-05）：NOTICE 的 "Third-party proprietary components in the binary
      releases" 一节逐个列了文件名（以 firmware/README.md:26-31 的表为准）、hexagonrpcd-root、Histen、MindTheGapps。 -->
@@ -262,7 +262,7 @@
      取证看门狗：device/huawei/gaokun3/bin/gaokun3-hangdump.sh（同一 tid 连续三次采样在 D 状态，即 ≥2 分钟，
      就写到 /data/vendor/gaokun3/hangdump-<uptime>/，:63；盘上留最近 5 份，:28-34）、etc/hangdump.rc、device.mk:567。
      目录 0770 root system ⇒ 要 root 才能读；抓取命令在 FAQ.md / FAQ.zh-CN.md 的"有电脑、机器能开机时"一节。
-     "没有目录也是线索"：docs/TODO.md:515-516。 -->
+     "没有目录也是线索"：docs/TODO.md:515-516（10-06 之前的行号，那段现在在 archive/TODO-history-2026-10.md，按节内标注的原行号找）。 -->
 * **现象**：机器连续运行很久以后，声音和蓝牙都不工作了，只有重启才能恢复。这是用户报告的，我们自己还没复现过。
 * **原因**：还不清楚。音频和蓝牙共用一条到 DSP 的通路，怀疑是这条通路卡住了。
 * **替代办法**：重启。系统里有一个看门狗，发现卡死时会自动把证据存到 `/data/vendor/gaokun3/hangdump-*`，重启后还在。
@@ -294,7 +294,7 @@
 * **替代办法**：操作时别把手掌搭在屏幕上。
 
 ### 《英雄联盟手游》（Wild Rift）点开就退
-<!-- #15（docs/TODO.md:150：没有日志，不再并入 #12）；README.md:57。 -->
+<!-- #15（docs/TODO.md:150（10-06 之前的行号，那段现在在 archive/TODO-history-2026-10.md，按节内标注的原行号找）：没有日志，不再并入 #12）；README.md:57。 -->
 * **现象**：游戏一打开就退出。
 * **原因**：还不知道。这是 [#15](https://github.com/vahiru/gaokun-android/issues/15) 里报告的，我们还没拿到日志。
 * **替代办法**：如果你也遇到，请在它退出后马上抓崩溃日志（见[常见问题](FAQ.zh-CN.md#有电脑机器能开机时)），附到那个 issue 上。

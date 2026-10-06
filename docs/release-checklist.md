@@ -1,6 +1,6 @@
 # 发版回归清单
 
-> REL-6 / PERF-12（`docs/v1.0-plan.md`）。这份就是此前在 `docs/TODO.md:244`、`:1017`、`docs/project-log.md:494`、
+> REL-6 / PERF-12（`docs/v1.0-plan.md`）。这份就是此前在 `docs/TODO.md:244`、`:1017`（10-06 之前的行号，那段现在在 archive/TODO-history-2026-10.md，按节内标注的原行号找）、`docs/project-log.md:494`、
 > `docs/stage4-findings.md:4691`、`:8053` 里被引用、却一直不存在的「发版收尾清单」。
 > 内容取 `docs/TODO.md` 里三份装机验收清单的并集 —— v0.6.3 候选版（`:118-127`）、v0.7.0（`:57-68`）、
 > v0.7.1（`:133` 那段与 `docs/relnotes/v0.7.1-alpha.md` 末段"没测的项"）—— 再加上 1.0 计划的 G1–G11 与 PERF-12 的三档。
@@ -133,8 +133,8 @@ A 档里不在 `accept.sh` 的这几项（要手动，但不用人在场；A28�
 
 | # | 检查 | 怎么做 | 通过判据 | 来源 |
 |---|---|---|---|---|
-| D1 | 内核能从仓库重建 | 设备 `/proc/config.gz` 与照本仓配方重建出的 `.config` 做 diff；两个内核镜像做全字符串差集，dtb 比 sha256 | config 无差；字符串差集无未解释项；dtb sha256 一致（字符串差集看不见 DTS） | `TODO.md:244`、`stage4-findings.md:4691` |
-| D2 | 文档不过时 | `grep -rnE "cannot suspend\|不能待机\|=m\|❌" README.md README.zh-CN.md docs/INSTALL.md docs/TODO.md`，再对 README 状态表与本版实测；设备树里的成段注释也会变质（`init.gaokun3.rc`、`etc/usbrole.rc`、`device.mk` 都出过事），另跑 `grep -rnE "^[[:space:]]*#.*(cannot suspend\|不能待机\|❌)" device/huawei/gaokun3/` 只看注释命中 | 每一处命中都确认仍然成立 | `project-log.md:494`、`TODO.md:1017`、`stage4-findings.md:8053` |
+| D1 | 内核能从仓库重建 | 设备 `/proc/config.gz` 与照本仓配方重建出的 `.config` 做 diff；两个内核镜像做全字符串差集，dtb 比 sha256 | config 无差；字符串差集无未解释项；dtb sha256 一致（字符串差集看不见 DTS） | `TODO.md:244`（10-06 之前的行号，那段现在在 archive/TODO-history-2026-10.md，按节内标注的原行号找）、`stage4-findings.md:4691` |
+| D2 | 文档不过时 | `grep -rnE "cannot suspend\|不能待机\|=m\|❌" README.md README.zh-CN.md docs/INSTALL.md docs/TODO.md`，再对 README 状态表与本版实测；设备树里的成段注释也会变质（`init.gaokun3.rc`、`etc/usbrole.rc`、`device.mk` 都出过事），另跑 `grep -rnE "^[[:space:]]*#.*(cannot suspend\|不能待机\|❌)" device/huawei/gaokun3/` 只看注释命中 | 每一处命中都确认仍然成立 | `project-log.md:494`、`TODO.md:1017`（10-06 之前的行号，那段现在在 archive/TODO-history-2026-10.md，按节内标注的原行号找）、`stage4-findings.md:8053` |
 | D3 | 发的就是验过的那一版 | `release.sh --no-build`；变体是 `lineage_gaokun3-bp4a-userdebug`；各分区 build.prop 的 `date.utc` 对一遍（system / system_ext / product / vendor / odm，vendor 的曾停在 09-28 —— OTA-11 / SEC-13） | 构建戳 = A1 验过的戳；各分区 `date.utc` 一致（G6 / OTA-11：`2bf59e1` 起 `release.sh` 第 2 步断言各分区的 `ro.<part>.build.date.utc` 与 system 相同，⬜ 还没在真构建上跑过，第一次跑时仍手动对一遍；构建前要 `rm -f $OUT/vendor/build.prop`，构建机的 `~/iris-work/rom-build.sh` 还没加） | CLAUDE.md、#117 §15、G6 |
 | D4 | 产物齐、字节对 | GitHub release 附件逐个核对服务端字节数；R2 清单最后传、设备侧抓取 200；`install-artifacts.sha256` | 字节数与本地一致（别信上传命令的输出，CLAUDE.md 运维坑 1）。`2bf59e1` 起每版多出 `kernel-source.txt`、`kernel-config.txt`、`kernel-base-patches.tar.gz`，`repo manifest -r` 能跑成时还有 `crdroid-manifest.xml` —— 都要传、都要核字节数（它们不进 `install-artifacts.sha256`，sha256 记在 `kernel-source.txt` 里），发版说明的 Files 一节要链到 `kernel-source.txt` | v0.7.0 / v0.7.1 发版记录、REL-7 |
 | D5 | 安装器与 ROM 一致 | 安装器里的内核 / dtb 与 ROM 的 `boot.img` 拆出来的比 sha256 | 一致 | G11 |
