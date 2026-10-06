@@ -18,6 +18,7 @@
 | `stage2-plan.md` | Stage 2 引导链 + AOSP 启动方案 | Stage 2 已于 2026-08-17 完成，结论见 `docs/stage2-findings.md`（12 个实测问题） |
 | `plan-2026-09-14.md` | 09-14 收尾计划（相机内核 #19 + v0.6.1 两批） | 两批都已随 v0.6.1 / v0.6.2 发出；没做完的几条（UBWC、libcamera genrule、CCM）已并进 `docs/TODO.md` 总表。2026-09-23 归档 |
 | `touch-morning-runbook.md` | 2026-09-16 触摸实机调参的逐步手册 | 结论已定案并随 v0.6.2 发布，见案卷 #114–#116 与 `scripts/touch/README.md`。2026-09-23 归档 |
+| `stage7-installer-roadmap.md` | C 版图形安装器的需求排序（用户 2026-08-23 的 9 条）与 08-23 搁置时的接手说明 | 它规划的 C 版（`live/installer/`）2026-09-26 已删，Stage 7 改 Flutter + Debian 重做，9 条需求与"从没真装过一台"的欠账都在 `docs/stage7-flutter-debian.md` 里收口（M4b 已真装）。2026-10-06 归档；正文未改，别处引用的 `:行号` 仍然有效 |
 
 ⚠️ **这些文档里的技术判断按当时的认知写成，其中一部分后来被实测推翻。**
 要查某件事现在是什么状况，去看对应的案卷或 CLAUDE.md，不要看这里。

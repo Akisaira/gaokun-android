@@ -24,7 +24,7 @@ extension SessionX on BuildContext {
 
 /// 跳到下一步。★ 导航就是 Navigator 的栈：返回 = 回到真正来的那一页。
 /// C 版用 screen++/screen-- 时，分支屏插在枚举中间，"来源"页按返回会掉进
-/// 一个用户没走过的"缩分区"页（stage7-installer-roadmap.md:139-144）。
+/// 一个用户没走过的"缩分区"页（docs/archive/stage7-installer-roadmap.md:146-151）。
 Future<T?> go<T>(BuildContext context, Widget page, {bool replace = false}) {
   final route = PageRouteBuilder<T>(
     pageBuilder: (_, _, _) => page,

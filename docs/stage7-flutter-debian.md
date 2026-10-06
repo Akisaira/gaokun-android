@@ -21,7 +21,7 @@
 > ⬜ 还没验：清除数据 / 整盘 / 双系统（后两者本机没有合适的盘面，M4a 要外接 USB 盘）；M4.5 救援迁移。
 >
 > 前情：[`stage7-live-installer.md`](stage7-live-installer.md)（C + cairo 直画 DRM 的
-> 设计与 M0）、[`stage7-installer-roadmap.md`](stage7-installer-roadmap.md)（用户 9 条需求
+> 设计与 M0）、[`archive/stage7-installer-roadmap.md`](archive/stage7-installer-roadmap.md)（用户 9 条需求
 > 与搁置时的接手说明）。那两份里被这份推翻的，以这份为准。
 
 ---
@@ -92,7 +92,7 @@ scripts/live/installer-lib.sh    唯一的分区 / 写盘实现
 而 Windows 建的 ESP 叫 `EFI system partition`。于是在任何一台 Windows 机器上都必然失败，
 并留下 6 个建了一半的空分区（分区表备份在，能还原）。
 
-为什么一直没发现：`stage7-installer-roadmap.md:96-98` 说"后端 probe/plan 真实磁盘验过、
+为什么一直没发现：`archive/stage7-installer-roadmap.md:103-104` 说"后端 probe/plan 真实磁盘验过、
 apply loop 设备端到端验过"—— **两句都对，但拼不出"双系统能装"**：真盘上验的是
 `gk3_plan`（纯计算），loop 上跑的 apply 只有整盘模式。
 
@@ -432,7 +432,7 @@ BIOS 版本），并提供 `-RepairBoot`、"重启到 Android"、`-SetDefault`�
 
 ### 5.9 ★ M4b：第一次真的装了一台（2026-09-26，内置盘，重新安装 + 保留数据）
 
-`docs/stage7-installer-roadmap.md` 那条"从来没有真的装过一台机器"的欠账，今天还上了。
+`docs/archive/stage7-installer-roadmap.md` 那条"从来没有真的装过一台机器"的欠账，今天还上了。
 本机整盘是 Android，双系统必被 PARTLABEL 查重拒绝 ⇒ 走**重新安装**；用户选"同版本、保留数据"（对日用数据改动最小）。
 
 * 载荷：构建机 `out/` 里的 `1790206017`（设备正在跑的那一版，未发布）照 `release.sh` 的办法打包
