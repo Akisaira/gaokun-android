@@ -103,6 +103,7 @@ gk3_prog() {
 # ★ 在 gk3_apply / gk3_shrink 里面（看调用栈，不看变量 —— 同一个 shell 里先后调过它们，变量会留着）
 #   自动带上 touched=yes|no：目标盘动过没有（GK3__TOUCHED，由它们俩维护）。
 #   界面据此决定失败页说"盘没动过，可以返回 / 重试"还是"盘可能写了一半"；命令行版在失败时照着说一句。
+#   调用方自己给了 touched=（例如 gk3__table_guard 在任何入口里都是"没动过"）就不再追加。
 gk3_fail() {
     local out="ERR code=$1" kv; shift
     while [ $# -gt 0 ] && [ "$1" != -- ]; do
@@ -110,7 +111,10 @@ gk3_fail() {
         out="$out ${kv%%=*}=$(gk3__enc "${kv#*=}")"
     done
     [ "${1:-}" = -- ] && shift
-    case " ${FUNCNAME[*]} " in *" gk3_apply "*|*" gk3_shrink "*) out="$out touched=${GK3__TOUCHED:-no}" ;; esac
+    case "$out " in
+        *" touched="*) ;;
+        *) case " ${FUNCNAME[*]} " in *" gk3_apply "*|*" gk3_shrink "*) out="$out touched=${GK3__TOUCHED:-no}" ;; esac ;;
+    esac
     echo "$out" >&2
     gk3_die "$@"
 }
@@ -130,14 +134,16 @@ gk3__medium_disk() {
 
 # ── 探测 ────────────────────────────────────────────────────────────────────
 # 输出：
-#   DISK path=/dev/nvme0n1 size_mib=488386 model=... removable=0 tran=nvme|usb medium=no|yes
+#   DISK path=/dev/nvme0n1 size_mib=488386 model=... removable=0 tran=nvme|usb medium=no|yes table=gpt|mbr|unreadable|unknown
+#   （table=：gk3__read_table 的结论。mbr ⇒ 界面只给整盘清空；unreadable ⇒ 这块盘不给选，后面不跟 PART / FREE，
+#     stderr 上另有 `ERR code=disk-unreadable disk=… touched=no` + `!!`，gk3_probe 最后返回 1 —— 别的盘照常列出）
 #   PART path=/dev/nvme0n1p1 num=1 start=2048 end=616447 size_mib=300 \
 #        type=<GUID> name=esp fs=vfat fslabel=... os=windows|linux|android| medium=no|yes
 #   （PART 的 medium=yes：安装器就是从这个分区跑起来的 —— 挂在 /media/gk3 的那个）
 #   FREE disk=/dev/nvme0n1 start=616448 end=… size_mib=…
 #   （model / name / fslabel 已百分号编码）
 gk3_probe() {
-    local d
+    local d rc=0
     for d in /sys/block/*; do
         local name; name=$(basename "$d")
         # ⚠️ 正常情况下跳过 loop —— 没人往 loop 设备装系统。但测试需要它，
@@ -164,26 +170,94 @@ gk3_probe() {
         # medium=yes：安装器就是从这块盘启动的。gk3_apply 的安全闸 1 会拒绝整盘清空它；
         # 界面应当【一开始】就把它标出来，而不是等用户选完、确认完再报错。
         [ "/dev/$name" = "$(gk3__medium_disk)" ] && medium=yes
-        echo "DISK path=/dev/$name size_mib=$size_mib model=$(gk3__enc "${model:-?}") removable=$removable tran=${tran:-?} medium=$medium"
-        gk3__probe_parts "/dev/$name" "$sectors"
+        gk3__read_table "/dev/$name"
+        echo "DISK path=/dev/$name size_mib=$size_mib model=$(gk3__enc "${model:-?}") removable=$removable tran=${tran:-?} medium=$medium table=$GK3__PT"
+        gk3__probe_parts "/dev/$name" "$sectors" have-table || rc=1
     done
+    return $rc
+}
+
+# ── 分区表是什么、读不读得出来（docs/installer-rust-design.md §3.2 的 S1 / S2，2026-10-06 修）─────────
+# gk3__read_table <盘>：跑一次 sgdisk -p，结论放进全局变量（不用 $(…)：调用方还要用 sgdisk 的输出）——
+#   GK3__PT     = gpt | mbr | unreadable | unknown（没有 sgdisk）
+#   GK3__PT_P   = sgdisk -p 的 stdout
+#   GK3__PT_WHY = unreadable 的原因（给人看的，只进 `!!`）
+# 判据（gdisk 1.0.10 / util-linux 2.41.5，2026-10-06 在 test-env 容器里对各种盘实录，原文见设计稿 §3.2）：
+#   ★ unreadable：sgdisk 退出码非零（打不开：rc=2 "Problem opening … for reading!"）；或者 stderr 上有读错误
+#     （"Warning! Read error 5; strange behavior now likely!" / "Error 5 reading partition table for CRC check!"）；
+#     或者 stdout 里没有 "First usable sector is N, last usable sector is M"。
+#     ⚠️★ 整块盘读都 EIO 时（dm-error 实测）sgdisk 的退出码是【0】，stdout 是一张 "Creating new GPT entries in memory."
+#       的空表 —— 只看退出码 / 只看 stdout 都会把它当成一块空盘（S1 原来的样子：整块盘报成空闲区）。读错误只在 stderr 上。
+#     只在 stderr 里找读错误：stdout 里有分区名，名字叫 "read error" 的分区不该把整块盘判成读不出。
+#   ★ mbr：blkid -p 说 PTTYPE=dos，或者 sgdisk 在行首说 "Found invalid GPT and valid MBR; converting MBR to GPT format"
+#     （这句在 stdout 上）。原来的判据找 "MBR only" —— gdisk 1.0.10 从来不这么说，于是 MBR 检查从不触发（S2）。
+#     两样都认：blkid 是独立于 sgdisk 的一份判断；sgdisk 那句说的是它此刻手里拿的已经不是盘上那张表了。
+#     混合 MBR（sgdisk -h）与坏了主 GPT 头的盘：blkid 说 gpt、sgdisk 照 GPT 读 ⇒ 不算 MBR。只剩保护性 MBR 的盘：
+#     blkid 说 PMBR、sgdisk 当空盘 ⇒ 也不算（没有可丢的布局）。
+#   unreadable 优先于 mbr：读不出来的盘上，"它是 MBR"这个结论也不可信。
+gk3__read_table() {
+    local disk=$1 ef err rc
+    GK3__PT_P=""; GK3__PT_WHY=""
+    command -v sgdisk >/dev/null || { GK3__PT=unknown; GK3__PT_WHY="缺 sgdisk"; return 0; }
+    ef=$(mktemp)
+    GK3__PT_P=$(sgdisk -p "$disk" 2>"$ef" </dev/null); rc=$?
+    err=$(cat "$ef"); rm -f "$ef"
+    if [ "$rc" != 0 ]; then
+        GK3__PT=unreadable; GK3__PT_WHY="sgdisk -p 退出码 ${rc}：$(printf '%s\n' "$err" | head -1)"
+    elif printf '%s\n' "$err" | grep -Eqi 'read error|error [0-9]+ reading'; then
+        GK3__PT=unreadable; GK3__PT_WHY="读盘出错：$(printf '%s\n' "$err" | grep -Ei -m1 'read error|error [0-9]+ reading')"
+    elif ! printf '%s\n' "$GK3__PT_P" | grep -Eq '^First usable sector is [0-9]+, last usable sector is [0-9]+'; then
+        GK3__PT=unreadable; GK3__PT_WHY="sgdisk -p 的输出里没有可用扇区的范围"
+    elif [ "$(blkid -p -o value -s PTTYPE "$disk" 2>/dev/null </dev/null)" = dos ] \
+         || printf '%s\n%s\n' "$GK3__PT_P" "$err" | grep -q '^Found invalid GPT and valid MBR; converting MBR to GPT format'; then
+        GK3__PT=mbr
+    else
+        GK3__PT=gpt
+    fi
+    return 0
+}
+
+# gk3__table_guard <盘> [mbr-ok]：写盘入口在动盘之前调。读不出 ⇒ ERR disk-unreadable；MBR ⇒ ERR mbr-disk
+#   （整盘清空本来就要抹掉分区表，传 mbr-ok）。两种都带 touched=no：这一步之前什么都没写。
+#   ★ MBR 盘上为什么必须在【入口】拦（2026-10-06 容器实录，gdisk 1.0.10）：sgdisk 读 MBR 盘时在内存里转成 GPT，
+#     写的时候不带 -g 就拒绝保存 —— `sgdisk -d / -n / -t / -c` 一律 rc=3 "Non-GPT disk; not saving changes. Use -g to override."，
+#     盘上的 MBR 不变（带 -g 才真的转成 GPT）。所以不拦的话不是"静默转表"，而是写表那一步【必然失败】，而失败之前的步骤已经做了：
+#     格式化先跑了 mkfs、缩分区先缩了文件系统、apply 已经标了 touched=yes —— 报出来的是 part-type / gpt-rewrite / cmd-failed
+#     （"盘可能写了一半"），不是"这是 MBR 盘"。整盘清空的 `sgdisk --zap-all` 在 MBR 盘上照常成功（rc 0，之后 PTTYPE 为空）。
+#   没有 sgdisk（unknown）不在这里拦：各入口自己的工具检查会报 tool-missing。
+gk3__table_guard() {
+    gk3__read_table "$1"
+    case "$GK3__PT" in
+        unreadable)
+            gk3_fail disk-unreadable "disk=$1" touched=no -- "读不出 $1 的分区表（${GK3__PT_WHY}）—— 不动它（盘没动过）"; return 1 ;;
+        mbr)
+            [ "${2:-}" = mbr-ok ] && return 0
+            gk3_fail mbr-disk "disk=$1" touched=no -- "$1 是 MBR 分区表：我们只改 GPT 分区表（转成 GPT 会丢掉现有布局，sgdisk 不带 -g 也拒绝写）—— 不动它。要用这块盘只能整盘清空（盘没动过）"; return 1 ;;
+    esac
+    return 0
 }
 
 # ⚠️ 用 sgdisk 而不是 lsblk：我们要的是【分区表层面】的起止扇区和类型 GUID，
 #    而且要能算出空闲区间 —— lsblk 不报空闲区间。
+#   gk3__probe_parts <盘> <总扇区> [have-table]   have-table：调用方刚对这块盘跑过 gk3__read_table，不再读一遍
+# ⚠️★ S1（2026-10-06 修）：原来 sgdisk -p 读失败时可用区间落到默认值（2048 / 总扇区−2048）、表行为空，
+#   于是【整块盘报成一段空闲】—— 界面会把一块有数据、只是读不出的盘当空盘给人选。现在读不出就明确报错、不报空闲。
+#   （总扇区这个参数因此不再用到，留着是为了调用方不用改）
 gk3__probe_parts() {
-    local disk=$1 total_sectors=$2
-    command -v sgdisk >/dev/null || { gk3_log "缺 sgdisk，跳过 $disk 的分区探测"; return 0; }
+    local disk=$1
+    [ "${3:-}" = have-table ] || gk3__read_table "$disk"
+    case "$GK3__PT" in
+        unknown) gk3_log "缺 sgdisk，跳过 $disk 的分区探测"; return 0 ;;
+        unreadable) gk3_fail disk-unreadable "disk=$disk" touched=no -- "读不出 $disk 的分区表（${GK3__PT_WHY}）—— 不列它的分区与空闲区"; return 1 ;;
+    esac
 
     local first_usable last_usable
-    first_usable=$(sgdisk -p "$disk" 2>/dev/null | sed -n 's/^First usable sector is \([0-9]*\).*/\1/p')
-    last_usable=$(sgdisk -p "$disk" 2>/dev/null | sed -n 's/.*last usable sector is \([0-9]*\).*/\1/p')
-    [ -n "$first_usable" ] || first_usable=2048
-    [ -n "$last_usable" ] || last_usable=$(( total_sectors - 2048 ))
+    first_usable=$(printf '%s\n' "$GK3__PT_P" | sed -n 's/^First usable sector is \([0-9]*\).*/\1/p')
+    last_usable=$(printf '%s\n' "$GK3__PT_P" | sed -n 's/.*last usable sector is \([0-9]*\).*/\1/p')
 
     # 收集分区，按起始扇区排序
     local tmp; tmp=$(mktemp)
-    sgdisk -p "$disk" 2>/dev/null | awk '/^ *[0-9]+ /{print $1" "$2" "$3}' | sort -k2 -n > "$tmp"
+    printf '%s\n' "$GK3__PT_P" | awk '/^ *[0-9]+ /{print $1" "$2" "$3}' | sort -k2 -n > "$tmp"
 
     local cursor=$first_usable num start end medium_part
     medium_part=$(findmnt -no SOURCE /media/gk3 2>/dev/null || echo "")
@@ -410,6 +484,22 @@ gk3_plan() {
         esac
     done
     [ -n "$disk" ] || { echo "PLANERR msg=no-disk"; return 1; }
+
+    # ⚠️★ ⑤ MBR 盘。我们只会写 GPT；MBR 盘上的写表一定失败、而且失败在别的步骤已经动了盘之后（gk3__table_guard 的注释；
+    #   这里原来写的"sgdisk 会把 MBR 盘静默转成 GPT"不对：不带 -g 它拒绝写，2026-10-06 实录）。
+    #   老 Windows 装机大多是 MBR，所以这不是理论风险。整盘清空不拦（本来就要抹掉分区表 —— 这是 MBR 盘唯一能走的路）。
+    #   ⚠️ 2026-10-06 之前这里找的是 "MBR only"，gdisk 1.0.10 从来不输出它 ⇒ 这道检查从没触发过（设计稿 S2），
+    #   MBR 盘照样算出双系统方案；判据见 gk3__read_table。也挪到了重新安装的分支之前（原来重新安装绕过它）。
+    #   读不出的盘（unreadable）这里不拦：方案是纯计算（自测拿不存在的 /dev/nvme0n1 算），读不出由 gk3_probe 报、
+    #   由 gk3_apply 在动盘前拦（gk3__table_guard）。
+    if [ "$mode" != wipe ]; then
+        gk3__read_table "$disk"
+        if [ "$GK3__PT" = mbr ]; then
+            echo "PLANERR msg=mbr-disk"
+            return 1
+        fi
+    fi
+
     if [ "$mode" = reinstall ]; then
         gk3__plan_reinstall "$disk" "$rescue" "$keep" "$esp"; return $?
     fi
@@ -432,15 +522,6 @@ gk3_plan() {
         done
         if [ -n "$dup" ]; then
             echo "PLANERR msg=partlabel-conflict names=$(echo $dup | tr " " ",")"
-            return 1
-        fi
-    fi
-
-    # ⚠️★ ⑤ MBR 盘。sgdisk 会把 MBR 盘【静默转成 GPT】，原布局当场没了。
-    #   老 Windows 装机大多是 MBR，所以这不是理论风险。
-    if command -v sgdisk >/dev/null; then
-        if sgdisk -p "$disk" 2>&1 | grep -qi "MBR only"; then
-            echo "PLANERR msg=mbr-disk"
             return 1
         fi
     fi
@@ -805,6 +886,11 @@ gk3_apply() {
     case "$super_src" in *.zst) command -v zstd >/dev/null || { gk3_fail tool-missing tool=zstd -- "缺工具：zstd"; return 1; } ;; esac
     local misc_tool
     misc_tool=$(gk3__misc_tool) || { gk3_fail tool-missing tool=gk3-misc -- "缺工具：gk3-misc（live 镜像自带；从仓库跑命令行版时要能用 cc 现编 tools/gk3boot/misc/gk3-misc.c）"; return 1; }
+
+    # ★ 目标盘的分区表：读不出 ⇒ disk-unreadable；MBR ⇒ mbr-disk（整盘清空除外）。都在动盘之前、在 ESP 检查之前 ——
+    #   2026-10-06 之前 MBR 盘上的双系统是被 ESP 检查【碰巧】挡住的（MBR 分区的类型不是 EFI System ⇒ esp-not-esp-type），
+    #   用户看到的是"ESP 类型不对"而不是"这是 MBR 盘"；哪天 ESP 检查放宽，就会真的把 MBR 盘写成 GPT（设计稿 S2）
+    gk3__table_guard "$disk" "$([ "$mode" = wipe ] && echo mbr-ok)" || return 1
 
     # ★ 完整性也在动盘之前验。下载断在一半的 super.img.zst 能通过上面所有检查，
     #   要到流式写盘写到一半才暴露 —— 那时分区表已经改了。有发版的校验清单
@@ -1667,6 +1753,9 @@ gk3_shrink() {
     if [ ! -b "$disk" ] || [ -z "$num" ]; then
         gk3_fail part-unknown "part=$part" -- "认不出 $part 属于哪块盘的第几个分区"; return 1
     fi
+    # MBR 盘：下面的 sgdisk -d / -n 一定失败（不带 -g 不写 MBR 盘）—— 而那时文件系统已经缩了；读不出的盘不动（设计稿 S1 / S2）。
+    # 所以在缩文件系统之前拦
+    gk3__table_guard "$disk" || return 1
 
     # ★ 保住身份：PARTUUID（Windows BCD 靠它）、PARTLABEL、类型 GUID
     pu=$(sgdisk -i "$num" "$disk" 2>/dev/null | grep '^Partition unique GUID:' | awk '{print $4}')
@@ -2254,6 +2343,9 @@ gk3__edit_guard() {    # $1=分区 → 设 GK3_E_DISK / GK3_E_NUM
     GK3_E_DISK=/dev/$(lsblk -no PKNAME "$part" 2>/dev/null | head -1)
     GK3_E_NUM=$(cat "/sys/class/block/$(basename "$part")/partition" 2>/dev/null)
     [ -b "$GK3_E_DISK" ] && [ -n "$GK3_E_NUM" ] || { gk3_fail part-unknown "part=$part" -- "认不出 $part 属于哪块盘的第几个分区"; return 1; }
+    # MBR 盘：删 / 改类型码 / 重建分区项都是 sgdisk 写表，一定失败（格式化是先 mkfs 再改类型码 —— 数据已经没了才报错）；
+    # 读不出的盘不动（设计稿 S1 / S2）
+    gk3__table_guard "$GK3_E_DISK"
 }
 
 # 分区的 GPT 属性位（16 位十六进制）。重建分区项时要原样带过去 —— Windows 恢复分区靠它们
@@ -2363,6 +2455,7 @@ gk3_part_create() {
     done
     [ -b "$disk" ] && [ -n "$start" ] && [ -n "$mib" ] || { gk3_fail usage -- "create 要 --disk --start --size-mib"; return 1; }
     case "$fs" in ext4|vfat|ntfs|none) ;; *) gk3_fail fs-unsupported "fs=$fs" -- "不支持的文件系统：$fs"; return 1 ;; esac
+    gk3__table_guard "$disk" || return 1      # 同 gk3__edit_guard
     # 起点对齐到 1 MiB；整段必须落在【某一段】空闲区里 —— 空闲区用 gk3_probe 同一套算法算，不另写一份
     local st=$(( (start + 2047) / 2048 * 2048 )) en ok="" line a b
     en=$(( st + mib * 2048 - 1 ))

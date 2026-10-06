@@ -6,6 +6,8 @@
 //!
 //! 实测的输出样本（2026-10-06，test-env 容器里的 gdisk 1.0.10）见本文件末尾的测试。
 
+use crate::exec::{Cmd, Status};
+use crate::host::Host;
 use crate::sh;
 
 /// `sgdisk -p <盘>` 里我们用到的东西
@@ -149,6 +151,124 @@ pub fn parse_info(out: &[u8]) -> Info {
     Info { type_guid: join_subst(guids), name: join_subst(names), first: join_subst(firsts), last: join_subst(lasts) }
 }
 
+/// 分区表是什么、读不读得出来（installer-lib.sh `gk3__read_table`；设计稿 §3.2 的 S1 / S2，2026-10-06 修）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Gpt,
+    /// 我们只写 GPT；sgdisk 不带 -g 拒绝写 MBR 盘（rc 3）⇒ 只有整盘清空能走
+    Mbr,
+    /// 读不出：不列分区与空闲区、不往上写
+    Unreadable,
+    /// 没有 sgdisk
+    Unknown,
+}
+
+impl Kind {
+    /// 协议里的写法（DISK 记录的 `table=`）
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Gpt => "gpt",
+            Kind::Mbr => "mbr",
+            Kind::Unreadable => "unreadable",
+            Kind::Unknown => "unknown",
+        }
+    }
+}
+
+/// 读一次分区表的结果
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Table {
+    pub kind: Kind,
+    /// `sgdisk -p` 的 stdout（经 `$(…)`）
+    pub print: Vec<u8>,
+    /// [`Kind::Unreadable`] 的原因（给人看的，只进 `!!`）
+    pub why: String,
+}
+
+/// sgdisk 在 stderr 上报读错误的两种说法（gdisk 1.0.10 实录）："Warning! Read error 5; strange behavior now likely!"
+/// 与 "Warning! Error 5 reading partition table for CRC check!"。shell 版：`grep -Eqi 'read error|error [0-9]+ reading'`（逐行）
+fn read_error_line(stderr: &[u8]) -> Option<&[u8]> {
+    sh::lines(stderr).into_iter().find(|line| {
+        let l = line.to_ascii_lowercase();
+        if sh::find(&l, b"read error").is_some() {
+            return true;
+        }
+        // error [0-9]+ reading：每一处 "error " 后面跟一串数字、再跟 " reading"
+        let mut from = 0usize;
+        while let Some(i) = l.get(from..).and_then(|rest| sh::find(rest, b"error ")) {
+            let after = l.get(from + i + 6..).unwrap_or(&[]);
+            let nd = after.iter().take_while(|c| c.is_ascii_digit()).count();
+            if nd > 0 && after.get(nd..).is_some_and(|r| r.starts_with(b" reading")) {
+                return true;
+            }
+            from += i + 1;
+        }
+        false
+    })
+}
+
+/// `grep -Eq '^First usable sector is [0-9]+, last usable sector is [0-9]+'`
+fn has_usable_range(print: &[u8]) -> bool {
+    sh::lines(print).into_iter().any(|line| {
+        let Some(rest) = line.strip_prefix(b"First usable sector is ".as_slice()) else { return false };
+        let nd = rest.iter().take_while(|c| c.is_ascii_digit()).count();
+        let Some(rest) = rest.get(nd..).and_then(|r| r.strip_prefix(b", last usable sector is ".as_slice())) else { return false };
+        nd > 0 && rest.first().is_some_and(u8::is_ascii_digit)
+    })
+}
+
+/// sgdisk 说它要把 MBR 在内存里转成 GPT 的那句（stdout 上、行首；shell 版对 stdout 与 stderr 一起 grep）
+const MBR_BANNER: &[u8] = b"Found invalid GPT and valid MBR; converting MBR to GPT format";
+
+/// 判据的纯函数部分（与 `gk3__read_table` 的 if / elif 同序）。`exit` = sgdisk 的退出码（起不来 / 超时 / 被杀 ⇒ None）；
+/// `pttype` 是惰性的：前面几条已经定了就不去问 blkid（shell 版的 elif 也不会跑它）
+pub fn classify(exit: Option<i32>, print: &[u8], stderr: &[u8], pttype: impl FnOnce() -> Vec<u8>) -> (Kind, String) {
+    match exit {
+        Some(0) => {}
+        Some(c) => {
+            let first = sh::lines(stderr).first().map(|l| String::from_utf8_lossy(l).into_owned()).unwrap_or_default();
+            return (Kind::Unreadable, format!("sgdisk -p 退出码 {c}：{first}"));
+        }
+        None => return (Kind::Unreadable, "sgdisk -p 没有正常结束（起不来 / 超时 / 被信号杀）".into()),
+    }
+    if let Some(l) = read_error_line(stderr) {
+        return (Kind::Unreadable, format!("读盘出错：{}", String::from_utf8_lossy(l)));
+    }
+    if !has_usable_range(print) {
+        return (Kind::Unreadable, "sgdisk -p 的输出里没有可用扇区的范围".into());
+    }
+    let banner = sh::lines(print).into_iter().chain(sh::lines(stderr)).any(|l| l.starts_with(MBR_BANNER));
+    if pttype() == b"dos" || banner {
+        return (Kind::Mbr, String::new());
+    }
+    (Kind::Gpt, String::new())
+}
+
+/// installer-lib.sh `gk3__read_table`：跑一次 `sgdisk -p`，必要时问 `blkid -p -o value -s PTTYPE`。
+/// ★ 这里的失败【不】进 Diag：读不出是结论本身（Kind::Unreadable），由调用方明确报出去（S1 之前是静默按空盘算）
+pub fn read_table(host: &dyn Host, disk: &str) -> Table {
+    if host.which("sgdisk").is_none() {
+        return Table { kind: Kind::Unknown, print: Vec::new(), why: "缺 sgdisk".into() };
+    }
+    let (exit, print, stderr) = match host.run(&Cmd::new("sgdisk").arg("-p").arg(disk)) {
+        Ok(o) => {
+            let exit = match o.status {
+                Status::Exited(c) if !o.truncated => Some(c),
+                _ => None,
+            };
+            (exit, sh::subst(o.stdout), o.stderr)
+        }
+        Err(_) => (None, Vec::new(), Vec::new()),
+    };
+    let pttype = || match host.run(&Cmd::new("blkid").args(["-p", "-o", "value", "-s", "PTTYPE"]).arg(disk)) {
+        // `$(blkid … 2>/dev/null)`：退出码不看（没有分区表时是 2），blkid 起不来 ⇒ 空串
+        Ok(o) => sh::subst(o.stdout),
+        Err(_) => Vec::new(),
+    };
+    let (kind, why) = classify(exit, &print, &stderr, pttype);
+    Table { kind, print, why }
+}
+
 /// installer-lib.sh:249-255 `gk3_partpath`：盘名以数字结尾（nvme0n1、loop0）⇒ 加 p
 pub fn partpath(disk: &str, num: &str) -> String {
     if disk.as_bytes().last().is_some_and(u8::is_ascii_digit) {
@@ -223,6 +343,57 @@ Partition name: 'EFI system partition'
         let s = sorted_by_start(&[r("3", "100000"), r("1", "34"), r("2", "2048"), r("4", "x")]);
         let nums: Vec<_> = s.iter().map(|r| String::from_utf8(r.num.clone()).unwrap()).collect();
         assert_eq!(nums, ["4", "1", "2", "3"]); // "x" 按 0
+    }
+
+    /// 2026-10-06 test-env 容器实录（gdisk 1.0.10、util-linux 2.41.5），每种盘：(退出码, stdout, stderr, blkid PTTYPE) → 结论
+    #[test]
+    fn classify_recorded_disks() {
+        let usable = "First usable sector is 34, last usable sector is 6291422\n";
+        let mbr_banner = "\n***\nFound invalid GPT and valid MBR; converting MBR to GPT format\nin memory. \n***\n\n";
+        let c =
+            |exit: Option<i32>, out: &str, err: &str, pt: &str| classify(exit, out.as_bytes(), err.as_bytes(), || pt.as_bytes().to_vec()).0;
+        // sfdisk 建的 dos 盘（有分区 / 空表）：横幅在 stdout，blkid 说 dos
+        assert_eq!(c(Some(0), &format!("{mbr_banner}{usable}"), "", "dos"), Kind::Mbr);
+        // 两样里只有一样也算
+        assert_eq!(c(Some(0), &format!("{mbr_banner}{usable}"), "", ""), Kind::Mbr);
+        assert_eq!(c(Some(0), usable, "", "dos"), Kind::Mbr);
+        // GPT、混合 MBR（sgdisk -h）、坏了主 GPT 头（stderr 一堆 Caution / Warning，但没有读错误）：gpt
+        assert_eq!(c(Some(0), usable, "", "gpt"), Kind::Gpt);
+        let bad_main = "Caution: invalid main GPT header, but valid backup; regenerating main header\nfrom backup!\n\nWarning: Invalid CRC on main header data; loaded backup partition table.\nWarning! One or more CRCs don't match. You should repair the disk!\n";
+        assert_eq!(c(Some(0), usable, bad_main, "gpt"), Kind::Gpt);
+        // 没有分区表 / 只剩保护性 MBR：sgdisk 在内存里建空表，blkid 退出码 2 / PMBR
+        let blank = format!("Creating new GPT entries in memory.\n{usable}");
+        assert_eq!(c(Some(0), &blank, "", ""), Kind::Gpt);
+        assert_eq!(c(Some(0), &blank, "", "PMBR"), Kind::Gpt);
+        // 读不出：打不开（rc 2）、整块 EIO（rc 0 + 空表 + stderr 读错误）、备份 GPT 读不到、起不来
+        assert_eq!(c(Some(2), "", "Problem opening /dev/x for reading! Error is 2.\n", ""), Kind::Unreadable);
+        assert_eq!(c(Some(0), &blank, "Warning! Read error 5; strange behavior now likely!\n", ""), Kind::Unreadable);
+        assert_eq!(c(Some(0), usable, "Warning! Error 5 reading partition table for CRC check!\n", "gpt"), Kind::Unreadable);
+        assert_eq!(c(None, "", "", "gpt"), Kind::Unreadable);
+        assert_eq!(c(Some(0), "", "", "gpt"), Kind::Unreadable);
+        // unreadable 优先于 mbr；"error 5x reading" / "error  reading" 不是读错误的说法
+        assert_eq!(c(Some(0), mbr_banner, "", "dos"), Kind::Unreadable);
+        assert_eq!(c(Some(0), usable, "error 5x reading\nerror  reading\n", "gpt"), Kind::Gpt);
+        // 横幅要在行首（分区名里出现这句话不算）
+        assert_eq!(
+            c(
+                Some(0),
+                &format!("{usable}   1  2048  4095  1 MiB  8300  Found invalid GPT and valid MBR; converting MBR to GPT format\n"),
+                "",
+                "gpt"
+            ),
+            Kind::Gpt
+        );
+    }
+
+    #[test]
+    fn classify_does_not_ask_blkid_when_already_decided() {
+        let asked = std::cell::Cell::new(false);
+        let (k, _) = classify(Some(2), b"", b"", || {
+            asked.set(true);
+            Vec::new()
+        });
+        assert_eq!((k, asked.get()), (Kind::Unreadable, false));
     }
 
     #[test]

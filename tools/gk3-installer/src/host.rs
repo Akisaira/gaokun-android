@@ -74,25 +74,6 @@ pub fn capture(host: &dyn Host, cmd: &Cmd, accept: &[i32], diag: &mut Diag) -> V
     }
 }
 
-/// 同上，但 stdout 与 stderr 合在一起（shell 版的 `2>&1`）。⚠️ 两条流的交错顺序丢了 —— 只给"有没有某个子串"用
-pub fn capture_both(host: &dyn Host, cmd: &Cmd, accept: &[i32], diag: &mut Diag) -> Vec<u8> {
-    match host.run(cmd) {
-        Ok(o) => {
-            let ok = matches!(o.status, Status::Exited(c) if accept.contains(&c)) && !o.truncated;
-            if !ok {
-                diag.note(ExecError::Status(Box::new(o.clone())).to_string());
-            }
-            let mut v = o.stdout;
-            v.extend_from_slice(&o.stderr);
-            v
-        }
-        Err(e) => {
-            diag.note(e.to_string());
-            Vec::new()
-        }
-    }
-}
-
 /// `$(cat <path> 2>/dev/null)`：读不到 ⇒ None（调用方决定 `|| echo 0` 之类的默认值）
 pub fn cat(host: &dyn Host, p: &str) -> Option<Vec<u8>> {
     host.read(p).ok().map(sh::subst)
@@ -252,6 +233,11 @@ pub mod fake {
         }
         pub fn cmd(mut self, argv: &str, code: i32, out: &str) -> Self {
             self.cmds.insert(argv.to_string(), (code, out.as_bytes().to_vec(), Vec::new()));
+            self
+        }
+        /// 同 [`FakeHost::cmd`]，另给 stderr（sgdisk 的读错误、MBR 提示都在 stderr / stdout 的哪一边是要紧的）
+        pub fn cmd_err(mut self, argv: &str, code: i32, out: &str, err: &str) -> Self {
+            self.cmds.insert(argv.to_string(), (code, out.as_bytes().to_vec(), err.as_bytes().to_vec()));
             self
         }
         pub fn block(mut self, p: &str) -> Self {

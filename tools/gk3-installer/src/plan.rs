@@ -10,7 +10,7 @@ use std::io;
 
 use crate::exec::Cmd;
 use crate::gpt;
-use crate::host::{capture, capture_both, Diag, Host};
+use crate::host::{capture, Diag, Host};
 use crate::protocol::{Out, Record};
 use crate::sh;
 
@@ -80,6 +80,14 @@ pub fn plan(host: &dyn Host, args: &[String], out: &mut Out, diag: &mut Diag) ->
     if a.disk.is_empty() {
         return planerr(out, "no-disk", &[]);
     }
+    // ⑤ MBR 盘（installer-lib.sh gk3_plan 的 ⑤；S2，2026-10-06 两边一起修）：写表一定失败，而且失败在别的步骤动过盘之后
+    //   （installer-lib.sh gk3__table_guard 的注释）。
+    //   整盘清空不拦（本来就要抹掉分区表）；在重新安装的分支之前（原来重新安装绕过了它）。
+    //   原来的判据找 "MBR only"，gdisk 1.0.10 从不输出它 ⇒ 从没触发过；判据见 gpt::classify。
+    //   读不出（Unreadable）这里不拦：方案是纯计算，读不出由 gk3_probe 报、由 gk3_apply 在动盘前拦
+    if a.mode != "wipe" && gpt::read_table(host, &a.disk).kind == gpt::Kind::Mbr {
+        return planerr(out, "mbr-disk", &[]);
+    }
     if a.mode == "reinstall" {
         return plan_reinstall(host, &a, out, diag);
     }
@@ -106,18 +114,6 @@ pub fn plan(host: &dyn Host, args: &[String], out: &mut Out, diag: &mut Diag) ->
             return planerr(out, "partlabel-conflict", &[("names", sh::join_words_comma(&dup))]);
         }
     }
-    // ⑤ MBR 盘（installer-lib.sh:439-446）。
-    // ⚠️★ 这道检查在 shell 版里【从来不会触发】：gdisk 1.0.10 的 `sgdisk -p` 对 MBR 盘说的是
-    //   "Found invalid GPT and valid MBR; converting MBR to GPT format in memory."，没有 "MBR only"
-    //   （2026-10-06 在 test-env 容器里对 sfdisk 建的 dos 盘实测，设计稿 §6.1）。兼容阶段照搬（对拍要相同），
-    //   修法写在设计稿的偏差表 S2 —— 要用户点头才改，因为 shell 版要一起改。
-    if has_sgdisk {
-        let both = capture_both(host, &Cmd::new("sgdisk").arg("-p").arg(a.disk.clone()), &[0], diag);
-        if sh::find(&both.to_ascii_lowercase(), b"mbr only").is_some() {
-            return planerr(out, "mbr-disk", &[]);
-        }
-    }
-
     let (cur, last, last_raw);
     if a.mode == "wipe" {
         // total_mib=${GK3_FAKE_DISK_MIB:-} —— 命令行的 --disk-size-mib 写的就是这个全局变量
@@ -482,18 +478,55 @@ mod tests {
         assert_eq!(o, "PLANERR msg=reinstall-needs-esp\n");
     }
 
+    /// gdisk 1.0.10 对 sfdisk 建的 dos 盘的 `sgdisk -p`（2026-10-06 test-env 容器实录；那句提示在 stdout 上）
+    const P_MBR: &str = "
+***************************************************************
+Found invalid GPT and valid MBR; converting MBR to GPT format
+in memory. 
+***************************************************************
+
+Disk /dev/x: 62914560 sectors, 30.0 GiB
+First usable sector is 34, last usable sector is 62914526
+
+Number  Start (sector)    End (sector)  Size       Code  Name
+   1            2048          206847   100.0 MiB   0700  Microsoft basic data
+";
+
     #[test]
-    fn mbr_guard_is_bug_compatible() {
-        // gdisk 1.0.10 对 MBR 盘的真实输出：不含 "MBR only" ⇒ shell 版的检查不触发，这里也不触发（偏差表 S2）
-        let h = FakeHost::default().tool("sgdisk").cmd(
-            "sgdisk -p /dev/x",
-            0,
-            "Found invalid GPT and valid MBR; converting MBR to GPT format\nin memory. \nFirst usable sector is 34, last usable sector is 4194270\n",
-        );
+    fn mbr_disk_refused_except_wipe() {
+        // S2（2026-10-06 修）：原来找 "MBR only"、从不触发。现在 blkid 说 dos 或者 sgdisk 说要转换 ⇒ mbr-disk
+        let h = FakeHost::default().tool("sgdisk").cmd("sgdisk -p /dev/x", 0, P_MBR).cmd("blkid -p -o value -s PTTYPE /dev/x", 0, "dos\n");
+        let along = ["--disk", "/dev/x", "--mode", "alongside", "--region-start", "206848", "--region-end", "62914526", "--esp", "/dev/x1"];
+        assert_eq!(run(&h, &along), (1, "PLANERR msg=mbr-disk\n".to_string()));
+        // 重新安装原来在这道检查之前就分岔走了
+        assert_eq!(run(&h, &["--disk", "/dev/x", "--mode", "reinstall", "--esp", "/dev/x1"]), (1, "PLANERR msg=mbr-disk\n".to_string()));
+        // 整盘清空是 MBR 盘唯一能走的路：照常出方案，而且不去读盘
         let (rc, o) = run(&h, &["--disk", "/dev/x", "--mode", "wipe", "--disk-size-mib", "40960"]);
         assert_eq!(rc, 0, "{o}");
-        let h = FakeHost::default().tool("sgdisk").cmd("sgdisk -p /dev/x", 0, "  MBR: MBR only\n");
-        let (rc, o) = run(&h, &["--disk", "/dev/x", "--mode", "wipe", "--disk-size-mib", "40960"]);
-        assert_eq!((rc, o.as_str()), (1, "PLANERR msg=mbr-disk\n"));
+        // 只有 blkid 认出来（sgdisk 换了措辞）、只有 sgdisk 那句（没有 blkid）：都算
+        let mut only_blkid = h;
+        only_blkid
+            .cmds
+            .insert("sgdisk -p /dev/x".into(), (0, b"First usable sector is 34, last usable sector is 62914526\n".to_vec(), vec![]));
+        assert_eq!(run(&only_blkid, &along).1, "PLANERR msg=mbr-disk\n");
+        let only_banner = FakeHost::default().tool("sgdisk").cmd("sgdisk -p /dev/x", 0, P_MBR);
+        assert_eq!(run(&only_banner, &along).1, "PLANERR msg=mbr-disk\n");
+        // 原来的判据那句 "MBR only" 不再有意义：GPT 盘上照常出方案
+        let gpt = FakeHost::default()
+            .tool("sgdisk")
+            .cmd("sgdisk -p /dev/x", 0, "  MBR: MBR only\nFirst usable sector is 34, last usable sector is 62914526\n")
+            .cmd("blkid -p -o value -s PTTYPE /dev/x", 0, "gpt\n");
+        assert_eq!(run(&gpt, &along).0, 0);
+    }
+
+    #[test]
+    fn unreadable_disk_is_not_planned_against_but_not_refused_here() {
+        // 读不出的盘：方案照算（纯计算 —— 自测拿不存在的盘算），由 gk3_apply 的 gk3__table_guard 在动盘前拦
+        let h = FakeHost::default().tool("sgdisk");
+        let (rc, _) = run(
+            &h,
+            &["--disk", "/dev/x", "--mode", "alongside", "--region-start", "206848", "--region-end", "62914526", "--esp", "/dev/x1"],
+        );
+        assert_eq!(rc, 0);
     }
 }
