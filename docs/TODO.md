@@ -22,10 +22,10 @@ D1–D23 是 v1.0-plan §6 的决定，其余是 v1.0-plan 与本文件的条目
 
 **用户已定**：D1 发布版关 debuggable · D2 留 test-key 并披露 · D3 `/data` 不加密并披露 · D4 恢复出厂交给统一启动入口 · D6 保留 root ·
 D7 只发 GApps 版 · D10 fcitx5-android 从 GitHub 取（2026-10-06，已入构建）· D13 备份默认 Seedvault · D15 默认时区上海 ·
-D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）· **E10 真机恢复出厂不测**（2026-10-06）· D21 0050 移出发布内核（dev.9 起）·
+D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）· **D5 SELinux 切 enforcing**（2026-10-06，dev.10 起默认）· **E10 真机恢复出厂不测**（2026-10-06）· D21 0050 移出发布内核（dev.9 起）·
 其余按 v1.0-plan §6 的"建议"列执行（2026-10-04）。仓库已推送到 origin。
 
-**下一个构建（dev.10）要带上的**（已在 main、不在 dev.9 镜像里）：`b2c8c44` NET-4 稳定 MAC 的真正修法、`f2fd400` fcitx5-android APK。
+**下一个构建（dev.10）要带上的**（已在 main、不在 dev.9 镜像里）：`b2c8c44` NET-4 稳定 MAC 的真正修法、`f2fd400` fcitx5-android APK、**SELinux 默认 enforcing**（D5）。
 
 ### ① 发版阻断（v1.0-plan §2 的 B1–B7 与发版标准 G1–G11）
 
@@ -39,7 +39,7 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 | B6 · G3 | 设置里"清除所有数据"静默失效 | ◐ | 统一启动入口接管：1.0 镜像默认动作模式 + 分派开（`ca55b5c`），QEMU exec-wipe 过；**用户定 E10 不测** ⇒ 已知限制里"别指望设置里的清除数据"那段保持原样，推荐"图形安装器 → 重新安装 + 清除数据" | [`boot-entry-design.md`](boot-entry-design.md) E10；下文 A5 |
 | B7 · G7 / G8 | 用户默认配置下的待机与长稳没测过 | ⬜ | 批 4（用户在场、拔线）：`allow_suspend=1` 放 8 小时（前后读 `qcom_stats`、`charge_now`、`suspend_stats`）、亮屏硬解 1 小时、72 小时狗粮；先用 V14 验 `scripts/perf/standby.sh` 的输出格式 | v1.0-plan B7 |
 | G6 · OTA-2 | OTA 新槽起不来时自动回落 | ◐ | 入口的启动计数与自动回滚已真机过（E5 / E6 / E8）。⬜ **E11：0.7.x → 1.0 那一跳的迁移演练**（那次 OTA 由旧 HAL 执行） | archive [`#v1-batch01`](archive/TODO-history-2026-10.md#v1-batch01) dev.5 段 |
-| G9 · SEC-4 | SELinux：1.0 切 enforcing 还是披露 permissive | ⬜ 等 D5 | 第七轮已有一次真 enforcing 开机成功（09-30）。剩：enforcing 下拔线待机 + 回插、enforcing → enforcing OTA，然后用户定跟哪一版切（先发策略、再改 cmdline） | 下文 B1 |
+| G9 · SEC-4 | SELinux：1.0 切 enforcing | ◐ **用户 10-06 定：切** | ✅ dev.9 经 OneShot 真 enforcing 开机：普查只剩两类已知上游缺口；显示 / 触摸 / Wi-Fi / 传感器 / 音频 / iris 15/15 / 前后摄 / A 档 44 / s2idle 11/11（含 USB 角色切换与回插）全过（`out/sel-d5-*`）。BoardConfig 默认改 enforcing，dev.10 起。⬜ enforcing → enforcing OTA（dev.10 装机即是）；OTA-5 手工分区 ESP 名字不标准的机器 enforcing 下 OTA 失败（INSTALL 已写改名办法） | BoardConfig.mk 注释 |
 | G10 | 用户文档 | ◐ | README 中英、INSTALL 中英（`33faa9b`）、FAQ、known-limitations、1.0 发版说明草稿（`8ccdd35`）都有了。⬜ 定稿（V17）：草稿里十余处"⬜ 还没在真机上测过"逐条回填或删掉 | `docs/relnotes/v1.0.0-draft*.md` |
 | G11 | 回归清单与安装器一致性 | ◐ | `release-checklist.md` + `scripts/accept.sh` 已用于 dev.1–dev.9。⬜ GUI-15：RC 时用 1.0 的 boot.img 重建安装器、`release.sh` 断言两边 sha 一致 | release-checklist |
 
@@ -93,7 +93,7 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 
 | 编号 | 事情 | 状态 | 要什么 |
 |---|---|---|---|
-| D5 · SEC-4 | 1.0 切不切 enforcing | ⬜ | 先做完 B1 的两项上机，再请用户定 |
+| D5 · SEC-4 | 1.0 切不切 enforcing | ✅ 用户定切（10-06） | 见 ① 表 G9 |
 | V7b | 1.0 预不预装 ReSukiSU 管理器 APK | ⬜ | 用户定；预装就改 known-limitations / FAQ / INSTALL 里"先装管理器"那句与 `gsf-android-id.sh` 的提示 |
 | V7c | issue 表单渲染核对；v0.7.1 GPL 附件补传 | ⬜ | 仓库已推送 ⇒ 去 `issues/new/choose` 把 7 个表单打开看一遍；补传 release 附件要用户点头 |
 | B2 R2 轮换 | 见阻断表 B2 | ⬜ | 用户在 Cloudflare 后台做 |

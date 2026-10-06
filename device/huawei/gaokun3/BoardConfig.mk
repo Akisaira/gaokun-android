@@ -118,6 +118,12 @@ BOARD_BOOTIMAGE_PARTITION_SIZE := 67108864
 # [measured] boot_devices 来自
 #   /sys/devices/platform/soc@0/1c20000.pcie/pci0002:00/.../nvme/nvme0/nvme0n1
 #
+# ★ 2026-10-06 D5（用户定"调严格"）：androidboot.selinux 改成 enforcing。依据：dev.9 经 OneShot 真 enforcing 开机（40 秒），
+#   开机普查只剩两类已知的上游缺口（system_server 读键盘 country、com.android.se 的 oat 缓存），显示 / 触摸 / Wi-Fi /
+#   传感器 / 音频 / iris 15/15 / 前后摄 / A 档 44 / s2idle 11/11（含 USB 角色切换与回插）全过（TODO「D5」一节）。
+#   退回：这一行改回 permissive（userdebug 变体认它；user 变体无条件 enforcing，本仓不编 user，#117 §15）。
+#   ⚠️ OTA-5：ESP 的 GPT 名字既不是 esp 也不是 EFI system partition 的手工分区机器，enforcing 下 postinstall 扫全盘找 ESP
+#   会被拒（通用 block_device，domain.te:705）⇒ OTA 失败；INSTALL 写了 `sgdisk -c <N>:esp` 改名。
 # ⚠️ 绝对不要加 earlycon：强烈怀疑 earlycon=efifb 会挂死本机启动，
 #    见 docs/stage1-kernel-plan.md 第 1.0 节。
 BOARD_KERNEL_CMDLINE := \
@@ -125,7 +131,7 @@ BOARD_KERNEL_CMDLINE := \
     iommu.passthrough=0 iommu.strict=0 \
     androidboot.hardware=gaokun3 \
     androidboot.boot_devices=soc@0/1c20000.pcie \
-    androidboot.selinux=permissive androidboot.veritymode=disabled \
+    androidboot.selinux=enforcing androidboot.veritymode=disabled \
     firmware_class.path=/vendor/firmware/ \
     init=/init printk.devkmsg=on deferred_probe_timeout=10 \
     console=tty0 \

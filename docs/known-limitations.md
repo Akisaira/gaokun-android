@@ -91,6 +91,7 @@ Problems specific to one release are in that release's [release notes](relnotes/
     apps have not been tested systematically. Reports are welcome.
 
 ### SELinux runs in permissive mode
+<!-- ⬜ 2026-10-06 D5：从 1.0.0-dev.10 起构建默认 enforcing（BoardConfig.mk），dev.9 上真 enforcing 回归全过。1.0 发版时把这一条改成"SELinux 处于 enforcing"并写明 OTA-5（ESP 名字不标准的手工分区机器 OTA 会失败，改名办法见 INSTALL）。现在这条描述的是 v0.7.1。 -->
 <!-- SEC-4 / D5. Delete or rewrite this entry in the release that switches to enforcing. -->
 * **What you see**: nothing.
 * **Why**: Android sandboxes apps in two layers: ordinary user permissions, and SELinux. The SELinux rules for this

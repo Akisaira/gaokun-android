@@ -95,6 +95,7 @@
 <!-- 冒烟测试出处：docs/TODO.md:136（10-06 之前的行号，那段现在在 archive/TODO-history-2026-10.md，按节内标注的原行号找）（v0.7.1 候选版 1791053208，App 冒烟 8/8）。APP-4 的金融 App 测试做完后在这里补结果。 -->
 
 ### SELinux 处于 permissive（宽容）模式
+<!-- ⬜ 2026-10-06 D5：从 1.0.0-dev.10 起构建默认 enforcing（BoardConfig.mk），dev.9 上真 enforcing 回归全过。1.0 发版时把这一条改成"SELinux 处于 enforcing"并写明 OTA-5（ESP 名字不标准的手工分区机器 OTA 会失败，改名办法见 INSTALL）。现在这条描述的是 v0.7.1。 -->
 <!-- SEC-4 / D5（建议：批 2 的三项 enforcing 验收都过就切，否则披露）。证据：device/huawei/gaokun3/BoardConfig.mk:128
      androidboot.selinux=permissive；实机 /sys/fs/selinux/enforce=0；perf_event_paranoid=-1。
      ⚠️ 维护：哪一版默认切到 enforcing，就删掉这一条（或改成"从 vX 起 enforcing"）。 -->

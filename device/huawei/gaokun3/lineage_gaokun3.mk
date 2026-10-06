@@ -62,7 +62,7 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base.mk)
 # ★ init 能不能 permissive 由 Soong 的 Debuggable 决定（只看变体：
 #   refs/aosp-build/core/soong_config.mk:58 → refs/lineage-system-core/init/Android.bp:126-134
 #   的 ALLOW_PERMISSIVE_SELINUX），与 ro.debuggable 无关 ⇒ 发布构建仍是 userdebug 变体、
-#   cmdline 的 androidboot.selinux=permissive 照样生效。⚠️ 待构建机核实：
+#   cmdline 的 androidboot.selinux=permissive 照样生效（2026-10-06 D5 起 cmdline 默认是 enforcing，见 BoardConfig.mk）。⚠️ 待构建机核实：
 #   `grep -rn ProductNotDebuggableInUserdebug build/soong` 没有去改 Debuggable 的消费者。
 #
 # ⚠️ 开发机装发布构建（候选版就是发布构建 —— release.sh --no-build 发的必须是验过的那一版）
