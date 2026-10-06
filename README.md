@@ -222,7 +222,9 @@ notes ([v0.7.1-alpha](docs/relnotes/v0.7.1-alpha.md)) list what changed. In shor
   headset microphone, the wired headset microphone, auto-brightness.
 * **Known bugs:** audio and Bluetooth can deadlock after long uptime (a watchdog
   saves evidence under `/data/vendor/gaokun3/hangdump-*` — please attach it);
-  the USB-C port can stop working after replugging until a reboot; a palm
+  plugged into a computer, the tablet may end up powering the computer and
+  neither side sees the other (replug); the USB-C port can stop working after
+  replugging until a reboot; a palm
   fragments into several touches; the hotspot drops Wi-Fi; *Wild Rift* closes
   on launch; the battery can show *charging* while draining on low-power
   sources.
