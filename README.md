@@ -298,7 +298,7 @@ how to build `vmlinuz.efi` and the DTB and where to put them is in
 | `scripts/` | Build, release, deploy, forensics and installer tooling (`scripts/live/` builds the graphical installer's Linux) |
 | `live/installer-flutter/` | The graphical installer (Flutter) |
 | `tools/` | Bring-up tools (fingerprint, camera, debugging) |
-| `docs/` | **The engineering record.** Every finding, with evidence |
+| `docs/` | **The engineering record.** Every finding, with evidence. Start from the index: [`docs/README.md`](docs/README.md) |
 | `manifests/` | `repo` local manifest |
 
 `docs/` is not an afterthought. Nothing about this platform exists in any wiki
@@ -343,8 +343,11 @@ first:
    no denoise of its own, and flash-lit shots blow out the highlights.
    Concrete next steps are in [`docs/TODO.md`](docs/TODO.md) T3.
 
-Factory reset and `fastboot` are being designed now — please talk to us before
-starting on recovery.
+Factory reset and `fastboot` now go through a unified boot entry
+([`docs/boot-entry-design.md`](docs/boot-entry-design.md), code in
+[`tools/gk3boot/`](tools/gk3boot/README.md)). It is in the 1.0 development
+builds, not in a release yet, and factory reset through it has not been tested
+on hardware — please talk to us before starting on recovery.
 
 **If you have a MateBook E Go and want to test**, these have never been tried on
 hardware: Bluetooth headphones, an external display over USB-C, a phone joining

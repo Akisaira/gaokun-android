@@ -241,7 +241,7 @@ DTB 怎么编、放哪里，见
 | `scripts/` | 构建、发布、部署、取证、安装工具（`scripts/live/` 构建图形安装器用的 Linux） |
 | `live/installer-flutter/` | 图形安装器（Flutter） |
 | `tools/` | 调试与点亮工具（指纹、相机等） |
-| `docs/` | **工程案卷。** 每一条结论都带证据 |
+| `docs/` | **工程案卷。** 每一条结论都带证据。从索引 [`docs/README.md`](docs/README.md) 找起 |
 | `manifests/` | `repo` local manifest |
 
 `docs/` 不是附属品。这个平台的任何信息都不存在于任何 wiki、也不在任何模型的
@@ -274,7 +274,9 @@ DTB 怎么编、放哪里，见
 6. **相机画质。** 剩下的是画质，不是链路：没有色彩矫正矩阵（要色卡）、软件 ISP
    自己没有降噪、闪光片高光过曝。具体下一步见 [`docs/TODO.md`](docs/TODO.md) T3。
 
-恢复出厂和 `fastboot` 正在设计中 —— 想碰 recovery 的话，请先来聊一下。
+恢复出厂和 `fastboot` 现在走统一启动入口（设计 [`docs/boot-entry-design.md`](docs/boot-entry-design.md)，
+代码 [`tools/gk3boot/`](tools/gk3boot/README.md)）。它在 1.0 的开发构建里、还没进任何发布版，
+经它恢复出厂也还没在真机上测过 —— 想碰 recovery 的话，请先来聊一下。
 
 **如果你手上有 MateBook E Go 想帮忙测**，下面这些从没在实机上试过：蓝牙耳机、
 USB-C 接外接显示器、手机连本机热点、v0.7.1 针对 WPA2/WPA3 混合模式路由器的改动、
