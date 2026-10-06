@@ -30,6 +30,7 @@ void main() {
     await see(t, find.text(l.optsTitle));
     await see(t, find.textContaining('/data'), findsWidgets);
     await next(t);
+    await passRisk(t);
     await see(t, find.text(l.confirmTitle));
     await see(t, find.text(l.confirmAlongHead));
     await see(t, find.text(l.confirmWindowsKept));
@@ -57,6 +58,7 @@ void main() {
     expect(find.text(l.modeAlongOk), findsNothing);
     await tap(t, find.text(l.modeShrinkTitle));
     await next(t);
+    await passRisk(t);
     await see(t, find.text(l.shrinkTitle));
     await tap(t, find.textContaining('Data'));
     await hold(t, l.shrinkGo);
@@ -69,6 +71,7 @@ void main() {
     await next(t);
     await next(t); // 来源
     await next(t); // 选项
+    await passRisk(t);
     await see(t, find.text(l.confirmAlongHead));
     await hold(t, l.confirmHoldIdle);
     await see(t, find.text(l.doneTitle));
@@ -96,6 +99,7 @@ void main() {
     await next(t);
     await next(t); // 来源
     await next(t); // 选项
+    await passRisk(t);
     await see(t, find.text(l.confirmAlongHead));
     await see(t, find.text(l.confirmWindowsKept));
     await hold(t, l.confirmHoldIdle);
@@ -123,6 +127,7 @@ void main() {
     expect(find.text(l.modeAlongOk), findsNothing);
     await tap(t, find.text(l.modeShrinkTitle));
     await next(t);
+    await passRisk(t);
     await see(t, find.text(l.shrinkTitle));
     await tap(t, find.textContaining('Data'));
     await hold(t, l.shrinkGo);
@@ -138,6 +143,7 @@ void main() {
     await next(t);
     await tap(t, find.text(l.modeShrinkTitle));
     await next(t);
+    await passRisk(t);
     await see(t, find.text(l.shrinkTitle));
     await see(t, find.text(l.shrinkWhyBitlocker), findsWidgets); // 两个加密卷各一条
     expect(find.text(l.shrinkWhyFs), findsNothing);
@@ -154,6 +160,7 @@ void main() {
     await next(t);
     await next(t); // 来源：U 盘
     await next(t); // 选项
+    await passRisk(t);
     await see(t, find.text(l.confirmWipeHead));
     await see(t, find.text(l.confirmNoParts));
     await hold(t, l.confirmHoldIdle);
@@ -183,6 +190,7 @@ void main() {
     expect(find.text(l.optsAdvanced), findsNothing);   // 不改分区表：没有分区大小可调
     await see(t, find.textContaining('/data 将被清空'));
     await next(t);
+    await passRisk(t);
     await see(t, find.text(l.confirmReinstallHead));
     await see(t, find.text(l.actFormat), findsNWidgets(2));   // userdata、metadata
     await see(t, find.text(l.actWrite), findsNWidgets(5));    // misc、boot_a、boot_b、super、gk3rescue
@@ -206,6 +214,7 @@ void main() {
     await tap(t, find.text(l.optsKeepTitle));
     await see(t, find.textContaining('/data 保留'));
     await next(t);
+    await passRisk(t);
     await see(t, find.text(l.actKeep), findsNWidgets(2));
     await hold(t, l.confirmHoldIdle);
     await see(t, find.text(l.doneTitle));
@@ -219,6 +228,7 @@ void main() {
     await next(t);
     await tap(t, find.text(l.editEntryTitle));
     await next(t);
+    await passRisk(t);
     await see(t, find.text(l.editTitle));
     return rec;
   }
@@ -330,6 +340,7 @@ void main() {
     await tap(t, find.text('标准版'));
     await next(t);
     await next(t); // 选项
+    await passRisk(t);
     await hold(t, l.confirmHoldIdle);
     await see(t, find.text(l.doneTitle));
     final dl = rec.last('gk3_net_release')!;
@@ -396,6 +407,7 @@ void main() {
     await next(t);
     await next(t);
     await next(t);
+    await passRisk(t);
     await hold(t, l.confirmHoldIdle);
     await see(t, find.text(l.failTitle));
     await see(t, find.textContaining('分区 super 没解析出来'), findsWidgets);
@@ -436,6 +448,7 @@ void main() {
     await next(t, x);
     noCjk?.call('opts');
     await next(t, x); // 选项
+    await passRisk(t, loc: x, check: () => noCjk?.call('risk'));
     noCjk?.call('confirm');
     await hold(t, x.confirmHoldIdle);
     return rec;
@@ -494,6 +507,7 @@ void main() {
     await next(t);
     await next(t);
     await next(t);
+    await passRisk(t);
     await hold(t, l.confirmHoldIdle);
     await see(t, find.text(l.runTitle));
     await see(t, find.text(l.railBusy));
@@ -526,6 +540,7 @@ void main() {
     await tap(t, find.text('标准版'));
     await next(t);
     await next(t); // 选项
+    await passRisk(t);
     await hold(t, l.confirmHoldIdle);
     await see(t, find.text(l.runTitle));
     expect(rec.last('gk3_net_release'), isNotNull);
@@ -546,6 +561,7 @@ void main() {
     await next(t);
     await tap(t, find.text(l.modeShrinkTitle));
     await next(t);
+    await passRisk(t);
     await tap(t, find.textContaining('Data'));
     // 固定开销 13476 MiB 来自 PLANERR fixed_mib（双系统 + 救援）；Data 现在 344708 MiB
     await see(t, find.text(l.shrinkData(fmtMib(65536))));
@@ -600,6 +616,7 @@ void main() {
     await see(t, find.text(en.optsTitle));
     check('opts');
     await next(t, en);
+    await passRisk(t, loc: en, check: () => check('risk'));
     await see(t, find.text(en.confirmTitle));
     check('confirm');
     await hold(t, en.confirmHoldIdle);
@@ -654,6 +671,7 @@ void main() {
     await next(t);
     await next(t);
     await next(t);
+    await passRisk(t);
     await hold(t, l.confirmHoldIdle);
     await see(t, find.text(l.progWriteSuper));
     expect(find.text(l.runCancel), findsNothing);
@@ -670,6 +688,7 @@ void main() {
     await next(t);
     await next(t);
     await next(t);
+    await passRisk(t);
     await hold(t, l.confirmHoldIdle);
     await see(t, find.text(l.failUntouchedTitle));
     await see(t, find.text(l.errReleaseNoSuper));
@@ -689,6 +708,7 @@ void main() {
     await next(t, en);
     await next(t, en);
     await next(t, en);
+    await passRisk(t, loc: en);
     await hold(t, en.confirmHoldIdle);
     await see(t, find.text(en.failTitle));
     await see(t, find.text(en.errPartMissing('super')));
@@ -764,6 +784,7 @@ void main() {
     await see(t, find.text(l.optsTitle));
     await see(t, find.text(l.optsRescueSameDisk));
     await next(t);
+    await passRisk(t);
     await see(t, find.text(l.confirmRescue(l.wordNoInstall)));
     await hold(t, l.confirmHoldIdle);
     await see(t, find.text(l.doneTitle));
@@ -782,6 +803,7 @@ void main() {
     await next(t);
     expect(find.text(l.optsRescueSameDisk), findsNothing);
     await next(t);
+    await passRisk(t);
     await hold(t, l.confirmHoldIdle);
     await see(t, find.text(l.doneBody));
     expect(rec.last('gk3_apply')!.join(' '), contains('--rescue yes'));
@@ -796,6 +818,7 @@ void main() {
     await next(t);
     await next(t);
     await next(t);
+    await passRisk(t);
     await see(t, find.text(l.confirmWipeHead));
     await see(t, find.textContaining(l.confirmOnekey), findsWidgets);
     await see(t, find.text(l.confirmOnekeyWarn('Onekey')));
@@ -852,6 +875,7 @@ void main() {
     await next(t);
     await next(t);
     await next(t);
+    await passRisk(t);
     await hold(t, l.confirmHoldIdle);
     await see(t, find.text(l.failTitle));
   }
@@ -902,6 +926,7 @@ void main() {
     await next(t);
     await next(t); // 来源
     await next(t); // 选项
+    await passRisk(t);
     await see(t, find.text(l.confirmTitle));
     return rec;
   }
@@ -994,6 +1019,7 @@ void main() {
     await next(t);
     await next(t);
     await next(t);
+    await passRisk(t);
     await see(t, find.text(l.confirmTitle));
     expect(find.text(l.confirmDefaultTitle), findsNothing);
   });
@@ -1007,6 +1033,7 @@ void main() {
     await next(t, en);
     await next(t, en);
     await next(t, en);
+    await passRisk(t, loc: en);
     await see(t, find.text(en.confirmBitlockerHead));
     expect(cjkOnScreen(t), isEmpty);
   });

@@ -10,6 +10,7 @@ import '../model/model.dart';
 import '../session.dart';
 import 'messages.dart';
 import 'save_logs.dart';
+import 'screens_risk.dart';
 import 'screens_start.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -52,7 +53,8 @@ class _OptsPageState extends State<OptsPage> {
       onBack: () => Navigator.pop(context),
       // 重新安装不改分区表：分区大小没得调
       bottomLeft: re ? null : Btn(l.optsAdvanced, kind: BtnKind.secondary, icon: Icons.tune, onPressed: p?.ok == true ? () => go(context, const AdvPage()) : null),
-      onNext: p?.ok == true && !s.planning ? () => go(context, const ConfirmPage()) : null,
+      // 方案选定 → 写盘前的风险确认（强制阅读）→ 最终确认 → 开始（用户 2026-10-06）
+      onNext: p?.ok == true && !s.planning ? () => RiskPage.open(context, RiskKind.install, const ConfirmPage()) : null,
       child: ListView(children: [
         if (re) ...[
           ChoiceCard(
@@ -590,7 +592,11 @@ class _FailPageState extends State<FailPage> {
         subtitle: sub,
         bottom: w.untouched
             ? Row(children: [
-                Btn(l.failBackEdit, kind: BtnKind.text, icon: Icons.arrow_back, onPressed: () => Navigator.pop(context)),
+                // 回到选项页：跳过风险确认页（它在栈里、正好在失败页下面）—— "返回修改"是去改方案的
+                Btn(l.failBackEdit, kind: BtnKind.text, icon: Icons.arrow_back, onPressed: () {
+                  final self = ModalRoute.of(context);
+                  Navigator.popUntil(context, (r) => r != self && r.settings.name != kRiskRoute);
+                }),
                 const SizedBox(width: 12),
                 Btn(l.shellOpen, kind: BtnKind.secondary, icon: Icons.terminal, onPressed: () => openShell(context)),
                 const SizedBox(width: 12),

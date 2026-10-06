@@ -9,6 +9,7 @@ import '../model/model.dart';
 import '../session.dart';
 import 'screens_edit.dart';
 import 'screens_finish.dart';
+import 'screens_risk.dart';
 import 'messages.dart';
 import 'screens_source.dart';
 import 'theme.dart';
@@ -273,15 +274,16 @@ class _ModePageState extends State<ModePage> {
       case _Pick.reinstall:
         s.setMode(Mode.reinstall);
         go(context, const SourcePage());
+      // 缩分区与手动调整同样先过风险确认页（RiskPage 等那一页 pop 了才跟着 pop，所以这里 await 的仍是"做完了没有"）
       case _Pick.edit:
-        await go(context, const DiskEditPage());
+        await RiskPage.open(context, RiskKind.edit, const DiskEditPage());
         // 改过的盘要重新评估：几种方式能不能走，都可能变了
         if (mounted && s.disk != null) {
           setState(() => _pick = null);
           await s.assess(s.disk!);
         }
       case _Pick.shrink:
-        await go(context, const ShrinkPage());
+        await RiskPage.open(context, RiskKind.shrink, const ShrinkPage());
         // 缩完回来：assess 已经重跑过，双系统多半可行了 —— 替用户选上
         if (mounted && context.session.along is AlongOk) setState(() => _pick = _Pick.along);
     }

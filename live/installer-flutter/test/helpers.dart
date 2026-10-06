@@ -11,6 +11,7 @@ import 'package:gk3_installer/backend/fixture_backend.dart';
 import 'package:gk3_installer/backend/protocol.dart';
 import 'package:gk3_installer/l10n/app_localizations.dart';
 import 'package:gk3_installer/session.dart';
+import 'package:gk3_installer/ui/screens_risk.dart';
 import 'package:gk3_installer/ui/widgets.dart';
 
 /// 包一层 FixtureBackend：记下每一次调用；可以让某个函数失败
@@ -174,6 +175,32 @@ Future<void> next(WidgetTester t, [L10n? loc]) async {
   final f = find.ancestor(of: find.text((loc ?? l).btnNext), matching: find.byWidgetPredicate((w) => w is ButtonStyleButton && w.onPressed != null));
   await tap(t, f);
 }
+
+/// 写盘前的风险确认页（screens_risk.dart）：滚到底、等够时间、勾选、（要的话）输入确认词，然后继续。
+/// [check] 给了就在页面刚出来时调一次（英文界面查 CJK 用）
+Future<void> passRisk(WidgetTester t, {L10n? loc, void Function()? check}) async {
+  final x = loc ?? l;
+  await see(t, find.text(x.riskTitle));
+  check?.call();
+  await scrollRiskToEnd(t);
+  await t.pump(const Duration(seconds: RiskPage.readSeconds));
+  await settle(t);
+  await tap(t, find.byKey(kRiskCheckKey));
+  if (find.byKey(kRiskWordKey).evaluate().isNotEmpty) {
+    await t.enterText(find.byKey(kRiskWordKey), x.riskWord);
+    await settle(t);
+  }
+  await tap(t, find.text(x.riskContinue));
+}
+
+Future<void> scrollRiskToEnd(WidgetTester t) async {
+  await t.drag(find.byKey(kRiskScrollKey), const Offset(0, -30000));
+  await settle(t);
+}
+
+/// 风险确认页的"继续"能不能点
+bool riskContinueEnabled(WidgetTester t, [L10n? loc]) =>
+    t.widget<ButtonStyleButton>(find.ancestor(of: find.text((loc ?? l).riskContinue), matching: find.byWidgetPredicate((w) => w is ButtonStyleButton)).first).onPressed != null;
 
 /// 按住 2 秒（确认页 / 缩分区）
 Future<void> hold(WidgetTester t, String idleText) async {

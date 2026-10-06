@@ -8,6 +8,7 @@ import '../backend/backend.dart';
 import '../backend/protocol.dart';
 import '../l10n/app_localizations.dart';
 import '../model/model.dart';
+import '../session.dart' show kRiskUnackedCode;
 
 String _mib(String v) => fmtMib(int.tryParse(v) ?? 0);
 
@@ -95,6 +96,8 @@ String errText(L10n l, Gk3Record e) {
   String f(String k) => e[k];
   return switch (e['code']) {
     'usage' => l.errUsage,
+    // 界面自己的（Session 的守卫）：没经过风险确认页就要写盘
+    kRiskUnackedCode => l.errRiskUnacked,
     'job-start' => l.errJobStart,
     'job-missing' => l.errJobMissing(f('id')),
     'job-lost' => l.errJobLost,

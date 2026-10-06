@@ -46,6 +46,7 @@ class StepPage extends StatelessWidget {
     this.nextDanger = false,
     this.bottomLeft,
     this.bottom,
+    this.danger = false,
   });
 
   final Gk3Step step;
@@ -59,6 +60,9 @@ class StepPage extends StatelessWidget {
 
   /// 替换整条底栏（确认页的"按住 2 秒"、进度页的空底栏）
   final Widget? bottom;
+
+  /// 标题换成 error-container 的警示横幅（大警告图标 + 标题 + 说明）：写盘前的风险确认页（screens_risk.dart）
+  final bool danger;
 
   @override
   Widget build(BuildContext context) {
@@ -74,12 +78,16 @@ class StepPage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(title, style: context.tt.headlineMedium),
-                  if (subtitle != null) ...[
-                    const SizedBox(height: 8),
-                    Text(subtitle!, style: context.tt.bodyLarge!.copyWith(color: context.cs.onSurfaceVariant)),
+                  if (danger)
+                    _DangerBanner(title: title, subtitle: subtitle)
+                  else ...[
+                    Text(title, style: context.tt.headlineMedium),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 8),
+                      Text(subtitle!, style: context.tt.bodyLarge!.copyWith(color: context.cs.onSurfaceVariant)),
+                    ],
                   ],
-                  const SizedBox(height: 28),
+                  SizedBox(height: danger ? 20 : 28),
                   Expanded(child: child),
                   const SizedBox(height: 20),
                   bottom ??
@@ -98,6 +106,41 @@ class StepPage extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 风险确认页的标题：MD3 的 error-container 横幅，左边一个 error 色的圆、里面是大号警告图标。
+/// 整页最醒目的东西 —— 用户 2026-10-06："用最醒目的方式告诉用户，这玩意儿可能会损坏数据"
+class _DangerBanner extends StatelessWidget {
+  const _DangerBanner({required this.title, this.subtitle});
+  final String title;
+  final String? subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = context.cs, tt = context.tt;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 18, 24, 18),
+      decoration: BoxDecoration(color: cs.errorContainer, borderRadius: BorderRadius.circular(24)),
+      child: Row(children: [
+        Container(
+          width: 72,
+          height: 72,
+          decoration: BoxDecoration(color: cs.error, shape: BoxShape.circle),
+          child: Icon(Icons.warning_amber_rounded, size: 44, color: cs.onError),
+        ),
+        const SizedBox(width: 20),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title, style: tt.headlineMedium!.copyWith(color: cs.onErrorContainer)),
+            if (subtitle != null) ...[
+              const SizedBox(height: 6),
+              Text(subtitle!, style: tt.bodyLarge!.copyWith(color: cs.onErrorContainer)),
+            ],
+          ]),
+        ),
+      ]),
     );
   }
 }

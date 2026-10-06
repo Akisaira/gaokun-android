@@ -103,6 +103,7 @@ void main() {
     await toMode(t);
     await tap(t, find.text(l.modeShrinkTitle));
     await next(t);
+    await passRisk(t);
     await tap(t, find.textContaining('Data'));
     await shot(t, '05-shrink');
   }, skip: !haveFont);
@@ -188,6 +189,7 @@ void main() {
     await next(t);
     await next(t);
     await next(t);
+    await passRisk(t);
     await waitFor(t, find.text(l.confirmWipeHead));
     await shot(t, '14-confirm-wipe');
   }, skip: !haveFont);
@@ -199,6 +201,7 @@ void main() {
     await next(t);
     await next(t);
     await next(t);
+    await passRisk(t);
     await waitFor(t, find.text(l.confirmReinstallHead));
     await shot(t, '15b-confirm-reinstall');
   }, skip: !haveFont);
@@ -208,6 +211,7 @@ void main() {
     await toMode(t);
     await tap(t, find.text(l.editEntryTitle));
     await next(t);
+    await passRisk(t);
     await waitFor(t, find.text(l.editTitle));
     await tap(t, find.textContaining('Data'));
     await tap(t, find.text(l.editResize));
@@ -221,6 +225,7 @@ void main() {
     await next(t);
     await next(t);
     await next(t);
+    await passRisk(t);
     await waitFor(t, find.text(l.confirmAlongHead));
     await shot(t, '15-confirm-alongside');
   }, skip: !haveFont);
@@ -233,6 +238,7 @@ void main() {
     await next(t);
     await next(t);
     await next(t);
+    await passRisk(t);
     await waitFor(t, find.text(l.confirmHoldIdle));
     final g = await t.startGesture(t.getCenter(find.text(l.confirmHoldIdle)));
     for (var i = 0; i < 25; i++) {
@@ -254,6 +260,7 @@ void main() {
     await next(t);
     await next(t);
     await next(t);
+    await passRisk(t);
     await hold(t, l.confirmHoldIdle);
     await waitFor(t, find.text(l.failTitle));
     await shot(t, '18-fail');

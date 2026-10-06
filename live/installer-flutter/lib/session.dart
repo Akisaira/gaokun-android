@@ -79,6 +79,22 @@ class AlongError extends Along {
 /// 下载被取消时 install() 最后报的退出码（130 = 被信号打断的惯例）
 const kCancelledExit = 130;
 
+/// 三条写盘的路（用户 2026-10-06：分区之前强制阅读风险提示）。每一条在 UI 上都先过 RiskPage（ui/screens_risk.dart）；
+/// Session 再守一道：没确认过的那条路，install / shrink / editDisk 一个字节都不写（[Session.riskAcked]）
+enum RiskKind {
+  /// 整盘清空 / 双系统 / 重新安装：gk3_apply
+  install,
+
+  /// 缩分区腾空间：gk3_shrink
+  shrink,
+
+  /// 手动调整磁盘：gk3_part_*
+  edit,
+}
+
+/// 没经过风险确认页就要写盘时报的 ERR 代码（界面自己的，不是后端的；touched=no ⇒ "盘没动过"那种失败页）
+const kRiskUnackedCode = 'risk-not-acknowledged';
+
 /// /run 是 tmpfs：1.2 GiB 的 super.img.zst 放得下，展开是流式写盘的（gk3_net_release 的注释）
 const netPayloadDir = '/run/gaokun3/payload';
 
@@ -145,6 +161,22 @@ class Session extends ChangeNotifier {
       _changed();
     }
   }
+
+  // ── 风险确认（用户 2026-10-06）────────────────────────────────────────────
+  /// 确认过的是"哪条路、哪块盘、哪种方式"：换了盘、换了方式、改了保不保留数据，都要重新确认
+  final _riskAcked = <String>{};
+  String _riskKey(RiskKind k) => switch (k) {
+        RiskKind.install => 'install ${disk?.path} ${mode?.name} keep=$keepData',
+        _ => '${k.name} ${disk?.path}',
+      };
+
+  /// 风险确认页读完、勾选（、输入确认词）之后调
+  void ackRisk(RiskKind k) => _riskAcked.add(_riskKey(k));
+  bool riskAcked(RiskKind k) => _riskAcked.contains(_riskKey(k));
+
+  static const _riskErr = Gk3Record('ERR', {'code': kRiskUnackedCode, 'touched': 'no'});
+  static const _riskLog = Gk3Log('!! 没有经过写盘前的风险确认页，不写盘（这是界面的缺陷）');
+  static const _riskRefused = CallResult([_riskErr], [_riskLog], 1);
 
   // ── 语言 ────────────────────────────────────────────────────────────────
   String language;
@@ -271,6 +303,7 @@ class Session extends ChangeNotifier {
   /// 执行一个调整操作（gk3_part_delete / format / create / resize）。成功与否都重新探测这块盘 ——
   /// 分区号、空闲区都可能变了，界面上显示的必须是盘上【现在】的样子
   Future<CallResult> editDisk(String fn, List<String> args, void Function(Gk3Event) onEvent) async {
+    if (!riskAcked(RiskKind.edit)) return _riskRefused;
     final r = await _whileWriting(() => backend.run(fn, args, onEvent));
     await probe();
     final again = disks?.where((x) => x.path == disk?.path).firstOrNull;
@@ -281,6 +314,7 @@ class Session extends ChangeNotifier {
 
   // ── 缩分区 ──────────────────────────────────────────────────────────────
   Future<CallResult> shrink(Shrinkable s, int targetMib, void Function(Gk3Event) onEvent) async {
+    if (!riskAcked(RiskKind.shrink)) return _riskRefused;
     final r = await _whileWriting(() => backend.run('gk3_shrink', [s.part, '$targetMib'], onEvent));
     if (r.ok) {
       await probe();
@@ -483,6 +517,15 @@ class Session extends ChangeNotifier {
 
   /// 网络安装先下载（占总进度 0–40%），再走和 U 盘安装完全相同的 gk3_apply
   Stream<Gk3Event> install() async* {
+    // 风险确认页没过（界面的缺陷才会走到这里）：连下载都不开始
+    if (!riskAcked(RiskKind.install)) {
+      stage = InstallStage.write;
+      cancelled = false;
+      yield _riskLog;
+      yield _riskErr;
+      yield const Gk3Exit(1);
+      return;
+    }
     var rel = usbRelease?.dir ?? '';
     final net = source == Source.net;
     if (net) {

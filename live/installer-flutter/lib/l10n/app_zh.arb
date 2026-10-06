@@ -1192,5 +1192,85 @@
         "type": "String"
       }
     }
-  }
+  },
+  "riskTitle": "请先读完：接下来的操作可能让你丢失数据",
+  "riskSub": "接下来要改动这块硬盘。请从头读到尾 —— 读完、等够时间、勾选之后，继续按钮才会亮起。",
+  "riskExpHead": "这是实验性的社区移植",
+  "riskExpBody": "这个 Android 是爱好者做的移植，不是华为、高通或 Google 的产品。没有任何厂商支持，也没有人对你的数据负责。安装器在真机上测过的情形很有限（安装说明里的“在真机上测过什么”一节）。",
+  "riskDiskHead": "对硬盘的改动可能无法挽回",
+  "riskDiskBody": "接下来要修改这块硬盘的分区表和分区里的内容。程序缺陷、硬盘故障或意外断电，都可能让数据损坏，甚至全部丢失。这些改动不可逆：安装器不能撤销，也不能保证事后把数据找回来。",
+  "riskWipeHead": "清除整个磁盘：盘上的一切都会被删除",
+  "riskWipeBody": "这块盘上的所有分区都会被删除 —— Windows、你的文件、其他系统和恢复分区，一个不留。之后想再用 Windows，只能用 Windows 安装 U 盘从头装。",
+  "riskAlongHead": "保留现有系统：仍然会改动硬盘",
+  "riskAlongBody": "Android 只装进空闲空间，现有分区不缩、不删；但分区表会被改写，两个系统共用的 EFI 分区里也要放入启动器。哪一步出错，现有的系统同样可能起不来。",
+  "riskReinstallHead": "重新安装 Android",
+  "riskReinstallWipe": "Android 的系统分区会被重写，/data 会被清空：装过的应用、照片、聊天记录等存在 Android 里的东西都会丢失。",
+  "riskReinstallKeep": "Android 的系统分区会被重写，你选了保留 /data。但换到更旧的版本、或者安装中途出错时，保留下来的数据也可能读不出来 —— 一样要先备份。",
+  "riskWinHead": "Windows 与 BitLocker 恢复密钥",
+  "riskWinBody": "安装要往两个系统共用的 EFI 分区里放启动器，并替换开机时最先运行的启动文件（原文件先备份）。Windows 用了 BitLocker 或“设备加密”时，下次进 Windows 可能要输入恢复密钥 —— 没有密钥，就再也进不了 Windows，里面的数据也读不出来。继续之前，先到 aka.ms/myrecoverykey 确认拿得到密钥。",
+  "riskWinBitlocker": "这块盘上确实有 BitLocker 加密的卷：最后的确认页会要你确认已经拿到恢复密钥。",
+  "riskShrinkHead": "缩小现有分区",
+  "riskShrinkBody": "缩小分区要搬动文件系统里的数据。如果 Windows 没有完全关机（休眠、快速启动），或者分区本身有错误，缩小可能把它弄坏、让 Windows 起不来。用了 BitLocker 的 Windows，下次启动还可能要恢复密钥（aka.ms/myrecoverykey）。",
+  "riskEditHead": "手动调整磁盘",
+  "riskEditBody": "删除和格式化会立刻抹掉分区里的数据；缩小、扩大要搬动文件系统里的数据。只在你清楚每一个分区是什么的时候使用 —— 删错一个，就可能让 Windows 或 Android 再也起不来。",
+  "riskBackupHead": "现在就备份",
+  "riskBackupBody": "把重要的文件（照片、文档、Windows 里的资料、Android 里的应用数据）复制到另一台设备、移动硬盘或网盘上。备份在这块硬盘的另一个分区里不算 —— 它同样在风险之内。还没备份的话，现在点“返回”，关机去备份，备份好了再回来。",
+  "riskPowerHead": "全程接上电源",
+  "riskPowerBody": "开始之前插上电源适配器，直到完成都不要拔。写到一半断电或电池耗尽，硬盘会停在写了一半的状态：系统起不来，数据可能损坏。进行中不要长按电源键，也不要强行重启。",
+  "riskNoCancelHead": "开始写盘之后不能取消",
+  "riskNoCancelInstall": "下一页是最后确认。在那里按住开始之后就会写盘，写盘阶段不能取消、不能返回（从网络安装时，下载阶段还能取消 —— 那时盘还没动）。",
+  "riskNoCancelStep": "下一页上的每一个操作，在按住确认之后立即执行：执行中途不能停下，执行完也没有“撤销”。",
+  "riskEnd": "—— 以上就是全部 ——",
+  "riskScrollHint": "向下滚动，读完全文",
+  "riskCheck": "我已备份重要数据，并理解此操作可能造成不可逆的数据丢失",
+  "riskWord": "ERASE",
+  "@riskWord": {
+    "description": "确认词。⚠️ 必须是 ASCII：live 里没有输入法，软键盘与实体键盘都只出 ASCII（screens_source.dart 的 HiddenNetPage 注释）"
+  },
+  "riskWordPrompt": "这一步会删掉盘上现有的系统或数据。请在下面输入 {word}（大小写均可）以确认：",
+  "@riskWordPrompt": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "riskWordLabel": "确认词",
+  "riskWordWrong": "与 {word} 不一致",
+  "@riskWordWrong": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "riskContinue": "我已了解风险，继续",
+  "riskMissing": "还差：{items}",
+  "@riskMissing": {
+    "placeholders": {
+      "items": {
+        "type": "String"
+      }
+    }
+  },
+  "riskSep": "、",
+  "riskNeedScroll": "读到最后",
+  "riskNeedWait": "再等 {sec} 秒",
+  "@riskNeedWait": {
+    "placeholders": {
+      "sec": {
+        "type": "String"
+      }
+    }
+  },
+  "riskNeedCheck": "勾选确认",
+  "riskNeedWord": "输入 {word}",
+  "@riskNeedWord": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "errRiskUnacked": "没有经过写盘前的风险确认，安装器拒绝写盘，盘没有动过。这是安装器的缺陷，请保存日志并报告。"
 }
