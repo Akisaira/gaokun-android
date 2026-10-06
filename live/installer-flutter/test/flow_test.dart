@@ -171,6 +171,43 @@ void main() {
     expect(rec.last('gk3_apply')!.join(' '), contains('--mode wipe'));
   });
 
+  testWidgets('MBR 盘与读不出分区表的盘（S1 / S2）：读不出的盘禁用并写明原因；MBR 盘只给整盘清空，整盘清空照常装完', (t) async {
+    final rec = await pumpApp(t, 'blank', overrides: {'gk3_probe': 'probe-mbr-unreadable.txt'});
+    await tap(t, find.text(l.btnStart));
+    // 读不出的盘：列出来（让人知道它在），但禁用、写明原因，不说"没有分区"（S1 原来把它报成一整块空闲）
+    await see(t, find.text(l.diskUnreadable));
+    final unreadable = find.ancestor(of: find.textContaining('/dev/sdb'), matching: find.byType(ChoiceCard));
+    expect(t.widget<ChoiceCard>(unreadable).reason, l.diskUnreadable);
+    expect(find.descendant(of: unreadable, matching: find.textContaining(l.diskNoParts)), findsNothing);
+    await tap(t, find.textContaining('/dev/sdb'));
+    expect(t.widget<ChoiceCard>(unreadable).selected, isFalse);
+    // MBR 盘：双系统与手动调整都写明"MBR、只能整盘清空"，不去问 ESP、不去算双系统方案
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t);
+    await see(t, find.text(l.errMbr), findsNWidgets(2));
+    expect(rec.calls.where((c) => c.first == 'gk3_esp_info' || (c.first == 'gk3_plan' && c.contains('alongside'))), isEmpty);
+    for (final title in [l.modeAlongTitle, l.editEntryTitle]) {
+      final card = find.ancestor(of: find.text(title), matching: find.byType(ChoiceCard));
+      expect(t.widget<ChoiceCard>(card).reason, l.errMbr, reason: title);
+    }
+    await tap(t, find.text(l.modeWipeTitle));
+    await next(t);
+    await next(t); // 来源：U 盘
+    await next(t); // 选项
+    await passRisk(t);
+    await hold(t, l.confirmHoldIdle);
+    await see(t, find.text(l.doneTitle));
+    expect(rec.last('gk3_apply')!.join(' '), contains('--disk /dev/nvme0n1 --mode wipe'));
+  });
+
+  testWidgets('写盘入口拒绝 MBR 盘 / 读不出的盘（ERR mbr-disk / disk-unreadable）：失败的话按代码说', (t) async {
+    final mbr = Gk3Record('ERR', {'code': 'mbr-disk', 'disk': '/dev/nvme0n1', 'touched': 'no'});
+    final bad = Gk3Record('ERR', {'code': 'disk-unreadable', 'disk': '/dev/sdb', 'touched': 'no'});
+    expect(errText(l, mbr), l.errMbr);
+    expect(errText(l, bad), l.errDiskUnreadable('/dev/sdb'));
+    expect(errText(en, bad), en.errDiskUnreadable('/dev/sdb'));
+  });
+
   testWidgets('android（已经装过）：双系统禁用，原因里列出冲突的分区名', (t) async {
     await pumpApp(t, 'android');
     await tap(t, find.text(l.btnStart));

@@ -146,6 +146,9 @@ String errText(L10n l, Gk3Record e) {
     'shrink-not-smaller' => l.errShrinkNotSmaller,
     'part-unknown' => l.errPartUnknown(f('part')),
     'gpt-read' => l.errGptRead(f('part')),
+    // S1 / S2（docs/installer-rust-design.md §3.2）：写盘入口在动盘之前拦的两种分区表
+    'disk-unreadable' => l.errDiskUnreadable(f('disk')),
+    'mbr-disk' => l.errMbr,
     'ntfs-dryrun' => l.errNtfsDryrun,
     'ntfs-shrink' => l.errNtfsShrink,
     'fsck' => l.errFsck(f('rc')),

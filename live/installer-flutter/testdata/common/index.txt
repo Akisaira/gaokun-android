@@ -16,6 +16,7 @@ gk3_log_targets                                                                l
 gk3_save_logs *                                                                save_logs.txt   # 录（存到假 U 盘上）
 gk3_release_info                                                               release_info.txt   # 录
 #  release_info-none.txt：U 盘里没有镜像（界面测试用 overrides 选它）
+#  probe-mbr-unreadable.txt：一块 MBR 盘 + 一块读不出分区表的盘（S1 / S2；对拍时实录的两块盘拼的，文件头写着怎么拼；测试用 overrides 选它）
 gk3_net_release *                                                              net_release.txt   # 录（本地服务器，内容是上面那份发布目录）
 gk3_net_manifest                                                               net_manifest.txt   # 手写（清单 URL 还不存在）
 # shrink_scan-bitlocker.txt   gk3_shrink_scan：出厂盘、C: 与 D: 是 BitLocker 卷头（录；只给测试按文件名用）

@@ -195,7 +195,7 @@ class _DiskPageState extends State<DiskPage> {
       // 安装 U 盘排最后、禁用但写明原因（C 版是直接不显示 —— 用户会以为盘没识别）。
       // ★ 安装器跑在【内置盘】上时（免 U 盘安装）那块盘照样能选：只是不能整盘清空（选方式那一页拦），
       //   双系统照常 —— 那正是免 U 盘装双系统的目标流程（用户 2026-09-25）。
-      bool blocked(Disk d) => d.medium && d.external;
+      bool blocked(Disk d) => (d.medium && d.external) || d.unreadable;
       final sorted = [...disks]..sort((a, b) => (blocked(a) ? 1 : 0) - (blocked(b) ? 1 : 0));
       body = ListView.separated(
         itemCount: sorted.length,
@@ -209,10 +209,11 @@ class _DiskPageState extends State<DiskPage> {
             title: '$name · ${fmtMib(d.sizeMib)}',
             body: [
               d.path,
-              d.parts.isEmpty ? l.diskNoParts : l.diskParts('${d.parts.length}'),
+              // 读不出分区表的盘没有"几个分区"可说（说"没有分区"就是 S1 原来的错）
+              if (!d.unreadable) d.parts.isEmpty ? l.diskNoParts : l.diskParts('${d.parts.length}'),
               if (free != null) l.diskFree(fmtMib(free.sizeMib)),
             ].join('   ·   '),
-            reason: blocked(d) ? l.diskMedium : null,
+            reason: d.unreadable ? l.diskUnreadable : (blocked(d) ? l.diskMedium : null),
             note: d.medium && !d.external ? l.diskMediumInternal : null,
             selected: identical(_picked, d),
             onTap: () => setState(() => _picked = d),
@@ -360,6 +361,8 @@ class _ModePageState extends State<ModePage> {
           icon: Icons.construction,
           title: l.editEntryTitle,
           body: l.editEntryBody,
+          // MBR 盘上删 / 建 / 改大小都要写 GPT 分区表，后端一律拒绝（ERR mbr-disk）—— 这里先说
+          reason: s.disk!.mbr ? l.errMbr : null,
           selected: _pick == _Pick.edit,
           onTap: () => setState(() => _pick = _Pick.edit),
         ),

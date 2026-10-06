@@ -73,6 +73,7 @@
     }
   },
   "diskNoParts": "没有分区",
+  "diskUnreadable": "读不出这块盘的分区表（坏盘，或者连接不稳？），不能安装到它上面。详情见日志。",
   "diskFree": "可用 {size}",
   "@diskFree": {
     "placeholders": {
@@ -440,7 +441,7 @@
       }
     }
   },
-  "errMbr": "这块盘是 MBR 分区表。我们不会把它转换成 GPT —— 那会丢掉现有布局。",
+  "errMbr": "这块盘是 MBR 分区表。我们不会把它转换成 GPT —— 那会丢掉现有布局。要用这块盘，只能整盘清空。",
   "errUserdataSmall": "/data 至少要 {min}",
   "@errUserdataSmall": {
     "placeholders": {
@@ -914,6 +915,14 @@
   "@errGptRead": {
     "placeholders": {
       "part": {
+        "type": "String"
+      }
+    }
+  },
+  "errDiskUnreadable": "读不出 {disk} 的分区表，没有动它",
+  "@errDiskUnreadable": {
+    "placeholders": {
+      "disk": {
         "type": "String"
       }
     }

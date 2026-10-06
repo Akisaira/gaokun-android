@@ -260,6 +260,8 @@ class Session extends ChangeNotifier {
   }
 
   Future<Along> _assessAlong(Disk d) async {
+    // MBR 盘先说：它上面的 0xEF 分区经 sgdisk 换算也会显示成 ESP，不先拦就会走到"ESP 类型不对"之类别的原因上（S2）
+    if (d.mbr) return const AlongMbr();
     final esp = d.esp;
     if (esp == null) return const AlongNoEsp();
     final er = (await backend.run('gk3_esp_info', [esp.path])).first('ESP');
