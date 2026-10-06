@@ -43,6 +43,7 @@
 | [boot-entry-design.md](boot-entry-design.md) | 统一启动入口 `gk3boot.efi` + fastboot 执行端 + 双系统（方案 Y，实验 E0–E11、决定 U1–U25） | 现行（开头"还没有实现"已过时：E3–E8 真机过，实现见 [`tools/gk3boot/README.md`](../tools/gk3boot/README.md)） | 维护者 · AI |
 | [fastboot-design.md](fastboot-design.md) | 最早的 fastboot 设计稿（C′：ESP 常驻 initramfs） | 部分有效：§4 `gk3-fastbootd` 的协议 / 白名单 / 清除语义 / USB / 界面仍是执行端依据；§3.3 推荐与 §7.1 U1–U7 已被 [boot-entry-design.md](boot-entry-design.md) 取代 | 维护者 |
 | [stage7-flutter-debian.md](stage7-flutter-debian.md) | 图形安装器（Flutter + Debian live）：决定、里程碑 M0–M4、真机记录 | 现行 | 维护者 · AI |
+| [installer-rust-design.md](installer-rust-design.md) | 安装器后端用 Rust 重写（并行轨道）：不静默失败的规则、迁移顺序、协议兼容与偏差表、对拍、进镜像的方式；对着 shell 版查出的问题 S1–S5 | 现行（阶段 0 + 1a 完成，未替换任何东西；代码 [`tools/gk3-installer/`](../tools/gk3-installer/)） | 维护者 · AI |
 | [stage7-live-installer.md](stage7-live-installer.md) | 第一版 Stage 7 设计（C + cairo 安装器 + Alpine 救援）与 M0 实测 | 部分有效：一套镜像 / 共用内核与 dtb / ESP 约束 / M0 实测仍被 `scripts/live/` 引用；界面与底座已被 [stage7-flutter-debian.md](stage7-flutter-debian.md) 取代 | 维护者 |
 | [fingerprint-driver-design.md](fingerprint-driver-design.md) | 指纹（FTE7001）：TA 已加载进 QSEE（M1），M2 发真命令暂停；架构、复现步骤 | 现行（暂停中） | 维护者 · AI |
 | [upstream/README.md](upstream/README.md) | 5 份待投上游的相机 / camcc 补丁稿与收件人（未发，等用户点头） | 现行 | 维护者 |
