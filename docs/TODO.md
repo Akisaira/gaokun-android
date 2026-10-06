@@ -16,7 +16,7 @@ D1–D23 是 v1.0-plan §6 的决定，其余是 v1.0-plan 与本文件的条目
 
 ## 总表：现在在做 / 待办（2026-10-06）
 
-**设备现状**：槽 `_a` = `1.0.0-dev.10`（戳 `1791278550`，内核 `912f22c3` = 7.2.9 + 0076、无 0050），**SELinux enforcing（D5，默认）**，经统一启动入口开机（动作模式 + 分派开）。**dev.10 验收（10-06）**：在 dev.9 的 enforcing 开机里经 OTA 装上（= enforcing 下 OTA 测试 ✅），A 档 44（FAIL 只有开发机故意持久化的 5555）、avc 只剩两类已知；稳定 MAC `7e:a1:e8:15:66:f1` 生效（NET-4 ✅）；HAL 不再误报 Windows（ESP 已清）。**这一轮踩到并已修**：① enforcing 下第一次 OTA 失败 —— install-ota-local.sh 装机期间 rw 挂着 ESP ⇒ postinstall / HAL 的只读探测 EBUSY ⇒ HAL 退去扫 /dev/block 被拒、又没走到按名字 ⇒ SetActiveBootSlot 失败（`309f735`：脚本下发前卸 ESP、HAL 认 EBUSY 与 opendir 被拒）；② fcitx5 在镜像里因构建系统解压 .so 弄坏 v2 签名被拒装（`5c48d08`：原样安装），开发机上先作为普通应用装了 0.1.3；③ 装机脚本把上一轮的失败行当成这一轮的（`5c48d08`：下发前清 logcat）。⚠️ 分派开着：设置里的恢复出厂会真擦。
+**设备现状**：槽 `_b` = **`1.0.0-rc.1`**（戳 `1791285623`，内核 `912f22c3`），**SELinux enforcing**，active = `_b`。**rc.1 验收（10-06）**：在 dev.10（enforcing）上经 OTA 装（第二次 enforcing 下 OTA ✅），A 档 **PASS 47 · FAIL 0**（发布闸门要的零 FAIL：验收期间临时关了开发机的 5555，跑完恢复）、iris 15/15、前后摄、s2idle 11/11、稳定 MAC、fcitx5 是系统应用（`UPDATED_SYSTEM_APP`，签名吻合）。载荷 `out/rc1-1791285623/`；安装器 `0.2.0-rc.1`（U 盘镜像带 rc.1 系统，Windows 包不带）在 `out/rc1-wt/out/release-installer/0.2.0-rc.1/`。踩到：enforcing 下 Android 侧写 EFI 变量被拒（efivarfs 没标签，`a1d303a` 修，进下一版；只影响开发脚本）。⬜ 发布：等用户给 R2 凭据并确认方式（建议 ROM `--stage-only` + 安装器 R2 + GitHub pre-release，不进 OTA 清单）。⚠️ 分派开着：设置里的恢复出厂会真擦。
 
 **用户已定**：D1 发布版关 debuggable · D2 留 test-key 并披露 · D3 `/data` 不加密并披露 · D4 恢复出厂交给统一启动入口 · D6 保留 root ·
 D7 只发 GApps 版 · D10 fcitx5-android 从 GitHub 取（2026-10-06，已入构建）· D13 备份默认 Seedvault · D15 默认时区上海 ·
