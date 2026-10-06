@@ -69,56 +69,6 @@ numbers (#NN) are in [`docs/stage4-findings.md`](docs/stage4-findings.md).
 | DRM (Widevine) | ❌ | No DRM module at all: Netflix, Disney+, Prime Video and the like do not play their shows ([details](docs/known-limitations.md#no-drm-protected-video-no-widevine)) |
 | SELinux | ⚠️ | `permissive`. Seven rounds of policy work towards enforcing; in enforcing trial runs the main functions work, the camera included ([#129](docs/stage4-findings.md#129)) |
 
-### Three things that will surprise you
-
-**The mainline device tree had no CPU thermal throttling at all.**
-`sc8280xp.dtsi` contains exactly one `cooling-maps` block and it is under
-`gpu-thermal`. Every CPU zone had a single 110 °C *critical* trip and nothing
-else — so the CPUs ran flat out until the kernel performed an emergency
-shutdown, with no gradual throttling in between. On a fanless tablet that is
-reachable.
-
-[`patches/0009`](patches/) fixes it in the device tree: a passive trip at 85 °C
-on each of the eight per-core zones, bound to that core's cluster cpufreq
-cooling device. Measured on the same machine across a DTB swap: cooling devices
-bound per zone 0 → 1, trip points 1 → 2. Worth knowing if you run any other
-sc8280xp machine on mainline — the gap is not specific to this device.
-
-**Standby was broken for a whole stage, and the culprit was a line of device
-tree we wrote ourselves.** It looked like a kernel or EC defect: the machine
-would suspend and then reset itself seconds later, and **it reproduced
-identically under Ubuntu on the same kernel** — which is exactly the evidence
-you would use to rule Android out. It did rule Android out. It also pointed at
-the wrong layer entirely.
-
-The real cause was added in Stage 2 to get USB device-mode adb: we set the
-second USB controller to `dr_mode = "otg"` with `usb-role-switch`, where
-upstream has plain `host`. This machine's UCSI did not come up at the time, so
-nothing ever assigned a role, and the controller sat in `device` with no gadget
-and no xHCI child. Powering that half-initialised state down — a system suspend
-does it, and so does simply unbinding the driver — **resets the whole board,
-with nothing in any log**.
-
-Two things made it take so long. There were **two independent blockers stacked**
-(the second, an EC `suspend_noirq` timeout, was already fixed by a patch we were
-carrying), so every single-variable experiment came back negative. And the
-**per-attempt failure rate was about 93%**, which makes "change one thing, try
-once, it died" the expected outcome for *any* configuration — several rounds
-went into chasing noise. The Android fix switches the role to `host` before the
-machine sleeps and back to `device` when the screen comes on, which is why USB
-adb drops while the machine is asleep. [#52](docs/stage4-findings.md#52),
-[#57](docs/stage4-findings.md#57)
-
-**An ordinary app could panic the kernel.** A `sync_file` ioctl on a present
-fence races with dma-fence's detach-on-signal and trips a `BUG_ON` in
-`drm_crtc.c:161`, taking the whole machine down — this is what "switching to
-Settings freezes" turned out to be. `patches/0013` deletes the racy check, and
-this port has carried it since v0.4.0-alpha ([#58](docs/stage4-findings.md#58),
-[#62](docs/stage4-findings.md#62)). The bug is still in mainline, so any other
-DRM machine can hit it.
-
----
-
 ## Hardware
 
 | | |

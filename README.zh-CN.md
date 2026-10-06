@@ -59,44 +59,6 @@ UEFI。这不是一次常规移植 —— 它是 **AOSP on mainline**，每一�
 | DRM（Widevine） | ❌ | 系统里完全没有 DRM 模块：Netflix、Disney+、Prime Video 这类放不了正片（[详情](docs/known-limitations.zh-CN.md#无法播放受-drm-保护的视频没有-widevine)） |
 | SELinux | ⚠️ | `permissive`。为转 enforcing 已经做了七轮策略；enforcing 试跑时主要功能都正常，相机也在内（[#129](docs/stage4-findings.md#129)） |
 
-### 三件反直觉的事
-
-**主线设备树里原先完全没有 CPU 温控。** `sc8280xp.dtsi` 里总共只有一处
-`cooling-maps`，在 `gpu-thermal` 下面。每个 CPU 温区只有一条 110 °C 的
-*critical* trip，别的什么都没有 —— CPU 会一路满频跑到内核紧急关机，
-中间**没有任何渐进降频**。这台是被动散热的无风扇平板，长时间游戏真的撞得到。
-
-[`patches/0009`](patches/) 在设备树里把它修好了：8 个 per-core 温区各加一条
-85 °C 的 passive trip，绑到本簇的 cpufreq cooling device。同一台机器只换 DTB
-的实测对比：每个温区绑定的 cooling device 从 0 变 1、trip 点从 1 变 2。
-**这个缺口不是本机特有的** —— 任何跑主线的 sc8280xp 机器都值得看一眼。
-
-**待机坏了整整一个阶段，而真凶是我们自己改的一行设备树。**
-它看起来像内核或 EC 的缺陷：挂下去几秒后整机复位，而且**在 Ubuntu 上用同一棵
-内核复现得一模一样** —— 这恰恰是你会拿来排除 Android 的那种证据。
-它确实排除了 Android，也把我们指向了完全错误的一层。
-
-真正的原因是 Stage 2 为了 USB adb 自己加的：我们把第二个 USB 控制器设成
-`dr_mode = "otg"` + `usb-role-switch`，而上游就是普通的 `host`。本机的 UCSI
-当时起不来，没有任何东西会去指派 role，于是控制器停在 `device`、既没有 gadget
-也没有 xhci 子设备。给这个"半初始化"状态断电 —— 系统挂起会，单纯解绑驱动也会
-—— **整板复位，且不留任何日志**。
-
-有两件事让它拖了这么久。**两道坎叠在一起**（第二道是 EC 的 `suspend_noirq`
-超时，而它早就被我们带着的一个补丁修好了），所以每个单变量实验都返回"无效"。
-而且**单次失败率约 93%** —— "改一条、试一次、炸了"对任何配置都是大概率事件，
-有好几轮是在追噪声。Android 侧的修法是**睡下去之前把 role 切到 `host`、
-亮屏时切回 `device`**，这也就是机器睡着时 USB adb 会断的原因。
-[#52](docs/stage4-findings.md#52)、[#57](docs/stage4-findings.md#57)
-
-**普通应用曾经能把内核 panic 掉。** 对 present fence 做 `sync_file` ioctl 会与
-dma-fence 的「signal 即摘 ops」竞态，撞上 `drm_crtc.c:161` 的 `BUG_ON`，整台机器
-当场倒下 ——「切到设置就卡死」就是这个。`patches/0013` 删掉那个竞态检查，本仓自
-v0.4.0-alpha 起一直带着（[#58](docs/stage4-findings.md#58)、[#62](docs/stage4-findings.md#62)）。
-这个缺陷主线至今还在，别的 DRM 机器也撞得到。
-
----
-
 ## 硬件
 
 | | |
