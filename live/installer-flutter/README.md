@@ -73,6 +73,9 @@ bash scripts/live/test-in-container.sh scripts/live/gen-fixtures.sh
 * 逻辑坐标固定 1280×800，整体缩放；旋转交给 cage
 * 触摸目标：按钮 56、列表项 ≥ 72 逻辑像素（软键盘：键帽 48 + 缝 8）。C 版定的是 88；改 MD3 时按 MD3 的下限
   （48 dp ≈ 本机 37 逻辑像素）收回来，理由写在 `lib/ui/theme.dart` 的 `kTouch`
+* 每一条写盘的路（安装三种方式、缩分区、手动调整）之前都有**强制阅读的风险确认页**（`lib/ui/screens_risk.dart`，用户 2026-10-06）：
+  滚到底 + 停够 15 秒 + 勾选，整盘清空 / 有 Windows 的盘上手动调整再输入 ASCII 的 `ERASE`；`Session` 没记下确认就不写盘。
+  新加写盘的路要接上它（`RiskPage.open`），详见 `docs/stage7-flutter-debian.md` §5.16
 * 最后一步和缩分区是**按住 2 秒**；键盘上按住回车 / 空格也行 —— 触摸坏了不能变砖
 * 做不到的选项**禁用并写明原因**，不藏起来（安装 U 盘也列出来，写明"不能装到它上面"）
 * 导航就是 Navigator 的栈：返回 = 回到真正来的那一页（C 版 `screen--` 掉进过没走过的分支屏）

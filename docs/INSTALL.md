@@ -102,6 +102,13 @@ What it can do:
 | **Reinstall Android** (Android already on the disk) | Rewrites Android in its existing partitions; wipes data by default, or keeps it (*Keep user data*) | ✅ keeping data, same version, from the medium and over the network. ⬜ wiping data |
 | **Adjust the disk** | Delete / shrink / grow / create / format partitions, one confirmed step at a time | ⬜ not yet (only on test disks) |
 
+**Before anything is written to the disk, the installer shows a risk notice
+you have to read** — in every mode above, and before shrinking a partition:
+scroll to the end, wait 15 seconds and tick *I have backed up my important
+data…* before *Continue* unlocks; erasing the whole disk, or adjusting a disk
+that has Windows on it, also asks you to type `ERASE`. It means what it says:
+back up your important data to another device first.
+
 The system image comes from the medium if it carries one, or is downloaded
 over Wi-Fi from the mirror above (the latest release, about 1.3 GB). If the
 medium carries the image, a small rescue system (the installer itself) goes
