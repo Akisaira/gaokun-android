@@ -36,6 +36,9 @@ LOCAL_SRC_FILES := fcitx5-android-arm64-v8a.apk
 LOCAL_CERTIFICATE := PRESIGNED
 LOCAL_PRODUCT_MODULE := true
 LOCAL_DEX_PREOPT := false
+# APK 的 manifest 声明了两个 uses-library-not-required（androidx.window.extensions / .sidecar）；构建系统的
+# enforce_uses_libraries 检查要求这里列得一模一样，否则 dev.10 第一次编就停在 Fcitx5Android 上（2026-10-06）。
+LOCAL_OPTIONAL_USES_LIBRARIES := androidx.window.extensions androidx.window.sidecar
 LOCAL_LICENSE_KINDS := SPDX-license-identifier-LGPL-2.1
 LOCAL_LICENSE_CONDITIONS := restricted
 include $(BUILD_PREBUILT)
