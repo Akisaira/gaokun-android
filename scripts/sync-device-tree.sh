@@ -138,6 +138,21 @@ else
     die "构建机上的 Histen 引擎$why —— 见 effects/prebuilt/README.md；确实不要它就设 GK3_ALLOW_NO_HISTEN=1"
 fi
 
+echo "═══ 3b2. 断言：中文输入法 fcitx5-android 的 APK 在、且是钉住的那一份 ═══"
+# 来源与版本见 prebuilt-apps/fcitx5/README.md（用户 2026-10-06 定：GitHub release）。期望值入库在 .sha256 里。
+# APK 走第 1 步的 device/ 同步（它没被排除；.gitignore 只是不入库）。不在时 device.mk 的 wildcard 会静默不带 ——
+# 这里大声说出来：发版构建要带它（DISP-3），确实不要就设 GK3_ALLOW_NO_FCITX5=1（同时构建时设 GAOKUN3_WITH_FCITX5=false）。
+FCITX_SHA=$(cut -d' ' -f1 "$SRC/prebuilt-apps/fcitx5/fcitx5-android-arm64-v8a.apk.sha256")
+got=$($SSH "vahiru@$HOST" 'sha256sum ~/crdroid/device/huawei/gaokun3/prebuilt-apps/fcitx5/fcitx5-android-arm64-v8a.apk 2>/dev/null | cut -d" " -f1' || true)
+if [ "$got" = "$FCITX_SHA" ]; then
+    ok "fcitx5-android APK 在（${FCITX_SHA:0:16}）"
+elif [ "${GK3_ALLOW_NO_FCITX5:-0}" = 1 ]; then
+    echo "· fcitx5-android APK 不在或不符（${got:-缺失}），GK3_ALLOW_NO_FCITX5=1 ⇒ 这一版不带中文输入法"
+else
+    if [ -n "$got" ]; then why="sha256 不符（${got}）"; else why="缺失"; fi
+    die "构建机上的 fcitx5-android APK $why —— 取法见 prebuilt-apps/fcitx5/README.md；确实不要它就设 GK3_ALLOW_NO_FCITX5=1"
+fi
+
 echo "═══ 3c. 断言：统一启动入口 gk3boot.efi 在、version 与二进制里嵌的版本串一致 ═══"
 # 规矩与理由见 prebuilt-gk3boot/README.md：version 决定 ESP 上的目录名 EFI/gk3boot/<version>/，
 #   与二进制里的 androidboot.bootloader=gk3boot-<串> 对不上就是"换了二进制没换版本串"。

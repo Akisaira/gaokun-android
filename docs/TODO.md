@@ -1116,7 +1116,8 @@ features xml 补 `android.hardware.camera` + `android.hardware.camera.flash`（S
 
 ## B. 工程债与正确性
 
-### B12a. 🔄 中文输入法（DISP-3 / D10）：选 fcitx5-android，构建写法已就位、默认关（2026-10-05 调研）
+### B12a. 🔄 中文输入法（DISP-3 / D10）：fcitx5-android 0.1.3（GitHub release）已放进构建（2026-10-06 用户定来源），⬜ 下一版构建 + 上机
+> 2026-10-06：APK 下载、sha256 `8e5de1036aea…` 与 GitHub 资产 digest 一致；device.mk 改成 APK 在就带（`GAOKUN3_WITH_FCITX5=false` 显式不带）；sync-device-tree.sh 3b2 断言；NOTICE 记 LGPL 源码 tag；已知限制中英改成"要自己打开一次"。⬜ 上机：设置里能启用、拼音能出字、实体键盘中英切换。以下是 10-05 的调研记录。
 按 D10"许可证合适、物理键盘可用就预置"调研了两个（只看了项目页、GitHub release、F-Droid 页，**没在本机上装过**）：
 
 | | fcitx5-android | Trime（RIME） |

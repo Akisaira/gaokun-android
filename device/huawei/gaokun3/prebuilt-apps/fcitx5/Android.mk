@@ -1,4 +1,4 @@
-# 中文输入法预置：fcitx5-android（v1.0 DISP-3 / D10，2026-10-05）。⚠️ 默认【不启用】：等用户确认 APK 来源。
+# 中文输入法预置：fcitx5-android（v1.0 DISP-3 / D10，2026-10-05）。★ 2026-10-06 用户定来源 = GitHub release 0.1.3（README.md）。
 #
 # 为什么选它（调研 2026-10-05，只看了项目页 / release / F-Droid 页，⬜ 没在本机上装过）：
 #   * 许可证 LGPL-2.1（github.com/fcitx5-android/fcitx5-android；F-Droid 页写 "GNU Lesser General Public License v2.1 only"）
@@ -17,7 +17,7 @@
 #   GAOKUN3_WITH_FCITX5 := true（device.mk 只有这个开关为 true 才把模块加进 PRODUCT_PACKAGES）。
 #
 # 源码出处（LGPL 义务；发版时把这一行抄进 docs/relnotes/<版本>-sources.md 与 NOTICE）：
-#   https://github.com/fcitx5-android/fcitx5-android/tree/<所用版本的 tag>（含子模块 fcitx5 / libime / fcitx5-chinese-addons 等）。
+#   https://github.com/fcitx5-android/fcitx5-android/tree/0.1.3（含子模块 fcitx5 / libime / fcitx5-chinese-addons 等）。
 #
 # ★ 为什么用 Android.mk + wildcard 而不是 Android.bp 的 android_app_import：
 #   Soong 遇到不存在的 apk 源文件会在分析期直接让整个构建失败，而 APK 不入库（本目录 .gitignore）；

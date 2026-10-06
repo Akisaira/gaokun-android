@@ -35,6 +35,12 @@ under other licenses; those keep their own terms.
       combined with, the GPL-3 userspace.
 * patches/ that apply to Mesa:
       MIT, matching upstream Mesa.
+* fcitx5-android 0.1.3 (Chinese input method, preinstalled in the binary
+  releases from 1.0; the APK is not contained in this repository):
+      GNU Lesser General Public License v2.1, upstream
+      https://github.com/fcitx5-android/fcitx5-android -- the corresponding
+      source is https://github.com/fcitx5-android/fcitx5-android/tree/0.1.3
+      (with its submodules). The APK is the project's own signed release build.
 * external/hexagonrpc (fetched by the local manifest, not vendored here):
       GNU General Public License v3.0, upstream linux-msm/hexagonrpc.
 * Proprietary firmware for this device (Huawei .mbn / .jsn / audioreach

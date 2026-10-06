@@ -1053,9 +1053,12 @@ PRODUCT_SYSTEM_EXT_PROPERTIES += \
 
 # ═══════════ 中文输入法 fcitx5-android（v1.0 DISP-3 / D10）：默认关 ═══════════
 # 模块定义在 prebuilt-apps/fcitx5/Android.mk（APK 不入库、放进去才有这个模块；选型与许可证见那个文件顶部）。
-# ⬜ 等用户确认 APK 来源（GitHub release 还是 F-Droid，两者签名不同，决定以后从哪更新）、并上机验过实体键盘的
-#   中英切换，再在构建时设 GAOKUN3_WITH_FCITX5 := true。APK 不在时别打开：PRODUCT_PACKAGES 里的名字找不到模块会让构建失败。
-ifeq ($(GAOKUN3_WITH_FCITX5),true)
+# ★ 2026-10-06 用户定 APK 来源 = GitHub release（0.1.3，版本 / sha256 / 取法见 prebuilt-apps/fcitx5/README.md）。
+#   APK 在就带（wildcard，与 Histen 引擎同一个规矩：别人的 checkout 里没有它也照样能编）；GAOKUN3_WITH_FCITX5=false 显式不带。
+#   构建机上 sync-device-tree.sh 断言它在、且 sha256 与入库的 .sha256 一致。只预装、不改默认输入法。⬜ 实体键盘中英切换未上机。
+ifneq ($(GAOKUN3_WITH_FCITX5),false)
+ifneq ($(wildcard $(LOCAL_PATH)/prebuilt-apps/fcitx5/fcitx5-android-arm64-v8a.apk),)
 PRODUCT_PACKAGES += \
     Fcitx5Android
+endif
 endif

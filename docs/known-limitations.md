@@ -326,8 +326,12 @@ These are bugs, not trade-offs, and they will be removed from this list once fix
   of the chip.
 * **What to do**: nothing yet; connect your other devices to the router directly.
 
-### No Chinese input method is included
-<!-- DISP-3 (D10). Delete once a Chinese IME is preinstalled. -->
-* **What you see**: the built-in keyboard has no Chinese.
-* **Why**: no Chinese input method is preinstalled yet.
-* **What to do**: install a Chinese IME yourself (download the APK from the IME's website).
+### The Chinese input method has to be turned on once
+<!-- DISP-3 (D10). 2026-10-06: fcitx5-android 0.1.3 (GitHub release build) is preinstalled from the build after
+     1.0.0-dev.9 (prebuilt-apps/fcitx5/README.md). ⬜ Not yet checked on the machine: how a hardware keyboard switches
+     between Chinese and English. Rewrite this entry once that is checked. -->
+* **What you see**: the default keyboard has no Chinese.
+* **Why**: the Chinese input method (fcitx5, pinyin / shuangpin / wubi built in) is preinstalled but not made the default.
+* **What to do**: Settings → System → Keyboard → On-screen keyboard → turn on *Fcitx5*, then switch to it (menu names not yet checked on the machine). Updates come
+  from the project's GitHub releases (the F-Droid build is signed differently and will not install over it).
+  How the hardware keyboard switches between Chinese and English has not been checked yet.
