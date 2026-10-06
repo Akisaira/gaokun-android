@@ -118,3 +118,6 @@ genfscon sysfs /devices/platform/soc@0/c251000.thermal-sensor/wakeup u:object_r:
 genfscon sysfs /devices/platform/soc@0/c252000.thermal-sensor/wakeup u:object_r:sysfs_wakeup:s0
 genfscon sysfs /devices/platform/soc@0/c263000.thermal-sensor/wakeup u:object_r:sysfs_wakeup:s0
 genfscon sysfs /devices/platform/soc@0/c440000.spmi/spmi-0/0-00/c440000.spmi:pmic@0:rtc@6100/wakeup u:object_r:sysfs_wakeup:s0
+
+# efivarfs：见 file.te（没有它时文件是 unlabeled，enforcing 下建不了新变量）
+genfscon efivarfs / u:object_r:gaokun3_efivarfs:s0

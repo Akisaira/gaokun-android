@@ -1,0 +1,10 @@
+# efivarfs 的标签（2026-10-06，D5 enforcing 下装 rc.1 时踩的）。
+#
+# 核心策略里没有 efivarfs 的类型（refs/lineage-sepolicy 里 grep 不到），没有 genfscon 时这个文件系统上的文件
+# 一律是 unlabeled；enforcing 下新建 EFI 变量（例如 scripts/boot-oneshot.sh 写 LoaderEntryOneShot）会被
+# `unlabeled unlabeled:filesystem associate` 拒绝 —— 这条检查的主体是文件的标签而不是进程，所以 ksu 域是
+# permissive 也躲不开（实机：write 报 Permission denied，dmesg 一条 avc associate permissive=0）。
+# 声明成 fs_type 即可：核心策略已有 `allow fs_type self:filesystem associate;`（private/file.te:202）。
+# 谁会写：只有开发脚本（经 KSU 的 adb shell，ksu 域本来就 permissive）。Android 自己不碰 efivarfs ——
+#   统一启动入口在 UEFI 里写变量，fastboot 执行端在 initramfs 里写（那里不加载 SELinux 策略）。
+type gaokun3_efivarfs, fs_type;
