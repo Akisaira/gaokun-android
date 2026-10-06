@@ -48,7 +48,7 @@
 > * 10-06 Mac 与设备都在热点「Xiaomi 17」（设备 `10.146.153.115`）。
 > * 常驻：预置 `/data/misc/adb/adb_keys`（Mac + Windows）+ 持久化 `persist.sys.usb.config=adb`、`persist.adb.tcp.port=5555` ⇒ 发布构建下 USB / TCP adb 照常；`adb shell` 经 KSU 即 root（无 `adb root`）。
 > * 常驻：`persist.vendor.gaokun3.allow_suspend` 开发机显式持久化为 0（不睡；镜像默认 1；旧名 `persist.gaokun3.allow_suspend` 的孤儿值无害）；`persist.logd.audit.rate=1000`。
->   ⚠️ 待核：dev.9 的 Parts 待机开关与 s2idle 循环之后 allow_suspend 是否仍为 0；10-05 为屏幕散热设的 `screen_off_timeout` 15 秒可能还在。
+>   2026-10-06 实机核过：`persist.vendor.gaokun3.allow_suspend` 仍为持久 0（开发机不睡）；`screen_off_timeout` 已是 600000（10 分钟）。
 
 ## 文档地图
 
