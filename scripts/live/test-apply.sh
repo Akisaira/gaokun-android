@@ -18,6 +18,9 @@
 #   K. 双系统专项（S10 / S15，docs/boot-entry-design.md §4.7、§4.9）：Windows 休眠拒绝写 ESP（U18）、BitLocker + 换 BOOTAA64
 #      要确认恢复密钥（U16）、默认系统写进 GK3 的 set_default（U12）、timeout 5（U13）、32 MiB 余量（U17）、
 #      重新安装删掉统一启动入口的条目、BOOTAA64 字节相同就不重写、LoaderEntryDefault 被删掉
+#   M. MBR 盘与读不出分区表的盘（设计稿 S1 / S2）：MBR 盘上方案报 mbr-disk、apply / 缩分区 / 手动调整在动盘前
+#      ERR mbr-disk touched=no、整盘清空照常；读不出的盘（dm-error 真设备 + 照它实录输出回答的假 sgdisk）探测不报空闲、
+#      写盘入口 ERR disk-unreadable
 #   每一次装完都核对 misc 的前 64 KiB 与 Python 独立算的初始状态逐字节相同（gk3-misc init，S10）
 #   GK3_TEST_DUEL=<Rust 版路径>：在下面标了 duel_* 的场景点上顺带与 Rust 版（tools/gk3-installer）对拍只读入口
 #      （scripts/live/duel-lib.sh，docs/installer-rust-design.md §6）；不设时 duel_* 什么都不做
@@ -76,6 +79,8 @@ cleanup() {
     for img in "$W"/*.img; do
         for l in $(losetup -j "$img" 2>/dev/null | cut -d: -f1); do losetup -d "$l" 2>/dev/null; done
     done
+    # M 组的 dm-error 设备（中途失败时它还在 colima 虚拟机里）
+    command -v dmsetup >/dev/null && dmsetup remove "gk3-test-eio-$$" 2>/dev/null
     rm -rf "$W"
 }
 trap cleanup EXIT
@@ -727,6 +732,114 @@ OUT=$(gk3__node_matches "$DS" "${DS}p1" 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q '对不上' && ok "内核还拿着旧分区表：同号节点认出来是旧的（起点对不上）" || bad "旧节点没认出来（rc=${rc}）"
 umount "$ms"; partprobe "$DS"; sleep 1
 gk3__node_matches "$DS" "${DS}p1" 2>/dev/null && ok "卸下、partprobe 生效之后：对上了" || bad "partprobe 之后还说对不上"
+
+# ── M. MBR 盘与读不出分区表的盘（设计稿 docs/installer-rust-design.md §3.2 的 S1 / S2，2026-10-06 修）──────
+# S2：原来的 MBR 检查找 "MBR only"，gdisk 1.0.10 从不这么说 ⇒ MBR 盘上照算双系统方案，挡住写盘的是 ESP 类型检查的
+#     副作用（esp-not-esp-type）。现在：方案报 mbr-disk；apply / 缩分区 / 手动调整在动盘前报 ERR mbr-disk touched=no；
+#     整盘清空照常（本来就要抹掉分区表）。这块盘上故意放一个 0xEF 分区：证明拦住它的是 MBR 检查，不是 ESP 检查。
+# S1：sgdisk -p 读不出时原来把整块盘报成一段空闲。现在 DISK 标 table=unreadable、不列 PART / FREE、ERR disk-unreadable。
+echo "═══ M. MBR 盘与读不出分区表的盘：动盘之前明确拒绝 ═══"
+DM=$(new_disk m 40G)
+printf 'label: dos\n,300M,ef\n,4G,7\n,2G,83\n' | sfdisk -q "$DM"
+partprobe "$DM" 2>/dev/null; udevadm settle 2>/dev/null; sleep 1
+mkfs.vfat -F 32 "${DM}p1" >/dev/null; mkntfs -Q -F "${DM}p2" >/dev/null 2>&1; mkfs.ext4 -q -F "${DM}p3"
+mfp() {   # MBR 盘的指纹：分区表（sfdisk -d）、PTTYPE、盘头 1 MiB、每个分区头 1 MiB
+    local p; sfdisk -d "$1" 2>/dev/null; blkid -p -o value -s PTTYPE "$1"; head -c 1048576 "$1" | sha256sum
+    for p in "$1"p*; do head -c 1048576 "$p" | sha256sum; done
+}
+BEFORE_M=$(mfp "$DM")
+[ "$(blkid -p -o value -s PTTYPE "$DM")" = dos ] && [ "$(sgdisk -p "$DM" 2>&1 | grep -ci 'MBR only')" = 0 ] \
+    && ok "造出来的是 dos 盘，sgdisk -p 里没有 \"MBR only\"（原来的判据永远不触发）" || bad "测试盘不对"
+PM=$(gk3_probe 2>/dev/null)
+FM=$(printf '%s\n' "$PM" | grep "^FREE disk=$DM " | tail -1)
+printf '%s\n' "$PM" | grep -q "^DISK path=$DM .* table=mbr$" && [ -n "$FM" ] \
+    && ok "探测：DISK 标 table=mbr，分区与空闲区照列（界面据此只给整盘清空）" || bad "探测里 MBR 盘没标出来：$(printf '%s\n' "$PM" | grep "^DISK path=$DM ")"
+duel_scene "M MBR 盘（带 0xEF 分区）" "$DM"
+mplan() { local out rc; out=$(gk3_plan "$@" 2>/dev/null); rc=$?; echo "$rc $out"; }
+[ "$(mplan --disk "$DM" --mode alongside --rescue no --region-start "$(gk3__f "$FM" start)" --region-end "$(gk3__f "$FM" end)" --esp "${DM}p1")" = "1 PLANERR msg=mbr-disk" ] \
+    && ok "方案（双系统）：PLANERR msg=mbr-disk" || bad "双系统方案没拦住 MBR 盘"
+[ "$(mplan --disk "$DM" --mode reinstall --rescue no --esp "${DM}p1")" = "1 PLANERR msg=mbr-disk" ] \
+    && ok "方案（重新安装）：PLANERR msg=mbr-disk（原来重新安装绕过这道检查）" || bad "重新安装方案没拦住 MBR 盘"
+OUT=$(mplan --disk "$DM" --mode wipe --rescue no)
+printf '%s\n' "$OUT" | head -1 | grep -q '^0 PLAN op=wipe ' && printf '%s\n' "$OUT" | grep -q '^PLANSUM mode=wipe ' \
+    && ok "方案（整盘清空）：照常 —— MBR 盘唯一能走的路" || bad "整盘清空的方案被 MBR 检查拦了"
+mrefuse() {   # $1=说明 $2=期望的 ERR 行开头 $3…=命令：必须失败、ERR 对、盘一个字节没变
+    local what=$1 want=$2 out rc; shift 2
+    out=$("$@" 2>&1); rc=$?
+    if [ "$rc" != 0 ] && printf '%s\n' "$out" | grep -q "^$want" && [ "$(mfp "$DM")" = "$BEFORE_M" ]; then
+        ok "${what}：$(printf '%s\n' "$out" | grep -m1 '^ERR ')，盘没动"
+    else bad "${what}：rc=${rc}，或 ERR 不对，或盘被改了"; printf '%s\n' "$out" | grep -e '^ERR' -e '^!!' | tail -3 | sed 's/^/      /'; fi
+}
+MERR="ERR code=mbr-disk disk=$DM touched=no"
+mrefuse "apply 双系统（ESP 类型检查之前就拦）" "$MERR" gk3_apply --disk "$DM" --mode alongside --rescue no --release "$REL" \
+    --region-start "$(gk3__f "$FM" start)" --region-end "$(gk3__f "$FM" end)" --esp "${DM}p1"
+mrefuse "apply 重新安装" "$MERR" gk3_apply --disk "$DM" --mode reinstall --rescue no --release "$REL" --esp "${DM}p1"
+mrefuse "缩 NTFS（gk3_shrink）" "$MERR" gk3_shrink "${DM}p2" 2048
+mrefuse "删分区" "$MERR" gk3_part_delete "${DM}p3"
+mrefuse "格式化分区（原来先 mkfs、之后的 sgdisk -t 才失败）" "$MERR" gk3_part_format "${DM}p3" vfat
+mrefuse "新建分区" "$MERR" gk3_part_create --disk "$DM" --start "$(gk3__f "$FM" start)" --size-mib 1024 --fs ext4
+mrefuse "扩大分区" "$MERR" gk3_part_resize "${DM}p3" 3072
+mrefuse "缩小分区" "$MERR" gk3_part_resize "${DM}p3" 1024
+# 整盘清空：照常装完，盘变成 GPT
+gk3_apply --disk "$DM" --mode wipe --rescue no --release "$REL" >"$W/m-wipe.log" 2>&1; rc=$?
+[ "$rc" = 0 ] && [ "$(blkid -p -o value -s PTTYPE "$DM")" = gpt ] && [ "$(gk3__bylabel "$DM" super 2>/dev/null)" != "" ] \
+    && gk3_probe 2>/dev/null | grep -q "^DISK path=$DM .* table=gpt$" \
+    && ok "整盘清空 MBR 盘：装完，分区表换成 GPT" || { bad "整盘清空 MBR 盘不对（rc=${rc}）"; grep -e '^ERR' -e '^!!' "$W/m-wipe.log" | tail -3; }
+
+# 读不出：① 真的读不出的设备（dm-error：每次读都 EIO）—— sgdisk 退出码 0、给一张空表，只在 stderr 上说 Read error
+EIO=gk3-test-eio-$$
+if dmsetup create "$EIO" --table "0 6291456 error" 2>/dev/null; then
+    MM=$(dmsetup info -c --noheadings -o major,minor "$EIO" | tr -d ' '); DX=$W/eio
+    mknod "$DX" b "${MM%%:*}" "${MM##*:}"
+    sgdisk -p "$DX" >/dev/null 2>&1; rc=$?
+    gk3__read_table "$DX"
+    [ "$rc" = 0 ] && [ "$GK3__PT" = unreadable ] && printf '%s' "$GK3__PT_WHY" | grep -q 'Read error' \
+        && ok "整块 EIO 的盘：sgdisk 退出码 0，仍判成 unreadable（${GK3__PT_WHY}）" || bad "整块 EIO 的盘没判成读不出（rc=${rc} PT=${GK3__PT}）"
+    OUT=$(gk3_apply --disk "$DX" --mode wipe --rescue no --release "$REL" 2>&1); rc=$?
+    [ "$rc" != 0 ] && printf '%s\n' "$OUT" | grep -q "^ERR code=disk-unreadable disk=$DX touched=no$" \
+        && ok "apply 整盘清空一块读不出的盘：ERR disk-unreadable touched=no" || { bad "读不出的盘 apply 没拦（rc=${rc}）"; printf '%s\n' "$OUT" | grep -e '^ERR' -e '^!!' | tail -2; }
+    OUT=$(gk3_part_create --disk "$DX" --start 2048 --size-mib 100 --fs ext4 2>&1); rc=$?
+    [ "$rc" != 0 ] && printf '%s\n' "$OUT" | grep -q "^ERR code=disk-unreadable disk=$DX touched=no$" \
+        && ok "在读不出的盘上新建分区：ERR disk-unreadable" || bad "读不出的盘上新建分区没拦（rc=${rc}）"
+    rm -f "$DX"; dmsetup remove "$EIO" 2>/dev/null
+else bad "建不出 dm-error 设备（容器里没有 dmsetup / device-mapper？）"; fi
+
+# ② 探测：一块有数据的 GPT 盘读不出（假 sgdisk 照 dm-error 上实录的输出回答，其余原样转给真 sgdisk）——
+#    gk3_probe 枚举 /sys/block 时跳过 dm-*，真的 dm-error 设备进不了探测，只能这样造
+DN=$(new_disk n 20G)
+sgdisk -o -n 1:2048:+300M -t 1:ef00 -c 1:esp -n 2:0:+4G -t 2:0700 -c 2:"Basic data partition" "$DN" >/dev/null 2>&1
+partprobe "$DN" 2>/dev/null; udevadm settle 2>/dev/null; sleep 1
+FB=$W/fakebin; mkdir -p "$FB"
+cat > "$FB/sgdisk" <<EOF
+#!/bin/bash
+if [ "\$1" = -p ] && [ "\$2" = "\${GK3_TEST_EIO_DISK:-}" ]; then
+    echo "Warning! Read error 5; strange behavior now likely!" >&2
+    echo "Warning! Read error 5; strange behavior now likely!" >&2
+    echo "Creating new GPT entries in memory."
+    echo "Disk \$2: 41943040 sectors, 20.0 GiB"
+    echo "First usable sector is 34, last usable sector is 41943006"
+    echo; echo "Number  Start (sector)    End (sector)  Size       Code  Name"
+    exit 0
+fi
+exec $(command -v sgdisk) "\$@"
+EOF
+chmod +x "$FB/sgdisk"
+BEFORE_N=$(fp "$DN")
+OUT=$(PATH=$FB:$PATH GK3_TEST_EIO_DISK=$DN gk3_probe 2>"$W/n.err"); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$OUT" | grep -q "^DISK path=$DN .* table=unreadable$" \
+    && ! printf '%s\n' "$OUT" | grep -q -e "^FREE disk=$DN " -e "^PART path=${DN}p" \
+    && grep -q "^ERR code=disk-unreadable disk=$DN touched=no$" "$W/n.err" && grep -q '^!! 读不出' "$W/n.err" \
+    && printf '%s\n' "$OUT" | grep -q "^DISK path=$DM .* table=gpt$" \
+    && ok "探测：读不出的盘标 table=unreadable、不报空闲、ERR disk-unreadable、退出码 1；别的盘照常列" \
+    || { bad "探测把读不出的盘报错了（rc=${rc}）"; printf '%s\n' "$OUT" | grep "disk=$DN \|path=$DN"; cat "$W/n.err" | tail -3; }
+duel_call "M 读不出的盘" "PATH=$FB:$PATH" "GK3_TEST_EIO_DISK=$DN" gk3_probe
+OUT=$(PATH=$FB:$PATH GK3_TEST_EIO_DISK=$DN gk3_part_delete "${DN}p2" 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s\n' "$OUT" | grep -q "^ERR code=disk-unreadable disk=$DN touched=no$" && [ "$(fp "$DN")" = "$BEFORE_N" ] \
+    && ok "读不出的盘上删分区：ERR disk-unreadable，盘没动" || bad "读不出的盘上删分区没拦（rc=${rc}）"
+OUT=$(PATH=$FB:$PATH GK3_TEST_EIO_DISK=$DN gk3_apply --disk "$DN" --mode alongside --rescue no --release "$REL" \
+      --region-start 8808448 --region-end 41943006 --esp "${DN}p1" 2>&1); rc=$?
+[ "$rc" != 0 ] && printf '%s\n' "$OUT" | grep -q "^ERR code=disk-unreadable disk=$DN touched=no$" && [ "$(fp "$DN")" = "$BEFORE_N" ] \
+    && ok "读不出的盘上装双系统：ERR disk-unreadable，盘没动" || bad "读不出的盘上装双系统没拦（rc=${rc}）"
 
 # ── E. 网络安装 ────────────────────────────────────────────────────────────
 echo "═══ E. 网络安装：下载一整套发布文件，再走同一条写盘路径 ═══"

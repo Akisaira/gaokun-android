@@ -7,7 +7,8 @@
 #       bash scripts/live/test-in-container.sh scripts/live/test-duel.sh
 #
 # 两部分：
-#   1. 这里自己造的边角盘（test-apply.sh 里没有的）：没有分区表的盘、坏的 GPT、MBR 盘、怪名字（空格 / % / 引号 /
+#   1. 这里自己造的边角盘（test-apply.sh 里没有的）：没有分区表的盘、坏的 GPT、MBR 盘（含 0xEF 分区 / 空 dos 表；混合 MBR 与
+#      只剩保护性 MBR 不算 MBR）、读不出分区表的盘（假 sgdisk，四种说法，S1）、怪名字（空格 / % / 引号 /
 #      中文 / 名字里带"super x"）、GBK 卷标、乱序与不对齐的分区、16 MiB 以下的缝、重名的 super、正好 1 GiB 的盘……
 #   2. 与盘无关的方案计算（duel_pure）
 # test-apply.sh 的全部场景另外由它自己在 GK3_TEST_DUEL 设了时顺带对拍（同一批盘、同一个时刻）。
@@ -43,11 +44,24 @@ D2=$(new_disk badgpt 3G)
 sgdisk -o "$D2" >/dev/null 2>&1; head -c 4096 /dev/urandom | dd of="$D2" bs=512 seek=1 conv=notrunc status=none
 duel_scene "坏的 GPT 头" "$D2"
 
-echo "═══ 2. MBR 盘（sgdisk 读它时会在内存里转成 GPT）═══"
+echo "═══ 2. MBR 盘（sgdisk 读它时会在内存里转成 GPT；写时不带 -g 就拒绝）═══"
 D3=$(new_disk mbr 30G)
 printf 'label: dos\n,100M,c\n,4G,7\n,200M,83\n' | sfdisk -q "$D3"; settle "$D3"
 mkfs.vfat "${D3}p1" >/dev/null 2>&1; mkntfs -Q -F "${D3}p2" >/dev/null 2>&1
 duel_scene "MBR 盘" "$D3"
+# 带 0xEF 分区（MBR 上的 ESP）、空的 dos 表（S2：两边都要报 table=mbr / mbr-disk）
+D3E=$(new_disk mbresp 30G)
+printf 'label: dos\n,300M,ef\n,4G,7\n' | sfdisk -q "$D3E"; settle "$D3E"; mkfs.vfat -F 32 "${D3E}p1" >/dev/null 2>&1
+duel_scene "MBR 盘（带 0xEF 分区）" "$D3E"
+D3Z=$(new_disk mbrempty 3G); printf 'label: dos\n' | sfdisk -q "$D3Z"
+duel_scene "空的 dos 表" "$D3Z"
+# 混合 MBR（sgdisk -h）、只剩保护性 MBR：都不算 MBR
+D3H=$(new_disk hybrid 3G); sgdisk -o -n 1:2048:+100M -t 1:0700 -n 2:0:+100M "$D3H" >/dev/null; sgdisk -h 1 "$D3H" >/dev/null 2>&1; settle "$D3H"
+duel_scene "混合 MBR" "$D3H"
+D3P=$(new_disk pmbr 3G); sgdisk -o "$D3P" >/dev/null 2>&1
+dd if=/dev/zero of="$D3P" bs=512 seek=1 count=33 conv=notrunc status=none
+dd if=/dev/zero of="$D3P" bs=512 seek=$(( 3 * 1024 * 2048 - 33 )) count=33 conv=notrunc status=none
+duel_scene "只剩保护性 MBR" "$D3P"
 
 echo "═══ 3. 怪名字、怪卷标、乱序、不对齐、小缝 ═══"
 D4=$(new_disk names 30G)
@@ -69,6 +83,31 @@ mkfs.vfat -F 32 "${D4}p3" >/dev/null 2>&1; mkfs.ext4 -q -F -L "lab el%" "${D4}p1
 # libblkid 原样给出 —— shell 版原样透过，Rust 版必须按字节处理才能一致（protocol.rs 的 enc 按字节做的理由）
 mkfs.ext4 -q -F -L "$(printf '\xcf\xb5\xcd\xb3 \xc5\xcc')" "${D4}p5"
 duel_scene "怪名字" "$D4"
+
+echo "═══ 3b. 读不出分区表的盘（S1）：假 sgdisk 照 dm-error 上实录的输出回答 ═══"
+# gk3_probe 枚举 /sys/block 时跳过 dm-*，真的 dm-error 设备进不了探测 —— 两边都经 PATH 找 sgdisk，于是用一个假的
+FB=$W/fakebin; mkdir -p "$FB"
+cat > "$FB/sgdisk" <<EOF
+#!/bin/bash
+if [ "\$1" = -p ] && [ "\$2" = "\${GK3_TEST_EIO_DISK:-}" ]; then
+    case "\${GK3_TEST_EIO_MODE:-eio}" in
+        eio)  echo "Warning! Read error 5; strange behavior now likely!" >&2
+              echo "Creating new GPT entries in memory."; echo "Disk \$2: 62914560 sectors, 30.0 GiB"
+              echo "First usable sector is 34, last usable sector is 62914526"; echo
+              echo "Number  Start (sector)    End (sector)  Size       Code  Name"; exit 0 ;;
+        open) echo "Problem opening \$2 for reading! Error is 2." >&2; echo "The specified file does not exist!" >&2; exit 2 ;;
+        crc)  echo "Warning! Error 5 reading partition table for CRC check!" >&2 ;;
+        none) echo "nothing useful"; exit 0 ;;
+    esac
+fi
+exec $(command -v sgdisk) "\$@"
+EOF
+chmod +x "$FB/sgdisk"
+for m in eio open crc none; do
+    duel_call "读不出（${m}）" "PATH=$FB:$PATH" "GK3_TEST_EIO_DISK=$D4" "GK3_TEST_EIO_MODE=$m" gk3_probe
+    duel_call "读不出（${m}）" "PATH=$FB:$PATH" "GK3_TEST_EIO_DISK=$D4" "GK3_TEST_EIO_MODE=$m" \
+        gk3_plan --disk "$D4" --mode alongside --rescue no --region-start 2048 --region-end 62914526 --esp "${D4}p3"
+done
 
 echo "═══ 4. 重名的 super、真机那种 34 扇区起的 misc、缺 userdata ═══"
 D5=$(new_disk dup 30G)

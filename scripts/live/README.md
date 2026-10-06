@@ -160,6 +160,9 @@ GK3_TEST_DUEL=/repo/tools/gk3-installer/target/aarch64-unknown-linux-musl/releas
 双系统时 Windows 那几个分区逐字节未变、PARTUUID 未变、ESP 没被格式化……），
 再验一组必须**在动盘之前**就拒绝的反例（截断的 .zst、sha256 不符、
 Windows 默认的 100 MiB ESP、在已装过的盘上再装一次）。每次装完都核对 misc 的前 64 KiB 与独立算的初始状态逐字节相同。
+M 组是 MBR 盘与读不出分区表的盘（`docs/installer-rust-design.md` §3.2 的 S1 / S2）：MBR 盘上非整盘的方案、apply、缩分区、手动调整都在动盘前
+报 `mbr-disk`（整盘清空照常），读不出的盘探测不报空闲、写盘入口报 `disk-unreadable` —— 用 dm-error 真设备（容器里要有 `dmsetup`）
+和照它实录输出回答的假 sgdisk（`gk3_probe` 枚举 `/sys/block` 时跳过 `dm-*`）。
 K 组是双系统专项（S10 / S15，`tools/gk3boot/README.md` §17）：Windows 休眠拒绝写 ESP、BitLocker + 换 BOOTAA64 要
 `--bitlocker-key yes`、32 MiB 余量、Windows 为默认写进 GK3 的 `set_default`、`timeout 5`、`LoaderEntryDefault` 被删
 （假 efivarfs：`GK3_EFIVARS=<目录>`）、重新安装删掉统一启动入口的条目、字节相同的 BOOTAA64 不重写。
