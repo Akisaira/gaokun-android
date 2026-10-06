@@ -19,6 +19,8 @@
 #      要确认恢复密钥（U16）、默认系统写进 GK3 的 set_default（U12）、timeout 5（U13）、32 MiB 余量（U17）、
 #      重新安装删掉统一启动入口的条目、BOOTAA64 字节相同就不重写、LoaderEntryDefault 被删掉
 #   每一次装完都核对 misc 的前 64 KiB 与 Python 独立算的初始状态逐字节相同（gk3-misc init，S10）
+#   GK3_TEST_DUEL=<Rust 版路径>：在下面标了 duel_* 的场景点上顺带与 Rust 版（tools/gk3-installer）对拍只读入口
+#      （scripts/live/duel-lib.sh，docs/installer-rust-design.md §6）；不设时 duel_* 什么都不做
 #
 # ⚠️ 故意不开 pipefail：判据都显式取退出码（scripts/verify-root.sh:8-11）。
 set -u
@@ -27,6 +29,7 @@ REPO=$(pwd)
 [ "$(id -u)" = 0 ] || { echo "要 root（用 scripts/live/test-in-container.sh 跑）"; exit 2; }
 . scripts/live/installer-lib.sh
 export GK3_ALLOW_LOOP=1
+. scripts/live/duel-lib.sh
 
 PASS=0; FAIL=0
 ok()  { echo "  ✓ $*"; PASS=$((PASS+1)); }
@@ -243,6 +246,7 @@ TL=$(PATH=$PB gk3_preflight 2>/dev/null | grep '^CHECK id=tools ')
     && ok "缺 sgdisk / partprobe / blkid / lsblk：$TL" || bad "预检的包名不对：$TL"
 TL=$(gk3_preflight 2>/dev/null | grep '^CHECK id=tools ')
 [ "$TL" = "CHECK id=tools ok=yes" ] && ok "工具齐全：${TL}（没有 pkgs= 字段）" || bad "工具齐全时预检不对：$TL"
+duel_call P gk3_preflight; duel_call "P 缺工具" "PATH=$PB" gk3_preflight; duel_pure
 
 # ── A. 命令行版，整盘 ───────────────────────────────────────────────────────
 echo "═══ A. install-gaokun3.sh 整盘安装 ═══"
@@ -273,6 +277,7 @@ echo ERASE | DISK=$DA GK3_SKIP_PREFLIGHT=1 bash scripts/install-gaokun3.sh "$W/b
     && grep -q '^ERR code=release-no-super touched=no' "$W/a2.log" \
     && ok "命令行版失败在动盘之前：明说盘没动过（ERR code=release-no-super touched=no），盘确实没变" \
     || { bad "命令行版失败时没说清盘动没动过（rc=${rc}）"; tail -4 "$W/a2.log" | sed 's/^/      /'; }
+duel_scene "A 整盘装完" "$DA"
 
 # ── B. 双系统 ──────────────────────────────────────────────────────────────
 echo "═══ B. 双系统：装进 Windows 盘中间的空闲区 ═══"
@@ -296,6 +301,7 @@ for n in 2 3 4; do H[$n]=$(sha "${DB}p$n"); done
 for n in 1 2 3 4; do PU[$n]=$(sgdisk -i "$n" "$DB" 2>/dev/null | awk '/unique GUID/{print $4}'); done
 ESP_UUID=$(blkid -o value -s UUID "${DB}p1")
 
+duel_scene "B Windows 盘（装前）" "$DB"
 PROBE=$(gk3_probe 2>/dev/null | awk -v d="$DB" '$2=="path="d || index($0, "disk="d" ") || index($0, "path="d"p")')
 printf '%s\n' "$PROBE" | sed 's/^/    /'
 printf '%s\n' "$PROBE" | grep -q "name=Basic%20data%20partition " && printf '%s\n' "$PROBE" | grep -q "name=EFI%20system%20partition " \
@@ -343,10 +349,12 @@ OUT=$(gk3_apply --disk "$DB" --mode alongside --rescue no --release "$REL" \
           --region-start "$RS" --region-end "$RE" --esp "${DB}p1" 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s' "$OUT" | grep -q 'partlabel-conflict' && [ "$(fp "$DB")" = "$BEFORE" ] \
     && ok "在已装过的盘上再装一次：partlabel-conflict 拒绝，盘没动" || bad "重复安装没被拦住（rc=${rc}）"
+duel_scene "B 双系统装完" "$DB"
 
 # ── C. 反例：都必须在动盘之前拒绝 ───────────────────────────────────────────
 echo "═══ C. 反例 ═══"
 DC=$(new_disk c 40G); sgdisk -o "$DC" >/dev/null; BEFORE=$(fp "$DC")
+duel_scene "C 空 GPT" "$DC"
 try() {   # $1=说明 $2=发布目录 $3=期望的报错片段
     local out rc; out=$(gk3_apply --disk "$DC" --mode wipe --rescue no --release "$2" 2>&1); rc=$?
     if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q "$3" && [ "$(fp "$DC")" = "$BEFORE" ]; then
@@ -371,6 +379,7 @@ sgdisk -o -n 1:2048:+100M -t 1:ef00 -c 1:"EFI system partition" \
 partprobe "$DE" 2>/dev/null; udevadm settle 2>/dev/null; sleep 1
 mkfs.vfat -F 32 "${DE}p1" >/dev/null 2>&1; mkntfs -Q -F "${DE}p2" >/dev/null 2>&1
 FE=$(gk3_probe 2>/dev/null | grep "^FREE disk=$DE " | tail -1)
+duel_scene "C 100 MiB 的 ESP" "$DE"
 BEFORE_E=$(fp "$DE")
 tryb() {  # $1=说明 $2=--esp $3=期望的报错片段
     local out rc; out=$(gk3_apply --disk "$DE" --mode alongside --rescue no --release "$REL" \
@@ -422,6 +431,7 @@ head -c 1048576 /dev/urandom > /media/gk3/gaokun3/live.squashfs; LIVE_SHA=$(sha 
 head -c 70000 /dev/urandom > /media/gk3/gaokun3/initramfs.img; sync
 PU4=$(sgdisk -i 4 "$DD" 2>/dev/null | awk '/unique GUID/{print $4}')
 PROBE=$(gk3_probe 2>/dev/null | awk -v d="$DD" '$2=="path="d || index($0, "disk="d" ") || index($0, "path="d"p")')
+duel_scene "D 介质与目标同盘" "$DD"
 printf '%s\n' "$PROBE" | grep -q "^DISK path=$DD .*medium=yes" && printf '%s\n' "$PROBE" | grep -q "^PART path=${DD}p4 .*medium=yes" \
     && ! printf '%s\n' "$PROBE" | grep -q "^PART path=${DD}p3 .*medium=yes" \
     && ok "gk3_probe：整块盘 medium=yes，且只有 p4（安装器所在）标 medium=yes" || bad "medium 标得不对"
@@ -451,6 +461,7 @@ else bad "双系统安装失败 rc=$rc"; tail -20 "$W/d.log" | sed 's/^/      /'
 findmnt -rn -S "${DD}p4" -T /media/gk3 >/dev/null && [ "$(sha /media/gk3/gaokun3/live.squashfs)" = "$LIVE_SHA" ] \
     && [ "$(sgdisk -i 4 "$DD" 2>/dev/null | awk '/unique GUID/{print $4}')" = "$PU4" ] \
     && ok "介质分区：还挂着、live.squashfs 内容未变、PARTUUID 未变" || bad "介质分区被动了"
+duel_scene "D 装完（介质还挂着）" "$DD"
 umount /media/gk3
 
 # ── F. 重新安装 ────────────────────────────────────────────────────────────
@@ -467,6 +478,7 @@ head -c 1048576 /dev/urandom | dd of="$(gk3__bylabel "$DA" super)" bs=1M seek=0 
 mount "$ESPA" "$mk"; FREEA=$(df -m "$mk" | awk 'NR==2{print $4}')
 dd if=/dev/zero of="$mk/filler.bin" bs=1M count=$(( FREEA - 100 )) status=none; sync; umount "$mk"
 BEFORE_F=$(sgdisk -p "$DA" | grep -v '^Disk identifier')
+duel_scene "F 重新安装前（ESP 只剩约 100 MiB）" "$DA"
 P=$(gk3_plan --disk "$DA" --mode reinstall --rescue yes --esp "$ESPA" --keep-data yes)
 printf '%s\n' "$P" | grep -q '^PLAN op=reuse name=userdata .*action=keep' && printf '%s\n' "$P" | grep -q '^PLAN op=reuse name=super .*action=write' \
     && [ "$(printf '%s\n' "$P" | grep -c '^PLAN op=reuse')" = 7 ] && ! printf '%s\n' "$P" | grep -q '^PLAN op=mkpart' \
@@ -540,6 +552,7 @@ mkfs.vfat -F 32 -n ESP "${DR}p1" >/dev/null; mkfs.ext4 -q -F -L userdata "${DR}p
 head -c 1031168 /dev/urandom | dd of="${DR}p4" conv=notrunc status=none     # misc 里先放点垃圾：必须被清零
 mkdir -p /media/gk3 && mount "${DR}p3" /media/gk3 && mkdir -p /media/gk3/gaokun3
 MK=$(( $(blockdev --getsize64 "${DR}p4") / 1024 ))
+duel_scene "F 真机布局（1007 KiB 的 misc，介质挂着）" "$DR"
 P=$(gk3_plan --disk "$DR" --mode reinstall --rescue no --esp "${DR}p1")
 printf '%s\n' "$P" | grep -q "^PLAN op=reuse name=misc .*size_kib=$MK " && printf '%s\n' "$P" | grep -q '^PLANSUM mode=reinstall' \
     && ok "真机布局（misc ${MK} KiB，从第 34 扇区起）：重新安装的方案成立" || { bad "真机布局的方案不成立"; printf '%s\n' "$P" | sed 's/^/      /'; }
@@ -581,6 +594,7 @@ ntfs-3g "${DK}p3" "$mk" && { printf 'hibr'; head -c 8192 /dev/urandom; } > "$mk/
 # 假 efivarfs：一个指着 live 的 LoaderEntryDefault（§4.9.3 的"不合法值"）与一个 OneShot
 EFV=$W/efivars; mkdir -p "$EFV"
 efw "$EFV" LoaderEntryDefault gaokun3-live.conf; efw "$EFV" LoaderEntryOneShot "*-android-a.conf"
+duel_scene "K Windows + BitLocker + 休眠" "$DK"
 PROBE=$(gk3_probe 2>/dev/null | awk -v d="$DK" 'index($0, "disk="d" ")')
 FREE=$(printf '%s\n' "$PROBE" | grep '^FREE ' | sort -t= -k5 -n | tail -1); RS=$(gk3__f "$FREE" start); RE=$(gk3__f "$FREE" end)
 kapply() { gk3_apply --disk "$DK" --mode alongside --rescue no --release "$REL" --region-start "$RS" --region-end "$RE" --esp "${DK}p1" "$@"; }
@@ -648,6 +662,7 @@ mount -o ro "${DK}p1" "$mk"
 umount "$mk"
 grep -q '^NOTE code=loadervar-stuck name=LoaderEntryDefault value=auto-windows$' "$W/k2.log" \
     && ok "LoaderEntryDefault 删不掉（只读）：安装照样成功，stdout 给一条 NOTE code=loadervar-stuck" || bad "删不掉变量时没有 NOTE"
+duel_scene "K 双系统重新安装完" "$DK"
 umount "$EFV2"
 
 # ── G. 手动调整磁盘 ────────────────────────────────────────────────────────
@@ -681,6 +696,7 @@ OUT=$(gk3_part_create --disk "$DG" --start "$FS" --size-mib 1024 --fs ext4 2>/de
 [ -b "$NP" ] && [ "$(blkid -o value -s TYPE "$NP")" = ext4 ] && [ "$(( $(blockdev --getsize64 "$NP") >> 20 ))" = 1024 ] \
     && [ $(( $(sgdisk -i "$(cat /sys/class/block/$(basename "$NP")/partition)" "$DG" | awk '/^First sector:/{print $3}') % 2048 )) = 0 ] \
     && ok "在空闲区新建 1 GiB ext4：${NP}（对齐 1 MiB）" || bad "新建分区不对：$OUT"
+duel_scene "G 手动新建分区之后" "$DG"
 gk3_part_format "$NP" vfat >/dev/null 2>&1 && [ "$(blkid -o value -s TYPE "$NP")" = vfat ] \
     && sgdisk -i "$(cat /sys/class/block/$(basename "$NP")/partition)" "$DG" | grep -q 'EBD0A0A2' \
     && ok "格式化成 FAT32：类型也跟着改成 Basic data" || bad "格式化不对"
@@ -978,17 +994,20 @@ mkps() {   # mkps <名字> <type> [capacity] [online] [status]
 pc() { GK3_POWER_SUPPLY_DIR=$PS gk3__power_check; }
 rm -rf "$PS"; mkps gaokun-ec-battery Battery 12 "" Discharging; mkps gaokun-ec-adapter USB "" 0
 [ "$(pc)" = "CHECK id=power ok=no value=12 ac=no min=15" ] && ok "12%、没接电源：ok=no" || bad "低电量没拦：$(pc)"
+duel_call "H 低电量" "GK3_POWER_SUPPLY_DIR=$PS" gk3_preflight
 echo 1 > "$PS/gaokun-ec-adapter/online"
 [ "$(pc)" = "CHECK id=power ok=yes value=12 ac=yes min=15" ] && ok "12%、接着电源：放行" || bad "接着电源还拦：$(pc)"
 echo 0 > "$PS/gaokun-ec-adapter/online"; echo 15 > "$PS/gaokun-ec-battery/capacity"
 [ "$(pc)" = "CHECK id=power ok=yes value=15 ac=no min=15" ] && ok "正好 15%：放行" || bad "15% 被拦：$(pc)"
 rm -rf "$PS"; mkps BAT0 Battery 5 "" Charging
 [ "$(pc)" = "CHECK id=power ok=yes value=5 ac=yes min=15" ] && ok "认不出名字时按 type 找电池；status=Charging 算接着电源" || bad "按 type 找不对：$(pc)"
+duel_call "H 按 type 找电池" "GK3_POWER_SUPPLY_DIR=$PS" gk3_preflight
 rm -rf "$PS"; mkdir -p "$PS"
 [ "$(pc)" = "CHECK id=power ok=unknown value= ac=no min=15" ] && ok "没有电池：ok=unknown（不拦）" || bad "没电池时：$(pc)"
 gk3_preflight 2>/dev/null | grep -q '^CHECK id=power ' && ok "gk3_preflight 带上了 CHECK id=power" || bad "gk3_preflight 里没有 power"
 
 echo
+duel_summary || FAIL=$((FAIL + DUEL_FAIL))
 echo "═══ 通过 $PASS · 失败 $FAIL ═══"
 [ "$FAIL" -eq 0 ]
 

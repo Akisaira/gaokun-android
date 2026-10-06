@@ -148,6 +148,11 @@ bash scripts/live/test-boot-android.sh  # 救援里的 gk3-boot-android：选直
 bash scripts/live/test-in-container.sh scripts/live/test-unsparse.sh   # 多一轮与真 simg2img 交叉比对
 bash scripts/live/test-in-container.sh scripts/live/test-apply.sh      # 端到端真装：整盘 / 双系统 / 反例
 bash scripts/live/test-in-container.sh scripts/live/test-shrink.sh
+# Rust 版后端（tools/gk3-installer，并行轨道，docs/installer-rust-design.md）与本库对拍：先 bash tools/gk3-installer/build.sh musl
+GK3_TEST_DUEL=/repo/tools/gk3-installer/target/aarch64-unknown-linux-musl/release/gk3-installer \
+    bash scripts/live/test-in-container.sh scripts/live/test-duel.sh     # 边角盘 + 纯计算
+GK3_TEST_DUEL=/repo/tools/gk3-installer/target/aarch64-unknown-linux-musl/release/gk3-installer \
+    bash scripts/live/test-in-container.sh scripts/live/test-apply.sh    # test-apply 的每个场景点上顺带对拍（不设就不对拍）
 ```
 
 `test-apply.sh` 在 loop 设备上把命令行版和 `gk3_apply` 各真装一遍，逐项核对
