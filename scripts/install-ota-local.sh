@@ -122,6 +122,13 @@ if [ "$MODE" != "--go" ]; then
 fi
 
 echo "═══ 2. 下发更新 ═══"
+# ★ 2026-10-06（D5 enforcing 下装 dev.10 踩的）：前提检查时把 ESP rw 挂在了 /mnt/gaokun3_ota_install，一直挂到第 4 步。
+#   装机期间 postinstall 与 boot_control HAL 都要【只读】挂同一个 ESP 来认它（LooksLikeOurEsp / find_esp）——
+#   vfat 已经 rw 挂着时再 ro 挂会 EBUSY ⇒ 认不出 ⇒ 退去扫 /dev/block，而 enforcing 下 HAL 读不了那个目录 ⇒
+#   SetActiveBootSlot 报 "misc updated but ESP loader.conf could not be written"、整个 OTA 判失败。
+#   permissive 下扫全盘照样能找到，所以此前从没暴露。⇒ 下发更新前卸掉，第 4 步再挂回来。
+S 'sync; umount /mnt/gaokun3_ota_install 2>/dev/null'
+S 'grep -q " /mnt/gaokun3_ota_install " /proc/mounts' && die "ESP 还挂在 /mnt/gaokun3_ota_install，卸不掉 —— 装机期间 postinstall / HAL 会认不出 ESP"
 ota_move
 HDRS=$(S "cat $OTA/payload_properties.txt" | tr -d '\r' | tr '\n' '|' | sed 's/|$//')
 S "update_engine_client --payload=file://$OTA/payload.bin --update --headers=\"\$(cat $OTA/payload_properties.txt)\"" 2>&1 | tail -5
@@ -167,6 +174,8 @@ echo "   （boot_control HAL 刚把它改成新槽了 —— 这一步是安全�
 #   ★ 规矩：写 glob 之前先确认它在真实目录上匹配得到东西，匹配不到就 die。
 SLOT=${CUR#_}                       # _b -> b
 GLOB="*-android-${SLOT}.conf"
+S 'mkdir -p /mnt/gaokun3_ota_install; grep -q " /mnt/gaokun3_ota_install " /proc/mounts || mount -t vfat /dev/block/by-name/esp /mnt/gaokun3_ota_install' \
+    || die "第 4 步挂不回 ESP"
 # ★ 2026-10-05（统一启动入口 S9）：只认直连条目 <32 位十六进制>-android-<槽>.conf。祝福过的 gk3boot 条目
 #   gk3boot-android-<槽>.conf 也匹配这个 glob，但它不是"已知可用的那个槽的内核"，不能拿来证明 glob 不是死链。
 S "ls /mnt/gaokun3_ota_install/loader/entries/ | grep -qE '^[0-9a-f]{32}-android-${SLOT}\.conf\$'" \

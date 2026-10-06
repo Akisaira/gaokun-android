@@ -8,6 +8,11 @@
 #include "EspSlot.h"
 
 #include <sys/mount.h>
+#include <cerrno>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -61,18 +66,48 @@ std::string DefaultLineForSlot(int slot) {
 //   （gk3boot 条目不会脱离直连条目单独存在：它的 fail-open 要指向直连条目）。
 constexpr char kProbeMountPoint[] = "/mnt/gaokun3_esp_probe";
 
-bool LooksLikeOurEsp(const std::string& dev) {
-    if (mkdir(kProbeMountPoint, 0700) != 0 && errno != EEXIST) return false;
-    if (mount(dev.c_str(), kProbeMountPoint, "vfat", MS_RDONLY | MS_NOATIME, nullptr) != 0)
-        return false;
+bool HasAndroidEntries(const std::string& root) {
     bool found = false;
-    std::string entries = std::string(kProbeMountPoint) + "/loader/entries";
+    std::string entries = root + "/loader/entries";
     if (DIR* d = opendir(entries.c_str())) {
         while (struct dirent* e = readdir(d)) {
             if (fnmatch("*-android-*.conf", e->d_name, 0) == 0) { found = true; break; }
         }
         closedir(d);
     }
+    return found;
+}
+
+// ★ 2026-10-06（D5，enforcing 下装 dev.10 踩的）：ESP 已经 rw 挂在别处时（开发脚本 install-ota-local.sh 当时就挂着；
+//   用户手动挂、或另一个 HAL 调用正挂着也一样），vfat 再 ro 挂会 EBUSY（超级块已是 rw）⇒ 原来直接判"不是我们的 ESP"。
+//   这时到 /proc/mounts 里找它现有的挂载点，就地看 loader/entries。只认 /proc/mounts 第一列与 dev 字面相同、或同为
+//   by-name 链接解析后的同一个节点（realpath）。
+std::string ExistingMountOf(const std::string& dev) {
+    char real_dev[PATH_MAX];
+    if (!realpath(dev.c_str(), real_dev)) return "";
+    FILE* f = fopen("/proc/mounts", "re");
+    if (!f) return "";
+    std::string result;
+    char src[4096], dst[4096], type[64];
+    while (fscanf(f, "%4095s %4095s %63s %*[^\n]", src, dst, type) == 3) {
+        if (strcmp(type, "vfat") != 0) continue;
+        char real_src[PATH_MAX];
+        if (dev == src || (realpath(src, real_src) && strcmp(real_src, real_dev) == 0)) { result = dst; break; }
+    }
+    fclose(f);
+    return result;
+}
+
+bool LooksLikeOurEsp(const std::string& dev) {
+    if (mkdir(kProbeMountPoint, 0700) != 0 && errno != EEXIST) return false;
+    if (mount(dev.c_str(), kProbeMountPoint, "vfat", MS_RDONLY | MS_NOATIME, nullptr) != 0) {
+        if (errno != EBUSY) return false;
+        std::string at = ExistingMountOf(dev);
+        if (at.empty()) return false;
+        LOG(INFO) << dev << " is already mounted at " << at << "; checking it there";
+        return HasAndroidEntries(at);
+    }
+    bool found = HasAndroidEntries(kProbeMountPoint);
     umount(kProbeMountPoint);
     return found;
 }
@@ -91,10 +126,14 @@ std::string FindEspDevice() {
     }
     LOG(WARNING) << "no by-name ESP candidate holds loader/entries/*-android-*.conf; probing vfat partitions by content"
                  << " (fails under enforcing: those nodes are generic block_device)";
+    // ★ 2026-10-06：enforcing 下这个目录读不了（通用 block_device，domain.te:705）。原来这里直接 return ""，
+    //   连下面"信名字"的最后一招都走不到 ⇒ SetActiveBootSlot 失败、整个 OTA 判失败。读不了就当扫不到，照样往下走。
     DIR* d = opendir("/dev/block");
-    if (!d) return "";
     std::string result;
-    while (struct dirent* e = readdir(d)) {
+    if (!d) PLOG(WARNING) << "opendir /dev/block (expected under enforcing)";
+    while (d) {
+        struct dirent* e = readdir(d);
+        if (!e) break;
         std::string name = e->d_name;
         if (fnmatch("nvme*n*p*", e->d_name, 0) != 0 && fnmatch("sd*[0-9]", e->d_name, 0) != 0 &&
             fnmatch("mmcblk*p*", e->d_name, 0) != 0)
@@ -102,7 +141,7 @@ std::string FindEspDevice() {
         std::string dev = "/dev/block/" + name;
         if (LooksLikeOurEsp(dev)) { result = dev; break; }
     }
-    closedir(d);
+    if (d) closedir(d);
     // Last resort, the pre-2026-09-14 behaviour: trust the name. by-name/esp is
     // what a wipe install creates, so an empty loader/entries there is more
     // likely a damaged ESP than a wrong one.
