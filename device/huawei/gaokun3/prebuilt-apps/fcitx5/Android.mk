@@ -39,6 +39,11 @@ LOCAL_DEX_PREOPT := false
 # APK 的 manifest 声明了两个 uses-library-not-required（androidx.window.extensions / .sidecar）；构建系统的
 # enforce_uses_libraries 检查要求这里列得一模一样，否则 dev.10 第一次编就停在 Fcitx5Android 上（2026-10-06）。
 LOCAL_OPTIONAL_USES_LIBRARIES := androidx.window.extensions androidx.window.sidecar
+# ★ 原样安装，不让构建系统改 APK（dev.10 上机踩的）：这个 APK 的 .so 是压缩存放的（extractNativeLibs），PRESIGNED 的
+#   预置 APK 默认会被解压 .so、重新对齐（refs/aosp-build/core/app_prebuilt_internal.mk:201-229）⇒ v2 签名失效，
+#   PackageManager 报 "No APK Signature Scheme v2 signature"、整个应用不装（镜像里 51.7 MB vs 原件 45.9 MB）。
+#   LOCAL_REPLACE_PREBUILT_APK_INSTALLED 走 :169-172 那一支，逐字节拷贝；压缩的 .so 由 PackageManager 首次开机解到 /data。
+LOCAL_REPLACE_PREBUILT_APK_INSTALLED := $(LOCAL_PATH)/fcitx5-android-arm64-v8a.apk
 LOCAL_LICENSE_KINDS := SPDX-license-identifier-LGPL-2.1
 LOCAL_LICENSE_CONDITIONS := restricted
 include $(BUILD_PREBUILT)

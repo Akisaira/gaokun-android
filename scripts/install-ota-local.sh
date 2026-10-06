@@ -129,6 +129,8 @@ echo "═══ 2. 下发更新 ═══"
 #   permissive 下扫全盘照样能找到，所以此前从没暴露。⇒ 下发更新前卸掉，第 4 步再挂回来。
 S 'sync; umount /mnt/gaokun3_ota_install 2>/dev/null'
 S 'grep -q " /mnt/gaokun3_ota_install " /proc/mounts' && die "ESP 还挂在 /mnt/gaokun3_ota_install，卸不掉 —— 装机期间 postinstall / HAL 会认不出 ESP"
+# ★ 2026-10-06：第 3 步从 logcat 里找终态行，上一轮（失败那次）的终态行还在缓冲里会被当成这一轮的 ⇒ 下发前清空 logcat。
+S 'logcat -c' >/dev/null 2>&1
 ota_move
 HDRS=$(S "cat $OTA/payload_properties.txt" | tr -d '\r' | tr '\n' '|' | sed 's/|$//')
 S "update_engine_client --payload=file://$OTA/payload.bin --update --headers=\"\$(cat $OTA/payload_properties.txt)\"" 2>&1 | tail -5
