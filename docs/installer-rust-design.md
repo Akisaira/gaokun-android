@@ -71,7 +71,7 @@
 * `Output { argv, status: Exited(c) | Signaled(s) | TimedOut(t), stdout, stderr, truncated, elapsed }`；
 * `Output::check(&[允许的退出码])` 把"退出码不在预期内 / 超时 / 被信号杀 / 输出没收全"变成 `ExecError::Status`。
 
-兼容阶段的难点是：shell 版**故意**吞掉一些失败（`blkid` 认不出文件系统返回 2 是正常的；`sgdisk -p` 读不了盘就按默认值往下走）。
+兼容阶段的难点是：shell 版**故意**吞掉一些失败（`blkid` 认不出文件系统返回 2 是正常的；`sgdisk -p` 读不了盘就按默认值往下走 —— 这一条是 S1，2026-10-06 两边一起改成明确报错，见 §3.2）。
 Rust 版的做法是 `host::capture(host, cmd, accept, diag)`：**输出语义照 shell 版**（返回 stdout，失败时为空），
 但每一次"不在 `accept` 里"的结果都记进 `Diag`，入口结束时以 `gk3-installer: 注意：<完整命令行>：<状态>（stderr 最后一行）`
 打到 stderr（给人看的日志；前端放进"详情"，对拍不比这些行）。每个调用点显式写出它认为正常的退出码
@@ -81,7 +81,7 @@ Rust 版的做法是 `host::capture(host, cmd, accept, diag)`：**输出语义�
 
 例（2026-10-06 容器里实跑）：`gk3_plan --disk /dev/nonexist --mode alongside …` —— shell 版对一块**不存在的盘**照样算出完整方案、
 退出码 0，两次 `sgdisk -p` 的报错全被 `2>/dev/null` 吞掉（前端只会传探测到的盘，所以没出过事，但这正是"静默"的样子）。
-Rust 版输出逐字节相同，stderr 多两行（两次 `sgdisk -p` 各一行），形如：
+Rust 版输出逐字节相同，stderr 多两行（两次 `sgdisk -p` 各一行；S2 修完后只剩查重那一次 —— MBR 判断那一次读不出是结论本身，不进诊断），形如：
 
 ```
 gk3-installer: 注意：sgdisk -p /dev/nonexist：退出码 2（The specified file does not exist!）
@@ -103,20 +103,61 @@ gk3-installer: 注意：sgdisk -p /dev/nonexist：退出码 2（The specified fi
 先做只读的理由：它们是**每一次**安装都要走的、决定"往哪写"的那一半（界面上的空闲区、方案的扇区边界都出自这里），
 而且可以在任意时刻对同一块盘反复跑两边比较，不需要准备两份一模一样的盘。写盘动作的对拍代价高一个量级（§6.3）。
 
-### 3.2 对着 shell 版查出来的问题（只记录，没改 —— 改要用户点头，而且两边要一起改）
+### 3.2 对着 shell 版查出来的问题（改要用户点头，而且两边要一起改；S1 / S2 已按用户 2026-10-06 的决定修了，其余只记录）
 
 | # | 位置 | 问题 | 实测 / 依据 | Rust 版现在 |
 |---|---|---|---|---|
-| S1 | installer-lib.sh:179-182 | `sgdisk -p` 读失败（I/O 错、超时）时 `first_usable` / `last_usable` 落到默认值、表行为空 ⇒ **整块盘报成一段空闲**，界面会把有数据的盘当空盘给用户选 | 推理（单测 `probe::tests::sgdisk_failure_falls_back_like_shell_but_is_noted` 模拟了这条路），真盘上没造出读失败 | 输出照旧（兼容），`Diag` 里记一笔 |
-| S2 | installer-lib.sh:439-446 | **MBR 盘检查从来不会触发**：它找 `"MBR only"`，而 gdisk 1.0.10 的 `sgdisk -p` 对 MBR 盘只说 `Found invalid GPT and valid MBR; converting MBR to GPT format in memory.` ⇒ `gk3_plan` 对 MBR 盘照常算出双系统方案（rc 0），`gk3_probe` 把 MBR 分区报成 GPT 的样子（类型 GUID 是 sgdisk 换算的）。界面上那条专门的提示 `errMbr`（screens_finish.dart:95）永远出不来。**现在挡住双系统写盘的是另一道检查的副作用**：MBR 盘上没有 EF00 类型的 ESP，`gk3_apply` 在动盘前报 `esp-not-esp-type`（:871）——用户看到的是"ESP 类型不对"，不是"这是 MBR 盘" | 2026-10-06 在 test-env 容器里对 `sfdisk` 建的 dos 盘实测：`sgdisk -p 2>&1 \| grep -ci 'MBR only'` = 0；shell 版 `gk3_plan --mode alongside` 输出 6 条 mkpart + PLANSUM、退出码 0；盘的 PTTYPE 仍是 dos（plan 不写盘）。没跑 apply | 照搬（兼容），单测 `plan::tests::mbr_guard_is_bug_compatible` 钉住两种输出 |
+| S1 ✅ 已修（2026-10-06） | installer-lib.sh:179-182（修前） | `sgdisk -p` 读失败（I/O 错、超时）时 `first_usable` / `last_usable` 落到默认值、表行为空 ⇒ **整块盘报成一段空闲**，界面会把有数据的盘当空盘给用户选。★ 修的时候实录出更糟的一层：**整块盘读都 EIO 时 sgdisk 的退出码是 0**、stdout 是一张 `Creating new GPT entries in memory.` 的空表 —— 连默认值那条路都不走，sgdisk 自己就说"空盘" | 修前：推理；修时在容器里用 dm-error 设备实录（下面的表）。修前的阴性对照：一块有两个分区的 GPT 盘、`sgdisk -p` 照 dm-error 实录回答时，旧版探测输出 `FREE disk=… start=34 end=41943006 size_mib=20479`（整块盘空闲）、退出码 0 | 两边一起改：读不出 ⇒ DISK `table=unreadable`、不列 PART / FREE、`ERR code=disk-unreadable disk=… touched=no`、gk3_probe 退出码 1；写盘入口在动盘前同样报这个 ERR。判据见下 |
+| S2 ✅ 已修（2026-10-06） | installer-lib.sh:439-446（修前） | **MBR 盘检查从来不会触发**：它找 `"MBR only"`，而 gdisk 1.0.10 的 `sgdisk -p` 对 MBR 盘只说 `Found invalid GPT and valid MBR; converting MBR to GPT format in memory.` ⇒ `gk3_plan` 对 MBR 盘照常算出双系统方案（rc 0），`gk3_probe` 把 MBR 分区报成 GPT 的样子（类型 GUID 是 sgdisk 换算的；0xEF 分区换算成 EFI System、`os=esp`）。界面上那条专门的提示 `errMbr`（screens_finish.dart:95）永远出不来。**挡住双系统写盘的是另一道检查的副作用**：MBR 分区的 `PART_ENTRY_TYPE` 是 `0xef` 而不是 EFI System 的 GUID，`gk3_apply` 在动盘前报 `esp-not-esp-type`（:871）——用户看到的是"ESP 类型不对"，不是"这是 MBR 盘"。重新安装的分支还在这道检查之前就分岔走了；缩分区与手动调整根本没有这道检查。⚠️ 修的时候实录：sgdisk **不会**静默转表 —— `-d / -n / -t / -c` 不带 `-g` 一律 rc 3 `Non-GPT disk; not saving changes. Use -g to override.`、MBR 不变；坏处是写表那一步必然失败、而失败之前格式化已经 mkfs、缩分区已经缩了文件系统、apply 已经标 touched=yes（修前的阴性对照：MBR 盘上 `gk3_part_delete` 报 `gpt-rewrite`，双系统方案照算 rc 0） | 2026-10-06 在 test-env 容器里对 `sfdisk` 建的 dos 盘实测：`sgdisk -p 2>&1 \| grep -ci 'MBR only'` = 0；shell 版 `gk3_plan --mode alongside` 输出 6 条 mkpart + PLANSUM、退出码 0 | 两边一起改：DISK 标 `table=mbr`；`gk3_plan` 非整盘模式（含重新安装）报 `PLANERR msg=mbr-disk`；apply（非整盘）/ gk3_shrink / gk3_part_* 在动盘前、在 ESP 检查之前报 `ERR code=mbr-disk disk=… touched=no`；整盘清空照常（本来就要抹掉分区表，MBR 盘唯一能走的路） |
 | S3 | installer-lib.sh:398-411、:742-757 | 参数缺值（`--mode` 是最后一个）时 `shift 2` 失败、`$#` 不变 ⇒ **死循环**，界面永远停在"正在计算" | 读代码（bash 的 `shift n` 在 n>$# 时返回非零且不移位）；对拍不跑这个输入 | 偏差 D1：`PLANERR msg=missing-value:<参数>` |
 | S4 | installer-lib.sh:457、:462、:470、:487-489、:580（`$(( … ))` 与 `[ -ge ]`） | 数字参数走 bash 算术：`010` 是八进制、`1+1` 是表达式、`abc` 是值为 0 的变量；而同一个值在 `[ -ge ]` 里又按十进制 ⇒ 两处对同一个参数理解不同 | 读代码 + bash 手册 | 偏差 D2：非规范十进制 ⇒ `PLANERR msg=bad-number:<参数>` |
 | S5 | 多处 `k=$v` 不编码的字段（`fs=`、`unknown-arg:$1`、`limit=$last`…） | 值里真有空白时整行切不开 | 读代码 | 偏差 D4：这种值改为编码，`Out.coerced` 计数 |
 
-S2 的修法建议：同时认 `MBR only` 与 `converting MBR to GPT`（或直接 `blkid -p -o value -s PTTYPE <盘>` = `dos`）。
-它目前没造成损坏（双系统被 `esp-not-esp-type` 意外挡住，整盘清空本来就要抹掉分区表），坏处是报错说错了原因、
-而且只要哪天 ESP 检查放宽（例如认 MBR 的 0xEF 分区）就会真的把 MBR 盘写成 GPT。
-要两边一起改、test-apply 加一组 MBR 盘反例，**需要用户定**（这是安装器行为的改变，1.0 之前要不要动由用户判断）。
+#### S1 / S2 的修法（2026-10-06，用户定：修，shell 版与 Rust 版一起改）
+
+一个判据、两边各一份：shell 版 `gk3__read_table` / `gk3__table_guard`（installer-lib.sh「分区表是什么、读不读得出来」一节），
+Rust 版 `gpt::classify` / `gpt::read_table`。跑一次 `sgdisk -p`，按顺序：
+
+1. **unreadable**：退出码非零；或者 **stderr** 上有读错误（`grep -Eqi 'read error|error [0-9]+ reading'`）；或者 stdout 里没有
+   `First usable sector is N, last usable sector is M`。只在 stderr 里找读错误 —— stdout 里有分区名，叫 "read error" 的分区不该把整块盘判成读不出。
+2. **mbr**：`blkid -p -o value -s PTTYPE <盘>` = `dos`，**或者** sgdisk 在行首说 `Found invalid GPT and valid MBR; converting MBR to GPT format`
+   （这句在 stdout 上）。两样都认：blkid 是独立于 sgdisk 的判断；sgdisk 那句说的是它手里的表已经不是盘上那张了。
+3. 其余 **gpt**（包括没有分区表的空盘）；没有 sgdisk 是 **unknown**（各入口自己的工具检查会报 tool-missing）。
+
+unreadable 优先于 mbr（读不出的盘上"它是 MBR"也不可信）。写 MBR 盘时（同一次实录）：`sgdisk -d 3` / `-t 3:8300` / `-n 0:…` / `-c 3:x`
+一律 rc 3 `Non-GPT disk; not saving changes. Use -g to override.`、PTTYPE 仍是 dos；带 `-g` 才 rc 0、变成 gpt；`sgdisk --zap-all` rc 0、PTTYPE 变空。实录（2026-10-06，test-env 容器：gdisk 1.0.10、util-linux 2.41.5）：
+
+| 盘 | `sgdisk -p` 退出码 | stdout 要点 | stderr 要点 | `blkid -p` PTTYPE | 结论 |
+|---|---|---|---|---|---|
+| sfdisk 建的 dos 盘（有分区 / 空表） | 0 | 星号框里的 `Found invalid GPT and valid MBR; converting MBR to GPT format` `in memory.` + 换算出的表 | 空 | `dos` | mbr |
+| GPT | 0 | 正常 | 空 | `gpt` | gpt |
+| 没有分区表 | 0 | `Creating new GPT entries in memory.` + 空表 | 空 | 空（rc 2） | gpt |
+| 主 GPT 头坏、备份好 | 0 | 正常表 | `Caution: invalid main GPT header, but valid backup…`、CRC 警告 | `gpt` | gpt |
+| 混合 MBR（`sgdisk -h 1`） | 0 | 正常 | 空 | `gpt` | gpt |
+| 只剩保护性 MBR（两份 GPT 都抹了） | 0 | `Creating new GPT entries in memory.` + 空表 | 空 | `PMBR` | gpt |
+| 不存在的设备 | 2 | 空 | `Problem opening … for reading! Error is 2.` | 空（rc 2） | unreadable |
+| dm-error（整块读都 EIO） | **0** | `Creating new GPT entries in memory.` + **空表** | `Warning! Read error 5; strange behavior now likely!` ×2 | 空（rc 2） | unreadable |
+| dm：前 1 MiB 可读、其后 EIO（备份 GPT 读不到） | 0 | 正常表（分区都在） | `Read error 5`、`Error 5 reading partition table for CRC check!`、CRC 警告 | 空（rc 2） | unreadable |
+
+用到它的地方（每一处都在动盘之前，都带 `touched=no`）：
+
+| 入口 | 读不出 | MBR |
+|---|---|---|
+| `gk3_probe` | DISK `table=unreadable`，不列 PART / FREE，`ERR disk-unreadable`，最后退出码 1（别的盘照常） | DISK `table=mbr`，分区与空闲区照列 |
+| `gk3_plan` | 不拦（纯计算，自测拿不存在的 `/dev/nvme0n1` 算） | 非整盘模式（双系统、重新安装）`PLANERR msg=mbr-disk`；挪到了重新安装的分支之前 |
+| `gk3_apply` | 任何模式 `ERR disk-unreadable` | 非整盘 `ERR mbr-disk`；在工具检查之后、ESP 检查之前 |
+| `gk3_shrink` | `ERR disk-unreadable` | `ERR mbr-disk`（在缩文件系统之前） |
+| `gk3__edit_guard`（`gk3_part_delete` / `_format` / `_resize` 两个方向）、`gk3_part_create` | `ERR disk-unreadable` | `ERR mbr-disk` |
+
+前端（live/installer-flutter）：`Disk.table` / `unreadable` / `mbr`；选盘页读不出的盘禁用并写明原因（`diskUnreadable`，不说"没有分区"）；
+方式页 MBR 盘的双系统在问 ESP 之前就给 `errMbr`（原来 0xEF 分区换算成 ESP 后会去问 esp_info、算双系统方案），手动调整也禁用并给 `errMbr`；
+`errText` 认 `mbr-disk`、`disk-unreadable`；`errMbr` 补一句"要用这块盘，只能整盘清空"。
+
+测试：test-apply 的 M 组（MBR 盘：探测、三种方案、apply 双系统 / 重新安装、缩 NTFS、删 / 格式化 / 新建 / 扩大 / 缩小都拒绝且
+`sfdisk -d` / PTTYPE / 盘头与每个分区头 1 MiB 都没变，整盘清空照常装完变成 GPT；读不出：dm-error 真设备上 read_table / apply / part_create，
+照 dm-error 实录输出回答的假 sgdisk 上 probe / part_delete / apply 双系统）；test-duel 加 MBR + 0xEF、空 dos 表、混合 MBR、
+只剩保护性 MBR 四个场景与假 sgdisk 的四种读不出（EIO / 打不开 / CRC 读错 / 没有可用扇区）× probe / plan；
+Rust 单测钉住上表每一行（`gpt::tests::classify_recorded_disks`）与 probe / plan 的新输出。结果见 §9。
 
 ### 3.3 切换方式：逐个函数，前端不改
 
@@ -204,10 +245,11 @@ gk3_probe() { "${GK3_RS:-$GK3_LIBDIR/gk3-installer}" gk3_probe "$@"; }
 
 `src/host.rs` 的 `Host` trait 把"文件、环境变量、外部命令"抽出来；测试用 `host::fake::FakeHost`（路径 → 内容、命令行 → 输出的表）。
 `sgdisk` 的输出样本是 2026-10-06 在 test-env 容器里实录的（gdisk 1.0.10：GPT 盘、空盘、不存在的设备、MBR 盘、坏 GPT 头、
-`-i` 不存在的分区号 → `Partition #9 does not exist.` 退出码 0）。另外钉住 shell 语义的零件（`src/sh.rs`）：`$(…)` 去掉全部结尾换行与 NUL、
+`-i` 不存在的分区号 → `Partition #9 does not exist.` 退出码 0；S1 / S2 修时补了 dm-error 的读错误、混合 MBR、只剩保护性 MBR，§3.2 的表）。另外钉住 shell 语义的零件（`src/sh.rs`）：`$(…)` 去掉全部结尾换行与 NUL、
 `cut -d"'" -f2` 在没有分隔符时回整行、`[ -gt ]` 的整数规则、`sort -k2 -n` 的同值时按整行比、`basename`……
 
-本轮 39 个单测全过；`clippy -D warnings` 与 `rustfmt --check` 干净。
+本轮 39 个单测全过；`clippy -D warnings` 与 `rustfmt --check` 干净。S1 / S2 修完（2026-10-06）是 44 个：删掉钉住旧行为的两个
+（`sgdisk_failure_falls_back_like_shell_but_is_noted`、`mbr_guard_is_bug_compatible`），换成钉住新行为的七个。
 
 ### 6.2 对拍（`scripts/live/duel-lib.sh`）
 
@@ -223,7 +265,8 @@ gk3_probe() { "${GK3_RS:-$GK3_LIBDIR/gk3-installer}" gk3_probe "$@"; }
   1. `scripts/live/test-apply.sh` 在 12 个盘的场景上调 `duel_scene`、在 4 处调 `duel_call gk3_preflight`、开头调一次 `duel_pure`（空 GPT、Windows 盘装前装后、100 MiB ESP、
      介质与目标同盘、真机布局的 1007 KiB misc、BitLocker + 休眠、手动新建分区之后、低电量……）——**同一批盘、同一个时刻**；
      结尾的失败数并进 test-apply 自己的。不设 `GK3_TEST_DUEL` 时这些调用全是空操作，test-apply 的行为不变（§9 有对照）。
-  2. `scripts/live/test-duel.sh`：test-apply 里没有的边角盘 —— 没有分区表、坏 GPT 头、MBR 盘、怪名字（空格 / `%` / 引号 / 中文 /
+  2. `scripts/live/test-duel.sh`：test-apply 里没有的边角盘 —— 没有分区表、坏 GPT 头、MBR 盘（含 0xEF 分区 / 空 dos 表；混合 MBR、
+     只剩保护性 MBR）、读不出分区表的盘（假 sgdisk 的四种说法 × probe / plan）、怪名字（空格 / `%` / 引号 / 中文 /
      空名 / `misc metadata` / `super x`）、GBK 卷标、乱序与不对齐的分区、16 MiB 以下的缝、重名的 super、34 扇区起的 misc、
      缺 userdata、救援分区太小、正好 1 GiB 与差一个扇区的盘、介质挂在怪名字盘上；预检的缺工具、跳过型号、各种假电源目录。
 * **阴性对照**（证明对拍抓得住）：拿一个包装脚本在 Rust 版输出上做一处小改动 —— 把 `gk3_plan` 的退出码改成 0、把 GBK 卷标的头两个字节换掉 ——
@@ -303,6 +346,16 @@ rustup component add clippy rustfmt --toolchain 1.99.0
   * 第一次跑就全一致，所以做了阴性对照（§6.2）：改退出码 → 146 处不一致、改 GBK 卷标两个字节 → 8 处不一致，都只出现在该出现的地方
 * 不设 `GK3_TEST_DUEL` 的 test-apply：接钩子之前 205/205，接之后 205/205、输出里没有任何对拍行（钩子是空操作）。
 * 对着 shell 版查出的问题见 §3.2（S2 实测确认）。
+* **S1 / S2 修完（2026-10-06，用户定）**：见下面"S1 / S2 之后"的数字。
+
+S1 / S2 之后（同一个容器、新编的 musl 二进制）：
+
+* 单测 44/44；clippy / rustfmt 干净。
+* `test-duel.sh`：**一致 275 · 不一致 0 · 不稳定 0**（新加的 4 个 MBR 类场景 + 8 次读不出的调用都在里面）。
+* `test-apply.sh`（设了 `GK3_TEST_DUEL`）：**225/225**（原 205 + M 组 20 条）；对拍 **一致 217 · 不一致 0 · 不稳定 0**（多了 M 组的 MBR 盘场景与读不出的探测）。
+* 不设 `GK3_TEST_DUEL` 的 test-apply：225/225、没有对拍行；`test-shrink.sh` 19/19（gk3_shrink 多了 gk3__table_guard）。
+* `flutter test`：135/135（新增：MBR 盘 + 读不出的盘一路到整盘清空装完；两个 ERR 代码的话）。
+* `test-plan.sh` 的"\$变量紧跟中文"体检在仓库里另有 12 处既有的命中（clone-refs / release.sh / installer-lib.sh:1418 等，不是这次加的；这次加的 3 处已改成 `${…}`）。
 
 ## 10. 下一步与工作量估计
 
@@ -315,4 +368,4 @@ rustup component add clippy rustfmt --toolchain 1.99.0
 | 3 | 网络 / WiFi / job（curl 进度、wpa_cli、systemd-run） | 3–5 天 |
 | 4 | 进镜像 + 体检断言 + 薄壳切换 + 真机验收（要用户在场） | 2–3 天 + 一次上机 |
 
-合计约 3–4 周的专注工作。最该先做的一件不是代码：**§3.2 的 S2（MBR 检查从不触发）要不要在 1.0 修**，请用户定。
+合计约 3–4 周的专注工作。（原来写在这里的"S2 要不要在 1.0 修、请用户定"：用户 2026-10-06 定了修，S1 一起，见 §3.2。）

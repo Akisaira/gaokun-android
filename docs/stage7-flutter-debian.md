@@ -669,6 +669,26 @@ M4b 那次"ESP 写满、却报告成功"之后，让一个独立的审查专找�
 * 测试：flow_test 新增"风险确认页"组 17 条（不滚到底 / 倒计时没到 / 不勾选 / 确认词错误各自不能继续、点了不走、后端什么都没收到；五种写盘方式各自经过它；
   软键盘能打确认词；从确认页返回；英文无 CJK；Session 守卫），原有 27 条走到写盘的流程都改成先过风险页；出图加 13b–13e。`flutter test` 133/133（原 112）。
 
+### 5.17 MBR 盘与读不出分区表的盘：动盘之前明确拒绝（S1 / S2，用户 2026-10-06 定修）
+
+Rust 重写对拍时查出来的两处（`docs/installer-rust-design.md` §3.2，那里有实录的 sgdisk / blkid 输出与每个调用点），shell 版与 Rust 版一起改、
+对拍保持一致。只在容器（loop / dm-error 设备）与 Mac 的 flutter test 里验过，**没重建 live 镜像、没上机**。
+* **S2 MBR**：原来的检查找 `"MBR only"`，gdisk 1.0.10 从不这么说 ⇒ 从没触发过。MBR 盘上的双系统是被 ESP 类型检查**碰巧**挡住的
+  （用户看到"ESP 类型不对"）；重新安装绕过了这道检查；缩分区、手动调整根本没有它。⚠️ 原注释说"sgdisk 会把 MBR 盘静默转成 GPT"不对：实录 `sgdisk -d / -n / -t / -c`
+  不带 `-g` 一律 rc 3 "Non-GPT disk; not saving changes"、MBR 不变 —— 真正的坏处是写表那一步必然失败、而失败之前格式化已经 mkfs、
+  缩分区已经缩了文件系统、apply 已经标 touched=yes，报出来的是"盘可能写了一半"。
+  现在按 `blkid -p` 的 `PTTYPE=dos` 或 sgdisk 的 `converting MBR to GPT` 那句认，非整盘的方案报 `mbr-disk`，apply / 缩分区 / 手动调整在动盘前
+  （apply 里在 ESP 检查之前）报 `ERR code=mbr-disk touched=no`；**整盘清空照常**（本来就要抹掉分区表 —— MBR 盘唯一能走的路，容器里装完验过变成 GPT）。
+* **S1 读不出**：原来 `sgdisk -p` 读失败时把整块盘报成一段空闲；修的时候实录出更糟的一层 —— 整块盘读都 EIO（dm-error）时 **sgdisk 退出码是 0**、
+  给一张空表，只在 stderr 上说 `Read error 5`。现在看退出码 + stderr 的读错误 + 有没有可用扇区那一行；读不出 ⇒ 探测里 DISK 标 `table=unreadable`、
+  不列分区与空闲区、`ERR code=disk-unreadable touched=no`、gk3_probe 退出码 1（别的盘照常）；写盘入口在动盘前同样拒绝。
+* **界面**：选盘页读不出的盘禁用、写明原因（不再说"没有分区"）；方式页 MBR 盘的双系统**在问 ESP 之前**就给 `errMbr`（0xEF 分区经 sgdisk 换算也显示成 ESP，
+  原来会去问 esp_info、算方案），手动调整也禁用；`errText` 认两个新代码；`errMbr` 补一句"要用这块盘，只能整盘清空"。DISK 记录多一个 `table=` 字段
+  （旧 fixture 没有它 ⇒ 按 gpt 待）。
+* 测试：test-apply 新 M 组（MBR 盘 8 种写盘入口拒绝且 `sfdisk -d` / PTTYPE / 盘头与各分区头都没变、整盘清空装完；dm-error 真设备与照它实录输出回答的假 sgdisk），
+  test-duel 加 4 个 MBR 类场景与 8 次读不出的调用，Rust 单测 44；flutter test 135/135（新增 2 条，fixture `testdata/common/probe-mbr-unreadable.txt` 由对拍实录的两块盘拼成）。
+  数字见设计稿 §9。
+
 ## 6. 风险（按"会不会让方案作废"排序）
 
 1. 🔴 mesa/freedreno 在 Debian arm64 用户态不可用 → 回落 `FLUTTER_LINUX_RENDERER=software`
