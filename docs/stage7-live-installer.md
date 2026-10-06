@@ -40,7 +40,7 @@
 | 磁盘 | 476.9 GiB，**约 64 GiB 未分配** | `/proc/partitions` 求和 |
 | 现役救援 Ubuntu | p3，24.6 GiB | 同上 |
 | 内存 | 15.7 GiB | 前期 |
-| 固件 | UEFI 2.70，Qualcomm 8483.513；**chainload 实测可用** | [#73](stage4-findings.md) |
+| 固件 | UEFI 2.70，Qualcomm 8483.513；**chainload 实测可用** | [#73](stage4-findings.md#73) |
 
 ★ **ESP 只剩 28 MiB 是这份设计里最硬的约束**，它直接否决了"把救援 rootfs 也塞进 ESP"。
 

@@ -34,30 +34,30 @@ UEFI。这不是一次常规移植 —— 它是 **AOSP on mainline**，每一�
 | 引导（UEFI + systemd-boot，内置盘） | ✅ | 不需要 U 盘。A/B 槽位 + Virtual A/B；系统更新（含内核）在设置里装 |
 | 屏幕 1600×2560 @ 120 Hz | ✅ | 框架默认值把渲染钉在 60，已覆盖；实测 vsync 周期 8.33 ms |
 | GPU —— Adreno 690 硬件 Vulkan | ✅ | Mesa 26.0.3 `turnip`；22 分钟浸泡零 SMMU fault |
-| 触摸屏 | ⚠️ | 可用 —— Himax HX83121A，需要 `patches/` 里的 gpio174 补丁（[#26](docs/stage4-findings.md)）。**v0.6.2 起手感是实机量出来的**：① 默认预设里的跳点检测阈值实际上是一条 1.0 m/s 的限速线，快滑时驱动一个点都不上报，一次甩动被切成十几次触摸 —— 判据改成对照预测位置（[#114](docs/stage4-findings.md)）；② 坐标 `fuzz` 从 8 改为 0：实测质心抖动不到半个坐标单位，而 fuzz=8 抹掉了四分之一的真实运动数据（[#116](docs/stage4-findings.md)）；③ 按下延迟 25→17 ms；④ 上报触点面积与压力，供读取它们的应用使用（本机 Android 自带的手掌误触抑制是关着的，用不上这些数据）。驱动本身修了 6 个缺陷并加了逐级计数器与原始电容帧导出（[#115](docs/stage4-findings.md)）。⚠️ 手掌压屏会碎成多个触点（不影响点击） |
+| 触摸屏 | ⚠️ | 可用 —— Himax HX83121A，需要 `patches/` 里的 gpio174 补丁（[#26](docs/stage4-findings.md#26)）。**v0.6.2 起手感是实机量出来的**：① 默认预设里的跳点检测阈值实际上是一条 1.0 m/s 的限速线，快滑时驱动一个点都不上报，一次甩动被切成十几次触摸 —— 判据改成对照预测位置（[#114](docs/stage4-findings.md#114)）；② 坐标 `fuzz` 从 8 改为 0：实测质心抖动不到半个坐标单位，而 fuzz=8 抹掉了四分之一的真实运动数据（[#116](docs/stage4-findings.md#116)）；③ 按下延迟 25→17 ms；④ 上报触点面积与压力，供读取它们的应用使用（本机 Android 自带的手掌误触抑制是关着的，用不上这些数据）。驱动本身修了 6 个缺陷并加了逐级计数器与原始电容帧导出（[#115](docs/stage4-findings.md#115)）。⚠️ 手掌压屏会碎成多个触点（不影响点击） |
 | 磁吸键盘 + 触控板 | ✅ | USB HID `12d1:10b8`；可以在"设置 › 系统"里关掉（"磁吸键盘"） |
 | 键盘盖当合盖 | ⚠️ | EC 会上报合盖开关，但 Android 不处理：合上键盘盖不会熄屏，要等息屏超时 |
-| Wi-Fi | ✅ | ath11k / WCN6855。局域网拉 200 MB 实测 61.7 MB/s（[#44](docs/stage4-findings.md)）。从远处服务器（约 300 ms）下载时，单连接原先封顶约 3.5 MB/s —— 是 Android 默认 TCP 缓冲区的限制；v0.7.0 调大，实测 3.5→9.5 MB/s（[#119](docs/stage4-findings.md)）。WPA3-SAE 能连（[#107](docs/stage4-findings.md)）；有的 WPA2/WPA3 混合模式路由器会拒绝 Android 自动把 WPA2 升级成 WPA3，v0.7.1 起关掉了这个升级。[issue #2](https://github.com/vahiru/gaokun-android/issues/2)（纯 WPA3，在中兴路由器上关联后被踢）这里复现不出来。⚠️ MAC 地址每次开机都变 |
+| Wi-Fi | ✅ | ath11k / WCN6855。局域网拉 200 MB 实测 61.7 MB/s（[#44](docs/stage4-findings.md#44)）。从远处服务器（约 300 ms）下载时，单连接原先封顶约 3.5 MB/s —— 是 Android 默认 TCP 缓冲区的限制；v0.7.0 调大，实测 3.5→9.5 MB/s（[#119](docs/stage4-findings.md#119)）。WPA3-SAE 能连（[#107](docs/stage4-findings.md#107)）；有的 WPA2/WPA3 混合模式路由器会拒绝 Android 自动把 WPA2 升级成 WPA3，v0.7.1 起关掉了这个升级。[issue #2](https://github.com/vahiru/gaokun-android/issues/2)（纯 WPA3，在中兴路由器上关联后被踢）这里复现不出来。⚠️ MAC 地址每次开机都变 |
 | Wi-Fi 热点 | ⚠️ | v0.7.1 起可用（[#11](https://github.com/vahiru/gaokun-android/issues/11)）—— 热点开得起来；还没测过真有手机连上来。⚠️ 一开热点平板自己就断开 Wi-Fi（还没配置 Wi-Fi + 热点同时工作），所以没有上行可以分享 |
-| 蓝牙 | ⚠️ | 可用 —— `hci_qca`，adapter `ON`，开机后零崩溃。⚠️ 蓝牙耳机放音（A2DP）**没在实机上验证过**。音频策略里没有蓝牙 SCO 通路，所以**通话时用不了蓝牙耳机的麦克风**。长期运行后可能与音频一起死锁（[#38](docs/stage4-findings.md)） |
-| 扬声器 | ⚠️ | 可用 —— WSA883x 走 audioreach。增益分配原先是错的、一直在削波（−6 dBFS 素材上 THD −20 dB）；v0.6.0 起数字级压在单位增益、响度由 PA 出，干净约 20 dB（[#86](docs/stage4-findings.md)）。可选的"扬声器增强（实验性）"在"设置 › 声音"里，默认关（v0.7.0，感谢 @mashen11）。v0.7.1 起播放由声卡硬件定拍，负载下不再丢块，音游不再错位（[#130](docs/stage4-findings.md)）。⚠️ 长期运行后音频可能死锁，与蓝牙一起（[#38](docs/stage4-findings.md)） |
-| 耳机口 | ✅ | **已修复，用户实机确认出声。** 三处阻塞：rx-macro 内部的插值器链从来没接上（于是后端拒绝打开，**内核一行日志都不打**）；音频策略里没声明有线输出；框架去看 `/sys/class/switch/h2w`，主线上根本没这个东西（[#40](docs/stage4-findings.md)） |
-| 麦克风 | ⚠️ | **v0.7.0 起内置麦克风能录音**（[PR #10](https://github.com/vahiru/gaokun-android/pull/10)，感谢 @mashen11；[#127](docs/stage4-findings.md)）。它此前从来没工作过：前端混音器与 DMIC 序列从没设过、HAL 覆盖了麦克风的 address、策略列着硬件开不了的采样率、管道节流约每 8 块丢 1 块。⚠️ **有线耳机的麦克风用不上** —— 插四段耳机通话、录音时用的仍是内置麦 |
+| 蓝牙 | ⚠️ | 可用 —— `hci_qca`，adapter `ON`，开机后零崩溃。⚠️ 蓝牙耳机放音（A2DP）**没在实机上验证过**。音频策略里没有蓝牙 SCO 通路，所以**通话时用不了蓝牙耳机的麦克风**。长期运行后可能与音频一起死锁（[#38](docs/stage4-findings.md#38)） |
+| 扬声器 | ⚠️ | 可用 —— WSA883x 走 audioreach。增益分配原先是错的、一直在削波（−6 dBFS 素材上 THD −20 dB）；v0.6.0 起数字级压在单位增益、响度由 PA 出，干净约 20 dB（[#86](docs/stage4-findings.md#86)）。可选的"扬声器增强（实验性）"在"设置 › 声音"里，默认关（v0.7.0，感谢 @mashen11）。v0.7.1 起播放由声卡硬件定拍，负载下不再丢块，音游不再错位（[#130](docs/stage4-findings.md#130)）。⚠️ 长期运行后音频可能死锁，与蓝牙一起（[#38](docs/stage4-findings.md#38)） |
+| 耳机口 | ✅ | **已修复，用户实机确认出声。** 三处阻塞：rx-macro 内部的插值器链从来没接上（于是后端拒绝打开，**内核一行日志都不打**）；音频策略里没声明有线输出；框架去看 `/sys/class/switch/h2w`，主线上根本没这个东西（[#40](docs/stage4-findings.md#40)） |
+| 麦克风 | ⚠️ | **v0.7.0 起内置麦克风能录音**（[PR #10](https://github.com/vahiru/gaokun-android/pull/10)，感谢 @mashen11；[#127](docs/stage4-findings.md#127)）。它此前从来没工作过：前端混音器与 DMIC 序列从没设过、HAL 覆盖了麦克风的 address、策略列着硬件开不了的采样率、管道节流约每 8 块丢 1 块。⚠️ **有线耳机的麦克风用不上** —— 插四段耳机通话、录音时用的仍是内置麦 |
 | USB 音频 | ❌ | USB 耳机、USB 声卡不走（内核驱动在，音频 HAL 没有 USB 模块） |
 | 电池、充电 | ⚠️ | 华为 EC 驱动。⚠️ 接低功率电源（电脑 USB 口、小功率手机充电器）时，可能显示"正在充电"而电量照掉，Android 也就不会做低电量关机 —— 到 0% 直接断电。电池温度读数恒为 0 |
 | **游戏** | ✅ | 原神画质极高流畅。GPU 空闲 270 MHz、峰值 690 MHz、最高 50 °C。v0.7.1 冒烟测试：明日方舟、三角洲行动、卡拉彼丘、Phigros、Arcaea 都能跑。⚠️ 英雄联盟手游启动后马上退出（有人报告，还没有日志） |
 | CPU 温控降频 | ✅ | 主线 DTS **根本没有** CPU 的 cooling map —— 已由 [`patches/0009`](patches/) 在设备树里根治 |
-| **待机 / 挂起** | ✅ | **2026-08-22 修复 —— 而且真凶是我们自己，不是内核**（[#52](docs/stage4-findings.md)、[#57](docs/stage4-findings.md)）。真实挂起/唤醒，零复位。v0.7.1 修掉了长时间开机后唤醒卡死（[#16](https://github.com/vahiru/gaokun-android/issues/16)、[#131](docs/stage4-findings.md)）。插着电脑的 USB 时，息屏但不睡，所以 USB adb 一直在。还没量过：整夜待机掉多少电 |
-| 传感器（加速度计+陀螺仪）| ✅ | **自动旋转可用，用户实机确认方向正确。** 为本机写的 sensors HAL 把真实的加速度计、陀螺仪读数喂给 SensorService，框架据此融合出 Game Rotation Vector / Gravity / Linear Acceleration。出厂安装矩阵全零（校准数据随 Windows 一起没了），但传感器坐标系与面板方向本来就一致，不需要纠正。本机**没有磁力计**（所以没有指南针）。光感在总线上有应答，但一激活就让传感器 DSP 崩溃，所以一直关着 —— 没有自动亮度（[#121](docs/stage4-findings.md)）。⚠️ 那颗 DSP 一旦崩溃重启，传感器就全丢了，要重启才回来（[#121](docs/stage4-findings.md)） |
-| 硬件视频解码 | ✅ | **v0.7.0 起是 `qcom-iris`**（原来是 `qcom-venus`）：H.264、HEVC、VP9 走 `c2.v4l2.*.decoder`，中途停止、拖动、重播、中途变分辨率都过了，为此修了上游驱动几处（[#128](docs/stage4-findings.md)）。VP8 走软解。最早打通解码时修的两个 `external/v4l2_codec2` 可移植性 bug 见 [#41](docs/stage4-findings.md) |
+| **待机 / 挂起** | ✅ | **2026-08-22 修复 —— 而且真凶是我们自己，不是内核**（[#52](docs/stage4-findings.md#52)、[#57](docs/stage4-findings.md#57)）。真实挂起/唤醒，零复位。v0.7.1 修掉了长时间开机后唤醒卡死（[#16](https://github.com/vahiru/gaokun-android/issues/16)、[#131](docs/stage4-findings.md#131)）。插着电脑的 USB 时，息屏但不睡，所以 USB adb 一直在。还没量过：整夜待机掉多少电 |
+| 传感器（加速度计+陀螺仪）| ✅ | **自动旋转可用，用户实机确认方向正确。** 为本机写的 sensors HAL 把真实的加速度计、陀螺仪读数喂给 SensorService，框架据此融合出 Game Rotation Vector / Gravity / Linear Acceleration。出厂安装矩阵全零（校准数据随 Windows 一起没了），但传感器坐标系与面板方向本来就一致，不需要纠正。本机**没有磁力计**（所以没有指南针）。光感在总线上有应答，但一激活就让传感器 DSP 崩溃，所以一直关着 —— 没有自动亮度（[#121](docs/stage4-findings.md#121)）。⚠️ 那颗 DSP 一旦崩溃重启，传感器就全丢了，要重启才回来（[#121](docs/stage4-findings.md#121)） |
+| 硬件视频解码 | ✅ | **v0.7.0 起是 `qcom-iris`**（原来是 `qcom-venus`）：H.264、HEVC、VP9 走 `c2.v4l2.*.decoder`，中途停止、拖动、重播、中途变分辨率都过了，为此修了上游驱动几处（[#128](docs/stage4-findings.md#128)）。VP8 走软解。最早打通解码时修的两个 `external/v4l2_codec2` 可移植性 bug 见 [#41](docs/stage4-findings.md#41) |
 | 硬件视频编码 | ❌ | 故意关着：`v4l2_codec2` 的编码组件不会把交给它的 RGBX 帧转成硬件要的 NV12，开着的话应用会直接失败而不是回退。应用用的是软件编码器 |
-| 摄像头 | ✅ | **前后摄都能用**（v0.6.1 起）。前摄 Hynix hi846，后摄 **OmniVision OV13B10** —— 是从华为 Windows 驱动包里解出上电序列才认出来的（[#106](docs/stage4-findings.md)）。链路：主线 `camss` → libcamera simple 流水线 + 软件 ISP → libyuv → 为本机写的 AIDL HAL。闪光灯可用；后摄有**自动对焦**（v0.7.0，感谢 @mashen11）；照片按应用要求的方向旋转。"每隔一次就拍不了"的电源域缺陷已根治（[`patches/0031`](patches/)、[#105](docs/stage4-findings.md)）。⚠️ 最高 15 fps，没有变焦、没有曝光补偿。画质没调：没有色彩矫正矩阵、暗处噪点多、闪光片过曝；暗处对焦慢。**录像没在实机上验证过** |
-| USB-C | ⚠️ | UCSI 起得来，两个连接器都注册了（[#112](docs/stage4-findings.md)）。数据角色跟着对面实际是什么走 —— 接电脑时我们是设备；接 hub 或 U 盘时应当切成主机，这是按设计做的、还没拿真硬件试过（[`patches/0048`](patches/)，v0.7.0）—— v0.7.1 起 Android 的 USB 服务也起来了，应用能用 USB 设备（[#13](https://github.com/vahiru/gaokun-android/issues/13)）。⚠️ **回插之后（在待机后出现过）这个口可能坏掉，要重启才恢复** —— 按代码推断，那之后到重启为止整机也不再待机。⚠️ **不能和电脑传文件**（没有 MTP/PTP），**U 盘不会挂载**（Android 侧还没有可移动存储的配置）。DP 外接显示没测过 |
-| 指纹 | ❌ | 进行中：华为签名的指纹 TA 已经能在本机加载进安全世界（[#125](docs/stage4-findings.md)）；驱动和 HAL 还没有 |
+| 摄像头 | ✅ | **前后摄都能用**（v0.6.1 起）。前摄 Hynix hi846，后摄 **OmniVision OV13B10** —— 是从华为 Windows 驱动包里解出上电序列才认出来的（[#106](docs/stage4-findings.md#106)）。链路：主线 `camss` → libcamera simple 流水线 + 软件 ISP → libyuv → 为本机写的 AIDL HAL。闪光灯可用；后摄有**自动对焦**（v0.7.0，感谢 @mashen11）；照片按应用要求的方向旋转。"每隔一次就拍不了"的电源域缺陷已根治（[`patches/0031`](patches/)、[#105](docs/stage4-findings.md#105)）。⚠️ 最高 15 fps，没有变焦、没有曝光补偿。画质没调：没有色彩矫正矩阵、暗处噪点多、闪光片过曝；暗处对焦慢。**录像没在实机上验证过** |
+| USB-C | ⚠️ | UCSI 起得来，两个连接器都注册了（[#112](docs/stage4-findings.md#112)）。数据角色跟着对面实际是什么走 —— 接电脑时我们是设备；接 hub 或 U 盘时应当切成主机，这是按设计做的、还没拿真硬件试过（[`patches/0048`](patches/)，v0.7.0）—— v0.7.1 起 Android 的 USB 服务也起来了，应用能用 USB 设备（[#13](https://github.com/vahiru/gaokun-android/issues/13)）。⚠️ **回插之后（在待机后出现过）这个口可能坏掉，要重启才恢复** —— 按代码推断，那之后到重启为止整机也不再待机。⚠️ **不能和电脑传文件**（没有 MTP/PTP），**U 盘不会挂载**（Android 侧还没有可移动存储的配置）。DP 外接显示没测过 |
+| 指纹 | ❌ | 进行中：华为签名的指纹 TA 已经能在本机加载进安全世界（[#125](docs/stage4-findings.md#125)）；驱动和 HAL 还没有 |
 | 手写笔（M-Pencil）、TPM | ❌ | 不支持 |
 | Root | ⚠️ | 每个内核都**内置了** KernelSU（ReSukiSU 分支），关不掉。不装 ReSukiSU 管理器 App 时处于休眠；装了之后，只有你在管理器里批准的应用才能拿到 root。检测 root 或未锁定启动链的应用可能拒绝运行（[详情](docs/known-limitations.zh-CN.md#默认带-rootkernelsu--resukisu)） |
 | DRM（Widevine） | ❌ | 系统里完全没有 DRM 模块：Netflix、Disney+、Prime Video 这类放不了正片（[详情](docs/known-limitations.zh-CN.md#无法播放受-drm-保护的视频没有-widevine)） |
-| SELinux | ⚠️ | `permissive`。为转 enforcing 已经做了七轮策略；enforcing 试跑时主要功能都正常，相机也在内（[#129](docs/stage4-findings.md)） |
+| SELinux | ⚠️ | `permissive`。为转 enforcing 已经做了七轮策略；enforcing 试跑时主要功能都正常，相机也在内（[#129](docs/stage4-findings.md#129)） |
 
 ### 三件反直觉的事
 
@@ -87,12 +87,12 @@ UEFI。这不是一次常规移植 —— 它是 **AOSP on mainline**，每一�
 而且**单次失败率约 93%** —— "改一条、试一次、炸了"对任何配置都是大概率事件，
 有好几轮是在追噪声。Android 侧的修法是**睡下去之前把 role 切到 `host`、
 亮屏时切回 `device`**，这也就是机器睡着时 USB adb 会断的原因。
-[#52](docs/stage4-findings.md)、[#57](docs/stage4-findings.md)
+[#52](docs/stage4-findings.md#52)、[#57](docs/stage4-findings.md#57)
 
 **普通应用曾经能把内核 panic 掉。** 对 present fence 做 `sync_file` ioctl 会与
 dma-fence 的「signal 即摘 ops」竞态，撞上 `drm_crtc.c:161` 的 `BUG_ON`，整台机器
 当场倒下 ——「切到设置就卡死」就是这个。`patches/0013` 删掉那个竞态检查，本仓自
-v0.4.0-alpha 起一直带着（[#58](docs/stage4-findings.md)、[#62](docs/stage4-findings.md)）。
+v0.4.0-alpha 起一直带着（[#58](docs/stage4-findings.md#58)、[#62](docs/stage4-findings.md#62)）。
 这个缺陷主线至今还在，别的 DRM 机器也撞得到。
 
 ---
@@ -260,14 +260,14 @@ DTB 怎么编、放哪里，见
    `smmu-nostall.sh` 那个轮询 workaround（[`docs/stage5-freedreno.md`](docs/stage5-freedreno.md) D6）。
 2. **手掌误触。** 手掌压屏会碎成多个触点；三种按阈值的办法都实测过、全都不行，
    下一步是在触摸驱动里做跨帧的形态判据。驱动已经上报触点面积；触摸 IDC 文件还没写。
-   [#116](docs/stage4-findings.md)、[`scripts/touch/README.md`](scripts/touch/README.md)。
+   [#116](docs/stage4-findings.md#116)、[`scripts/touch/README.md`](scripts/touch/README.md)。
 3. **硬件视频【编码】。** 故意关着（见状态表）。要让它工作，得教 `v4l2_codec2` 的
    编码组件把 RGBX 转成 NV12 —— `device/huawei/gaokun3/device.mk` 里的注释列出了
    复测时要改的三处。
 4. **SELinux 转 enforcing。** 已经做了七轮，enforcing 试跑能用；剩下的是 enforcing
-   下的真实待机、enforcing → enforcing 的 OTA、enforcing 下的全新安装（[#129](docs/stage4-findings.md)）。
+   下的真实待机、enforcing → enforcing 的 OTA、enforcing 下的全新安装（[#129](docs/stage4-findings.md#129)）。
 5. **环境光传感器。** 一激活 SLPI 的 sensor_process 就整个崩溃；Windows 用的是同一套
-   配置，所以差别在 DSP 自己写的注册表里（[#121](docs/stage4-findings.md)）。
+   配置，所以差别在 DSP 自己写的注册表里（[#121](docs/stage4-findings.md#121)）。
    加速度计与陀螺仪那一套已经跑通 —— 据我们所知是 SC8280XP 上头一次，ThinkPad X13s
    也没有 —— 协议整理在 [`docs/sensors-ssc-protocol.md`](docs/sensors-ssc-protocol.md)，
    想在自己机器上做可以直接拿。

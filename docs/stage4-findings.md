@@ -9750,7 +9750,7 @@ oneshot → `…-android-b.conf`（回读一致）→ 重启，**40 秒 `boot_co
 
 ## <a name="123"></a>#123 ★★★ 指纹【路线翻案】：QSEECOM LOAD 已被完整逆向 + 有真机验证过的参考实现；本机 QSEECOM 通路已在跑（2026-09-24）
 
-⚠️ **本案推翻 [#120](stage4-findings.md) 的"现阶段驱动不了"。** #120 当时的判据是"上游 qcom_scm 只有 LOOKUP/SEND、没有 LOAD，而 QTEE 只覆盖 SM8650+"——
+⚠️ **本案推翻 [#120](stage4-findings.md#120) 的"现阶段驱动不了"。** #120 当时的判据是"上游 qcom_scm 只有 LOOKUP/SEND、没有 LOAD，而 QTEE 只覆盖 SM8650+"——
 **这个判据错在两点**：(a) 指纹走的是**旧 QSEECOM**（不是新 QTEE/SMCInvoke），gaokun3 恰好在 QSEECOM 的 allowlist 里；
 (b) 缺的 LOAD 已经有人写好并在真机上验证过。来源是用户提供的三份逆向报告（Windows/Ghidra 侧做的，见下），
 与我在 #120 独立查到的事实**逐条吻合**（FTE7001、GPIO61/62 选型、`qsee_spi_*`、片上比对、secelf 格式），可信度高。

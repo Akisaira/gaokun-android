@@ -4,7 +4,7 @@
 
 ## 为什么是"自己写 AIDL"而不是用现成件
 
-三条路都查过（[#91](../../../../docs/stage4-findings.md)），结论是只剩自己写：
+三条路都查过（[#91](../../../../docs/stage4-findings.md#91)），结论是只剩自己写：
 
 * ❌ **HIDL + 上游 `provider@2.4-legacy`**（能直接加载 libcamera 产出的传统
   `camera_module_t`，一行代码不用写）—— **本机 `hwservicemanager` 根本不存在**
@@ -13,7 +13,7 @@
   而且 FCM 202504 的兼容性矩阵里 camera.provider **只剩 `format="aidl"`**。
 * ❌ **libcamera 的 V4L2 垫片 + AOSP 自带的 ExternalCameraProvider** ——
   软件 ISP **只输出 RGB 族**（`debayer_cpu.cpp:436-441`），而那个 HAL 要 YUYV/MJPEG。
-  和 [#84](../../../../docs/stage4-findings.md) 撞的是同一堵墙。
+  和 [#84](../../../../docs/stage4-findings.md#84) 撞的是同一堵墙。
 * ✅ **自己写 AIDL**：`CameraMetadata.aidl` 原文说它就是
   "A serialized metadata buffer created by libcamera_metadata,
   access by casting to a `camera_metadata*`" ⇒ 与 camera3 同一个东西，
@@ -28,9 +28,9 @@ libcamera 本身**不在 AOSP 里编**，走 `scripts/camera/build-libcamera-and
 subprojects 里**只有 `libyuv.wrap`，没有这两个**；反过来，本模块是 Soong 模块，
 AOSP 自带的 libjpeg/libyuv 直接可用 ⇒ 绕开整个依赖问题。
 
-⚠️★ **但这笔债必须记着**：预编译产物**不在仓库里**（[#89](../../../../docs/stage4-findings.md)
+⚠️★ **但这笔债必须记着**：预编译产物**不在仓库里**（[#89](../../../../docs/stage4-findings.md#89)
 的决定：可复现的东西不入库），于是构建 ROM 前**必须先手动跑一次那个脚本**。
-**这正是 [#82](../../../../docs/stage4-findings.md)/[#85](../../../../docs/stage4-findings.md)
+**这正是 [#82](../../../../docs/stage4-findings.md#82)/[#85](../../../../docs/stage4-findings.md#85)
 那种"手动步骤终将被遗忘"的形状。**
 ⬜ 正解是把 libcamera 移植成 Soong 模块（TODO A7 的 M3）：生成文件那部分
 （control_ids / property_ids / mojom→C++）可以用 `genrule` 跑它自带的 Python 生成器。

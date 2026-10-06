@@ -583,7 +583,7 @@ before you sell the machine or send it for repair: see the
 
 There is **no working recovery on this device.** The image is built, but
 booting it reset-loops the machine, so no release ships it and the boot menu
-entry is **deliberately not created**. See [#39](stage4-findings.md) for what
+entry is **deliberately not created**. See [#39](stage4-findings.md#39) for what
 was measured and ruled out.
 
 What that costs you today:
@@ -612,7 +612,7 @@ button.
 | Picked the other slot's entry, it restarted | Expected after an update — see [Updating](#updating) |
 | Black screen, no menu | Secure Boot is still on, or the ESP was not written |
 | Boots but no GPU / no Wi-Fi / no sound | Firmware missing from `/vendor/firmware/` |
-| adb disappears after unplugging USB | Known ([#27](stage4-findings.md)). Use *Wireless debugging* in Developer options instead (see [adb](#adb)) |
+| adb disappears after unplugging USB | Known ([#27](stage4-findings.md#27)). Use *Wireless debugging* in Developer options instead (see [adb](#adb)) |
 
 The rescue system can reflash everything — at the machine, or over SSH on the
 LAN if you gave it your key (see [About the rescue system](#about-the-rescue-system)).
