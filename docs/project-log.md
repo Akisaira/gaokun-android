@@ -414,7 +414,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > install-artifacts.sha256 / gaokun3.json / zip / super.img.zst **五个附件全部就位**（下载 URL 200、大小与 sha 文件一致）。仓库 `ota/gaokun3.json` 与线上逐字节同步。
 > ⚠️ 下午的降噪 / 预闪 / usbrole v2 改动**不在**这一版里（只验过 bind mount，未进镜像），留给 v0.6.2。构建机已 deallocate。
 >
-> **⓪m 2026-09-14 下午两问（[#112](docs/stage4-findings.md)）：噪点 & 息屏 USB adb。**
+> **⓪m 2026-09-14 下午两问（[#112](stage4-findings.md)）：噪点 & 息屏 USB adb。**
 > ★ **UCSI 活了**（typec port0 有 partner），但数据角色**反的**（PC 插着报 `[host]`），靠 `init.gaokun3.usb.rc` 硬写 device 盖住。
 > ★ dwc3 源码：device 模式挂起无条件 `dwc3_core_exit()`（PHY 下电，= #56 的复位点）且 gadget 总 soft disconnect
 > ⇒ **上游没有"adb 穿越睡眠"**。折中已写：`gaokun3-usbrole.sh` v2 插着主机息屏不切 host、不睡；拔线再切。
@@ -425,7 +425,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > + swstats 剔饱和（#112 §5）。**未进镜像**，平板上以 bind mount 跑着新 HAL（重启消失）。
 > ⚠️ 测法坑：root 手动起 provider 会选 CMA 堆而分配失败；要用 `mount --bind` 盖到 vendor 路径再 `start` 服务。
 >
-> **⓪l ✅ 2026-09-14 13:26：v0.6.1（戳 `1789362233`）已装机验收通过（[#111](docs/stage4-findings.md) §6），【未发布】。**
+> **⓪l ✅ 2026-09-14 13:26：v0.6.1（戳 `1789362233`）已装机验收通过（[#111](stage4-findings.md) §6），【未发布】。**
 > `#19` / `_a` / IPA 目录对 / provider 在 `hal_camera_default` 域 0 denial / 后摄 flash TRUE / **快捷设置手电筒砖实测开关 LED**。
 > ⬜ 应用内拍照闪光要解锁，等用户。⬜ 发布（R2 + GitHub）要用户点头。ESP 实验槽位全清（50 MB 可用）。
 > ★ 第二版 `release-061d`（戳 **`1789364282`**，只多"相机 ID 按 Location 排、后摄=0"）已装到 `_b` 验收通过（14:07），
@@ -433,7 +433,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > 发布 = 构建机开机后 `release.sh --no-build`（清单）+ `gh release create v0.6.1-alpha`（附件）—— **等用户点头**。构建机已 deallocate。
 > ⚠️ `sysui_qs_tiles` 运行时改不动（SystemUI 毫秒级覆盖回去），要在它重启的窗口里写。
 >
-> **⓪k 🔦 2026-09-14 下午：闪光灯接进相机 HAL（[#111](docs/stage4-findings.md)），v0.6.1 带它重编中。**
+> **⓪k 🔦 2026-09-14 下午：闪光灯接进相机 HAL（[#111](stage4-findings.md)），v0.6.1 带它重编中。**
 > 没有同步 strobe ⇒ "闪光" = 预闪触发点灯、报几帧 PRECAPTURE 让 AGC 适应、到静态照片完成才灭（`firedPending_` 计数，
 > 别在下一个请求入队时灭——框架把预览请求紧跟着拍照请求发来）。手电筒 = `setTorchMode` 写 brightness。
 > ★★ 顺手抓到 HAL **从来没读 FMQ 里的请求设置**（框架优先走 FMQ，`AidlCamera3Device.cpp:1268`）—— 已修。
@@ -442,7 +442,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > 都没声明），要装镜像才能验。模组 EEPROM（0x50，16 KiB）读出来入库 `docs/hw/`。
 > ⚠️ 本会话 `pkill -f` 自杀三次（`dmesg -w` / `camprov` / `com.android.systemui`）——一行命令里只用 `pkill -x` 或 `kill $(pidof)`。
 >
-> **⓪j ✅ 2026-09-14 中午：内核 `#19` 两路验收全过、闪光灯定案、v0.6.1 重新构建中（[#110](docs/stage4-findings.md)）。**
+> **⓪j ✅ 2026-09-14 中午：内核 `#19` 两路验收全过、闪光灯定案、v0.6.1 重新构建中（[#110](stage4-findings.md)）。**
 > 正常 47 个 subdev / 前后摄各 12 帧；`ov13b10.fail_probe=1` 时 camss 20 s 后丢掉未绑端点、前摄照常（0035 生效）。
 > **闪光灯 = PM8350C 闪光模块 1+4 路**（四路逐个 torch、用户看背面、成对对照定案），`patches/0036` 收成单节点，
 > GPIO93 那个不亮的 gpio-led 删掉；dtb v2 上机只剩一个 `white:flash`。`prebuilt-boot/` = `#19` + dtb v2。
@@ -451,7 +451,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > ⚠️ 本机 ESP 曾只剩 4.5 MB（实验槽位吃的），postinstall 要 56 MB ⇒ 装机会失败；`slot_cam`/`slot_cam4` 已删（B13）。
 > ★ 用户 12:3x 指令：**不推仓库、不发版，其余直接做**（含 TODO 里的项）。
 >
-> **⓪i ⚠️★★★ v0.6.0 正式镜像上相机打不开（[#109](docs/stage4-findings.md)）**：IPA 模块被装在 `/vendor/lib64/`，
+> **⓪i ⚠️★★★ v0.6.0 正式镜像上相机打不开（[#109](stage4-findings.md)）**：IPA 模块被装在 `/vendor/lib64/`，
 > libcamera 却在 `/vendor/lib64/libcamera/ipa/` 找 ⇒ 软件 ISP 建不起来 ⇒ HAL 把裸拜耳当 RGB24 喂 libyuv ⇒ SIGSEGV 循环。
 > 开发期那份是手动 push 到 overlay 的，`enable-verity` 一拆就露馅。用户机器已热修（remount + 符号链接，
 > ⚠️ 下次 OTA 前 `enable-verity` 会抹掉）；正式修法：Android.bp `relative_install_path: "libcamera/ipa"` + HAL 两道保险，
@@ -467,7 +467,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > **释放 R2 桶之前必须先有国内可达的镜像**（同一 Cloudflare 域名下用 Worker 反代 GitHub 附件是最省事的路），
 > 这是用户的决定点，不是我能单方面做的。★ 教训：托管地址的变更要按【用户所在网络】验证，本机能通不算。
 >
-> **⓪g 🚦 收尾计划上午段（2026-09-14）：两样东西编好等中午重启验收（[#108](docs/stage4-findings.md)）。**
+> **⓪g 🚦 收尾计划上午段（2026-09-14）：两样东西编好等中午重启验收（[#108](stage4-findings.md)）。**
 > 内核 `#19` 在 `slot_cam5`（`cam5` 正常 / `cam6` 带 `ov13b10.fail_probe=1`）：0035 camss 容忍未绑传感器、
 > 0034 v3 get_selection、0036 PMIC 闪光四路试接线（⇒ ⓪j 定案 1+4 路）；验收脚本 `k19test.sh normal|fallback|flash`。
 > ROM v0.6.1 候选（戳 `1789344148`）在 staging、payload 已预推：ov13b10 增益模型/属性/yaml、**Updater 清单切 GitHub**。
@@ -493,7 +493,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > （用 `--no-build`！发验过的那一版）+ GitHub release。
 > ⚠️ 用户拍板"后摄一起发"：S5K3L6 模组的机器会**前后摄一起消失**（v7.2 camss 等所有传感器），说明里已写明。
 >
-> **⓪e ★★★★ 后摄通了：它是 OV13B10（[#106](docs/stage4-findings.md)，2026-09-14 凌晨）。**
+> **⓪e ★★★★ 后摄通了：它是 OV13B10（[#106](stage4-findings.md)，2026-09-14 凌晨）。**
 > 板级证据来自华为 Windows 驱动包（`uup-drivers-sc8280xp` release 200.0.10.0 → `qccamrearsensor_extension8280.cab`
 > → `CAMS_RES_QRD.bin`，简单 TLV，`bsdtar` 能解 .cab）：LDO2_B 2.8V / LDO2_C 1.8V / GPIO92 门控 / 复位 GPIO7 / MCLK4；
 > 前摄同格式解出来与现役 DT **逐项一致**（格式由此校准）。DSDT 显示设备投 LDO2_B **1.8V**、后摄投 **2.8V**，
@@ -509,7 +509,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > ⬜ 闪光灯走 PMIC 闪光模块（Windows FLSH 资源块为空；GPIO93 脉冲实测不亮）：要 `LEDS_QCOM_FLASH` + pmc8280c 节点 + 试 `led-sources`。
 > ⚠️ 稳健性：v7.2 camss 要求端点上所有传感器都绑上，任一没绑前后摄一起消失（0018 当初的理由）。
 >
-> **⓪d ★★★★★ 电源域缺陷已根治（[#105](docs/stage4-findings.md)，2026-09-14 凌晨）。**
+> **⓪d ★★★★★ 电源域缺陷已根治（[#105](stage4-findings.md)，2026-09-14 凌晨）。**
 > 根因 = `camcc-sc8280xp` 里 `camnoc_axi_clk_src`/`slow_ahb_clk_src`/`fast_ahb_clk_src` 用普通
 > `clk_rcg2_ops`（关闭时不停靠 XO）。camss 用完相机后 CAMNOC AXI 的 RCG **指着一个已熄灭的 PLL**
 > （clk debugfs：`parent=camcc_pll0_out_even`、`camcc_pll0 en=0`），GDSC 掉电/上电与 CAMNOC 握手
@@ -543,10 +543,10 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > ⚠️ A/B **分不开**两种读法：①真有 DMA/AXI 流量没静默就塌缩；
 > ②那段 ON 期间被打开又关掉的是**一整套 camcc 时钟 + CSIPHY 稳压器**（走 STREAMON
 > 的 pipeline PM），而 A 格只是朴素的 genpd resume。**下一步必须拆开这两件事**，
-> 阶梯实验见 [#102](docs/stage4-findings.md)（★ 关键性质：没毒化的那一级不消耗这次开机）。
+> 阶梯实验见 [#102](stage4-findings.md)（★ 关键性质：没毒化的那一级不消耗这次开机）。
 > ⚠️ 阶梯的第 1–4 级需要给 `camtest` 加一个"停在第 N 步"的开关，它现在是固定流程。
 >
-> **⓪b2 ★★★★★ 触发点已钉到"一次 STREAMON/STREAMOFF 循环"（[#103](docs/stage4-findings.md)）。**
+> **⓪b2 ★★★★★ 触发点已钉到"一次 STREAMON/STREAMOFF 循环"（[#103](stage4-findings.md)）。**
 > `camtest --stop N` 五级阶梯，探针用 `echo on > .../camss/power/control`
 > （朴素 genpd resume，实测无害 ⇒ **没毒化的那一级不消耗这次开机**）：
 > 1/2/3 级（接链、设格式、REQBUFS+QBUF）**都不毒化**——它们根本没让域上电；
@@ -559,7 +559,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > 全字段（**走 regmap，不碰 `/dev/mem`**，这是目前唯一安全的"看硬件内部"办法）；
 > ② `REQBUFS` 但不 `QBUF` 再 `STREAMON` = 真正的零 DMA。
 >
-> **⓪b3 ★★★★★ 硬件级证据链（[#104](docs/stage4-findings.md)）—— 根因仍未破，但已知的东西完全不同了。**
+> **⓪b3 ★★★★★ 硬件级证据链（[#104](stage4-findings.md)）—— 根因仍未破，但已知的东西完全不同了。**
 > * **与 DMA 无关**：`camtest --noqbuf`（一个缓冲都不入队）照样毒化 ⇒ 是 `s_stream` 开关序列本身。
 > * **签名**：干净掉电 `CFG_GDSCR=0x00088000`（6/6）vs 脏掉电 `0x00008000`（2/2），
 >   **`GDSCR` 完全相同、只差 bit 19**，掉电那一刻就能看见。
@@ -581,7 +581,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > **一个实验该在什么状态下做，是实验设计的一部分，不是"反正机器现在闲着"。**
 > ⬜ 于是 **`patches/0022` 至今未验证**，要在干净开机、camss 健康时补测。
 >
-> **⓪b ✅✅ WPA3 结案并已连上（[#107](docs/stage4-findings.md)，2026-09-14）**：#100 判"AP 不认密码"被证实 ——
+> **⓪b ✅✅ WPA3 结案并已连上（[#107](stage4-findings.md)，2026-09-14）**：#100 判"AP 不认密码"被证实 ——
 > 用户在手机上核对，密码是数字顺序记错了。改对之后 **SAE 一次连上**（group 19、H2E、PMF），
 > 带流量浸泡 3 分钟 **0 次掉线** ⇒ 本机 SAE 栈端到端可用，issue #2 在这台华为 AP 上**不复现**。
 > ★ 教训："用户给的密码"与"路由器上配的密码"是两个事实，前者要在另一台已连上的设备上核对过才算证据。
@@ -589,7 +589,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > **⓪b（原文）WPA3 结案：不是 WPA3 的问题。** 用户家里那台 AP
 > **不认用户给的那个密码**（⚠️ SSID/密码/BSSID 一律不写进本仓，这是公开仓库） —— SAE 与 WPA2-PSK 两条独立算法都在"校验"那一步失败，
 > 且与故意写错的密码**失败签名逐行同形**。`WifiConfigStore.xml` 里存的与用户给的
-> 逐字相同，且该网络**从没连上过**。见 [#100](docs/stage4-findings.md)。
+> 逐字相同，且该网络**从没连上过**。见 [#100](stage4-findings.md)。
 > ⬜ 因此 [issue #2](https://github.com/vahiru/gaokun-android/issues/2) **仍未复现**
 > —— 我们连认证都没过，报告者是关联之后才被踢，**不是同一个故障**。
 > 要推进它仍然需要**一个已知密码正确的 WPA3 AP**。
@@ -610,18 +610,18 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > `slot_b/` 内核 **sha 完全相同** ⇒ 只换了用户态。**上机前先量"改了几个变量"。**
 > ⚠️ 装机脚本里揪出三个"长得像成功"的 bug（假阳性完成判据 ×2、
 > 安全网 glob 写成下划线匹配不到条目），都已修并写进代码注释，见
-> [#86](docs/stage4-findings.md)。
+> [#86](stage4-findings.md)。
 > ⚠️★★★ **装完 OTA 后 `_b` 槽【不再存在】** —— `lpdump` 实测 super 里只剩 `_a`
 > 一套逻辑分区。我在验收里写过"`_b` 是现成回落"，**错的**，而本文下面早就
 > 写着"`bootctl is-slot-bootable` 不代表 super 里真有那套分区，先用 `lpdump` 查"。
-> 真正的回落 = `default *-android-a.conf` + 两个救援条目。见 [#86](docs/stage4-findings.md)。
+> 真正的回落 = `default *-android-a.conf` + 两个救援条目。见 [#86](stage4-findings.md)。
 >
 > **② ❌ 相机内核 `#5` 已上机实测 —— 上游候选修复【被否】。**
 > `patches/0020`（`unregister CAMCC_GDSC_CLK`）确实生效了
 > （`clk_summary` 里 `camcc_gdsc_clk` 出现 **0** 次、34 个 `/dev/video*`），
 > 但故障**一字不差复现**：第一次 camtest 12 帧 → 3 秒后 `titan_top_gdsc` 塌缩
 > → 第二次 `-110`，同一条 `gdsc.c:185 titan_top_gdsc status stuck at 'off'`。
-> ⇒ camss 电源域缺陷至此排除 **六条**。见 [#87](docs/stage4-findings.md)。
+> ⇒ camss 电源域缺陷至此排除 **六条**。见 [#87](stage4-findings.md)。
 > ★ 这个否定结果**是被预测到的**：#83 当时就记了反证（本机
 > `camcc_gdsc_clk` 硬件使能一直是 `Y`）。教训是**当时低估了那条反证的分量**
 > —— 上游告警文本与我们逐字相同，这种表面相似度压过了一条直接矛盾的实测。
@@ -635,17 +635,17 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 > camss"当桥（实测有效）；功耗的账留到真要发布时再算（那时再测 pin 的代价）。
 >
 > **③ 📷★★★★★ 相机日常可用了 —— 正常启动就能预览、拍照。**
-> ![拍的照片](docs/img/gaokun3-camera-shot.jpg)
+> ![拍的照片](img/gaokun3-camera-shot.jpg)
 > 走 `default` 普通启动（**不用 oneshot**）：内核 `#5`、`camss=active`、
 > 相机数 1，开 Aperture 能预览，按快门存出正常 JPEG 到相册。
 > 链路：`hi846 → CSIPHY3 → CSID0 → VFE0 RDI0 → libcamera simple 流水线
 > → 软件 ISP（去拜耳+AWB+AGC）→ libyuv → 自研 AIDL HAL → 相机应用`。
-> 案卷 [#88](docs/stage4-findings.md)…[#99](docs/stage4-findings.md)；
+> 案卷 [#88](stage4-findings.md)…[#99](stage4-findings.md)；
 > 代码 `device/huawei/gaokun3/camera/`，libcamera 的 Soong 移植与四个补丁
 > 在 `patches/libcamera/`。
 >
-> ⚠️ **仍欠的账（都记在 [#99](docs/stage4-findings.md)）**：
-> * **[#87](docs/stage4-findings.md) 电源域缺陷没根治** —— 靠 `on boot` 钉住
+> ⚠️ **仍欠的账（都记在 [#99](stage4-findings.md)）**：
+> * **[#87](stage4-findings.md) 电源域缺陷没根治** —— 靠 `on boot` 钉住
 >   camss 当桥，代价是相机电源域常开、**功耗未测**。
 > * **画质只是修掉了偏色，不等于调好** —— 没有 CCM（要拍色卡标定），
 >   AWB 是灰度世界法；`hi846.yaml` 给的是单位增益、不含标定信息。
@@ -695,7 +695,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 >   `scripts/live/README.md` —— **那两份的"状态"段落比本条旧**，以本条为准。
 
 > **★★★★ Stage 6 M20（2026-08-23 夜，用户睡觉期间）：root 进 ROM + SELinux 四步走完。**
-> 完整案卷 [#76](docs/stage4-findings.md) / [#77](docs/stage4-findings.md)。
+> 完整案卷 [#76](stage4-findings.md) / [#77](stage4-findings.md)。
 > - ★★ **第 3 步（sysfs 打标签）是本轮性价比最高的一击**：
 >   `network_stack` 236→0、`hal_health_default` 235→0，**四条 `genfscon`、
 >   零 allow 规则**。根因是 AOSP 的 genfs 只标了 `/class/...`，而那是符号链接
