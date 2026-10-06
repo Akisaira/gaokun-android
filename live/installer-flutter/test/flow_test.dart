@@ -4,9 +4,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gk3_installer/backend/fixture_backend.dart';
+import 'package:gk3_installer/backend/protocol.dart';
 import 'package:gk3_installer/l10n/app_localizations.dart';
 import 'package:gk3_installer/model/model.dart';
 import 'package:gk3_installer/session.dart';
+import 'package:gk3_installer/ui/messages.dart';
+import 'package:gk3_installer/ui/screens_risk.dart';
 import 'package:gk3_installer/ui/widgets.dart';
 
 import 'helpers.dart';
@@ -1036,5 +1039,275 @@ void main() {
     await passRisk(t, loc: en);
     await see(t, find.text(en.confirmBitlockerHead));
     expect(cjkOnScreen(t), isEmpty);
+  });
+
+  // ── 写盘前的风险确认（用户 2026-10-06：分区之前强制阅读风险提示）────────────────────────────────────
+  group('风险确认页', () {
+    /// 走到风险确认页。[install]：安装的三种方式（还要过来源、选项两页）；否则是缩分区 / 手动调整（方式页的下一页就是它）
+    Future<Rec> toRisk(WidgetTester t, String scenario, String Function(L10n) pick, {L10n? loc, bool install = true, Map<String, String> overrides = const {}}) async {
+      final x = loc ?? l;
+      final rec = await pumpApp(t, scenario, language: x.localeName, overrides: overrides);
+      await tap(t, find.text(x.btnStart));
+      await tap(t, find.textContaining('/dev/nvme0n1'));
+      await next(t, x);
+      await tap(t, find.text(pick(x)));
+      await next(t, x);
+      if (install) {
+        await next(t, x); // 来源
+        await next(t, x); // 选项
+      }
+      await see(t, find.text(x.riskTitle));
+      return rec;
+    }
+
+    /// 按钮旁边那句"还差：…"正好是这几项
+    Finder missing(List<String> items, [L10n? loc]) {
+      final x = loc ?? l;
+      return find.text(x.riskMissing(items.join(x.riskSep)));
+    }
+
+    /// "还差：再等 N 秒"（N 是几都行）
+    Finder missingOnlyWait([L10n? loc]) {
+      final x = loc ?? l;
+      final re = RegExp('^${RegExp.escape(x.riskMissing(x.riskNeedWait('#'))).replaceFirst('#', r'\d+')}\$');
+      return find.byWidgetPredicate((w) => w is Text && w.data != null && re.hasMatch(w.data!));
+    }
+
+    Future<void> tick(WidgetTester t) => tap(t, find.byKey(kRiskCheckKey));
+    Future<void> type(WidgetTester t, String s) async {
+      await t.enterText(find.byKey(kRiskWordKey), s);
+      await settle(t);
+    }
+
+    Future<void> waitOut(WidgetTester t) async {
+      await t.pump(const Duration(seconds: RiskPage.readSeconds));
+      await settle(t);
+    }
+
+    /// 点了也不走：还在风险页，下一页没出来，后端什么都没收到
+    Future<void> tapDoesNothing(WidgetTester t, Rec rec, String nextTitle) async {
+      await t.tap(find.text(l.riskContinue), warnIfMissed: false);
+      await settle(t);
+      expect(find.text(l.riskTitle), findsOneWidget);
+      expect(find.text(nextTitle), findsNothing);
+      for (final fn in ['gk3_apply', 'gk3_shrink', 'gk3_part_delete', 'gk3_part_create', 'gk3_part_format', 'gk3_part_resize']) {
+        expect(rec.last(fn), isNull, reason: fn);
+      }
+    }
+
+    testWidgets('整盘清空（出厂盘）：最醒目的样子、正文写明华为一键恢复分区；一开始四个门槛都没满足，按钮旁边逐项写明', (t) async {
+      final rec = await toRisk(t, 'factory', (x) => x.modeWipeTitle);
+      expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
+      expect(find.text(l.confirmTitle), findsNothing);
+      await see(t, find.text(l.riskWipeHead));
+      await see(t, find.textContaining(l.confirmOnekeyWarn('Onekey')));
+      await see(t, find.text(l.riskBackupHead));
+      await see(t, find.text(l.riskScrollHint));
+      expect(find.byKey(kRiskWordKey), findsOneWidget);
+      expect(riskContinueEnabled(t), isFalse);
+      // 刚进来：四项都差（秒数随测试推进的假时间变，只核对它在、且排在第二）
+      final txt = t.widgetList<Text>(find.byType(Text)).map((w) => w.data ?? '').firstWhere((s) => s.startsWith(l.riskMissing('')));
+      expect(txt, startsWith(l.riskMissing(l.riskNeedScroll + l.riskSep)));
+      expect(txt, endsWith(l.riskSep + l.riskNeedCheck + l.riskSep + l.riskNeedWord(l.riskWord)));
+      await tapDoesNothing(t, rec, l.confirmTitle);
+    });
+
+    testWidgets('没滚到底：等够了、勾了、确认词也对 —— 仍然不能继续；滚到底才行', (t) async {
+      final rec = await toRisk(t, 'factory', (x) => x.modeWipeTitle);
+      await waitOut(t);
+      await tick(t);
+      await type(t, 'ERASE');
+      await see(t, missing([l.riskNeedScroll]));
+      expect(riskContinueEnabled(t), isFalse);
+      await tapDoesNothing(t, rec, l.confirmTitle);
+      await scrollRiskToEnd(t);
+      expect(find.text(l.riskScrollHint), findsNothing);
+      expect(riskContinueEnabled(t), isTrue);
+      await tap(t, find.text(l.riskContinue));
+      await see(t, find.text(l.confirmTitle));
+    });
+
+    testWidgets('倒计时没到：滚到底、勾了、确认词对 —— 仍然不能继续；${RiskPage.readSeconds} 秒之后才行', (t) async {
+      final rec = await toRisk(t, 'factory', (x) => x.modeWipeTitle);
+      await scrollRiskToEnd(t);
+      await tick(t);
+      await type(t, 'ERASE');
+      await see(t, missingOnlyWait());
+      expect(riskContinueEnabled(t), isFalse);
+      await tapDoesNothing(t, rec, l.confirmTitle);
+      await waitOut(t);
+      expect(missingOnlyWait(), findsNothing);
+      expect(riskContinueEnabled(t), isTrue);
+    });
+
+    testWidgets('不勾选：读完、等够、确认词对 —— 仍然不能继续', (t) async {
+      final rec = await toRisk(t, 'factory', (x) => x.modeWipeTitle);
+      await scrollRiskToEnd(t);
+      await waitOut(t);
+      await type(t, 'ERASE');
+      await see(t, missing([l.riskNeedCheck]));
+      expect(riskContinueEnabled(t), isFalse);
+      await tapDoesNothing(t, rec, l.confirmTitle);
+      await tick(t);
+      expect(riskContinueEnabled(t), isTrue);
+      await tick(t); // 取消勾选：又不行了
+      expect(riskContinueEnabled(t), isFalse);
+    });
+
+    testWidgets('确认词错误（打一半 / 中文 / 别的词）不能继续，打错了标红；大小写不论', (t) async {
+      final rec = await toRisk(t, 'factory', (x) => x.modeWipeTitle);
+      await scrollRiskToEnd(t);
+      await waitOut(t);
+      await tick(t);
+      await see(t, missing([l.riskNeedWord(l.riskWord)]));
+      for (final w in ['ERAS', '清除', 'CLEAR', 'ERASED', 'E RASE']) {
+        await type(t, w);
+        expect(riskContinueEnabled(t), isFalse, reason: w);
+      }
+      await tapDoesNothing(t, rec, l.confirmTitle);
+      await see(t, find.text(l.riskWordWrong(l.riskWord)));   // 最后那个不是前缀：标红
+      await type(t, 'ERA');
+      expect(find.text(l.riskWordWrong(l.riskWord)), findsNothing);   // 打到一半不标红
+      await type(t, ' erase ');
+      expect(riskContinueEnabled(t), isTrue);
+    });
+
+    testWidgets('确认词能用软键盘打（live 里没有输入法，平板可能没接键盘盖）', (t) async {
+      await toRisk(t, 'factory', (x) => x.modeWipeTitle);
+      await scrollRiskToEnd(t);
+      await waitOut(t);
+      await tick(t);
+      for (final k in 'erase'.split('')) {
+        await tap(t, find.text(k));
+      }
+      expect(t.widget<TextField>(find.byKey(kRiskWordKey)).controller!.text, 'erase');
+      expect(riskContinueEnabled(t), isTrue);
+    });
+
+    testWidgets('双系统：经过风险页（共用 EFI 分区、Windows 与 BitLocker 恢复密钥那一段），不要确认词', (t) async {
+      final rec = await toRisk(t, 'windows-free', (x) => x.modeAlongTitle);
+      expect(find.text(l.confirmTitle), findsNothing);
+      await see(t, find.text(l.riskAlongHead));
+      await see(t, find.text(l.riskWinHead));
+      expect(find.textContaining(l.riskWinBitlocker), findsNothing); // 不是 BitLocker 盘
+      expect(find.byKey(kRiskWordKey), findsNothing);
+      await tapDoesNothing(t, rec, l.confirmTitle);
+      await passRisk(t);
+      await see(t, find.text(l.confirmTitle));
+    });
+
+    testWidgets('双系统 + BitLocker：风险页提一句"确认页会要你确认恢复密钥"，勾选框仍只在确认页（不重复确认）', (t) async {
+      await toRisk(t, 'windows-free', (x) => x.modeAlongTitle, overrides: {'gk3_esp_info': 'esp_info-bitlocker.txt'});
+      await see(t, find.textContaining(l.riskWinBitlocker));
+      expect(find.text(l.confirmBitlockerCheck), findsNothing);
+      expect(find.byType(CheckboxListTile), findsOneWidget); // 只有"我已备份…"那一个
+      await passRisk(t);
+      await see(t, find.text(l.confirmBitlockerCheck));
+    });
+
+    testWidgets('重新安装（默认清数据）：经过风险页，写明 /data 会被清空；不要确认词', (t) async {
+      final rec = await toRisk(t, 'android', (x) => x.modeReinstallTitle);
+      await see(t, find.text(l.riskReinstallHead));
+      await see(t, find.text(l.riskReinstallWipe));
+      expect(find.byKey(kRiskWordKey), findsNothing);
+      await tapDoesNothing(t, rec, l.confirmTitle);
+    });
+
+    testWidgets('缩分区：方式页 → 风险页 → 缩分区页；不要确认词；没过风险页就没有缩分区页', (t) async {
+      final rec = await toRisk(t, 'factory', (x) => x.modeShrinkTitle, install: false);
+      await see(t, find.text(l.riskShrinkHead));
+      await see(t, find.text(l.riskNoCancelStep));
+      expect(find.byKey(kRiskWordKey), findsNothing);
+      await tapDoesNothing(t, rec, l.shrinkTitle);
+      // 返回：回到方式页，什么都没做
+      await tap(t, find.text(l.btnBack));
+      await see(t, find.text(l.modeTitle));
+      expect(rec.last('gk3_shrink'), isNull);
+    });
+
+    testWidgets('手动调整磁盘（盘上有 Windows）：经过风险页、要确认词；从调整页"完成"直接回到方式页（不停在风险页）', (t) async {
+      final rec = await toRisk(t, 'factory', (x) => x.editEntryTitle, install: false);
+      await see(t, find.text(l.riskEditHead));
+      expect(find.byKey(kRiskWordKey), findsOneWidget);
+      await tapDoesNothing(t, rec, l.editTitle);
+      await passRisk(t);
+      await see(t, find.text(l.editTitle));
+      await tap(t, find.text(l.editDone));
+      await see(t, find.text(l.modeTitle));
+      expect(find.text(l.riskTitle), findsNothing);
+    });
+
+    testWidgets('手动调整磁盘（盘上没有 Windows）：经过风险页，不要确认词', (t) async {
+      await toRisk(t, 'android', (x) => x.editEntryTitle, install: false);
+      await see(t, find.text(l.riskEditHead));
+      expect(find.byKey(kRiskWordKey), findsNothing);
+    });
+
+    testWidgets('从确认页返回：回到风险页、已满足的不用再来一遍；再返回到选项页', (t) async {
+      await toRisk(t, 'windows-free', (x) => x.modeAlongTitle);
+      await passRisk(t);
+      await see(t, find.text(l.confirmTitle));
+      await tap(t, find.text(l.btnBack));
+      await see(t, find.text(l.riskTitle));
+      expect(riskContinueEnabled(t), isTrue);
+      await tap(t, find.text(l.btnBack));
+      await see(t, find.text(l.optsTitle));
+    });
+
+    testWidgets('英文界面：整盘清空与手动调整的风险页没有 CJK，确认词是 ERASE', (t) async {
+      await toRisk(t, 'factory', (x) => x.modeWipeTitle, loc: en);
+      expect(cjkOnScreen(t), isEmpty);
+      await see(t, find.text(en.riskWordPrompt('ERASE')));
+      await scrollRiskToEnd(t);
+      await waitOut(t);
+      await tap(t, find.byKey(kRiskCheckKey));
+      expect(cjkOnScreen(t), isEmpty);
+      await see(t, missing([en.riskNeedWord('ERASE')], en));
+      await type(t, 'ERASE');
+      expect(riskContinueEnabled(t, en), isTrue);
+    });
+
+    testWidgets('英文界面：缩分区的风险页没有 CJK', (t) async {
+      await toRisk(t, 'factory', (x) => x.modeShrinkTitle, loc: en, install: false);
+      expect(cjkOnScreen(t), isEmpty);
+    });
+
+    test('Session 守卫：没确认过风险的路，install / shrink / editDisk 一个字节都不写；换了方式要重新确认', () async {
+      final rec = Rec(FixtureBackend('factory', bundle: DiskBundle(), speed: 0));
+      final s = Session(rec);
+      await s.start();
+      await s.probe();
+      await s.assess(s.disks!.firstWhere((d) => d.path == '/dev/nvme0n1'));
+      s.setMode(Mode.wipe);
+      await s.computePlan();
+      final ev = await s.install().toList();
+      expect(ev.whereType<Gk3Record>().where((r) => r.type == 'ERR').single['code'], kRiskUnackedCode);
+      expect(ev.whereType<Gk3Record>().single['touched'], 'no');
+      expect((ev.last as Gk3Exit).code, isNot(0));
+      final sh = await s.shrink(Shrinkable(const Gk3Record('SHRINK', {'part': '/dev/nvme0n1p4', 'fs': 'ntfs', 'cur_mib': '300000', 'min_mib': '100000', 'can': 'yes'})), 200000, (_) {});
+      expect(sh.err?['code'], kRiskUnackedCode);
+      final ed = await s.editDisk('gk3_part_delete', ['/dev/nvme0n1p6'], (_) {});
+      expect(ed.err?['code'], kRiskUnackedCode);
+      for (final fn in ['gk3_apply', 'gk3_net_release', 'gk3_shrink', 'gk3_part_delete']) {
+        expect(rec.last(fn), isNull, reason: fn);
+      }
+      // 认过的那一条才放行；换了方式（或换了盘、改了保不保留数据）就又不算了
+      s.ackRisk(RiskKind.install);
+      expect(s.riskAcked(RiskKind.install), isTrue);
+      expect(s.riskAcked(RiskKind.edit), isFalse);
+      await s.install().toList();
+      expect(rec.last('gk3_apply'), isNotNull);
+      s.setMode(Mode.alongside);
+      expect(s.riskAcked(RiskKind.install), isFalse);
+      s.ackRisk(RiskKind.edit);
+      await s.editDisk('gk3_part_delete', ['/dev/nvme0n1p6'], (_) {});
+      expect(rec.last('gk3_part_delete'), isNotNull);
+    });
+
+    test('界面认识守卫的错误代码（两种语言）', () {
+      final e = const Gk3Record('ERR', {'code': kRiskUnackedCode});
+      expect(errText(l, e), l.errRiskUnacked);
+      expect(errText(en, e), en.errRiskUnacked);
+    });
   });
 }

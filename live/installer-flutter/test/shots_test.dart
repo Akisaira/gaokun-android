@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' show Scrollable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gk3_installer/app.dart';
+import 'package:gk3_installer/ui/screens_risk.dart';
 
 import 'helpers.dart';
 
@@ -180,6 +181,48 @@ void main() {
     await shot(t, '12-opts');
     await tap(t, find.text(l.optsAdvanced));
     await shot(t, '13-adv');
+  }, skip: !haveFont);
+
+  // 写盘前的风险确认（用户 2026-10-06）：刚进来（四个门槛都没满足、提示往下滚）与全部满足之后
+  testWidgets('13b–13d 风险确认：整盘清除（出厂盘，要确认词）', (t) async {
+    await pumpApp(t, 'factory');
+    await toMode(t);
+    await tap(t, find.text(l.modeWipeTitle));
+    await next(t);
+    await next(t);
+    await next(t);
+    await waitFor(t, find.text(l.riskTitle));
+    await shot(t, '13b-risk-wipe');
+    await scrollRiskToEnd(t);
+    await t.pump(const Duration(seconds: RiskPage.readSeconds));
+    await tap(t, find.byKey(kRiskCheckKey));
+    await t.enterText(find.byKey(kRiskWordKey), 'ERASE');
+    await shot(t, '13c-risk-wipe-ready');
+  }, skip: !haveFont);
+
+  testWidgets('13d 风险确认：双系统（Windows 与 BitLocker）', (t) async {
+    await pumpApp(t, 'windows-free', overrides: {'gk3_esp_info': 'esp_info-bitlocker.txt'});
+    await toMode(t);
+    await tap(t, find.text(l.modeAlongTitle));
+    await next(t);
+    await next(t);
+    await next(t);
+    await waitFor(t, find.text(l.riskTitle));
+    await scrollRiskToEnd(t);
+    await shot(t, '13d-risk-alongside');
+  }, skip: !haveFont);
+
+  testWidgets('13e 风险确认：英文、整盘清除', (t) async {
+    await pumpApp(t, 'factory', language: 'en');
+    await tap(t, find.text(en.btnStart));
+    await tap(t, find.textContaining('/dev/nvme0n1'));
+    await next(t, en);
+    await tap(t, find.text(en.modeWipeTitle));
+    await next(t, en);
+    await next(t, en);
+    await next(t, en);
+    await waitFor(t, find.text(en.riskTitle));
+    await shot(t, '13e-risk-wipe-en');
   }, skip: !haveFont);
 
   testWidgets('14 确认：整盘清除，逐条列出将被删除的分区', (t) async {

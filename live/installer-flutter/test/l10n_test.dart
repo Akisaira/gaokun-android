@@ -22,6 +22,14 @@ void main() {
     }
   });
 
+  // 风险确认页的确认词（screens_risk.dart）：live 里没有输入法，软键盘与实体键盘都只出 ASCII ——
+  // 中文界面要人输"清除"，就是一道永远过不去的门
+  test('确认词两种语言都是软键盘打得出来的 ASCII 字母', () {
+    for (final arb in [zh, en]) {
+      expect(arb['riskWord'], matches(RegExp(r'^[A-Za-z]{3,}$')));
+    }
+  });
+
   test('中英文逐条都有，占位符集合一致', () {
     for (final k in keys) {
       expect(en.containsKey(k), isTrue, reason: '英文缺 $k');
