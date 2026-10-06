@@ -1,7 +1,7 @@
 # Stage 7 设计：LiveCD 图形安装器 + 轻量救援系统
 
 > ⚠️ **C 版源码（`live/installer/`、`scripts/live/gen-strings.py`）2026-09-26 已删**（改 Flutter，M0 验收过后）。
-> 文中 `gk3-installer.c:行号` 一类的引用指最后一版：`git show 445e978:live/installer/<文件>`。
+> 文中 `gk3-installer.c:行号` 一类的引用指最后一版：`git show 445e978:live/installer/<文件>`。 **本文现状：部分有效** —— "rescue 与 live 一套镜像"、救援与 Android 共用内核与 dtb（§2.3）、ESP 现实约束与 M0 实测仍是现行 `scripts/live/` 的依据；C + cairo 界面、Alpine 底座、下面那段"状态"已被 [`stage7-flutter-debian.md`](stage7-flutter-debian.md) 取代，冲突时以那份为准（索引见 [`docs/README.md`](README.md)）。
 
 > 状态：**M0 上机完成 —— 完整启动跑通，ssh 可达、WiFi 自动连上、分区工具齐全。**
 > ⏸ 2026-08-23 起用户决定暂缓（TODO B4），⬜ 欠 `gk3_apply`（真写盘）与 DRM 后端。
@@ -209,9 +209,9 @@ squashfs 与 WiFi 配置都在 p3 上，一条 oneshot 就能进：
 
 ```sh
 # 在 Android 里（需要 root）
-printf '   ' > /data/local/tmp/os.bin
+printf '\x07\x00\x00\x00' > /data/local/tmp/os.bin
 printf '%s' "<machine-id>-rescue-alpine.conf" | iconv -t UTF-16LE >> /data/local/tmp/os.bin
-printf '  ' >> /data/local/tmp/os.bin
+printf '\x00\x00' >> /data/local/tmp/os.bin
 cat /data/local/tmp/os.bin > /mnt/efivars/LoaderEntryOneShot-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
 reboot
 ```
