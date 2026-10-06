@@ -257,6 +257,7 @@
   * NET-7：`cmd wifi get-country-code` 非 null；热点设置里能选 5 GHz、能选 WPA3；手机连 5 GHz / WPA3 热点能上网。
   * NET-10：`dumpsys network_stack` 里 https/http URL 是两项；临时用 iptables 拒掉 connect.rom.miui.com 后网络仍判"已连接"。
 * ✅ **NET-4 的迁移问题 2026-10-05 合并时绕开**：1.0 **不开**随机化总开关（overlay 保持 `config_wifi_connected_mac_randomization_supported=false`），所有网络都用 [19] 派生的稳定设备 MAC —— 解决"每次开机都换"，且没有"老网络存的 ALWAYS 突然生效、每次连接都换"的问题。实机只读核对（dev.7）：总开关 false 时各网络的 `mRandomizedMacAddress` 存在但没被用，`wlan0` 仍是固件给的 `00:03:7f:12:…` ⇒ 与"false 时连接前不碰 MAC"一致。代价：和以前一样没有按网络的随机 MAC。⬜ 以后要开随机化：连同一次性迁移（WifiConfigManager 加标记）一起做；[20] 已备好（总开关关时无效）。上机判据改为：两次重启 `wlan0` 地址相同且首字节含 0x02。
+* ★ **2026-10-06 dev.9 上机更正 NET-4**：总开关关着时框架连接前**根本不碰 MAC**，所以 [19] 派生的出厂 MAC 只停在框架日志里（`Primary factory MAC address retrieved: 7e:a1:e8:15:66:f1`），`wlan0` 实际仍是固件的 `00:03:7f:12:6d:44` ⇒ 10-05 那条"保持 false 即全部用派生 MAC"是错的。修法：`gaokun3-wlan-ap.sh` 开机在 Wi-Fi 打开前用 `/vendor/bin/ifconfig wlan0 hw ether` 写同一个派生值（mksh 只有 32 位算术，FNV-1a 64 拆成 16 位分量算，与 Python / HAL 逐字节对上），sepolicy 补 sysfs 读与 SIOCGIFFLAGS / SIOCSIFHWADDR。实机：改完关开 Wi-Fi 地址保持、照常连网。⬜ 挂起（固件重载）后是否保持、下个构建进镜像后的开机时序。
 * ⓘ 热点 MAC 随机化、ACS（`config_wifi_softap_acs_supported`）、11ac/ax 热点这一轮都没动。
 
 ### ▶ 1.0 批 2 · 音频（AV-4 / AV-10 / AV-16，外加 AV-5 的记录）已写、未编译、未上机（2026-10-05）

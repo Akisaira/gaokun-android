@@ -302,3 +302,10 @@ allow gaokun3_wlanap self:netlink_generic_socket create_socket_perms_no_ioctl;
 allow gaokun3_wlanap self:udp_socket { create ioctl };
 allowxperm gaokun3_wlanap self:udp_socket ioctl SIOCGIFINDEX;
 r_dir_file(gaokun3_wlanap, sysfs_net)
+# v1.0 NET-4（2026-10-06）：开机把 wlan0 改成由 SoC 序列号派生的稳定 MAC。
+#   * 读 /sys/devices/soc0/serial_number —— 实机标签 u:object_r:sysfs:s0（ls -Z 核过）；/sys/class/net/wlan0/flags 在 sysfs_net（上面已给）。
+#   * /vendor/bin/ifconfig（toybox_vendor）`hw ether`：先 SIOCGIFFLAGS 看状态，再 SIOCSIFHWADDR 写地址
+#     （宏在 public/ioctl_defines:1888 / :1995）。只在 wlan0 还 down 时写，所以不需要 SIOCSIFFLAGS。
+#   ⬜ 先写后验：未经 enforcing 普查。
+r_dir_file(gaokun3_wlanap, sysfs)
+allowxperm gaokun3_wlanap self:udp_socket ioctl { SIOCGIFFLAGS SIOCSIFHWADDR };
