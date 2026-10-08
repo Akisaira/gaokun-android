@@ -1,0 +1,13 @@
+# crash_dump（debuggerd 的抓取端）要能读写自己建的 memfd —— 否则 enforcing 下【任何 App 崩溃都写不出 tombstone】。
+#
+# 证据（2026-10-08，1.0.0-rc.1 戳 1791285623，enforcing；英雄联盟手游崩溃 + 对 Twelve kill -SEGV 两次都一样）：
+#   avc: denied { write } path="/memfd:axion:/proc/<crash_dump 子进程>/maps (deleted)"
+#        scontext=u:r:crash_dump:s0:c… tcontext=u:object_r:tmpfs:s0:c… tclass=file
+#   crash_dump64: crash_dump.cpp:816] Failed to initialize unwinder object: Failed to parse maps
+#   tombstoned: crash socket received short read of length 0 ⇒ /data/tombstones 里什么都没有。
+# 来源：crDroid 的 bionic（设备上 /apex/com.android.runtime/lib64/bionic/libc.so 里有 "axion:%s" 与 "/memfd:axion:"）
+# 打开 /proc/*/maps 时先拷一份到名为 axion:<路径> 的 memfd 再交给调用者。本机策略没开 memfd_class
+# （/sys/fs/selinux/policy_capabilities/memfd_class = 0），crash_dump 又不是 tmpfs_domain ⇒ memfd 落在通用 tmpfs 上。
+# ⚠️ 2026-10-08 写，【未编译、未上机】：dev.11 上用 kill -SEGV 一个普通 App，判据 = /data/tombstones 出新文件、零 crash_dump avc。
+#    上 dev.11 之前先在构建机 crDroid 树里 grep axion，看上游有没有配套策略（有就用上游的，删掉这里）。
+allow crash_dump tmpfs:file { read write getattr map };
