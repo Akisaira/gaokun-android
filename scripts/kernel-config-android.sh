@@ -460,6 +460,12 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
     --enable ARMV8_DEPRECATED --enable SWP_EMULATION \
     --enable CP15_BARRIER_EMULATION --enable SETEND_EMULATION
 
+# ─── 用户态 39 位地址窗口（patches/0078，issue #17 / #19 / #20；用户 2026-10-08 定进发版）───
+# 页表仍 48 位，64 位进程默认拿到的地址压到 2^39 以下（与 Android GKI 的 39 位布局相同）。
+# 2026-10-08 A/B：英雄联盟手游 7.3.0.2813 在原内核 2 秒崩（il2cpp_init 写 0x10），开了它过 il2cpp_init。
+# 符号由 0078 引入 —— 补丁没打，这里会在 MUST_Y 断言上失败，而不是静默编出 48 位窗口。
+./scripts/config --file "$OUT/.config" --enable ARM64_USER_MMAP_WINDOW_39
+
 # ─── olddefconfig + 断言（止损"=m 坑"）───
 # 这个坑已经踩了 13 次：`scripts/config --enable X` 写进去了，olddefconfig
 # 却可能因为依赖把它降回 =m（或压根没有该符号），而 Android **不加载任何模块**
@@ -518,6 +524,7 @@ VIDEOBUF2_DMA_SG MEDIA_CAMERA_SUPPORT V4L_PLATFORM_DRIVERS VIDEO_CAMERA_SENSOR
 EXPERT PM_DEBUG PM_SLEEP_DEBUG PM_ADVANCED_DEBUG DPM_WATCHDOG
 SQUASHFS NTFS3_FS NLS_UTF8
 USB_NET_DRIVERS USB_USBNET MII USB_RTL8152 USB_NET_AX8817X USB_NET_AX88179_178A
+ARM64_USER_MMAP_WINDOW_39
 USB_NET_CDCETHER USB_NET_CDC_EEM USB_NET_CDC_NCM USB_NET_HUAWEI_CDC_NCM USB_NET_RNDIS_HOST
 INET_ESP INET6_ESP INET6_IPCOMP INET_DIAG_DESTROY INET_UDP_DIAG
 IPV6_ROUTER_PREF IPV6_ROUTE_INFO IPV6_OPTIMISTIC_DAD IPV6_MIP6 IPV6_VTI NET_IPVTI NET_IPGRE_DEMUX
@@ -560,7 +567,8 @@ done
 # 取值断言：这几个曾经"以为是默认、其实是残留的调试值"（issue #16）
 for kv in DPM_WATCHDOG_TIMEOUT=120 DPM_WATCHDOG_WARNING_TIMEOUT=60 PANIC_TIMEOUT=10 \
           LOG_BUF_SHIFT=19 DEFAULT_HUNG_TASK_TIMEOUT=120 \
-          BOOTPARAM_HUNG_TASK_PANIC=0 BOOTPARAM_SOFTLOCKUP_PANIC=0; do
+          BOOTPARAM_HUNG_TASK_PANIC=0 BOOTPARAM_SOFTLOCKUP_PANIC=0 \
+          ARCH_MMAP_RND_BITS_MAX=24; do
     if ! grep -qx "CONFIG_$kv" "$OUT/.config"; then
         echo "  ✗ 期望 CONFIG_$kv，实际 '$(grep -E "^CONFIG_${kv%%=*}=" "$OUT/.config")'"; bad=1
     fi

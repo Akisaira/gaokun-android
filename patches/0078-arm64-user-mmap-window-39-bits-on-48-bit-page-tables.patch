@@ -1,7 +1,7 @@
 From: gaokun-android <local>
 Subject: [PATCH] arm64: optionally hand out 39-bit user addresses on 48-bit page tables
 
-【本地，实验，只进实验内核（--with-va39w）】issue #17 / #19 / #20 的假设验证用。
+【本地，2026-10-08 起进发版】issue #17（#20 同一崩溃、#19 疑似同类）。A/B：英雄联盟手游 7.3.0.2813 在 48 位窗口下 2 秒崩、本补丁下过 il2cpp_init。
 Android GKI 是 39 位用户地址空间（android16-6.12 gki_defconfig:64 CONFIG_ARM64_VA_BITS_39=y），
 我们是 48 位：tombstone 里的 libil2cpp 映射在 0xf672…、抖音 fault 地址在 0xeffd…，手机上不可能出现。
 直接编 39 位内核（#131 §6，k1）在本机 1 秒内死掉、原因未明 ⇒ 换个做法：页表仍是 48 位（已知能开机），

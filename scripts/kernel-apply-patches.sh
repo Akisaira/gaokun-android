@@ -205,6 +205,10 @@ KPATCHES=(
     # 0076：【本地，v7.2.9 起】撤回 stable 的 Revert "drm/msm: dsi: fix PLL init in bonded mode"（5de981b7db）——
     #    没有它本机双 DSI 绑定面板黑屏（触摸中断 0/s）；有它 118/s 有画面。2026-10-05 二分定案。
     0076-drm-msm-dsi-phy-7nm-reapply-bonded-pll-init-reverting-5de981b7db.patch
+    # 0078：【本地】页表仍 48 位，64 位进程默认地址窗口压到 2^39（Kconfig ARM64_USER_MMAP_WINDOW_39，
+    #    kernel-config-android.sh 打开并断言）。issue #17：英雄联盟手游在 48 位窗口下 il2cpp_init 必崩，
+    #    2026-10-08 A/B 实测；用户同日定进发版（起初是 --with-va39w 的实验补丁）。只碰 arch/arm64 的 Kconfig 与 processor.h。
+    0078-arm64-user-mmap-window-39-bits-on-48-bit-page-tables.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
@@ -238,28 +242,6 @@ else
         [ -f "$f" ] || continue
         if git -C "$TREE" apply --check -R "$f" 2>/dev/null; then
             echo "✗ 指纹实验补丁 $p 还在树里 —— 发版内核不带它（D21）。撤掉：git apply -R patches/${p}；或者这是实验内核，加 --with-fp" >&2
-            exit 1
-        fi
-    done
-fi
-
-# ★ 39 位用户地址窗口实验补丁（issue #17 / #19 / #20，2026-10-08）：
-#   0078：页表仍 48 位，只把 64 位进程默认拿到的地址压到 2^39 以下（新 Kconfig ARM64_USER_MMAP_WINDOW_39，
-#   默认 n ⇒ 打了不开配置也不改行为）。假设没被实机证实之前不进发版内核；只碰 arch/arm64 的 Kconfig 与 processor.h。
-VA39W_PATCHES=(
-    0078-arm64-user-mmap-window-39-bits-on-48-bit-page-tables.patch
-)
-WITH_VA39W=0
-for a in "$@"; do [ "$a" = "--with-va39w" ] && WITH_VA39W=1; done
-if [ "$WITH_VA39W" = 1 ]; then
-    KPATCHES+=("${VA39W_PATCHES[@]}")
-    echo "⚠️ --with-va39w：39 位用户地址窗口实验补丁也会打（${#VA39W_PATCHES[@]} 个，排在链尾；还要在 .config 里开 ARM64_USER_MMAP_WINDOW_39），这不是发版内核"
-else
-    for p in "${VA39W_PATCHES[@]}"; do
-        f="$REPO/patches/$p"
-        [ -f "$f" ] || continue
-        if git -C "$TREE" apply --check -R "$f" 2>/dev/null; then
-            echo "✗ 39 位窗口实验补丁 $p 还在树里 —— 发版内核不带它。撤掉：git apply -R patches/${p}；或者这是实验内核，加 --with-va39w" >&2
             exit 1
         fi
     done
