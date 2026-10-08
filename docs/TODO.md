@@ -23,7 +23,7 @@ D7 只发 GApps 版 · D10 fcitx5-android 从 GitHub 取（2026-10-06，已入�
 D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）· **D5 SELinux 切 enforcing**（2026-10-06，dev.10 起默认）· **E10 真机恢复出厂不测**（2026-10-06）· D21 0050 移出发布内核（dev.9 起）·
 其余按 v1.0-plan §6 的"建议"列执行（2026-10-04）。仓库已推送到 origin。
 
-**下一个构建（dev.11）要带上的**：`5c48d08` fcitx5 原样安装、`309f735` HAL 的 ESP 认法（EBUSY / enforcing），安装器 S1 / S2 修复与风险确认页（安装器侧，重建 live 镜像时带上）。
+**下一个构建（dev.11）要带上的**：`5c48d08` fcitx5 原样安装、`309f735` HAL 的 ESP 认法（EBUSY / enforcing）、`ec5f2a5` 相机 HAL 用合成器栅栏（issue #23），安装器 S1 / S2 修复与风险确认页（安装器侧，重建 live 镜像时带上）。
 
 ### ① 发版阻断（v1.0-plan §2 的 B1–B7 与发版标准 G1–G11）
 
@@ -253,6 +253,18 @@ B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 
 | #12 抖音播放必崩 | 报告者：抖音 40.6.0 在同一 48 位内核上已不崩；39 位测试内核起不来、搁置 | 要 tombstone 才能继续 |
 | #14 实测报告 | 与本表一致；MAC 部分并入 NET-4 | — |
 | #15 实测报告 | 无代码改动 | 英雄联盟秒退要 logcat |
+
+### 🐞 GitHub issues #17–#24（2026-10-08 逐条核查）
+
+| issue | 结论 | 还剩 |
+|---|---|---|
+| #17 英雄联盟手游秒退（`il2cpp_init+28` 写 `0x10`） | 未解；嫌疑仍是 48 位用户地址空间（#131 §6：39 位测试内核起不来） | ⬜ 39 位内核加 `earlycon=efifb keep_bootcon` 看屏幕（要人在场）；另一条待评估的路：保持 48 位页表、只把用户态默认 mmap 窗口压到 2^39 以下（arm64 的 52 位 VA 对 48 位做的就是这件事，**名字与改法要先在内核树里核**） |
+| #20 英雄联盟手游（国际版同包名） | 与 #17 同一崩溃（tombstone_09/10：同 BuildId、同 pc `0x3c4a880`）⇒ 按重复关闭；附带的 tombstone_36 是 system_server 的 HWUI 走 Vulkan 时 `queueCount < kRequestedQueueCount`（turnip 只报 1 个队列，`stage5-freedreno.md` 已记） | — |
+| #18 Wi-Fi + 热点同开 | rc.1 预建 `wlan1`，等报告者验 | 并入 NET-2 |
+| #19 抖音闪退 | x18 / SCS 说法已核否（10-06 回复）；嫌疑同 #17 | 等报告者在 rc.1 上复测与 `/proc/<pid>/maps` |
+| #21 手写笔 | 作者已撤回 PR #22（基线换到 7.2.9、改走面板从片 `spi20` 路线）；issue 留作跟踪，DISP-13 仍是 1.0 之后 | 等作者按新基线重提 |
+| #23 相机会话报错 + 画面转 90° | ★ 会话报错的根因：enforcing 下 `hal_camera_default` 用不了 drm_hwcomposer 发的 sync_file 栅栏（`tclass=fd`）⇒ binder `BR_FAILED_REPLY` ⇒ CAMERA_ERROR。rc.1 验收没抓到（预览没跑到缓冲带着栅栏回来的那一轮）。规则已补（`ec5f2a5`），**进 dev.11** | ⬜ dev.11 上 Aperture 预览跑满 5 分钟零 `tclass=fd`；⬜ 方向：报告者机器是 2023 款 GK-W76（后摄同为 ov13b10 + dw9714），开发机上 Aperture 横 / 竖各目视一次（与 AV-12、DISP-2 一起）；⬜ 浏览器里后摄 R/B 对调、部分网站开不了后摄（要网站名与复现时的 logcat） |
+| #24 待机时 `System (AUDIO)` 耗电高 | 开发机静置时 audioserver / 音频 HAL 30 秒 CPU 为 0，未复现。那一项是估算值（"音频输出开着的时长" × power_profile 的 `audio` 30 mA），要先分清是真掉电还是只是记账 | 等报告者的 `dumpsys batterystats` / `media.audio_flinger` |
 
 ---
 
