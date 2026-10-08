@@ -1,0 +1,4 @@
+# health HAL 扫 power supply 时也会读 m-pencil（type、scope）。它的 scope 是 Device，
+# BatteryMonitor 读到后就跳过，不会当成平板的电池；给读权限只是免得每次都记一条拒绝。
+allow hal_health_default sysfs_gaokun3_pen_battery:dir r_dir_perms;
+allow hal_health_default sysfs_gaokun3_pen_battery:file r_file_perms;
