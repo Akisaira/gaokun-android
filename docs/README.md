@@ -73,6 +73,7 @@
 | [contrib/slpi-sensors-deploy.md](contrib/slpi-sensors-deploy.md) | 外部贡献：Linux 侧 SLPI 传感器部署（推翻了 #37 的旧结论） | 参考（原样保留） | 维护者 |
 | [fingerprint/README.md](fingerprint/README.md) | 指纹 Windows 侧逆向报告的目录说明（报告本身不入库） | 参考 | 维护者 |
 | [parallel-mainline-generic.md](parallel-mainline-generic.md) | LineageOS 系 mainline-generic 的 gaokun3 支持（他人分享的补丁与交叉验证） | 历史（2026-08-17 后未跟进） | 维护者 |
+| [palm-rejection.md](palm-rejection.md) | 触摸屏的手掌识别：驱动里“手的位置图”的规则，以`MT_TOOL_PALM`撤回已上报的触点，参数、计数器、已知限制与调试 | 现行 | 维护者 · AI |
 | `img/`、`stage3-desktop.png` | README 与案卷引用的截图 / 照片 | — | — |
 
 ## 归档（[archive/](archive/README.md)）
