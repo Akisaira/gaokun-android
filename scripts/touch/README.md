@@ -10,6 +10,11 @@
 | `capture-ab.sh` | 在设备上跑。录 `/dev/input/event7` 原始流，**按收到多少数据**切换 A/B 预设 |
 | `evdev-strokes.py` | 在本机跑。解码成轨迹：轨迹数 / 每条帧数 / 速度分布 / **相邻轨迹间隔**（见下） |
 | `tracker-sim.c` | 在本机跑。`hx_track_contacts()` 的逐行复刻，不用硬件就能验证跟踪器的改动 |
+| `gk3trec.c` | 在设备上跑。把驱动处理后的网格（加`-r`时还有原始网格）和触摸屏、笔的evdev事件录进同一个文件，时间戳统一用CLOCK_MONOTONIC |
+| `hxsim/` | 在本机跑。用内核树里的`hx-algo.c`原样编译出回放器，把录下的网格重新跑一遍算法，逐帧输出连通域、峰值、触点和跟踪 |
+| `trec.py` | 读录制文件；`summary`列出标记和每段活动的起止时间 |
+| `simcmp.py` | 核对回放和设备当时的实际上报是否一致 |
+| `outcomes.py` | 按时间段统计到达应用的触摸和被撤回的触摸，用来比较改动前后 |
 
 ## 驱动侧的可观测接口（内核 **#23** 起，`patches/0043`）
 
@@ -19,12 +24,58 @@
 | `…/algo/contacts_log` | 最近 16 个触点**出生时**的 `seq x y area signal edge` |
 | `/sys/kernel/debug/himax-hx83121a/frame_raw` | 面板**产出**的 40×60 s16 网格（仅去基线）|
 | `/sys/kernel/debug/himax-hx83121a/frame` | 流水线**判定**的同一张网格（CMF/边缘增强/IIR 之后）|
+| `…/algo/hand_*` | 手的位置图的参数（`patches/0082`），计数器在`stats`里，见[`docs/palm-rejection.md`](../../docs/palm-rejection.md) |
 
 ★ 并排看两张网格是**区分"信号问题"与"算法问题"**的唯一办法。
 ★ 空载读 `frame_raw` 是回答**"固件到底做不做逐像素基线跟踪"**的唯一办法。
 
 ⚠️ 整帧要用 `adb exec-out`，**不能用 `adb shell`** —— 后者会把 `\n` 变成 `\r\n`，
 把二进制帧毁掉。`dump-state.sh` 已经处理了，并且会校验是不是 4800 字节。
+
+## 录制与回放（`patches/0082`起）
+
+改算法时，用同一份录制比较改动前后，比每次重新上手试更可靠，也能量出差别。`gk3trec`在设备上录下网格和事件，
+`hxsim`在本机把网格重新喂给同一份`hx-algo.c`，输出和驱动当时一样的触点与跟踪。
+
+编译：
+
+```sh
+aarch64-linux-gnu-gcc -O2 -static -o gk3trec scripts/touch/gk3trec.c   # 静态链接，不依赖设备上的libc
+bash scripts/touch/hxsim/build.sh /path/to/linux                        # 打过patches/的内核树
+```
+
+在设备上录制，需要root。在一个adb shell里运行录制器，另开一个shell打标记、结束录制，再把录制时的参数存下来：
+
+```sh
+/data/local/tmp/gk3trec -r -o /data/local/tmp/rec.bin
+
+echo palm > /data/local/tmp/gk3trec.mark      # 记一个标记，录制器读到后删掉这个文件
+echo stop > /data/local/tmp/gk3trec.mark      # 结束录制
+cd /sys/bus/spi/devices/spi0.0/algo &&
+	for f in *; do case $f in stats|contacts_log) ;; *) echo "$f=$(cat $f)" ;; esac; done > /data/local/tmp/params.txt
+```
+
+在本机回放：
+
+```sh
+python3 scripts/touch/trec.py summary rec.bin               # 标记和每段活动的时间（秒）
+./hxsim -p params.txt rec.bin > sim.txt
+python3 scripts/touch/simcmp.py rec.bin sim.txt             # 先确认回放和实机一致
+./hxsim -p params.txt -s hand_enabled=0 rec.bin > off.txt
+python3 scripts/touch/outcomes.py rec.bin "palm:30-60,writing:70-120" off.txt sim.txt
+```
+
+几点说明：
+
+- 回放默认直接用录下的处理后网格，跳过预处理（CMF、边缘增强、IIR）。`-r`改用原始网格，把预处理也重跑一遍，
+  这时每帧`F`行的最后一列是与设备网格不同的格数。只改了预处理之后的步骤时，用默认方式就够了。
+- `simcmp.py`把每一帧回放对到设备当时的那次上报。参数和算法都与录制时设备上的相同时，一致率应当接近100%，不一致的
+  多半是录制器漏掉了网格的帧。一致率明显偏低时，先检查参数文件，以及编译回放器的内核树是不是录制时设备上跑的那一版。
+  拿新算法回放旧录制时，一致率下降是正常的，这时要比较的是改动前后两次回放。
+- 录制器跳过空闲的网格，回放时超过30毫秒的空隙按空帧补上，因为跟踪器和手的位置图都按帧计数。
+- `-s 名字=值`覆盖单个参数（在`-p`的参数文件之后应用），可以拿同一份录制比较不同的取值。参数文件里有回放器不认识的名字时，
+  它会报错退出，所以要排除`stats`和`contacts_log`。
+- 笔的事件来自手写笔守护进程创建的`gk3 M-Pencil`设备；没有这个设备时只录触摸。
 
 ## 为什么不用 `getevent`
 
