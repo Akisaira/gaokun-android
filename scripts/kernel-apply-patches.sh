@@ -211,6 +211,9 @@ KPATCHES=(
     0078-arm64-user-mmap-window-39-bits-on-48-bit-page-tables.patch
     # ★ 0081（#29）：峰值多于10个时原先展开的是最弱的10个（峰值按从弱到强排序）；改成跳过最弱的。
     0081-Input-himax-spi-expand-the-strongest-peaks-when-there-are-too-many.patch
+    # ★★ 0082（#29）：手的位置图：掌根以外的手（指节、平放的手指、落下和抬起时的掌根）不再报成手指，
+    #    事后才认出的触点以MT_TOOL_PALM撤回（Android发ACTION_CANCEL）。参数在algo/hand_*，hand_enabled=0关闭。
+    0082-Input-himax-spi-hand-map-and-palm-cancel.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
