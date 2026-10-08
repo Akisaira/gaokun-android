@@ -258,7 +258,7 @@ B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 
 
 | issue | 结论 | 还剩 |
 |---|---|---|
-| #17 英雄联盟手游秒退（`il2cpp_init+28` 写 `0x10`） | 未解；嫌疑仍是 48 位用户地址空间（#131 §6：39 位测试内核起不来） | ⬜ 39 位内核加 `earlycon=efifb keep_bootcon` 看屏幕（要人在场）；另一条待评估的路：保持 48 位页表、只把用户态默认 mmap 窗口压到 2^39 以下（arm64 的 52 位 VA 对 48 位做的就是这件事，**名字与改法要先在内核树里核**） |
+| #17 英雄联盟手游秒退（`il2cpp_init+28` 写 `0x10`） | 未解；嫌疑仍是 48 位用户地址空间（#131 §6：39 位测试内核起不来）。★ 2026-10-08 换路：`patches/0078`（实验，`--with-va39w`）页表仍 48 位、只把 64 位进程默认地址窗口压到 2^39（Kconfig `ARM64_USER_MMAP_WINDOW_39`，`ARCH_MMAP_RND_BITS_MAX` 24）。实验内核 `2b93abcb…`（构建机 `~/gk3-kernel-va39w` worktree，配置相对发版只差这两项，dtb 与 k77 逐字节同）放在 ESP `android/va39w/Image` + 条目 `gaokun3-va39w.conf`（options 与 `_b` 逐字节同），oneshot 上机：34 秒开机、enforcing、`mmap_rnd_bits`=24、577 个进程 0 个映射 ≥ 2^39（最高是栈 `0x7ffe67e000`；原内核 123 个进程超出）、三角洲行动 / Phigros 各 40 秒无崩溃 | ⬜ 真正的判据：开发机装英雄联盟手游 / 抖音在这个内核上跑（或把内核给报告者）；过了再定进不进发版链（v1.0-plan 范围外，要用户定）；39 位内核本身起不来的原因仍未知 |
 | #20 英雄联盟手游（国际版同包名） | 与 #17 同一崩溃（tombstone_09/10：同 BuildId、同 pc `0x3c4a880`）⇒ 按重复关闭；附带的 tombstone_36 是 system_server 的 HWUI 走 Vulkan 时 `queueCount < kRequestedQueueCount`（turnip 只报 1 个队列，`stage5-freedreno.md` 已记） | — |
 | #18 Wi-Fi + 热点同开 | rc.1 预建 `wlan1`，等报告者验 | 并入 NET-2 |
 | #19 抖音闪退 | x18 / SCS 说法已核否（10-06 回复）；嫌疑同 #17 | 等报告者在 rc.1 上复测与 `/proc/<pid>/maps` |
