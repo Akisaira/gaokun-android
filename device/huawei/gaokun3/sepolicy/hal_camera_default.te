@@ -45,3 +45,17 @@ allow hal_camera_default gaokun3_camera_tmpfs:file { read write getattr map };
 # 与 hal_graphics_composer_default.te 同一行，AOSP 的 hal_evs_default 也是这样。
 hal_client_domain(hal_camera_default, hal_graphics_allocator)
 get_prop(hal_camera_default, vendor_minigbm_debug_prop)
+
+# ── 相机 HAL 要能用合成器发的栅栏 fd（2026-10-08，issue #23）──────────────────────
+# 证据（用户机 1.0.0-rc.1，enforcing，permissive=0；Aperture 预览跑到第 251 个请求）：
+#   avc: denied { use } path="anon_inode:sync_file" scontext=u:r:hal_camera_default:s0
+#        tcontext=u:r:hal_graphics_composer_default:s0 tclass=fd
+#   → libbinder BR_FAILED_REPLY (-1 EPERM) → AidlCamera3-Device processBatchCaptureRequests 失败
+#   → "Unable to submit capture request 251 to HAL device: Broken pipe" → CAMERA_ERROR(3)，
+#     Aperture 反复弹 "Error while setting up the session"、自动重开。
+# 预览缓冲被显示过一轮后，带着 drm_hwcomposer 建的 KMS 释放栅栏（sync_file）回到相机请求里；
+# 那个 fd 的创建者是合成器进程。手机上的 HWC 栅栏多半经 surfaceflinger 合并、标签是 surfaceflinger
+# （private/hal_camera.te:23 只放行了它），本机 drm_hwcomposer 的原样传过来，就落空了。
+# 核心策略给 cameraserver / appdomain / hal_codec2_server 都放行了同一条（private/cameraserver.te:24、
+# private/app.te:410、private/hal_codec2.te:16），唯独 hal_camera 没有。
+allow hal_camera_default hal_graphics_composer:fd use;
