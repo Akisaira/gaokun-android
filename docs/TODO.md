@@ -23,7 +23,7 @@ D7 只发 GApps 版 · D10 fcitx5-android 从 GitHub 取（2026-10-06，已入�
 D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）· **D5 SELinux 切 enforcing**（2026-10-06，dev.10 起默认）· **E10 真机恢复出厂不测**（2026-10-06）· D21 0050 移出发布内核（dev.9 起）·
 其余按 v1.0-plan §6 的"建议"列执行（2026-10-04）。仓库已推送到 origin。
 
-**下一个构建（dev.11）要带上的**：`5c48d08` fcitx5 原样安装、`309f735` HAL 的 ESP 认法（EBUSY / enforcing）、`ec5f2a5` 相机 HAL 用合成器栅栏（issue #23），安装器 S1 / S2 修复与风险确认页（安装器侧，重建 live 镜像时带上）。
+**下一个构建（dev.11）要带上的**：`5c48d08` fcitx5 原样安装、`309f735` HAL 的 ESP 认法（EBUSY / enforcing）、`ec5f2a5` 相机 HAL 用合成器栅栏（issue #23）、`a3c354c` crash_dump 的 memfd（enforcing 下无 tombstone），安装器 S1 / S2 修复与风险确认页（安装器侧，重建 live 镜像时带上）。
 
 ### ① 发版阻断（v1.0-plan §2 的 B1–B7 与发版标准 G1–G11）
 
@@ -258,13 +258,14 @@ B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 
 
 | issue | 结论 | 还剩 |
 |---|---|---|
-| #17 英雄联盟手游秒退（`il2cpp_init+28` 写 `0x10`） | 未解；嫌疑仍是 48 位用户地址空间（#131 §6：39 位测试内核起不来）。★ 2026-10-08 换路：`patches/0078`（实验，`--with-va39w`）页表仍 48 位、只把 64 位进程默认地址窗口压到 2^39（Kconfig `ARM64_USER_MMAP_WINDOW_39`，`ARCH_MMAP_RND_BITS_MAX` 24）。实验内核 `2b93abcb…`（构建机 `~/gk3-kernel-va39w` worktree，配置相对发版只差这两项，dtb 与 k77 逐字节同）放在 ESP `android/va39w/Image` + 条目 `gaokun3-va39w.conf`（options 与 `_b` 逐字节同），oneshot 上机：34 秒开机、enforcing、`mmap_rnd_bits`=24、577 个进程 0 个映射 ≥ 2^39（最高是栈 `0x7ffe67e000`；原内核 123 个进程超出）、三角洲行动 / Phigros 各 40 秒无崩溃 | ⬜ 真正的判据：开发机装英雄联盟手游 / 抖音在这个内核上跑（或把内核给报告者）；过了再定进不进发版链（v1.0-plan 范围外，要用户定）；39 位内核本身起不来的原因仍未知 |
+| #17 英雄联盟手游秒退（`il2cpp_init+28` 写 `0x10`） | ★★ **2026-10-08 A/B 定案：是 48 位用户地址空间**。官方 7.3.0.2813（`libil2cpp.so` BuildId `c171e91e…` 与 tombstone 同）装在开发机：原内核（48 位，`mmap_rnd_bits` 33）启动 2 秒 `UnityMain` SIGSEGV `fault addr 0x10`，与报告一致；实验内核（`patches/0078`，`--with-va39w`：页表仍 48 位、64 位进程默认地址窗口压到 2^39、`ARCH_MMAP_RND_BITS_MAX` 24）跑过 `il2cpp_init`、Unity 脚本层起来、停在用户协议弹窗 2 分钟无崩溃。该内核 `2b93abcb…`（构建机 `~/gk3-kernel-va39w`，配置相对发版只差这两项，dtb 与 k77 逐字节同）在 ESP `android/va39w/Image` + 条目 `gaokun3-va39w.conf`（options 与 `_b` 同）；oneshot 上机：34 秒开机、enforcing、577 个进程 0 个映射 ≥ 2^39、三角洲行动 / Phigros 无崩溃。#20 是同一崩溃，#19 抖音嫌疑同类 | ⬜ **要用户定：0078 进不进发版链**（进则把 VA39W_PATCHES 并入 KPATCHES、`kernel-config-android.sh` 断言 `ARM64_USER_MMAP_WINDOW_39=y`；代价：mmap 随机化 33→24 位，与手机一致）；⬜ 进游戏对局（要登录）；⬜ 抖音同法复测 |
 | #20 英雄联盟手游（国际版同包名） | 与 #17 同一崩溃（tombstone_09/10：同 BuildId、同 pc `0x3c4a880`）⇒ 按重复关闭；附带的 tombstone_36 是 system_server 的 HWUI 走 Vulkan 时 `queueCount < kRequestedQueueCount`（turnip 只报 1 个队列，`stage5-freedreno.md` 已记） | — |
 | #18 Wi-Fi + 热点同开 | rc.1 预建 `wlan1`，等报告者验 | 并入 NET-2 |
 | #19 抖音闪退 | x18 / SCS 说法已核否（10-06 回复）；嫌疑同 #17 | 等报告者在 rc.1 上复测与 `/proc/<pid>/maps` |
 | #21 手写笔 | 作者已撤回 PR #22（基线换到 7.2.9、改走面板从片 `spi20` 路线）；issue 留作跟踪，DISP-13 仍是 1.0 之后 | 等作者按新基线重提 |
 | #23 相机会话报错 + 画面转 90° | ★ 会话报错的根因：enforcing 下 `hal_camera_default` 用不了 drm_hwcomposer 发的 sync_file 栅栏（`tclass=fd`）⇒ binder `BR_FAILED_REPLY` ⇒ CAMERA_ERROR。rc.1 验收没抓到（预览没跑到缓冲带着栅栏回来的那一轮）。规则已补（`ec5f2a5`），**进 dev.11** | ⬜ dev.11 上 Aperture 预览跑满 5 分钟零 `tclass=fd`；⬜ 方向：报告者机器是 2023 款 GK-W76（后摄同为 ov13b10 + dw9714），开发机上 Aperture 横 / 竖各目视一次（与 AV-12、DISP-2 一起）；⬜ 浏览器里后摄 R/B 对调、部分网站开不了后摄（要网站名与复现时的 logcat） |
 | #24 待机时 `System (AUDIO)` 耗电高 | 开发机静置时 audioserver / 音频 HAL 30 秒 CPU 为 0，未复现。那一项是估算值（"音频输出开着的时长" × power_profile 的 `audio` 30 mA），要先分清是真掉电还是只是记账 | 等报告者的 `dumpsys batterystats` / `media.audio_flinger` |
+| （顺带）enforcing 下 App 崩溃不出 tombstone | crDroid bionic 把 `/proc/*/maps` 先拷进 `memfd:axion:*`，本机 memfd 落在通用 `tmpfs`，`crash_dump` 写被拒 ⇒ `Failed to parse maps` ⇒ 无 tombstone（英雄联盟崩溃、`kill -SEGV` Twelve 都复现）。规则 `a3c354c`，**未编译** | ⬜ dev.11 前在 crDroid 树 grep axion 看上游策略；⬜ dev.11 上 `kill -SEGV` 普通 App 出 tombstone、零 crash_dump avc；进 `release-checklist` |
 
 ---
 
