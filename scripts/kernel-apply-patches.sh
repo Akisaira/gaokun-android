@@ -243,6 +243,28 @@ else
     done
 fi
 
+# ★ 39 位用户地址窗口实验补丁（issue #17 / #19 / #20，2026-10-08）：
+#   0078：页表仍 48 位，只把 64 位进程默认拿到的地址压到 2^39 以下（新 Kconfig ARM64_USER_MMAP_WINDOW_39，
+#   默认 n ⇒ 打了不开配置也不改行为）。假设没被实机证实之前不进发版内核；只碰 arch/arm64 的 Kconfig 与 processor.h。
+VA39W_PATCHES=(
+    0078-arm64-user-mmap-window-39-bits-on-48-bit-page-tables.patch
+)
+WITH_VA39W=0
+for a in "$@"; do [ "$a" = "--with-va39w" ] && WITH_VA39W=1; done
+if [ "$WITH_VA39W" = 1 ]; then
+    KPATCHES+=("${VA39W_PATCHES[@]}")
+    echo "⚠️ --with-va39w：39 位用户地址窗口实验补丁也会打（${#VA39W_PATCHES[@]} 个，排在链尾；还要在 .config 里开 ARM64_USER_MMAP_WINDOW_39），这不是发版内核"
+else
+    for p in "${VA39W_PATCHES[@]}"; do
+        f="$REPO/patches/$p"
+        [ -f "$f" ] || continue
+        if git -C "$TREE" apply --check -R "$f" 2>/dev/null; then
+            echo "✗ 39 位窗口实验补丁 $p 还在树里 —— 发版内核不带它。撤掉：git apply -R patches/${p}；或者这是实验内核，加 --with-va39w" >&2
+            exit 1
+        fi
+    done
+fi
+
 WITH_DIAG=0
 for a in "$@"; do [ "$a" = "--with-diag" ] && WITH_DIAG=1; done
 if [ "$WITH_DIAG" = 1 ]; then
