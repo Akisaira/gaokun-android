@@ -15,30 +15,38 @@ MateBook E Go 屏幕的触摸控制器是一对 HX83121A：himax-spi 驱动的�
 - 从片没有复位线，每次主片复位（熄屏亮屏、himax-spi 自恢复）都会把它带掉：
   帧头错乱或连续读失败时重新初始化，并用跟随面板的 1 秒看门狗在亮屏而无帧
   时重新初始化；开机时主片固件可能还在加载，首次初始化失败时由看门狗启动
-  中断；
+  中断。熄屏时看门狗和下面的空闲轮询都靠面板的跟随回调停下，所以面板还没
+  注册时 probe 返回 -EPROBE_DEFER；
 - 省电：没有笔时从片每秒仍中断约 125 次，超过 idle_after_ms（默认 10 s）
   未见笔就关掉中断、每 idle_poll_ms（默认 50 ms）读一帧，见到笔立即恢复；
   用户态在笔 MCU 有报文时写一下 /dev/gk3_pen，提前唤醒；
 - 把笔的电量注册为 power supply "m-pencil"（作用域为设备），由用户态写入
   电量与充电状态。它不挂父设备：Android 为输入设备找电池时，从设备节点往上
   找最近的 power_supply 目录，uinput 笔位于 /sys/devices/virtual，因此会被
-  认作触控笔的电池。
+  认作触控笔的电池。它不建唤醒源：笔的电量不需要唤醒系统，而唤醒源会在它
+  下面建 wakeup/ 目录并沿用它的 SELinux 标签，system_suspend 读取时被拒绝；
+- 不提供 sysfs 的 bind / unbind（suppress_bind_attrs）：gk3pend 还开着
+  /dev/gk3_pen 时手动解绑，会释放仍在使用的设备状态。
 
 笔 MCU（USB 12d1:10b8）在系统休眠恢复后不再转发压感，只有 USB 端口复位能
 恢复，需要 usbcore.quirks=12d1:10b8:b，由启动参数提供，不在本驱动里处理。
 
 实测：同一份代码以树外模块的形式在 1.0.0-rc.1 上使用（KernelSU 模块，
 见 #26），树内版本只去掉了运行时 DT overlay（改由设备树提供节点）和 USB
-怪癖的处理；已在本仓基线上编译通过，checkpatch 无错误、无警告。
+怪癖的处理；已在本仓基线上编译通过，W=1 无警告，checkpatch 无错误、无警告。
+不建唤醒源、等待面板和 suppress_bind_attrs 这三处也先在模块上验证过：
+m-pencil 下不再有 wakeup 目录，system_suspend 不再被拒绝，驱动目录里没有
+bind / unbind，熄屏时空闲轮询停止，笔的各项功能照常。等待面板的那条路径在
+模块上走不到（加载时面板早已注册）。
 ---
  drivers/input/touchscreen/Kconfig              |   17 +
  drivers/input/touchscreen/Makefile             |    1 +
- drivers/input/touchscreen/himax_hx83121a_pen.c | 1086 ++++++++++++++++++++++++
- 3 files changed, 1104 insertions(+)
+ drivers/input/touchscreen/himax_hx83121a_pen.c | 1117 ++++++++++++++++++++++++
+ 3 files changed, 1135 insertions(+)
  create mode 100644 drivers/input/touchscreen/himax_hx83121a_pen.c
 
 diff --git a/drivers/input/touchscreen/Kconfig b/drivers/input/touchscreen/Kconfig
-index 0aa76956210791d970d298bdc3b583cbc80d0640..204fc7d7042ce5c3ced39b572ac51490739ede87 100644
+index 0aa769562..204fc7d70 100644
 --- a/drivers/input/touchscreen/Kconfig
 +++ b/drivers/input/touchscreen/Kconfig
 @@ -1430,4 +1430,21 @@ config TOUCHSCREEN_HIMAX_HX83121A_SPI
@@ -64,7 +72,7 @@ index 0aa76956210791d970d298bdc3b583cbc80d0640..204fc7d7042ce5c3ced39b572ac51490
 +
  endif
 diff --git a/drivers/input/touchscreen/Makefile b/drivers/input/touchscreen/Makefile
-index 329afd486dbd399fba8c558dc1df7c742cdccbd5..5c3d544ec3169386d770d131fd5ffa81d5fd24aa 100644
+index 329afd486..5c3d544ec 100644
 --- a/drivers/input/touchscreen/Makefile
 +++ b/drivers/input/touchscreen/Makefile
 @@ -121,3 +121,4 @@ obj-$(CONFIG_TOUCHSCREEN_ZINITIX)	+= zinitix.o
@@ -74,10 +82,10 @@ index 329afd486dbd399fba8c558dc1df7c742cdccbd5..5c3d544ec3169386d770d131fd5ffa81
 +obj-$(CONFIG_TOUCHSCREEN_HIMAX_HX83121A_PEN)	+= himax_hx83121a_pen.o
 diff --git a/drivers/input/touchscreen/himax_hx83121a_pen.c b/drivers/input/touchscreen/himax_hx83121a_pen.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..367371c58281e25cd6ccd95b5b3ee62c5d62bdfd
+index 000000000..ed90c2cea
 --- /dev/null
 +++ b/drivers/input/touchscreen/himax_hx83121a_pen.c
-@@ -0,0 +1,1086 @@
+@@ -0,0 +1,1117 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Himax HX83121A cascade slave (active pen) on the HUAWEI MateBook E Go
@@ -948,6 +956,15 @@ index 0000000000000000000000000000000000000000..367371c58281e25cd6ccd95b5b3ee62c
 +	.get_property = pen_bat_get,
 +};
 +
++/*
++ * Nothing about the pen's battery needs to wake the system, and a wakeup
++ * source would put a wakeup/ directory under the supply that inherits its
++ * SELinux label, which system_suspend is then denied reading.
++ */
++static const struct power_supply_config pen_bat_cfg = {
++	.no_wakeup_source = true,
++};
++
 +/* 'B', level (0-100), charging (0/1); 0xff leaves that field as it is */
 +static void pen_bat_set(const u8 *m)
 +{
@@ -1029,6 +1046,23 @@ index 0000000000000000000000000000000000000000..367371c58281e25cd6ccd95b5b3ee62c
 +	p->ring = devm_kcalloc(dev, RING_LEN, sizeof(*p->ring), GFP_KERNEL);
 +	if (!p->xfer || !p->ring)
 +		return -ENOMEM;
++
++	/*
++	 * The panel's follower callbacks stop the watchdog and the idle
++	 * polling while the screen is off.  If the panel has not probed yet the
++	 * follower cannot be added and both would keep running for good, so
++	 * defer until it has, before anything is started.  Other lookup
++	 * failures end in the always-on watchdog below.
++	 */
++	if (drm_is_panel_follower(dev)) {
++		struct device_node *np = of_parse_phandle(dev->of_node, "panel", 0);
++		struct drm_panel *panel = of_drm_find_panel(np);
++
++		of_node_put(np);
++		if (panel == ERR_PTR(-EPROBE_DEFER))
++			return dev_err_probe(dev, -EPROBE_DEFER, "waiting for the panel\n");
++	}
++
 +	p->spi = spi;
 +	p->tx1_peak_max = S16_MIN;
 +	mutex_init(&p->lock);
@@ -1129,6 +1163,11 @@ index 0000000000000000000000000000000000000000..367371c58281e25cd6ccd95b5b3ee62c
 +	.driver = {
 +		.name = "himax-hx83121a-pen",
 +		.of_match_table = gk3_pen_of_match,
++		/*
++		 * A manual unbind would free the device state while gk3pend
++		 * still has /dev/gk3_pen open.
++		 */
++		.suppress_bind_attrs = true,
 +	},
 +	.id_table = gk3_pen_ids,
 +	.probe = gk3_pen_probe,
@@ -1140,7 +1179,7 @@ index 0000000000000000000000000000000000000000..367371c58281e25cd6ccd95b5b3ee62c
 +	int ret;
 +
 +	/* not fatal: the pen works without */
-+	pen_bat = power_supply_register(NULL, &pen_bat_desc, NULL);
++	pen_bat = power_supply_register(NULL, &pen_bat_desc, &pen_bat_cfg);
 +	if (IS_ERR(pen_bat)) {
 +		pr_warn("battery not registered: %ld\n", PTR_ERR(pen_bat));
 +		pen_bat = NULL;
