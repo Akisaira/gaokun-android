@@ -1,10 +1,33 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 AND MIT */
 /*
  * HPP3 coordinate, pressure and tilt steps ported from EGoTouchRev-rebuild
- * (MIT), EGoTouchService/Solvers/StylusSolver: hpp3/CoordinateSolver.hpp,
+ * (https://github.com/awarson2233/EGoTouchRev-rebuild),
+ * EGoTouchService/Solvers/StylusSolver: hpp3/CoordinateSolver.hpp,
  * hpp3/GridFeatureExtractor.hpp, hpp3/PressureSolver.hpp, hpp3/TiltProcess.hpp
  * and shared/CoorReviseProcess.hpp.  The tilt constants are re-measured on
  * this unit.  Shared by gk3pend and the host tools (test_*.c, tilt_cal.c).
+ *
+ * The ported code is under the MIT license of EGoTouchRev-rebuild:
+ *
+ * Copyright (c) 2025 Detach2233
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 #define UNIT		1024	/* EGoTouchRev Asa::kCoorUnit: 1/1024 cell */
 #define REGION_FLOOR	100	/* GridFeatureExtractor m_peakRegionFloor */
