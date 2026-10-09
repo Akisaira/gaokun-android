@@ -45,6 +45,7 @@ summarize() {
     awk '
     function kv(line, k,   r) { if (match(line, "(^| )" k "=[^ ]*")) { r = substr(line, RSTART, RLENGTH); sub(/^ /, "", r); sub(k "=", "", r); return r } return "" }
     function cnt(v) { split(v, a, "/"); return a[1] + 0 }
+    function dur(v) { split(v, a, "/"); return a[2] + 0 }   # 原始单位是 19.2 MHz tick（rc.1 实测：cdsp 累计时长 / 19.2e6 = uptime）
     /^t=/ { n++; if (n == 1) f = $0; l = $0; ev[kv($0, "ev")]++
             if (kv($0, "ev") == "hb" || kv($0, "ev") == "stop") { if (h == "") h = $0; hl = $0 } }
     END {
@@ -58,15 +59,25 @@ summarize() {
         printf "供电：开头 ac=%s %s，结尾 ac=%s %s（插着电的这段不算待机掉电）\n", kv(f, "ac"), kv(f, "bstat"), kv(l, "ac"), kv(l, "bstat")
         printf "挂起：success %s → %s（%+d 次），fail %s → %s\n", kv(f, "ss_ok"), kv(l, "ss_ok"), kv(l, "ss_ok") - kv(f, "ss_ok"), kv(f, "ss_fail"), kv(l, "ss_fail")
         split("aosd cxsd ddr slpi adsp cdsp", qs, " ")
-        printf "qcom_stats 次数增量："
-        for (i = 1; i <= 6; i++) printf "%s %+d  ", qs[i], cnt(kv(l, qs[i])) - cnt(kv(f, qs[i]))
-        printf "ddr_lpm %+d\n", kv(l, "ddr_lpm") - kv(f, "ddr_lpm")
+        # 时长比次数要紧：ADSP 25.7 小时只进过 3 次、共 5 秒（2026-10-09）。占比的分母是墙上时间（含挂起）。
+        # 正处在睡眠中的那一段是实时计入累计时长的（qcom_stats.c:105-106 打印时补上，
+        # v7.2-rc2；10-09 实测 SLPI 次数不变、47 秒里时长 +47.0 秒）。
+        printf "qcom_stats 增量（次数 / 睡眠秒数 / 占整段时间）：\n"
+        for (i = 1; i <= 6; i++) {
+            ds = (dur(kv(l, qs[i])) - dur(kv(f, qs[i]))) / 19200000
+            printf "  %-5s %+6d 次  %10.1f 秒", qs[i], cnt(kv(l, qs[i])) - cnt(kv(f, qs[i])), ds
+            if (hrs > 0) printf "  %5.1f%%", 100 * ds / (hrs * 3600)
+            printf "\n"
+        }
+        printf "  ddr_lpm %+d\n", kv(l, "ddr_lpm") - kv(f, "ddr_lpm")
         if (h != "") {
             split("p_ss p_sf p_audioserver p_audiohal p_camhal p_senshal", ps, " ")
             printf "进程（PID/RSS kB/fd，首个心跳 → 最后一个）：\n"
             for (i = 1; i <= 6; i++) printf "  %-14s %s → %s\n", ps[i], kv(h, ps[i]), kv(hl, ps[i])
             printf "dropbox（采样开始以来）：system_server_crash %s，tombstone %s，system_app_crash %s\n", kv(hl, "db_ss_crash"), kv(hl, "db_tombstone"), kv(hl, "db_app_crash")
         }
+        printf "唤醒源 wakeup_count 前 5：开头 %s\n                         结尾 %s\n", kv(f, "ws_top"), kv(l, "ws_top")
+        printf "结尾的用户态锁 wl=%s，持有中的唤醒源 ws_act=%s，LPASS 投票 lpass=%s（开头 %s）\n", kv(l, "wl"), kv(l, "ws_act"), kv(l, "lpass"), kv(f, "lpass")
         printf "最后一行的 boot_history：%s\n", kv(l, "boot_history")
     }' "$1"
 }

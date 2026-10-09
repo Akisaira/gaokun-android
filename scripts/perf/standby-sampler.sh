@@ -45,6 +45,25 @@ qcom() {
     awk '/LPM Stat/{for(i=1;i<=NF;i++) if($i ~ /^count:/){split($i,a,":"); s+=a[2]}} END{printf "ddr_lpm=%d", s}' $QS/ddr_stats 2>/dev/null
 }
 
+# 为什么不睡 / 被谁叫醒（B7 排查用）：
+#   wl=      /sys/power/wake_lock 里的用户态锁（gaokun3_nosuspend = allow_suspend 没放开，gaokun3_usbrole = 插着主机）
+#   ws_act=  此刻持有中的内核唤醒源（active_since > 0）
+#   ws_top=  累计 wakeup_count 前 5 的唤醒源（名:次数；首末两行相减 = 这段时间谁叫醒了机器）
+#   ⚠️ debugfs 的 wakeup_sources 一行是 名字 + 9 列数字，名字可能全是空格（实测有一个 active_count 1 万多的匿名源）⇒
+#      按"从行尾数第几列"取，NF = 9 的记成 anon。列序：wakeup_count = $(NF-6)，active_since = $(NF-4)。
+#   lpass=   LPASS_HW_MACRO / LPASS_HW_DCODEC 的 enable_count（q6prm 投票）。2026-10-09 rc.1 息屏、无 PCM 打开、
+#            macro 全 runtime suspended 时仍是 4/4，同时 ADSP 25.7 小时只睡了 5 秒 —— 怀疑二者有关，未验证。
+wake_why() {
+    w=$(cat /sys/power/wake_lock 2>/dev/null | tr -s ' \n' ',' | sed 's/,$//')
+    WS=/sys/kernel/debug/wakeup_sources
+    a=$(awk 'NR > 1 && $(NF-4) > 0 { n = (NF == 10) ? $1 : "anon"; s = s (s ? "," : "") n } END { print s }' $WS 2>/dev/null)
+    t=$(awk 'NR > 1 && $(NF-6) > 0 { print $(NF-6), (NF == 10) ? $1 : "anon" }' $WS 2>/dev/null |
+        sort -rn | head -5 | awk '{ s = s (s ? "," : "") $2 ":" $1 } END { print s }')
+    m=$(rd /sys/kernel/debug/clk/LPASS_HW_MACRO/clk_enable_count)
+    c=$(rd /sys/kernel/debug/clk/LPASS_HW_DCODEC/clk_enable_count)
+    echo -n "wl=${w:--} ws_act=${a:--} ws_top=${t:--} lpass=$m/$c"
+}
+
 # 关键进程 PID/RSS(kB)/fd 数；标签:进程名，名字按 2026-10-04 实机 ps 核对过。PID 变了 = 中途崩溃重启过
 procs() {
     for e in ss:system_server sf:surfaceflinger audioserver:audioserver \
@@ -84,6 +103,7 @@ line() {  # $1 = ev；整条记录只占一行（start / hb / stop 的附加字�
          "cap=$(rd $BAT/capacity) charge_now=$(rd $BAT/charge_now) cur=$(rd $BAT/current_now) volt=$(rd $BAT/voltage_now) bstat=$(rd $BAT/status) ac=$(rd $ADP/online)" \
          "screen=$(getprop debug.tracing.screen_state) allow_suspend=$(getprop persist.vendor.gaokun3.allow_suspend) wlan=$(rd /sys/class/net/wlan0/operstate)" \
          "$(qcom)" \
+         "$(wake_why)" \
          "boot_reason=$(getprop sys.boot.reason) boot_history=$(getprop persist.sys.boot.reason.history | tr '\n' ';')" \
          "$x"
 }

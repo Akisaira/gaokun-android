@@ -56,4 +56,7 @@ SER=gaokun3 bash scripts/perf/standby.sh stop
   adbd 一重启采样器就跟着被杀，而且不留 `stop` 行。`pull` 发现最后一行不是 `stop`、采样器又不在跑时会明确提示"中途死了"。
   能不能把自己挪出那个 cgroup（比如挪到根 cgroup）**没实测过**，列为待验证。
 * 亮屏硬解 1 小时那种测法要更密的心跳：`HB=300 SER=gaokun3 bash scripts/perf/standby.sh start`。
+* 为什么不睡 / 被谁叫醒：每行带 `wl=`（`/sys/power/wake_lock` 的用户态锁；`gaokun3_nosuspend` = allow_suspend 没放开、`gaokun3_usbrole` = 插着主机）、
+  `ws_act=`（持有中的内核唤醒源）、`ws_top=`（累计 wakeup_count 前 5，首末相减 = 这段时间谁叫醒了机器）、`lpass=`（`LPASS_HW_MACRO` / `DCODEC` 的投票计数）。
+  摘要里 qcom_stats 给次数、睡眠秒数与占整段时间的比例 —— 看时长，别只看次数（ADSP 25.7 小时只进过 3 次、共 5 秒）。
 * 要 root（qcom_stats 在 debugfs）。adb 不是 root 的发布构建上走 `su -c`，KernelSU 管理器里要先给 shell 授权。
