@@ -145,6 +145,12 @@ allow gaokun3_usbrole self:global_capability2_class_set block_suspend;
 #   gaokun3_usbrole 是 vendor 域，不撞 private/property.te:492-502（lineage-sepolicy）"coredomain 不许设 vendor 属性"那条 neverallow。
 #   set_prop 已含上面的 get_prop（public/te_macros:393-397），那行留着不动。⬜ 未上机、未编译。
 set_prop(gaokun3_usbrole, vendor_gaokun3_prop)
+# 拔线检测（gaokun3-usbrole.sh 的 vbus_present()）读 EC 的适配器在线标志
+#   /sys/class/power_supply/gaokun-ec-adapter/online。真实节点在 huawei_gaokun_ec.psy.0/power_supply 下，
+#   由 genfs_contexts:17 标成 sysfs_batteryinfo；/sys/class/power_supply 目录和其中的链接是 sysfs，与读 usb_role 时
+#   走的链接一样，原本就能穿过。
+#   对 sysfs_batteryinfo 的 neverallow 只限 coredomain（见 hal_lineage_health_default.te 的核对），本域是 vendor 域。
+r_dir_file(gaokun3_usbrole, sysfs_batteryinfo)
 
 # ── audio-route.sh：2026-09-18 实机重跑一次这个服务抓到的完整清单 ────────────
 #
