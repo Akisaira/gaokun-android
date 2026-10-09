@@ -253,6 +253,13 @@ PRODUCT_PROPERTY_OVERRIDES += \
     persist.graphics.egl=angle
 PRODUCT_VENDOR_PROPERTIES += \
     debug.hwui.renderer=skiagl
+# GLES 应用的着色器 / 管线磁盘缓存（EGL_ANDROID_blob_cache，ANGLE 的程序与 VkPipelineCache 都存这里）。
+#   默认单文件：总量 2 MiB、单条 64 KiB（frameworks/native egl_cache.cpp:33-35，android16-release），
+#   大型 UE 游戏放不下 ⇒ 每次启动重编、加载材质时掉帧（issue #34 鸣潮）。多文件模式单条 8 MiB、
+#   总量默认 32 MiB（:41-43；ro 开关在 :237）。2026-10-09 rc.1 实机：debug.egl.blobcache.multifile=true
+#   后 App 的 cache/ 下出现 com.android.opengl.shaders_cache.multifile/，发布构建上也生效。
+PRODUCT_VENDOR_PROPERTIES += \
+    ro.egl.blobcache.multifile=true
 
 # ⚠️ 软渲染（SwiftShader）导入不了 UBWC 压缩 buffer —— SF 崩于
 # "Failed to create a valid texture"（GaneshBackendTexture 导入

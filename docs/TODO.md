@@ -23,7 +23,7 @@ D7 只发 GApps 版 · D10 fcitx5-android 从 GitHub 取（2026-10-06，已入�
 D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）· **D5 SELinux 切 enforcing**（2026-10-06，dev.10 起默认）· **E10 真机恢复出厂不测**（2026-10-06）· D21 0050 移出发布内核（dev.9 起）·
 其余按 v1.0-plan §6 的"建议"列执行（2026-10-04）。仓库已推送到 origin。
 
-**下一个构建（dev.11）要带上的**：`5c48d08` fcitx5 原样安装、`309f735` HAL 的 ESP 认法（EBUSY / enforcing）、`ec5f2a5` 相机 HAL 用合成器栅栏（issue #23）、`a3c354c` crash_dump 的 memfd（enforcing 下无 tombstone）、**内核：`5b5534c` 0078 进链（要重编内核）**，安装器 S1 / S2 修复与风险确认页（安装器侧，重建 live 镜像时带上）。
+**下一个构建（dev.11）要带上的**：`5c48d08` fcitx5 原样安装、`309f735` HAL 的 ESP 认法（EBUSY / enforcing）、`ec5f2a5` 相机 HAL 用合成器栅栏（issue #23）、`a3c354c` crash_dump 的 memfd（enforcing 下无 tombstone）、**内核：`5b5534c` 0078 进链（要重编内核）**，`ro.egl.blobcache.multifile=true`（issue #34），安装器 S1 / S2 修复与风险确认页（安装器侧，重建 live 镜像时带上）。
 
 ### ① 发版阻断（v1.0-plan §2 的 B1–B7 与发版标准 G1–G11）
 
@@ -266,6 +266,16 @@ B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 
 | #23 相机会话报错 + 画面转 90° | ★ 会话报错的根因：enforcing 下 `hal_camera_default` 用不了 drm_hwcomposer 发的 sync_file 栅栏（`tclass=fd`）⇒ binder `BR_FAILED_REPLY` ⇒ CAMERA_ERROR。rc.1 验收没抓到（预览没跑到缓冲带着栅栏回来的那一轮）。规则已补（`ec5f2a5`），**进 dev.11** | ⬜ dev.11 上 Aperture 预览跑满 5 分钟零 `tclass=fd`；⬜ 方向：报告者机器是 2023 款 GK-W76（后摄同为 ov13b10 + dw9714），开发机上 Aperture 横 / 竖各目视一次（与 AV-12、DISP-2 一起）；⬜ 浏览器里后摄 R/B 对调、部分网站开不了后摄（要网站名与复现时的 logcat） |
 | #24 待机时 `System (AUDIO)` 耗电高 | 开发机静置时 audioserver / 音频 HAL 30 秒 CPU 为 0，未复现。那一项是估算值（"音频输出开着的时长" × power_profile 的 `audio` 30 mA），要先分清是真掉电还是只是记账 | 等报告者的 `dumpsys batterystats` / `media.audio_flinger` |
 | （顺带）enforcing 下 App 崩溃不出 tombstone | crDroid bionic 把 `/proc/*/maps` 先拷进 `memfd:axion:*`，本机 memfd 落在通用 `tmpfs`，`crash_dump` 写被拒 ⇒ `Failed to parse maps` ⇒ 无 tombstone（英雄联盟崩溃、`kill -SEGV` Twelve 都复现）。规则 `a3c354c`，**未编译** | ⬜ dev.11 前在 crDroid 树 grep axion 看上游策略；⬜ dev.11 上 `kill -SEGV` 普通 App 出 tombstone、零 crash_dump avc；进 `release-checklist` |
+
+### 🐞 GitHub issues #26–#34（2026-10-09 逐条核查）
+
+| issue | 结论 | 还剩 |
+|---|---|---|
+| #26 M-Pencil / PR #27 | 审查：方向对、与 main 无冲突；要改两处才能合 —— 笔电量 `power_supply_register` 没关唤醒源 ⇒ `m-pencil/wakeup/` 串成笔电量标签、system_suspend 在 enforcing 下被拒；`solver.h` 缺 EGoTouchRev 的 MIT 版权行与全文。建议：`suppress_bind_attrs`、`-EPROBE_DEFER` 别吞、`mcu_find` 改按 sysfs VID/PID 找。⚠️ `usbcore.quirks=12d1:10b8:b` 作用的就是键盘盖（`hw-inventory.md:741`），每次休眠恢复都 USB 复位键盘 | 10-09 已在 PR 留言，等作者改。合后：构建机 `--verify` + `m gk3pend` + sepolicy 测试；enforcing 实机零 avc、按键唤醒正常、「关键盘」恢复后仍 inhibited |
+| #29 手掌识别 / PR #30 | 审查：补丁能干净打上（`hx-algo.c` 来自 buildbot `patches/others/0003`），0081 的排序修正对，协议 B 撤回顺序对；要改：`algo/hand_*` 无范围校验（`hand_hold_frames=255` ⇒ 整屏触摸被当手丢掉，回放器复现）。待定：game 预设要不要 `hand_enabled=0`；注册 `ABS_MT_TOOL_TYPE` 后 InputReader 会不会给触摸屏加 `SOURCE_STYLUS`（**未核实**，要在 crDroid 树 grep） | 10-09 已在 PR 留言。与 #27 只在 KPATCHES 尾部冲突，按 0079→0082 排；合后开发机（CSOT）上纯手指 `hand_lands` 恒 0、手掌平放有撤回 |
+| #28 BOE / CSOT 面板自动区分 | 现在靠 DT compatible 选 desc（`csot,ppc357db1-4` / `boe,ppc357db1-4`，`refs/gaokun-buildbot/drivers/panel-hx83121a/panel-himax-hx83121a.c:732-733`；DT 写死 csot，`refs/gaokun-buildbot/dts/sc8280xp-huawei-gaokun3.dts:814`）⇒ BOE 用户要改 boot 镜像。报告者 BOE 读 `DA DB DC` = `D2 FF FF` | ⬜ 开发机（CSOT）读同三个寄存器对照（要带读 ID 日志的内核 = 装内核，先征得同意）；值不同才值得在驱动里按 ID 自动选 desc |
+| #33 无限暖暖 2.9.1 启动即崩（v0.7.1） | UE 5.4.4，`SecondsSinceStart=0` 致命错误 "Global shader library is missing" —— 包里没有所选 RHI 的全局着色器 ⇒ **推断** UE 选了 GLES、而游戏只带 Vulkan 着色器。CrashContext 的 GPU 品牌 = `ANGLE (Qualcomm, Vulkan 1.3.335 (Turnip Adreno (TM) 690 …`：UE 拿 GL_RENDERER 当 GPU 家族匹配机型档案，`ANGLE (` 前缀可能匹配不上 Adreno 规则（UE 规则本地无源码，**未核实**）。对照：本机三角洲（UE4）走 Vulkan（有 `VulkanProgramBinaryCache/`），卡拉彼丘（UE4）走 GLES（`ProgramBinaryCache/GLSL_ES3_1_ANDROID_*`）—— 各游戏规则不同。ANGLE 支持用 `debug.angle.gl_renderer` / `gl_vendor` 整串覆盖（ANGLE `ab6a82e0` 的 `Context.cpp:3500-3533`；本机 `libGLESv2_angle.so` 含这两个属性名），adb shell 不用 root 就能设 | 请报告者在 rc.1 上 `setprop debug.angle.gl_renderer "Adreno (TM) 690"` + `setprop debug.angle.gl_vendor Qualcomm` 后重试做 A/B；有效再议进不进镜像（全局伪装 Adreno 可能让游戏走针对高通驱动的规避分支，要回归） |
+| #34 鸣潮每次重编着色器、加载掉帧、无 Vulkan 选项（v0.7.1） | 锁 GLES 推测同 #33。重编 / 掉帧另有一层：GLES 应用的 EGL blob cache 默认单文件，总量 2 MiB、单条 64 KiB（AOSP `egl_cache.cpp:33-35`、开关 `:237`，android16-release），ANGLE 的程序与管线缓存放不下；本机卡拉彼丘 1.6 MB、明日方舟 0.98 MB 已近上限。`debug.egl.blobcache.multifile=true` 在 rc.1（发布构建）上实测生效（出现 `.multifile/` 目录，已撤回）。已改镜像：`ro.egl.blobcache.multifile=true`（device.mk，多文件单条 8 MiB、总量 32 MiB） | ⬜ dev.11 后：同一游戏第二次进场景是否不再全量重编；同请报告者做 gl_renderer A/B。「划后台丢、正常退出保留」更像 UE 自己的 ProgramBinaryCache 只在正常退出时落盘（**推断**） |
 
 ---
 
