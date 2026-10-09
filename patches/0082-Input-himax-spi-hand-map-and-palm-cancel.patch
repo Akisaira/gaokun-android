@@ -27,12 +27,17 @@ Subject: [PATCH] Input: himax-spi: 手的位置图，误报成手指的手以MT_
 峰值带上所在区域的编号。熄屏和芯片重新初始化时，位置图随跟踪器一起清空
 （hx_hand_reset()）。
 
-algo/下新增的参数（可运行时修改）：
-  hand_enabled      1   总开关
-  hand_margin       2   手掌和手的碎块往外扩的格数（约9毫米）
-  hand_hold_frames  36  手离开后继续记住的帧数（约300毫秒）
-  hand_land_frames  12  "落下"前后的窗口（约100毫秒）
-  hand_land_dist    25  落下时算作同一只手的范围（约11厘米）
+algo/下新增的参数（可运行时修改；超出上限的写入返回-EINVAL）：
+  参数              默认  上限  含义
+  hand_enabled      1     -     总开关
+  hand_margin       2     8     手掌和手的碎块往外扩的格数（约9毫米）
+  hand_hold_frames  36    120   手离开后继续记住的帧数（约300毫秒）
+  hand_land_frames  12    60    "落下"前后的窗口（约100毫秒）
+  hand_land_dist    25    60    落下时算作同一只手的范围（约11厘米）
+
+上限定义在hx-algo.h：hand_age到255表示“不是手”，保留时间要远小于它，否则
+整块屏都会被当成手；落下窗口要和同样封顶在255的跟踪年龄比较，道理相同；外扩
+每一遍要为每格扫描2×hand_margin+1格，太大会拖慢中断线程。
 
 algo/stats新增的计数器：hand_lands（落下次数）、hand_peaks（作为手丢掉的
 峰值）、hand_cancel_map（落进位置图而撤回的跟踪）、hand_cancel_land（和手掌
@@ -41,7 +46,7 @@ algo/stats新增的计数器：hand_lands（落下次数）、hand_peaks（作�
 issue #29。
 ---
 diff --git a/drivers/input/touchscreen/himax-spi-core.c b/drivers/input/touchscreen/himax-spi-core.c
-index 0089e9be5..84072763c 100644
+index 0089e9be5..78ef03921 100644
 --- a/drivers/input/touchscreen/himax-spi-core.c
 +++ b/drivers/input/touchscreen/himax-spi-core.c
 @@ -686,6 +686,14 @@ static int himax_input_dev_config(struct himax_ts_data *ts)
@@ -67,20 +72,51 @@ index 0089e9be5..84072763c 100644
  	}
  
  	if (ts->input_dev)
-@@ -1052,6 +1061,12 @@ HX_ALGO_ATTR_U16_RW(palm_contact_area);
+@@ -1010,6 +1019,30 @@ static ssize_t _name##_store(struct device *dev,			\
+ }									\
+ static DEVICE_ATTR_RW(_name)
+ 
++/* u8 tunable with an upper limit; larger values are rejected */
++#define HX_ALGO_ATTR_U8_MAX_RW(_name, _max)				\
++static ssize_t _name##_show(struct device *dev,				\
++			    struct device_attribute *attr, char *buf)	\
++{									\
++	struct himax_ts_data *ts = dev_get_drvdata(dev);		\
++	return sysfs_emit(buf, "%u\n", (unsigned int)ts->algo->_name);	\
++}									\
++static ssize_t _name##_store(struct device *dev,			\
++			     struct device_attribute *attr,		\
++			     const char *buf, size_t count)		\
++{									\
++	struct himax_ts_data *ts = dev_get_drvdata(dev);		\
++	u8 val;								\
++	int ret = kstrtou8(buf, 0, &val);				\
++	if (ret)							\
++		return ret;						\
++	if (val > (_max))						\
++		return -EINVAL;						\
++	ts->algo->_name = val;						\
++	return count;							\
++}									\
++static DEVICE_ATTR_RW(_name)
++
+ #define HX_ALGO_ATTR_S32_RW(_name)					\
+ static ssize_t _name##_show(struct device *dev,				\
+ 			    struct device_attribute *attr, char *buf)	\
+@@ -1052,6 +1085,12 @@ HX_ALGO_ATTR_U16_RW(palm_contact_area);
  HX_ALGO_ATTR_U8_RW(palm_area_threshold);
  HX_ALGO_ATTR_S32_RW(palm_signal_threshold);
  HX_ALGO_ATTR_S16_RW(palm_density_low);
 +/* Hand map */
 +HX_ALGO_ATTR_BOOL_RW(hand_enabled);
-+HX_ALGO_ATTR_U8_RW(hand_margin);
-+HX_ALGO_ATTR_U8_RW(hand_hold_frames);
-+HX_ALGO_ATTR_U8_RW(hand_land_frames);
-+HX_ALGO_ATTR_U8_RW(hand_land_dist);
++HX_ALGO_ATTR_U8_MAX_RW(hand_margin, HX_HAND_MARGIN_MAX);
++HX_ALGO_ATTR_U8_MAX_RW(hand_hold_frames, HX_HAND_HOLD_MAX);
++HX_ALGO_ATTR_U8_MAX_RW(hand_land_frames, HX_HAND_LAND_FRAMES_MAX);
++HX_ALGO_ATTR_U8_MAX_RW(hand_land_dist, HX_HAND_LAND_DIST_MAX);
  /* Pressure / touch-major reporting */
  HX_ALGO_ATTR_BOOL_RW(pressure_enabled);
  /* Edge compensation */
-@@ -1102,6 +1117,10 @@ static ssize_t stats_show(struct device *dev, struct device_attribute *attr,
+@@ -1102,6 +1141,10 @@ static ssize_t stats_show(struct device *dev, struct device_attribute *attr,
  	n += sysfs_emit_at(buf, n, "tracks_jump       %u\n", st->tracks_jump);
  	n += sysfs_emit_at(buf, n, "tracks_guard_kill %u\n", st->tracks_guard_kill);
  	n += sysfs_emit_at(buf, n, "tracks_lost       %u\n", st->tracks_lost);
@@ -91,7 +127,7 @@ index 0089e9be5..84072763c 100644
  	n += sysfs_emit_at(buf, n, "max_contacts      %u\n", st->max_contacts);
  	return n;
  }
-@@ -1162,6 +1181,11 @@ static struct attribute *hx_algo_attrs[] = {
+@@ -1162,6 +1205,11 @@ static struct attribute *hx_algo_attrs[] = {
  	&dev_attr_palm_area_threshold.attr,
  	&dev_attr_palm_signal_threshold.attr,
  	&dev_attr_palm_density_low.attr,
@@ -103,7 +139,7 @@ index 0089e9be5..84072763c 100644
  	&dev_attr_pressure_enabled.attr,
  	&dev_attr_edge_comp_enabled.attr,
  	&dev_attr_edge_boost_pct.attr,
-@@ -1299,7 +1323,9 @@ static void himax_report_tracked_state(struct himax_ts_data *ts, bool report_on)
+@@ -1299,7 +1347,9 @@ static void himax_report_tracked_state(struct himax_ts_data *ts, bool report_on)
  			  ts->algo->tracks[i].debounce == 0;
  
  		input_mt_slot(ts->input_dev, i);
@@ -114,7 +150,7 @@ index 0089e9be5..84072763c 100644
  		if (!on)
  			continue;
  
-@@ -1362,7 +1388,9 @@ static irqreturn_t himax_ts_thread(int irq, void *data)
+@@ -1362,7 +1412,9 @@ static irqreturn_t himax_ts_thread(int irq, void *data)
  
  	hx_detect_macro_zones(algo);
  	hx_reject_palms(algo);
@@ -529,10 +565,29 @@ index 0d2b8dbb1..6de0bfe80 100644
  
  int hx_count_stable_tracks(struct hx_algo *algo)
 diff --git a/drivers/input/touchscreen/hx-algo.h b/drivers/input/touchscreen/hx-algo.h
-index 86dd5012c..2a9a4448d 100644
+index 86dd5012c..0496c74fc 100644
 --- a/drivers/input/touchscreen/hx-algo.h
 +++ b/drivers/input/touchscreen/hx-algo.h
-@@ -32,6 +32,7 @@
+@@ -25,6 +25,18 @@
+ /* Maximum simultaneous reported contacts. */
+ #define HIMAX_MAX_TOUCH 10
+ 
++/*
++ * Upper limits of the hand_* tunables; sysfs rejects larger values.
++ * hand_age saturates at U8_MAX, which reads as "not hand", so the hold has
++ * to stay well below it; the same goes for the landing window, which is
++ * compared with the saturating track age.  Every dilation pass scans up to
++ * 2 * margin + 1 cells per cell.
++ */
++#define HX_HAND_MARGIN_MAX      8       /* cells, ~3.5 cm */
++#define HX_HAND_HOLD_MAX        120     /* frames, ~1 s at 120 Hz */
++#define HX_HAND_LAND_FRAMES_MAX 60      /* frames, ~0.5 s */
++#define HX_HAND_LAND_DIST_MAX   HX_COLS /* cells: the whole panel */
++
+ /**
+  * struct hx_peak - single detected local-maximum candidate.
+  * @r:          row in the grid (0-based)
+@@ -32,6 +44,7 @@
   * @z:          signal value at the peak
   * @nbr_sum:    sum of all 8-neighbour signals (used for Z8 filter)
   * @zone_area:  area of the macro-zone this peak belongs to
@@ -540,7 +595,7 @@ index 86dd5012c..2a9a4448d 100644
   */
  struct hx_peak {
  	u8  r;
-@@ -39,6 +40,7 @@ struct hx_peak {
+@@ -39,6 +52,7 @@ struct hx_peak {
  	s16 z;
  	s32 nbr_sum;
  	u16 zone_area;
@@ -548,7 +603,7 @@ index 86dd5012c..2a9a4448d 100644
  };
  
  /**
-@@ -66,6 +68,7 @@ struct hx_contact {
+@@ -66,6 +80,7 @@ struct hx_contact {
   * @age:        frames the slot has been active
   * @missed:     consecutive frames the slot had no matching detection
   * @debounce:   remaining debounce frames before the slot is reported
@@ -556,7 +611,7 @@ index 86dd5012c..2a9a4448d 100644
   */
  struct hx_track {
  	bool active;
-@@ -77,8 +80,18 @@ struct hx_track {
+@@ -77,8 +92,18 @@ struct hx_track {
  	u8   age;
  	u8   missed;
  	u8   debounce;
@@ -575,7 +630,7 @@ index 86dd5012c..2a9a4448d 100644
  /**
   * struct hx_macro_zone - contiguous above-threshold region.
   * @pixels:     1-D indices (r*HX_COLS+c) of up to HX_ZONE_PX_MAX pixels
-@@ -96,6 +109,7 @@ struct hx_macro_zone {
+@@ -96,6 +121,7 @@ struct hx_macro_zone {
  	u8  max_c;
  	bool is_palm;   /* set by hx_reject_palms(); the zone is kept */
  	u8 palm_rule;   /* which rule fired, 1-4; 0 = not a palm      */
@@ -583,7 +638,7 @@ index 86dd5012c..2a9a4448d 100644
  };
  
  /* Number of recent contact births kept for inspection. */
-@@ -129,6 +143,10 @@ struct hx_stats {
+@@ -129,6 +155,10 @@ struct hx_stats {
  	u32 tracks_jump;        /* released by jump detection              */
  	u32 tracks_guard_kill;  /* killed by track_active_guard            */
  	u32 tracks_lost;        /* released after track_lost_frames        */
@@ -594,7 +649,7 @@ index 86dd5012c..2a9a4448d 100644
  	u8  max_contacts;       /* most simultaneous stable contacts seen  */
  };
  
-@@ -167,6 +185,7 @@ struct hx_algo {
+@@ -167,6 +197,7 @@ struct hx_algo {
  
  	/* ---- Scratch buffers (shared between pipeline stages) ---- */
  	u8  visited[HX_PIXELS];              /* BFS visited flags           */
@@ -602,7 +657,7 @@ index 86dd5012c..2a9a4448d 100644
  	u8  zone_map[HX_PIXELS];             /* per-pixel zone-ID map       */
  	u16 bfs_queue[HX_PIXELS];            /* ring-buffer BFS queue       */
  
-@@ -188,6 +207,16 @@ struct hx_algo {
+@@ -188,6 +219,16 @@ struct hx_algo {
  	bool touch_active;
  	u8   touch_start_frames;
  
@@ -619,7 +674,7 @@ index 86dd5012c..2a9a4448d 100644
  	/* ---- Tunable parameters (sysfs-writable, atomically updated) ---- */
  	/* Preprocessing */
  	bool cmf_enabled;          /* CMF on/off (default: true)           */
-@@ -212,6 +241,11 @@ struct hx_algo {
+@@ -212,6 +253,11 @@ struct hx_algo {
  	u8   palm_area_threshold;  /* area >= this → palm                  */
  	s32  palm_signal_threshold;/* signal_sum >= this → palm            */
  	s16  palm_density_low;     /* signal/area < this → palm            */
@@ -631,7 +686,7 @@ index 86dd5012c..2a9a4448d 100644
  	/* Pressure / touch-major reporting */
  	bool pressure_enabled;     /* report PRESSURE + TOUCH_MAJOR        */
  	/* Edge compensation */
-@@ -248,9 +282,18 @@ void hx_detect_macro_zones(struct hx_algo *algo);
+@@ -248,9 +294,18 @@ void hx_detect_macro_zones(struct hx_algo *algo);
  /* Phase 2B: palm rejection */
  void hx_reject_palms(struct hx_algo *algo);
  

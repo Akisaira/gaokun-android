@@ -66,10 +66,13 @@ struct param {
 	const char *name;
 	void *ptr;
 	enum kind kind;
+	long max;	/* < 0: no limit */
 };
 
 /* Every tunable under algo/ in himax-spi-core.c (stats and contacts_log aside). */
-#define P(f, k) { #f, &algo.f, k }
+#define P(f, k) { #f, &algo.f, k, -1 }
+/* the driver's sysfs rejects values above these (hx-algo.h) */
+#define PM(f, k, m) { #f, &algo.f, k, m }
 static struct param params[] = {
 	P(cmf_enabled, K_BOOL), P(cmf_exclusion, K_S16), P(cmf_max_correction, K_S16),
 	P(iir_enabled, K_BOOL), P(iir_decay_weight, K_U16), P(iir_decay_step, K_U16),
@@ -78,8 +81,10 @@ static struct param params[] = {
 	P(edge_min_area, K_U8), P(palm_enabled, K_BOOL), P(palm_zone_scan, K_BOOL),
 	P(palm_contact_area, K_U16), P(palm_area_threshold, K_U8),
 	P(palm_signal_threshold, K_S32), P(palm_density_low, K_S16),
-	P(hand_enabled, K_BOOL), P(hand_margin, K_U8), P(hand_hold_frames, K_U8),
-	P(hand_land_frames, K_U8), P(hand_land_dist, K_U8),
+	P(hand_enabled, K_BOOL), PM(hand_margin, K_U8, HX_HAND_MARGIN_MAX),
+	PM(hand_hold_frames, K_U8, HX_HAND_HOLD_MAX),
+	PM(hand_land_frames, K_U8, HX_HAND_LAND_FRAMES_MAX),
+	PM(hand_land_dist, K_U8, HX_HAND_LAND_DIST_MAX),
 	P(pressure_enabled, K_BOOL), P(edge_comp_enabled, K_BOOL),
 	P(edge_boost_pct, K_S16), P(edge_push_q8, K_S16), P(edge_blend_q8, K_S16),
 	P(track_dist2_max, K_S32), P(track_lost_frames, K_U8), P(debounce_base, K_U8),
@@ -102,6 +107,11 @@ static int set_param(const char *assign)
 
 		if (strlen(p->name) != n || strncmp(p->name, assign, n))
 			continue;
+		if (p->max >= 0 && (v < 0 || v > p->max)) {
+			fprintf(stderr, "hxsim: %s must be 0..%ld, as the driver enforces\n",
+				p->name, p->max);
+			return -1;
+		}
 		switch (p->kind) {
 		case K_BOOL: *(bool *)p->ptr = v != 0; break;
 		case K_U8:   *(u8 *)p->ptr = v; break;
