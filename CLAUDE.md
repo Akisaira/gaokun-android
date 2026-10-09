@@ -41,8 +41,9 @@
 > * ⚠️★★ **ROM 变体只用 `lineage_gaokun3-bp4a-userdebug`**：`-user` 的 init 强制 enforcing（`selinux.cpp:112-116`），装上去起不来（#117 §15）。
 > * **推仓库、发版要用户点头**；其余（本地提交、构建、staging、设备实验）直接做。
 >
-> ### 现在设备上跑的是什么（2026-10-06 16:0x 起；历次状态见 project-log）
-> * 槽 **`_b` = `1.0.0-rc.1`**（戳 `1791285623`），active = `_b`，**SELinux enforcing**；`_a` = dev.10。载荷 `out/rc1-1791285623/`，安装器 `out/rc1-wt/out/release-installer/0.2.0-rc.1/`。⚠️ enforcing 下 `boot-oneshot.sh` 要先 `setenforce 0`（efivarfs 无标签，`a1d303a` 进下一版才修）。
+> ### 现在设备上跑的是什么（2026-10-09 22:4x 起；历次状态见 project-log）
+> * 槽 **`_a` = `1.0.0-dev.11`**（戳 `1791554509`，内核 `705b1387…` = 7.2.9 + 0078），active = `_a`（ESP default 已同步），**SELinux enforcing**；`_b` = `1.0.0-rc.1`（戳 `1791285623`）。载荷 `out/dev11-1791554509/`（rc.1 的在 `out/rc1-1791285623/`，安装器 `out/rc1-wt/out/release-installer/0.2.0-rc.1/`）。⚠️ `a1d303a`（efivarfs 标签）已在 dev.11 里，但 enforcing 下 `boot-oneshot.sh` 不 `setenforce 0` 能否写成**没测过** —— 测之前照旧先 `setenforce 0`。
+> * ESP 上还留着实验内核目录 `android/va39w/`（15 MB）与条目 `gaokun3-va39w.conf`：0078 已进发版内核，验收完可删。
 > * ⚠️ 分派开着：**设置里的恢复出厂会真擦**（发布构建会丢 adb_keys ⇒ 连不上 adb）；`adb reboot bootloader|fastboot|recovery` 进 fastboot 执行端，Mac 上 `fastboot reboot` 回来。
 > * ESP 10-06 已清理（备份 `out/esp-backup-20261006/`）：菜单只剩 Android（入口 / 上一版入口 / fastboot / 两个直连槽）、`gaokun3 installer`（内置盘上的 live，能重装，安全网）、Ubuntu 救援。
 > * 10-06 Mac 与设备都在热点「Xiaomi 17」（设备 `10.146.153.115`）。
