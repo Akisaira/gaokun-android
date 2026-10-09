@@ -17,6 +17,7 @@ WANT="$1"
 S=/sys/class/usb_role/a600000.usb-role-switch/role
 D=/sys/bus/platform/devices/a600000.usb
 UDC=/sys/class/udc/a600000.usb/state
+ADAPTER=/sys/class/power_supply/gaokun-ec-adapter/online
 WL=gaokun3_usbrole
 TAG=gaokun3-usbrole
 
@@ -220,7 +221,17 @@ fi
 #   拔线后再切 host 放行挂起（role_host 进程原地每 2 秒看一次 UDC 状态）。判据用 UDC 的 state：
 #   configured/addressed = 有主机在总线另一端；not attached = 没有。
 #   ⚠️ 这不是根治。根治是让 dwc3 device 模式的挂起不复位（见 docs/stage4-findings.md #112）。
+#   ⚠️ 拔线之后 UDC 的 state 不会变：一直停在 configured，直到重新插上、主机再次枚举（dwc3 没有得知
+#   VBUS 消失）。只看 UDC 的话，被主机枚举过、再拔掉线以后（在息屏前拔还是息屏期间拔都一样），每次息屏
+#   都会当成主机还在、一直等下去，wakelock 不放，到重启为止整机都不再睡。EC 报的适配器在线
+#   （gaokun-ec-adapter/online）拔线当即变 0，所以先看它：不在线 ⇒ 没有主机。读不到时（节点不在或
+#   被拒）按在线处理，退回只看 UDC 的判断，不变量不受影响。
+vbus_present() {
+    [ "$(cat $ADAPTER 2>/dev/null)" != 0 ]
+}
+
 host_attached() {
+    vbus_present || return 1
     case "$(cat $UDC 2>/dev/null)" in
         configured|addressed|default) return 0 ;;
         *) return 1 ;;
@@ -239,12 +250,12 @@ if [ "$WANT" = host ] && host_attached; then
     #     开发机 allow_suspend=0，这条路径从没跑过）。
     #   现在：role_host 自己留着等；亮屏时 usbrole.rc 先 `stop gaokun3_role_host` 再起 role_device。
     echo $WL > /sys/power/wake_lock
-    say "USB 主机在线（UDC=$(cat $UDC 2>/dev/null)）→ 保持 device、不放行挂起（充电中，息屏不睡）；拔线后自动切 host"
+    say "USB 主机在线（UDC=$(cat $UDC 2>/dev/null)，适配器在线=$(cat $ADAPTER 2>/dev/null)）→ 保持 device、不放行挂起（充电中，息屏不睡）；拔线后自动切 host"
     while host_attached; do
         [ "$(getprop debug.tracing.screen_state)" = 2 ] && exit 0
         sleep 2
     done
-    say "USB 主机已拔掉（UDC=$(cat $UDC 2>/dev/null)）→ 现在切 host 放行挂起"
+    say "USB 主机已拔掉（UDC=$(cat $UDC 2>/dev/null)，适配器在线=$(cat $ADAPTER 2>/dev/null)）→ 现在切 host 放行挂起"
 fi
 
 # ★ 先把门关上，再动 role。失败路径全都停在这个状态。
