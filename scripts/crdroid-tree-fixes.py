@@ -697,6 +697,78 @@ def patch_wifi_mac_randomization_default(tree: pathlib.Path) -> str:
     return f"MAC 随机化默认改回 AUTO（改了 {len(todo)} 个文件）"
 
 
+def patch_build_fingerprint_variant_user(tree: pathlib.Path) -> str:
+    """—— 修补 23：BUILD_FINGERPRINT / BUILD_THUMBPRINT 的变体段改写成 user ——
+
+    游戏环境如实修正（Duck Detector 体检 2026-10-10）：把自相矛盾的身份字段改一致，
+    不是伪造硬件证明。同一天的运行时手段（scripts/game-mode.sh identity）已实测
+    只能改属性、改不掉 android.os.Build.FINGERPRINT 常量（zygote 预加载时定死），
+    那三条 Type/property 漂移在运行时消不掉，只有 ROM 级能齐。
+
+    现状（dev.11 实机 /system/build.prop 与构建机 out/ 一致）：
+      ro.build.type=user              ← soong gen_build_prop.get_build_variant()：
+      ro.system.build.type=user         非 eng 一律按 user 处理（lineage_gaokun3.mk
+      ro.build.flavor=gaokun3-user      注释引 gen_build_prop.py:28；#117 §16）
+      ro.build.fingerprint=…:userdebug/release-keys   ← build/make/core/config.mk:1308
+      ro.system.build.fingerprint=…:userdebug/release-keys
+                                        用 $(TARGET_BUILD_VARIANT)=userdebug 拼尾部
+    ⇒ 半截身份：type 一侧已是 user，fingerprint 一侧还写着 userdebug。Duck Detector
+      的 SystemPropertyConsistencyUtils.buildBuildFingerprintTailSignals 拿
+      Build.FINGERPRINT 的尾部去比 Build.TYPE / ro.build.type，三条全是 WARNING；
+      SystemPropertiesCatalog.suspiciousFingerprintPatterns 还有 "userdebug" 一条，
+      盯 ro.build.fingerprint / ro.system.build.fingerprint / ro.vendor.build.fingerprint
+      / ro.bootimage.build.fingerprint / Build.FINGERPRINT。
+      实测 after1（跑过运行时 identity）：dangerous_apps / root_managers 已转绿，
+      system_properties 的 3 条 danger 全是这个漂移 —— 属性被 resetprop 成 :user/，
+      常量还是 :userdebug/，反而多出一条 "ro.build.fingerprint <> Build.FINGERPRINT"。
+
+    改法：config.mk 里两处 `:$(TARGET_BUILD_VARIANT)/$(BUILD_VERSION_TAGS)` 改成
+      `:user/$(BUILD_VERSION_TAGS)`（BUILD_FINGERPRINT 与 BUILD_THUMBPRINT 各一处；
+      全文件 TARGET_BUILD_VARIANT 只出现在这两行，改完 type 与 fingerprint 尾部齐）。
+    ⓘ 为什么不改 gen_build_prop 让 type 跟着变 userdebug：那会让 ro.build.type
+      直接撞 SystemPropertiesCatalog 的 dangerousValues=["eng","userdebug"]，
+      更糟；产品身份本来就是 type=user（crDroid 的 gen_build_prop 身份），只是
+      fingerprint 没跟上。
+    ⓘ OTA 不受影响：本仓 full OTA 包的 META-INF/com/android/metadata 里【没有】
+      pre-build / pre-build-incremental（out/release-v0.7.1-alpha 的 zip 实测），
+      CheckAbSpecificMetadata 对空 pre-build 直接跳过指纹比对
+      （lineage-bootable-recovery install/install.cpp:171-176）；post-build 只比
+      最后一段 tags=release-keys（:203-204），与变体段无关。in-system 走
+      update_engine 的 payload_properties 也不带 pre-build。
+    ⚠️ 锚点按 refs/aosp-build（build/make）写的；构建机 crDroid 树若与 AOSP 16
+      的 config.mk 有出入会报 ⚠️ 并被 step() 记为失败，不会悄悄跳过。
+    上机判据：`getprop ro.build.fingerprint` 与新装后的 Build.FINGERPRINT 都是
+      …:user/release-keys，且不再与 Build.TYPE 漂移；Duck Detector 的
+      system_properties 3 条 danger / "Suspicious fingerprint pattern 'userdebug'" 消失。
+    """
+    p = tree / "build/make/core/config.mk"
+    if not p.exists():
+        return f"⚠️ 找不到 build/make/core/config.mk（{p}），上游可能挪了文件"
+    s = io.open(p, encoding="utf-8").read()
+    marker = "gaokun3 tree-fix [23]"
+    if marker in s:
+        return "已改（幂等，无需改动）"
+    old = ":$(TARGET_BUILD_VARIANT)/$(BUILD_VERSION_TAGS)"
+    new = ":user/$(BUILD_VERSION_TAGS)"
+    if s.count(new) == 2 and s.count(old) == 0:
+        return "已是 user（幂等，无需改动）"
+    if s.count(old) != 2:
+        return (f"⚠️ 锚点 {old} 出现 {s.count(old)} 次"
+                f"（应为 2：BUILD_FINGERPRINT 与 BUILD_THUMBPRINT），上游可能改了写法")
+    # 注释锚点先核对，别改了变体段却插不进标记（下次幂等判断就瞎了）
+    anchor = "# BUILD_FINGERPRINT is used used to uniquely identify the combined build and"
+    if anchor not in s:
+        return "⚠️ 找不到 BUILD_FINGERPRINT 注释锚点，上游可能改了写法"
+    comment = ("# " + marker + ": fingerprint/thumbprint variant segment forced to 'user',\n"
+               "# not $(TARGET_BUILD_VARIANT). ro.build.type already comes out 'user' via\n"
+               "# soong gen_build_prop.get_build_variant() (no userdebug tier), so the\n"
+               "# fingerprint tail saying userdebug is a half-done identity that drifts\n"
+               "# against Build.TYPE. See gaokun-android scripts/crdroid-tree-fixes.py.\n")
+    s = s.replace(old, new).replace(anchor, comment + anchor, 1)
+    io.open(p, "w", encoding="utf-8", newline="").write(s)
+    return "已把指纹/拇指纹的变体段改成 user（2 处）"
+
+
 def main():
     tree = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else pathlib.Path.home() / "crdroid").expanduser()
     if not (tree / "build/envsetup.sh").exists():
@@ -770,6 +842,10 @@ def main():
     step(" [22] audio AIDL HAL 播放块大小可配（10 ms，开 FastMixer）: ", apply_patch_file(
         tree, "hardware/interfaces",
         "0083-audio-aidl-primary-low-latency-playback-block.patch"))
+    # 游戏环境如实修正：fingerprint 尾部 userdebug→user，与 ro.build.type=user 对齐
+    # （Duck Detector system_properties 3 条 danger 的根；运行时改不掉 Build.FINGERPRINT 常量）
+    step(" [23] BUILD_FINGERPRINT/THUMBPRINT 变体段改写成 user（与 ro.build.type 对齐）: ",
+         patch_build_fingerprint_variant_user(tree))
     if failed:
         print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))
         sys.exit(1)
