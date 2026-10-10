@@ -137,8 +137,14 @@ BOARD_KERNEL_CMDLINE := \
     console=tty0 \
     clk_ignore_unused pd_ignore_unused arm64.nopauth efi=noruntime \
     fbcon=rotate:1 usbhid.quirks=0x12d1:0x10b8:0x20000000 \
+    usbcore.quirks=12d1:10b8:b \
     himax_hx83121a_spi.disable_pressure=0 \
     snd_usb_audio.index=-2,-2,-2,-2
+# ↑ usbcore.quirks（手写笔，#26）：b = USB_QUIRK_RESET_RESUME，系统休眠恢复时复位键盘 / 笔 MCU（12d1:10b8）。
+#   不复位的话，它醒来后照样报告笔已连接、键盘也能用，却不再转发压感（hidraw 报文 0x55）；
+#   重新握手、重绑 usbhid、取消再重新授权都无效，只有 USB 端口复位能恢复。usbhid 支持 reset-resume，
+#   键盘不受影响。cmdline 里的怪癖每次枚举都会重新生效（运行时设的标志在每次复位后会被
+#   hub_port_init 清掉，所以只能走 cmdline）。
 # ↑ 触摸报 ABS_MT_TOUCH_MAJOR/PRESSURE（#116 实测：轴建起、真值上报正常，Android 侧无异常）。
 #   这是 0444 模块参数，只能走 cmdline。配套 gaokun3-touch-mode.sh 里 pressure_enabled=1。
 # ↑ snd_usb_audio.index（v1.0 AV-4，⬜ 未上机）：USB 声卡永远不占 card0。内置声卡要等 ADSP 起来才注册，

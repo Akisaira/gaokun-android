@@ -8,3 +8,8 @@
 # 谁会写：只有开发脚本（经 KSU 的 adb shell，ksu 域本来就 permissive）。Android 自己不碰 efivarfs ——
 #   统一启动入口在 UEFI 里写变量，fastboot 执行端在 initramfs 里写（那里不加载 SELinux 策略）。
 type gaokun3_efivarfs, fs_type;
+
+# 手写笔电量：触摸从片驱动注册的 power supply m-pencil（genfs_contexts）。
+# 单独一个类型而不直接标 sysfs_batteryinfo：要让 system_server 读它，而核心策略只让
+# health HAL 读 sysfs_batteryinfo；平台类型之间的规则不该由 vendor 策略来加。
+type sysfs_gaokun3_pen_battery, sysfs_type, fs_type;

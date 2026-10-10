@@ -1,0 +1,13 @@
+# 手写笔（M-Pencil）守护进程，说明见 docs/stylus.md。
+#
+# 不用 root：user system 加上这两个组就够了。
+#   /dev/gk3_pen       0660 system system（ueventd.gaokun3.rc）  从片的帧
+#   /dev/hidraw*       0660 system system                        压感（笔 MCU 接口 0，报文 0x55）
+#   /dev/uinput        0660 uhid   uhid                          合成的触控笔
+#   /dev/bus/usb/*/*   0660 root   usb                           侧边双击、电量（笔 MCU 接口 1）
+# 日志（启动、电量变化、休眠恢复后重新握手）写进内核日志；stdio_to_kmsg 只在 userdebug 生效。
+service vendor.gk3pend /vendor/bin/gk3pend
+    class main
+    user system
+    group system uhid usb
+    stdio_to_kmsg

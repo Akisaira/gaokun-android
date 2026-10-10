@@ -1,0 +1,28 @@
+# 手写笔（M-Pencil）守护进程 gk3pend（stylus/，说明见 docs/stylus.md）。
+type gk3pend, domain;
+type gk3pend_exec, exec_type, vendor_file_type, file_type;
+init_daemon_domain(gk3pend)
+
+# 触摸从片的帧（read / poll）；写回的是笔在用时的唤醒提示，以及电量与充电状态
+allow gk3pend gaokun3_pen_device:chr_file rw_file_perms;
+
+# 压感：逐个打开 /dev/hidraw*，按报告描述符（HIDIOCGRDESC）认出笔 MCU 接口 0
+allow gk3pend hidraw_device:chr_file rw_file_perms;
+
+# 合成的触控笔
+allow gk3pend uhid_device:chr_file rw_file_perms;
+
+# 侧边双击与电量：逐个打开 /dev/bus/usb/*/* 认出笔 MCU（12d1:10b8），
+# 再经 usbfs 认领接口 1、提交 bulk URB
+allow gk3pend usb_device:dir r_dir_perms;
+allow gk3pend usb_device:chr_file rw_file_perms;
+
+# 设备树里面板的 compatible（/sys/firmware/devicetree/base/...，标签 sysfs）：
+# BOE 屏才用实测的列间距。只读这一个文件，不需要别的 sysfs。
+allow gk3pend sysfs:file r_file_perms;
+
+# stdio_to_kmsg（stylus/gk3pend.rc）：日志写进 /dev/kmsg_debug，只有 userdebug / eng 有这个节点。
+# init 以只写（不带 O_APPEND）打开后传给 gk3pend，exec 时按 write 检查，没有 write 就会被换成 /dev/null。
+userdebug_or_eng(`
+  allow gk3pend kmsg_debug_device:chr_file { write getattr };
+')

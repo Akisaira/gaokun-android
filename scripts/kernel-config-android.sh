@@ -466,6 +466,10 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 # 符号由 0078 引入 —— 补丁没打，这里会在 MUST_Y 断言上失败，而不是静默编出 48 位窗口。
 ./scripts/config --file "$OUT/.config" --enable ARM64_USER_MMAP_WINDOW_39
 
+# ★ 手写笔（M-Pencil，#26）：触摸从片驱动（patches/0079）。和主片 himax-spi 一样必须 =y
+#   （Android 不加载模块）；把从片的帧变成触控笔的是 vendor 的 gk3pend（device/huawei/gaokun3/stylus）。
+./scripts/config --file "$OUT/.config" --enable TOUCHSCREEN_HIMAX_HX83121A_PEN
+
 # ─── olddefconfig + 断言（止损"=m 坑"）───
 # 这个坑已经踩了 13 次：`scripts/config --enable X` 写进去了，olddefconfig
 # 却可能因为依赖把它降回 =m（或压根没有该符号），而 Android **不加载任何模块**
@@ -540,6 +544,7 @@ NETFILTER_XT_MATCH_MAC NETFILTER_XT_MATCH_STATISTIC NETFILTER_XT_MATCH_STRING NE
 CRYPTO_CHACHA20POLY1305 CRYPTO_MD5 CRYPTO_XCBC
 DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR ANON_VMA_NAME THERMAL_STATISTICS
 ARMV8_DEPRECATED SWP_EMULATION CP15_BARRIER_EMULATION SETEND_EMULATION
+TOUCHSCREEN_HIMAX_HX83121A_PEN
 "
 # 接了 ReSukiSU 才断言 KSU —— 没接的树上断言它只会误报。
 if [ "$RESUKISU" = 1 ]; then

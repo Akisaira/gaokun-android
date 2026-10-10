@@ -3,12 +3,14 @@
 #
 # 后端是 himax hx83121a 驱动自己暴露的算法参数
 # （/sys/bus/spi/devices/spi0.0/algo/，共 27 项），运行期可改、立刻生效。
-# 这里动五项（原来只动三项，取自上游 EGoTouchRev 的 game_preset）：
+# 这里动六项（原来只动三项，取自上游 EGoTouchRev 的 game_preset；hand_enabled 来自 patches/0082）：
 #   track_smoothing      基于速度预测的坐标平滑。开着更稳，代价是多一层延迟。
 #                        实现是 x = (3*旧 + 新)/4，稳态滞后 3 帧 ≈ 25 ms —— 不小。
 #   track_start_debounce touch_active 要连续几帧才确认。2 帧 ≈ 按下多 1 帧（8 ms）延迟，
 #                        换来的是噪声不那么容易变成一次"按下"。
 #   track_jump_dist2     跳点检测阈值的平方。⚠️★★ **两版预设一律给 0**，见下。
+#   hand_enabled         手的位置图（手掌识别）。game 关：贴着屏幕边缘平放的拇指会被掌压规则认成
+#                        手掌，位置图会把它周围、以及手抬起后约 300 ms 内的点按一起丢掉。daily 开。
 #
 # ⚠️★★★ 2026-09-14：`track_jump_dist2=6400` 是本仓自己制造的重大缺陷，已从两版预设清掉。
 #    驱动的跳点检测拿【原始位移】跟它比，于是它等于一条 **1.0 m/s 的限速线**；越过之后
@@ -26,11 +28,12 @@
 
 MODE="$1"
 case "$MODE" in
-    # game 与 daily 现在只差 track_smoothing —— 那才是"跟手 vs 稳"的真实取舍。
+    # game 与 daily 只差 track_smoothing 和 hand_enabled —— 前者是"跟手 vs 稳"的真实取舍，
+    # 后者是游戏里不要手掌识别。
     # DEB=1：2026-09-16 实测（#116）36 次点击 + 甩动，0 条 ≤2 帧的短触点、guard_kill=0，
     #        按下延迟 25 → 17 ms 无代价。空载 14636 帧一个像素都没越过阈值，噪声离阈值 11.6 倍。
-    game)  SMOOTH=0; DEB=1; JUMP=0 ;;
-    daily) SMOOTH=1; DEB=1; JUMP=0 ;;
+    game)  SMOOTH=0; DEB=1; JUMP=0; HAND=0 ;;
+    daily) SMOOTH=1; DEB=1; JUMP=0; HAND=1 ;;
     *) log -t gaokun3-touch "用法: $0 game|daily"; exit 2 ;;
 esac
 
@@ -54,6 +57,15 @@ for kv in "track_smoothing=$SMOOTH" "track_start_debounce=$DEB" "debounce_base=$
     got="$(cat "$ALGO/$k" 2>/dev/null)"
     [ "$got" = "$v" ] || { log -t gaokun3-touch "$k 回读 $got != 期望 $v"; fail=1; }
 done
+
+# ★ hand_enabled 单独写：没有 patches/0082 的内核没有这个节点，跳过而不算失败。
+#   daily 也要显式写 1，否则从 game 切回来时它还停在 0。
+if [ -e "$ALGO/hand_enabled" ]; then
+    if ! echo "$HAND" > "$ALGO/hand_enabled" 2>/dev/null ||
+       [ "$(cat "$ALGO/hand_enabled" 2>/dev/null)" != "$HAND" ]; then
+        log -t gaokun3-touch "hand_enabled 写入或回读失败（期望 $HAND）"; fail=1
+    fi
+fi
 
 if [ "$fail" = 0 ]; then
     log -t gaokun3-touch "触摸模式 = ${MODE}（${ALGO}）"
