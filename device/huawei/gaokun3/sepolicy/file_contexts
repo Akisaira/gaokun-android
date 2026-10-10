@@ -238,3 +238,7 @@
 # ✅ 2026-09-29 上机验证（v0.7.0，开机 2 小时后）：`ls -LZ /sys/class/wakeup/*/name` 50/50 是 sysfs_wakeup，
 #    包括 genfscon 没写到的 a400000 下的 xhci-hcd.2.auto 与键盘的 usb3/3-3。
 /sys/devices/platform/.*/wakeup/wakeup[0-9]+(/.*)?   u:object_r:sysfs_wakeup:s0
+
+# 手写笔（M-Pencil）：守护进程，与触摸从片驱动交出帧的节点（docs/stylus.md）
+/vendor/bin/gk3pend          u:object_r:gk3pend_exec:s0
+/dev/gk3_pen                 u:object_r:gaokun3_pen_device:s0

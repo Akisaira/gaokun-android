@@ -51,3 +51,7 @@
 /sys/class/leds/white:flash   flash_brightness   0664   root   camera
 /sys/class/leds/white:flash   flash_strobe       0664   root   camera
 /sys/class/leds/white:flash   flash_timeout      0664   root   camera
+
+# 手写笔（M-Pencil）：触摸从片驱动（patches/0079）交出帧的节点，内核默认 root 独占。
+# gk3pend 以 system 跑（stylus/gk3pend.rc）。
+/dev/gk3_pen              0660   system     system

@@ -983,6 +983,14 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     android.hardware.light-service.gaokun3
 
+# ═══════════ 手写笔（M-Pencil，#26）═══════════
+#
+# 内核一侧是触摸从片驱动（patches/0079、0080，kernel-config-android.sh 里 =y）；
+# gk3pend 把从片的帧和笔 MCU 的压感、侧键、电量合成一支 uinput 触控笔。
+# 权限见 ueventd.gaokun3.rc 与 sepolicy/gk3pend.te，整体说明见 docs/stylus.md。
+PRODUCT_PACKAGES += \
+    gk3pend
+
 # ═══════════ EC 充电上限（v1.0 PWR-14 / LIVE-9）═══════════
 #
 # vendor.lineage.health 的 IChargingControl（只报 LIMIT 模式）。用户入口是 LineageOS 现成的

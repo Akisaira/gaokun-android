@@ -209,6 +209,10 @@ KPATCHES=(
     #    kernel-config-android.sh 打开并断言）。issue #17：英雄联盟手游在 48 位窗口下 il2cpp_init 必崩，
     #    2026-10-08 A/B 实测；用户同日定进发版（起初是 --with-va39w 的实验补丁）。只碰 arch/arm64 的 Kconfig 与 processor.h。
     0078-arm64-user-mmap-window-39-bits-on-48-bit-page-tables.patch
+    # ★ 手写笔（M-Pencil，#26）：触摸从片（spi20）驱动与设备树。把从片的帧变成触控笔的是
+    #   vendor 的 gk3pend（device/huawei/gaokun3/stylus）；驱动要 =y（kernel-config-android.sh）。
+    0079-Input-add-HX83121A-cascade-slave-pen-driver.patch
+    0080-arm64-dts-gaokun3-enable-spi20-and-the-pen-slave.patch
     # ★ 0081（#29）：峰值多于10个时原先展开的是最弱的10个（峰值按从弱到强排序）；改成跳过最弱的。
     0081-Input-himax-spi-expand-the-strongest-peaks-when-there-are-too-many.patch
     # ★★ 0082（#29）：手的位置图：掌根以外的手（指节、平放的手指、落下和抬起时的掌根）不再报成手指，

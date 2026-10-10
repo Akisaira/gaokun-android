@@ -70,6 +70,7 @@
 | [hw/README.md](hw/README.md) | 硬件原始转储：后摄 EEPROM、BIOS 拆包；另有统一启动入口实验 E3–E8 的上机日志 `hw/gk3boot*-20261005.txt`（README 里未登记） | 参考（证据） | 维护者 |
 | [hw/bios-2.16/README.md](hw/bios-2.16/README.md) | BIOS 2.16 升级包拆包：工具、逐模块清单、逐字节复现步骤 | 参考 | 维护者 |
 | [sensors-ssc-protocol.md](sensors-ssc-protocol.md) | SSC 传感器 QMI / protobuf 协议规格（每条带出处），sensors HAL 的实现依据 | 参考（开头"客户端尚未实现"已过时：HAL 在 [`device/huawei/gaokun3/sensors-hal/`](../device/huawei/gaokun3/sensors-hal/README.md)） | 维护者 |
+| [stylus.md](stylus.md) | 手写笔（M-Pencil）：触摸从片与笔 MCU 两条数据通路，驱动 / 守护进程 / 权限的组成，设计要点，已知限制，调试 | 现行 | 维护者 · AI |
 | [contrib/slpi-sensors-deploy.md](contrib/slpi-sensors-deploy.md) | 外部贡献：Linux 侧 SLPI 传感器部署（推翻了 #37 的旧结论） | 参考（原样保留） | 维护者 |
 | [fingerprint/README.md](fingerprint/README.md) | 指纹 Windows 侧逆向报告的目录说明（报告本身不入库） | 参考 | 维护者 |
 | [parallel-mainline-generic.md](parallel-mainline-generic.md) | LineageOS 系 mainline-generic 的 gaokun3 支持（他人分享的补丁与交叉验证） | 历史（2026-08-17 后未跟进） | 维护者 |
