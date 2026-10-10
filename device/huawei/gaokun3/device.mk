@@ -197,7 +197,7 @@ PRODUCT_VENDOR_PROPERTIES += \
     ro.vendor.audio.primary.alsa.in_headset=CARD_0_DEV_2
 
 # 音游延迟（2026-10-09）：播放块 10 ms（480 帧）⇒ AudioFlinger 开 FastMixer、游戏的 AAudio 低延迟请求能批下来；
-# ALSA 跟着变成 4 × 480 帧（40 ms）。补丁 0079（tree-fix [22]）读它；不设 = 原来的 85 ms / 4096 帧。
+# ALSA 跟着变成 4 × 480 帧（40 ms）。补丁 0083（tree-fix [22]；原编号 0079 让给了 PR #27）读它；不设 = 原来的 85 ms / 4096 帧。
 # 实测（bind-mount + resetprop）：应用按时间戳算的输出延迟中位 317 → 114 ms，8 核跑满时 FastMixer underruns 0。
 PRODUCT_VENDOR_PROPERTIES += \
     ro.vendor.audio.primary.out_latency_ms=10

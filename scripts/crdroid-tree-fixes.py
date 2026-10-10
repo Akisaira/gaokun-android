@@ -769,7 +769,7 @@ def main():
     # 只动 ModulePrimary.cpp（头文件区与 getNominalLatencyMs()），与 [12]–[21] 不重叠；依赖 [17]（播放直接写 ALSA）。
     step(" [22] audio AIDL HAL 播放块大小可配（10 ms，开 FastMixer）: ", apply_patch_file(
         tree, "hardware/interfaces",
-        "0079-audio-aidl-primary-low-latency-playback-block.patch"))
+        "0083-audio-aidl-primary-low-latency-playback-block.patch"))
     if failed:
         print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))
         sys.exit(1)
