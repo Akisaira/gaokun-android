@@ -29,7 +29,8 @@
 #    attestation 一律不动——伪造证明链在边界外，那块归后续 TrickyStore。
 #
 # ⚠️ on 之后 adb 会断，off 就跑不了了！恢复有两条兜底：
-#      a) 定时器（默认 60 分钟）自动还原；
+#      a) 定时器（默认 60 分钟）自动还原——已做 trap '' HUP / setsid 脱离会话，
+#         否则 `stop adbd` 会连它一起杀掉（2026-10-10 实测踩过）；
 #      b) 开机兜底 /data/adb/service.d/gk3-game-mode-safety.sh——只要
 #         /data/local/tmp/gk3-game-mode/active 还在，下次开机把 adb 拉回来。
 #    最坏情况：按电源键重启一次，adb 就回来了。⇒ 分钟数要盖住整局游戏。
@@ -83,7 +84,9 @@ case "$CMD" in
     echo "开机归一已卸；如需立刻还原当前值，跑 game-mode.sh off（或重启）。"
     ;;
   on)
-    echo "设备 $SERIAL：开游戏模式（$MIN 分钟后自动恢复）……"
+    # ⚠️ ${} 花括号：macOS 自带 bash 3.2 会把紧跟在 $VAR 后面的多字节字符吞进变量名
+    #    （$SERIAL： 的全角冒号 → "SERIAL­: unbound variable"，2026-10-10 实测）。
+    echo "设备 ${SERIAL}：开游戏模式（${MIN} 分钟后自动恢复）……"
     # 定时器与安全网先布好，最后才断 adb（断开瞬间命令通道就没了）
     A shell "sh $REMOTE_SCRIPT on $MIN"
     echo "adb 即将关闭。$MIN 分钟后自动恢复；中途想手动恢复：等定时器到期后跑"

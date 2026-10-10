@@ -7,9 +7,12 @@
 # 动作与边界见 game-mode.sh 顶部。这里只记实现上踩过的点：
 #   * resetprop 用 KSU 的 /data/adb/ksu/bin/resetprop（Magisk 语法）。
 #     ro.* 删掉只影响内存属性区，重启自还原；persist.* 是真持久，靠状态文件还原。
-#   * on 的最后一步是【延迟 2 秒】关 adb —— 立即关会把正在执行的 shell 一起杀掉，
-#     后面的命令就丢了。定时器、安全网必须先布好。
-#   * 定时器是脱离 adb 的孤儿进程（shell 退出后 PPID=1），adbd 死了它还活着。
+#   * on 的最后一步是【延迟关 adb】—— 立即关会把正在执行的 shell 一起杀掉。
+#     定时器、安全网必须先布好。⚠️ USB 配置要走 setprop 才改 gadget（resetprop 不触发
+#     init 的 on property 钩子）；改 gadget 会立刻断开本会话。
+#   * ⚠️★★ 定时器必须 trap '' HUP / setsid 脱离会话：`stop adbd` 会毁掉 PTY，
+#     同进程组的定时器跟着收 SIGHUP。2026-10-10 实测没隔离的代价：定时器死在
+#     adb 前头，关掉的 adb 再也回不来，只能按电源键重启走开机兜底。
 #   * 恢复靠三层：定时器 → game-mode.sh off → 开机安全网
 #     /data/adb/service.d/gk3-game-mode-safety.sh（active 标记还在就拉回 adb）。
 
@@ -139,6 +142,7 @@ settings put global adb_enabled 1
 settings put global development_settings_enabled 1
 setprop persist.sys.usb.config adb
 setprop persist.adb.tcp.port 5555
+setprop service.adb.tcp.port 5555
 rm -f "$MARK"
 EOF
   chmod 755 "$SAFETY"
@@ -179,7 +183,15 @@ start_timer() { # start_timer <分钟>
     rm -f "$TIMER_PID"
   fi
   min=$1
-  ( sleep $((min * 60)); sh "$0" off ) >/dev/null 2>&1 &
+  # ⚠️★★ 定时器必须活得过 `stop adbd`：那一下会毁掉 PTY，同会话进程收 SIGHUP。
+  #    2026-10-10 实测代价（首次 on/off 链路测试）：没隔离的定时器跟着 adb 一起死，
+  #    adb 关了就再也回不来，只能按电源键重启走开机兜底。trap '' HUP 是最小隔离；
+  #    有 setsid（toybox 自带）就再套一层新会话，双保险。
+  if command -v setsid >/dev/null 2>&1; then
+    setsid sh -c "trap '' HUP; sleep $((min * 60)); exec sh \"$0\" off" >/dev/null 2>&1 &
+  else
+    ( trap '' HUP; sleep $((min * 60)); sh "$0" off ) >/dev/null 2>&1 &
+  fi
   echo $! > "$TIMER_PID"
   log "定时器已布：$min 分钟后自动恢复（pid $!）"
 }
@@ -196,12 +208,18 @@ do_on() {
   write_safety
   start_timer "$min"
   touch "$ACTIVE"
-  # 先持久属性、后 settings；adb_enabled=0 会立刻杀掉 adbd 与本会话
+  # ⚠️ USB / TCP 配置要走 setprop（属性服务）：resetprop 直写属性区、不触发 init 的
+  #    `on property:persist.sys.usb.config=*`，gadget 不重新枚举 —— 主机侧 adb 接口
+  #    会一直挂着（2026-10-10 实测）。改 gadget 会立刻断开本会话 ⇒ 定时器与安全网
+  #    必须先就位（上面两行已布好）。resetprop 只用来做持久副本，兜底 setprop 被拒。
   "$RP" persist.sys.usb.config mtp
+  setprop persist.sys.usb.config mtp
+  setprop sys.usb.config mtp
   "$RP" --delete persist.adb.tcp.port
+  setprop service.adb.tcp.port ""
   settings put global development_settings_enabled 0
-  log "2 秒后关闭 adb……"
-  ( sleep 2; settings put global adb_enabled 0; stop adbd ) >/dev/null 2>&1 &
+  log "关闭 adb……"
+  ( trap '' HUP; sleep 1; settings put global adb_enabled 0; stop adbd ) >/dev/null 2>&1 &
 }
 
 do_off() {
@@ -217,15 +235,24 @@ do_off() {
       rm -f "$STATE/$p"
     fi
   done
-  # persist 值还原（原值一般是 adb / 5555）
+  # persist 值还原（原值一般是 adb / 5555）。
+  # ⚠️ 同 do_on：USB 配置必须 setprop 才改 gadget；resetprop 只做持久副本。
+  #    另外把运行时 sys.usb.config 与 service.adb.tcp.port 一并拉回，
+  #    否则 adbd 起来了主机侧仍看不到接口 / 5555 不监听。
   if [ -f "$STATE/persist.sys.usb.config" ]; then
-    "$RP" persist.sys.usb.config "$(cat "$STATE/persist.sys.usb.config")"
+    v=$(cat "$STATE/persist.sys.usb.config")
+    [ -n "$v" ] && { "$RP" persist.sys.usb.config "$v"; setprop persist.sys.usb.config "$v"; }
     rm -f "$STATE/persist.sys.usb.config"
   fi
+  usb=$(getprop persist.sys.usb.config)
+  [ -n "$usb" ] && setprop sys.usb.config "$usb"
   if [ -f "$STATE/persist.adb.tcp.port" ]; then
-    "$RP" persist.adb.tcp.port "$(cat "$STATE/persist.adb.tcp.port")"
+    v=$(cat "$STATE/persist.adb.tcp.port")
+    [ -n "$v" ] && { "$RP" persist.adb.tcp.port "$v"; setprop persist.adb.tcp.port "$v"; }
     rm -f "$STATE/persist.adb.tcp.port"
   fi
+  tcp=$(getprop persist.adb.tcp.port)
+  [ -n "$tcp" ] && setprop service.adb.tcp.port "$tcp"
   for k in development_settings_enabled adb_enabled; do
     if [ -f "$STATE/setting.$k" ]; then
       v=$(cat "$STATE/setting.$k")
