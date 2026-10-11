@@ -71,4 +71,7 @@ gcc 自带 `strncpy` 的 builtin 原型，所以编译阶段一声不吭。
 ⚠️ **为什么 10-05 起的 7.2.9 发版内核一直不需要它，没查清。** 同一天这棵树的 `.config` 被换成了通用 defconfig
 （`docs/duck-detector-plan.md`「差点装了个起不来的内核」），**可能**是那份错配置少了某个间接把这个头带进来的选项。
 不管是哪种原因，这个 include 都该无条件写，所以照样收进来。
-2026-10-11 本机对 pin 的原文件 `git apply --check` 通过；构建机上要再跑 `kernel-setup-resukisu.sh <树> --check`。
+2026-10-11 本机对 pin 的原文件 `git apply --check` 通过；同日构建机 `~/gk3-kernel-72y/KernelSU` 上 0001–0003 反向检查都过（已在树里），
+`kernel-setup-resukisu.sh` 幂等跳过三个、rc.2 内核（`a0ea6ea4`）编过。
+⚠️ 构建机树上当时还多一处**不在任何补丁里**的手改：`kernel/feature/adb_root.c` 在 `slab.h` 后加了同一行
+`#include <linux/sched/task_stack.h>`（10-10 18:44，比 0086 早 4 分钟）。rc.2 构建前撤掉它重编（`adb_root.o` 确实重编了）、链接通过 ⇒ 不需要，没收进补丁。

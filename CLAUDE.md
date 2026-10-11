@@ -4,7 +4,7 @@
 
 ## 现在（2026-10-06；每次开工更新，旧内容搬进 project-log）
 
-* **阶段：1.0 发版前。** 最新发布 v0.7.1-alpha（2026-10-04）。**`1.0.0-rc.1`（戳 `1791285623`）2026-10-06 已作为候选版发布**（GitHub pre-release + R2 staging / installer，**没进 OTA 清单**），装在开发机 `_b`、验收零 FAIL。最新正式版仍是 v0.7.1-alpha。剩什么看 `docs/TODO.md` 顶部「▶ 1.0」；发版标准 / 阻断项 / 待定决定看 `docs/v1.0-plan.md`。
+* **阶段：1.0 发版前。** 最新发布 v0.7.1-alpha（2026-10-04）。**`1.0.0-rc.1`（戳 `1791285623`）2026-10-06 已作为候选版发布**（GitHub pre-release + R2 staging / installer，**没进 OTA 清单**），装在开发机 `_b`、验收零 FAIL。最新正式版仍是 v0.7.1-alpha。**`1.0.0-rc.2`（戳 `1791720612`）2026-10-11 已构建、传 R2 staging（`staging/rc2-1791720612/` 是开发机用的 payload），未上机、未发 pre-release**（TODO「① 」上方一段）。剩什么看 `docs/TODO.md` 顶部「▶ 1.0」；发版标准 / 阻断项 / 待定决定看 `docs/v1.0-plan.md`。
 * 内核 v7.2.9 stable + `patches/0076`（撤回 stable 撤掉的双 DSI 绑定 PLL 修复，否则黑屏）；dev.9 起发布内核不带指纹的 0050（D21，只进实验内核）。
 * 统一启动入口 `gk3boot.efi` + fastboot 执行端：E3–E8（含 OTA 自动回滚）、E6、E7 真机过；镜像默认动作模式 + BCB 分派开；E10 恢复出厂用户定不测（`docs/boot-entry-design.md`）。
 * 发布构建（dev.1 起）= 关免授权 adb、`ro.debuggable=0`，变体仍是 userdebug。SELinux 默认 permissive，1.0 切不切 enforcing 待定（v1.0-plan SEC-4 / D5）。
@@ -42,7 +42,7 @@
 > * **推仓库、发版要用户点头**；其余（本地提交、构建、staging、设备实验）直接做。
 >
 > ### 现在设备上跑的是什么（2026-10-11 18:4x 实机读到；历次状态见 project-log）
-> * **active = `_b` = 新 ROM 戳 `1791704075`**（10-11 构建，带 tree-fix [22][23]、去掉 swangle sepolicy；载荷不在本机 `out/`，来历待补），enforcing。
+> * **active = `_b` = 新 ROM 戳 `1791704075`**（10-11 构建，带 tree-fix [22]、去掉 swangle sepolicy；**不带 [23]**——`/system/build.prop` 指纹仍是 `:userdebug/`，`getprop` 的 `:user/` 是运行时改的；内核槽里是 dev.11 的 `705b1387`；载荷不在本机 `out/`），enforcing。
 >   18:2x 用户按电源键重启后走默认入口（`via=gk3boot`、`gk3boot-android-b.conf`）⇒ 内核是 `boot_b` 里的 **7.2.9**（`7.2.9-gaokun3+`）——
 >   证实 `boot_b` 没换成 0085 内核（TODO GAME-4）。0085 内核 `out/dev12-k0085/vmlinuz-a8f7c90e.efi` 只能走直连槽条目 `8a29534f…-android-b.conf` + oneshot 起。
 >   ⚠️ 18:4x 跑过 `game-mode.sh noforge` 测试：TrickyStore 已被杀、disable 标记已删（forge），**重启后才回来**。

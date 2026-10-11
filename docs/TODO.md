@@ -27,6 +27,8 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 
 **dev.11 带上的（上面已上机）**：`5c48d08` fcitx5 原样安装、`309f735` HAL 的 ESP 认法（EBUSY / enforcing）、`ec5f2a5` 相机 HAL 用合成器栅栏（issue #23）、`a3c354c` crash_dump 的 memfd（enforcing 下无 tombstone）、**内核：`5b5534c` 0078 进链（要重编内核）**，`ro.egl.blobcache.multifile=true`（issue #34），安装器 S1 / S2 修复与风险确认页（安装器侧，重建 live 镜像时带上）。
 
+**★ 2026-10-11 `1.0.0-rc.2` 已构建、已传 staging，⬜ 未上机（发布构建，戳 `1791720612`）**：仓库 `7f85271`（`git archive` 到构建机 `~/v1-work/repo-rc2/`，913 个文件 sha 一致）。内核 `~/gk3-kernel-72y`（D16）：`--verify` 打不上 0 / fuzz 0 / 53 文件一致；ReSukiSU 0001–0003 已在树；配置与 dev.11 只差 `TOUCHSCREEN_HIMAX_HX83121A_PEN=y`；vmlinuz **`a0ea6ea4…`**（含 0078–0085，uname 报 6.6.30）、dtb `d3448553…`（0080 改了 dts，与 dev.11 不同）；本机 `prebuilt-boot/` 已换（旧的备份 `out/prebuilt-boot-backup-k78/`）。crDroid 树：tree-fix [23] **这次才第一次打上**（`1791704075` 没有，见 gaming.md §1）。整包 `release.sh --dry-run` 增量 8 分 34 秒、第 2 步断言全过；镜像核对：指纹 `…:user/release-keys`、`out_latency_ms=10`、`blobcache.multifile=true`、vulkan=freedreno、vendor sepolicy 0 条 execmem。`release.sh --no-build --stage-only` → R2 `staging/crDroidAndroid-16.0-20261011-gaokun3-v12.11/`（8 个文件 HTTP 200，**不动 OTA 清单**）；开发机用的 payload 另传 `staging/rc2-1791720612/`（`payload.bin` 1396242813 字节、sha256 `ed848592…`）。小文件留档 `out/rc2-1791720612/`。**⬜ 下一步**：先把 adb 便利持久化（同 dev.11），下 payload → `install-ota-local.sh --go`（用户在场）→ `accept.sh --stamp 1791720612` → 手写笔 / 手掌（PR #27 / #30）、Arcaea 延迟、Duck 复测 → 过了再写 `docs/relnotes/v1.0.0-rc.2*.md` 并用 `--no-build` 发 GitHub pre-release。
+
 ### ① 发版阻断（v1.0-plan §2 的 B1–B7 与发版标准 G1–G11）
 
 | 编号 | 一句话 | 状态 | 下一步 | 证据 |
@@ -96,8 +98,8 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 | GAME-1 | 内核版本串覆写 `patches/0085`（uname 报 `6.6.30-android15-8-…`） | ◐ 用户 10-11 定：进发版 | vermagic 不变已核（gaming.md §4.1）。⬜ known-limitations / 发版说明披露（uname 不是真实版本）；⬜ 排查 bpfloader / VINTF 内核矩阵 / KSU 读到 6.6 后的行为 | gaming.md §4.1 |
 | GAME-2 | netlink 隐私边界 `patches/0084` | ◐ | 开发机 10-11 两条泄露都 `EACCES` ✅。⬜ 随下一个发版内核走 `--verify` + A 档；⬜ Wi-Fi / 热点 / `ip neigh`（root）照常 | gaming.md §1 |
 | GAME-3 | `system_server execmem` 去掉（swangle sepolicy 移出、`…EXECMEM_FOR_SWIFTSHADER` 注释掉） | ◐ 已提交 `53b34ff` | `1791704075` 实测 Denied ✅。⬜ enforcing 下全机 avc 无 `execmem` | BoardConfig.mk 注释 |
-| GAME-4 | 0085 内核固化进 `boot_b`（现在只能走直连槽条目） | ⬜ | **10-11 证实**：走默认入口起的是 7.2.9（`boot_b` 里没换）。`prebuilt-boot/` 换成新内核再打包（0084 / 0085 已在主链） | gaming.md §4.3 |
-| GAME-5 | 原 `patches/0086`（KernelSU 子目录）进正规入口 | ◐ | 已改名 `patches/resukisu/0003-…`（`kernel-setup-resukisu.sh` 打、`release.sh` 核）；本机对 pin `--check` 过。⬜ 构建机 `kernel-setup-resukisu.sh <树> --check` | gaming.md §4.2 |
+| GAME-4 | 0085 内核固化进 `boot_b`（现在只能走直连槽条目） | ◐ 已进 rc.2 镜像 | **10-11 证实**：走默认入口起的是 7.2.9（`boot_b` 里没换）。✅ 10-11 rc.2：`prebuilt-boot/` 换成 `a0ea6ea4`（含 0079–0085）、`release.sh` 断言 boot.img 的 kernel 与它逐字节同。⬜ 装上 rc.2 后默认入口起来 `uname -r` = `6.6.30-android15-8-…` | gaming.md §4.3 |
+| GAME-5 | 原 `patches/0086`（KernelSU 子目录）进正规入口 | ✅ 10-11 | 已改名 `patches/resukisu/0003-…`（`kernel-setup-resukisu.sh` 打、`release.sh` 核）；本机对 pin `--check` 过。✅ 10-11 构建机：0001–0003 都已在树里、脚本幂等跳过、rc.2 内核编过；树上另一处手改（`adb_root.c` 的 include）撤掉后照样编过 ⇒ 不需要（`patches/resukisu/README.md`） | gaming.md §4.2 |
 | GAME-6 | `game-mode.sh` 10-11 审查修复 + 上机 | ✅ 10-11 上机 | ✅ hide / unhide（数据保留）、`on 1` 走 TCP 与 USB 都自动恢复、开机兜底、noforge / forge。上机挖出的真凶：定时器在 adbd 的 cgroup 里被 init 一起杀（gaming.md §2 第 2 条）。⬜ `unhide` 里 `install-existing` 为什么失败（从备份装回能用） | gaming.md §2 |
 | GAME-7 | 验收：英雄联盟手游 / Wild Rift 进对局 | ⬜ | `on` + `hide` 后测（先 forge，不行再 noforge 对比）；记卡在哪一层 | #17、gaming.md §3 |
 | GAME-8 | 低延迟音频 0083 发版构建复测 | ◐ | `1791704075` 上 FastMixer `mixPeriod=10 ms` ✅；⬜ Arcaea 端到端延迟、满载欠载复测 | gaming.md §1 |
