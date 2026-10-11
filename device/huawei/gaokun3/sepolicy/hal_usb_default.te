@@ -4,8 +4,9 @@
 # 读 sysfs 里的链接。实机标签：role、UDC 的 state / soft_connect、/sys/class/typec/port0 下的属性、
 # regulator 全是 sysfs。这里只补三样。
 
-# /sys/class/udc 是 sysfs_udc（核心策略 genfscon）：读 UDC 的 state、写 soft_connect 都要穿过它。
-allow hal_usb_default sysfs_udc:dir search;
+# /sys/class/udc 是 sysfs_udc（核心策略 genfscon）：读 UDC 的 state、写 soft_connect 都要经过它和其中的链接。
+# 只给 search 不够，enforcing 下会读不到 UDC 状态（gaokun3_usbrole 在 #126 里就是这样被拦的），所以和它一样给 r_dir_file。
+r_dir_file(hal_usb_default, sysfs_udc)
 
 # EC 的适配器在线标志 /sys/class/power_supply/gaokun-ec-adapter/online：真实节点由 genfs_contexts 标成
 # sysfs_batteryinfo（对它的 neverallow 只限 coredomain，见 gaokun3_scripts.te 里 gaokun3_usbrole 的同一条）。

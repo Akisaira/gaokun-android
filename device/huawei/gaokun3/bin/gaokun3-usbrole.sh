@@ -139,7 +139,7 @@ echo $WL > /sys/power/wake_lock
 
 # ★ v1.0（PWR-5 / STOR-2）：切 device 之前看对面是不是设备。
 #   亮屏（usbrole.rc）和开机（init.gaokun3.usb.rc）都走这里。原先无条件写 device ⇒ port0 上由我们供电的
-#   U 盘 / 鼠标 / 手柄一亮屏就掉、follow 也不会救回来（它只管我方受电的情况）；带 PD 的扩展坞每次亮屏断约 6 秒。
+#   U 盘 / 鼠标 / 手柄一亮屏就掉；带 PD 的扩展坞每次亮屏断约 6 秒。
 #   现在：已是 host 且 xhci 下枚举着东西 ⇒ 保持 host、不写 device。对面是 PC 时 host 模式下枚举不出任何东西，照旧切 device。
 #   wakelock 照旧持有（上面刚拿）：亮屏时本来就不睡，息屏时 role_host 会重新确认 host 再放行 —— #52 的不变量不受影响。
 #   ⚠️ 开机那次可能早于 U 盘枚举完成 ⇒ 那时仍会切 device（与改之前一样），这一点没有办法在不拖慢开机的前提下根治。

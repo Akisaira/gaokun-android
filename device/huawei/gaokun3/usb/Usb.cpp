@@ -31,7 +31,10 @@
  * UsbManager: Settings' "USB controlled by", or `dumpsys usb set-port-roles
  * port0 source host` / `sink device`. The EC cannot swap the power role, so
  * the port reports that it can change mode, and the framework asks for a
- * mode: DFP for host, UFP for device. Otherwise the HAL reports status only.
+ * mode: DFP for host, UFP for device. Otherwise the HAL reports status only,
+ * and vendor.gaokun3.usbrole.adb_pause then changes only when
+ * gaokun3-usbrole.sh switches the role at screen off and on, no longer
+ * within seconds of any role change as with the script's old follow loop.
  * Power role swaps, USB data disabling, power limiting and port reset are
  * answered with NOT_SUPPORTED.
  *
@@ -428,7 +431,16 @@ class Usb : public BnUsb {
             for (int i = 0; i < n; i++) {
                 int fd = events[i].data.fd;
                 if (fd == uevents) {
-                    if (DrainUevents(uevents)) check = true;
+                    bool udcReplaced = false;
+                    if (DrainUevents(uevents, &udcReplaced)) check = true;
+                    if (udcReplaced && udc >= 0) {
+                        // Removing the UDC does not wake its watched state
+                        // attribute, and the new one is a new file: watch
+                        // that one instead (at the top of the loop).
+                        epoll_ctl(ep, EPOLL_CTL_DEL, udc, nullptr);
+                        close(udc);
+                        udc = -1;
+                    }
                 } else if (fd == udc) {
                     if (!RearmAttr(udc)) {
                         epoll_ctl(ep, EPOLL_CTL_DEL, udc, nullptr);

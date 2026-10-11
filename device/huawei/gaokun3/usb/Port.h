@@ -57,8 +57,9 @@ bool SetProp(const char* name, const std::string& value);
 
 int OpenUeventSocket();
 // Drains the socket; true if any uevent that can change port0 arrived, or
-// some were lost.
-bool DrainUevents(int fd);
+// some were lost. Sets *udcReplaced when the UDC was added or removed (or
+// uevents were lost): a watched UDC state attribute is then gone.
+bool DrainUevents(int fd, bool* udcReplaced);
 
 // Opens a sysfs attribute for epoll (EPOLLPRI on sysfs_notify) and arms it.
 int WatchAttr(const char* path);

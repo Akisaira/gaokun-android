@@ -133,13 +133,17 @@ bool PartnerNoPd() {
 // the controller's xhci child (it binds after its root hubs appear), the
 // Type-C class, or the EC adapter. Battery and other power supplies change
 // often and are skipped.
-bool IsRelevant(const char* msg, size_t len) {
+bool IsRelevant(const char* msg, size_t len, bool* udcReplaced) {
     const char* end = msg + len;
-    std::string subsystem, devpath;
+    std::string subsystem, devpath, action;
     for (const char* p = msg; p < end; p += strlen(p) + 1) {
         if (!strncmp(p, "SUBSYSTEM=", 10)) subsystem = p + 10;
         else if (!strncmp(p, "DEVPATH=", 8)) devpath = p + 8;
+        else if (!strncmp(p, "ACTION=", 7)) action = p + 7;
     }
+    // The UDC is removed in the host role and added again as a new device in
+    // the device role.
+    if (subsystem == "udc" && (action == "add" || action == "remove")) *udcReplaced = true;
     if (subsystem == "usb_role" || subsystem == "udc" || subsystem == "usb" ||
         subsystem == "typec") {
         return true;
@@ -261,7 +265,7 @@ int OpenUeventSocket() {
     return fd;
 }
 
-bool DrainUevents(int fd) {
+bool DrainUevents(int fd, bool* udcReplaced) {
     bool relevant = false;
     char buf[8192];
     for (;;) {
@@ -270,12 +274,13 @@ bool DrainUevents(int fd) {
             if (errno == EINTR) continue;
             if (errno == ENOBUFS) {
                 relevant = true;  // overflowed: re-read anyway
+                *udcReplaced = true;
                 continue;
             }
             break;  // EAGAIN: drained
         }
         buf[n] = '\0';
-        if (IsRelevant(buf, n)) relevant = true;
+        if (IsRelevant(buf, n, udcReplaced)) relevant = true;
     }
     return relevant;
 }
