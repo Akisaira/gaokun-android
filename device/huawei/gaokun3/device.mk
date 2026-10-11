@@ -76,6 +76,13 @@ PRODUCT_PROPERTY_OVERRIDES += \
 PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.hardware.usb.host.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.usb.host.xml
 
+# USB 端口 HAL（usb/）：向 UsbPortManager 报告 port0 的状态，并按插进来的东西决定 port0 的数据角色
+# （原先 gaokun3-usbrole.sh 每 2 秒轮询一次的 follow 模式）。设置里的 USB 页面（数据角色、USB 用途）
+# 还要 UsbDeviceManager，见上一段：没有 /sys/class/android_usb 时框架不建它。
+# 权限见 ueventd.gaokun3.rc 与 sepolicy/hal_usb_default.te。
+PRODUCT_PACKAGES += \
+    android.hardware.usb-service.gaokun3
+
 # ------------------------------------------------- 安全 HAL（软件实现）
 # keystore2 是 critical 服务且被 init.rc 的
 #   exec 4 (/system/bin/vdc keymaster earlyBootEnded)

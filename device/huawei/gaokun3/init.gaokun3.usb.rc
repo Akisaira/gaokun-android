@@ -35,7 +35,7 @@ on post-fs-data
     # 用 exec_start（同步，etc/bpfrelabel.rc 用过同一招）而不是 start：下面 configfs=1 → adbd →
     # 写 UDC 要等 device 角色就位。原先的 write 写完就返回（dwc3 的切换本身是异步的），脚本则轮询到
     # UDC 出现才退出，顺序只会更稳。代价：切不成（口坏）时 init 在这里最多等约 6 秒。
-    # ⚠️ 保持 host 的那种开机，init.usb.configfs.rc 写 UDC 会落空（UDC 不在）⇒ 之后换插 PC、follow 切回
+    # ⚠️ 保持 host 的那种开机，init.usb.configfs.rc 写 UDC 会落空（UDC 不在）⇒ 之后换插 PC、USB 端口 HAL 切回
     #    device 时 USB adb 能不能自己回来，取决于 gadget 有没有挂上 —— 未实测（见 v1.0 计划 PWR-5 验收）。
     exec_start gaokun3_role_device
     # configfs=1 必须在 post-fs-data 就设好：system 的 init.usb.rc:109 在 boot

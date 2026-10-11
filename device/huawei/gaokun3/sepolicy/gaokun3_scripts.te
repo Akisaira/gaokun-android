@@ -120,9 +120,9 @@ allow gaokun3_touchmode sysfs:file rw_file_perms;
 #   实机标签：…/2400000.remoteproc/remoteproc/remoteproc0/state = u:object_r:sysfs:s0
 allow gaokun3_rprockick sysfs:dir r_dir_perms;
 allow gaokun3_rprockick sysfs:file rw_file_perms;
-# gaokun3-usbrole.sh（host/device/watch/follow）：写 usb_role 的 role、读 UDC state、
-#   读 /sys/class/typec/port0/{power_role,…}、列 xhci-hcd.*/usb* 与 driver 链接，
-#   以及 /sys/power/wake_lock|wake_unlock。实机标签：role / udc state / typec 全是 sysfs，
+# gaokun3-usbrole.sh（host/device；follow 模式已交给 USB 端口 HAL，见 hal_usb_default.te）：
+#   写 usb_role 的 role、读 UDC state、列 xhci-hcd.*/usb* 与 driver 链接，
+#   以及 /sys/power/wake_lock|wake_unlock。实机标签：role / udc state 全是 sysfs，
 #   wake_lock 是 sysfs_wake_lock。属性：persist.vendor.gaokun3.allow_suspend 是
 #   vendor_gaokun3_prop（要显式 get_prop）；debug.tracing.screen_state 是 debug_prop
 #   （核心策略已给所有域：private/domain.te:485，不用写）。
@@ -132,7 +132,8 @@ allow gaokun3_usbrole sysfs:file rw_file_perms;
 allow gaokun3_usbrole sysfs_wake_lock:file rw_file_perms;
 get_prop(gaokun3_usbrole, vendor_gaokun3_prop)
 # ★ 2026-09-27 运行期 enforcing 试跑补的两条（#126）：
-#   1. /sys/class/udc 是 sysfs_udc（核心策略 genfscon），follow 模式读 UDC state 要穿过它。
+#   1. /sys/class/udc 是 sysfs_udc（核心策略 genfscon），读 UDC state 要穿过它
+#      （当时是 follow 模式；现在是 host 模式的 host_attached）。
 #      试跑里被拒 3 次 ⇒ 守护进程以为"没被主机枚举"，6 秒后切 host、再判成纯充电器停在 host
 #      ⇒ **USB adb 当场掉线**，回 permissive 后也不会自己恢复（settled 要等拔线）。
 #   2. 切 device 之前要拿 wakelock（"device 模式不挂起"的不变量，#52），写 wake_lock 要

@@ -55,3 +55,10 @@
 # 手写笔（M-Pencil）：触摸从片驱动（patches/0079）交出帧的节点，内核默认 root 独占。
 # gk3pend 以 system 跑（stylus/gk3pend.rc）。
 /dev/gk3_pen              0660   system     system
+
+# USB 端口 HAL（usb/）以 system 跑：切 port0 的数据角色要写 role，对端拔掉后要写 soft_connect
+# 让 UDC 断开再接上。两个节点默认 root 独占（role 0644、soft_connect 0200）。
+# UDC 每次切回 device 都会重新创建，ueventd 处理它的 add 事件时会重新套用 soft_connect 那一行
+# （system/core init/devices.cpp：HandleUevent → FixupSysPermissions）。
+/sys/class/usb_role/a600000.usb-role-switch   role           0664   root   system
+/sys/class/udc/a600000.usb                    soft_connect   0220   root   system

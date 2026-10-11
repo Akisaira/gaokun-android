@@ -1,0 +1,15 @@
+# USB 端口 HAL（usb/，说明见 usb/Usb.cpp 开头）。
+# 类型、init 的域转换、binder、服务注册、uevent 套接字和普通 sysfs 文件的读写，AOSP 都写好了
+# （system/sepolicy 的 vendor/hal_usb_default.te 与 private/hal_usb.te）；所有域都能 search sysfs 目录、
+# 读 sysfs 里的链接。实机标签：role、UDC 的 state / soft_connect、/sys/class/typec/port0 下的属性、
+# regulator 全是 sysfs。这里只补三样。
+
+# /sys/class/udc 是 sysfs_udc（核心策略 genfscon）：读 UDC 的 state、写 soft_connect 都要穿过它。
+allow hal_usb_default sysfs_udc:dir search;
+
+# EC 的适配器在线标志 /sys/class/power_supply/gaokun-ec-adapter/online：真实节点由 genfs_contexts 标成
+# sysfs_batteryinfo（对它的 neverallow 只限 coredomain，见 gaokun3_scripts.te 里 gaokun3_usbrole 的同一条）。
+r_dir_file(hal_usb_default, sysfs_batteryinfo)
+
+# vendor.gaokun3.usbrole.adb_pause / .reversed / .broken：etc/usbrole.rc 和 Parts 的 UsbPortNotifier 据此动作。
+set_prop(hal_usb_default, vendor_gaokun3_prop)
