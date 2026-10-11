@@ -142,8 +142,9 @@ KPATCHES=(
     # ★ 0047（#116）：pressure_enabled 默认跟着轴走（轴存在却报常数是逻辑缺陷）；
     #    contacts_log 加 zone_area 列 —— ct->area 分不开手掌碎块和指尖（实测 8-20 vs 5-21），能分的是它。
     0047-Input-himax-spi-pressure-follows-axes-and-log-zone-area.patch
-    # ★ 0048（#118 §7-8，实机验证过）：usb_0 用 UTMI 当 pipe 时钟 —— 角色切换后 xhci -110 / gadget -524。
-    0048-arm64-dts-gaokun3-usb0-select-utmi-as-pipe-clk.patch
+    # ❌ 0048（usb_0 用 UTMI 当 pipe 时钟）不再列入：它要绕开的"角色切换后 xhci -110 / gadget -524"，根因是
+    #    vreg_l9d 随 combo PHY 断电（0086）；UCSI 工作以后它反而让 port0 上的 U 盘根本不枚举（USB3 链路起不来，
+    #    又不退回 USB2）。0012 里的 maximum-speed = "high-speed" 同理去掉了。文件留作案卷。
     # ★ 0049：后摄 rotation 180 经用户目视确认（2026-09-24），只去掉 FIXME、值不变 ⇒ dtb 与 0048 逐字节同。
     #    ⚠️ 同号的前身（前 90 / 后 270，按 PR #6 描述）与目视结论相反，已作废 —— 构建机树上若还打着它，
     #    先 `git apply -R` 旧版（正文在 git 历史 cecb9ec 里）再打这一版。
@@ -229,6 +230,21 @@ KPATCHES=(
     # ★★ 0086：vreg_l9d常开。原先只有usb_0_qmpphy用它，combo PHY一退出就断电，而port0的USB2、
     #    多口USB控制器和PCIe也靠它：device模式挂起整板复位（#52）、port0切换后坏掉（#27一类）都是它。
     0086-arm64-dts-gaokun3-vreg-l9d-always-on.patch
+    # ★ 0087–0092：UCSI核心和ucsi_huawei_gaokun的六个修复，准备推主线（英文说明，Fixes指向主线提交）。
+    #    0087：0c8ee850572b把"对端不支持USB数据⇒角色NONE"写反了，EC从不置这个标志，每次插拔都被切成host；
+    #    0088：num_ports在probe时就设，否则插头方向报不出去；0089：离开DP模式时报HPD断开，否则另一个口的DP
+    #    分不到资源；0090：不在EC中断线程里等USB事件（原来每次等满2秒）；0091：先按EC的USB事件设插头方向
+    #    再切DP，否则翻面插显示器偶尔没画面；0092：EC丢掉的GET_CONNECTOR_STATUS重发，否则一直"忙"时两个口
+    #    的插拔都没人处理。
+    0087-usb-typec-ucsi-restore-the-USB-data-check-on-partner-change.patch
+    0088-usb-typec-ucsi-huawei_gaokun-set-the-number-of-ports-at-probe.patch
+    0089-usb-typec-ucsi-huawei_gaokun-report-HPD-when-leaving-DP-alt-mode.patch
+    0090-usb-typec-ucsi-huawei_gaokun-dont-block-the-EC-notifier.patch
+    0091-usb-typec-ucsi-huawei_gaokun-set-the-orientation-before-DP.patch
+    0092-usb-typec-ucsi-huawei_gaokun-resend-dropped-GET_CONNECTOR_STATUS.patch
+    # ★ 0093：UCSI不再设置usb_0的角色（update_connector里放掉它查到的role switch）。EC对什么都报对端类型
+    #    UFP、从不置USB数据标志，UCSI定的角色没有依据；角色由gaokun3-usbrole.sh的follow按电气事实决定。
+    0093-usb-typec-ucsi-huawei_gaokun-leave-the-usb_0-role-to-userspace.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，

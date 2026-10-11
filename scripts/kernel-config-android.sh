@@ -470,6 +470,12 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 #   （Android 不加载模块）；把从片的帧变成触控笔的是 vendor 的 gk3pend（device/huawei/gaokun3/stylus）。
 ./scripts/config --file "$OUT/.config" --enable TOUCHSCREEN_HIMAX_HX83121A_PEN
 
+# ★ UCSI（Type-C 口：插拔、供电方向、插头方向、DP）：两个口的 SBU 切换芯片（pi3usb102，设备树里的
+#   usb0-sbu-mux / usb1-sbu-mux）归 gpio-sbu-mux 驱动。buildbot 配置里它是 =m，而 Android 不加载模块
+#   ⇒ 驱动不在，typec_register_port 一直等不到这个 orientation-switch（-EPROBE_DEFER），UCSI 重试约
+#   80 秒后 "PPM init failed, stop trying"，/sys/class/typec 为空（#27 / #112 / #118 里的"UCSI 坏了"）。
+./scripts/config --file "$OUT/.config" --enable TYPEC_MUX_GPIO_SBU
+
 # ─── olddefconfig + 断言（止损"=m 坑"）───
 # 这个坑已经踩了 13 次：`scripts/config --enable X` 写进去了，olddefconfig
 # 却可能因为依赖把它降回 =m（或压根没有该符号），而 Android **不加载任何模块**
@@ -544,7 +550,7 @@ NETFILTER_XT_MATCH_MAC NETFILTER_XT_MATCH_STATISTIC NETFILTER_XT_MATCH_STRING NE
 CRYPTO_CHACHA20POLY1305 CRYPTO_MD5 CRYPTO_XCBC
 DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR ANON_VMA_NAME THERMAL_STATISTICS
 ARMV8_DEPRECATED SWP_EMULATION CP15_BARRIER_EMULATION SETEND_EMULATION
-TOUCHSCREEN_HIMAX_HX83121A_PEN
+TOUCHSCREEN_HIMAX_HX83121A_PEN TYPEC_MUX_GPIO_SBU
 "
 # 接了 ReSukiSU 才断言 KSU —— 没接的树上断言它只会误报。
 if [ "$RESUKISU" = 1 ]; then
