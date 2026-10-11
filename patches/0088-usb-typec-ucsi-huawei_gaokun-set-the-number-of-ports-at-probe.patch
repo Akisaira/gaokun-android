@@ -1,0 +1,48 @@
+From: Akisaira <akisaira@outlook.com>
+Subject: [PATCH] usb: typec: ucsi: huawei_gaokun: Set the number of ports at probe
+
+gaokun_ucsi_ports_init() sizes the port array by the number of ports
+the EC reports, but uec->num_ports is only set in gaokun_ucsi_refresh(),
+when the first port event arrives. If UCSI registers the connectors
+before that, gaokun_ucsi_update_connector() does not mark them
+orientation aware, gaokun_ucsi_connector_status() warns "set orientation
+out of range" and leaves the orientation unset, and
+gaokun_ucsi_remove() puts none of the mode switches.
+
+gaokun_ucsi_refresh() also bounds the port index by the number it has
+just read rather than by the size of the array. If the read at probe
+failed and left the array empty, the first port event writes past it.
+
+Set uec->num_ports when the array is allocated, and use it as the bound.
+
+Fixes: 00327d7f2c8c ("usb: typec: ucsi: add Huawei Matebook E Go ucsi driver")
+Cc: stable@vger.kernel.org
+Assisted-by: Claude:claude-opus-5-5
+---
+ drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c b/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c
+index 57b37fc..3fe5378 100644
+--- a/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c
++++ b/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c
+@@ -282,10 +282,9 @@ static int gaokun_ucsi_refresh(struct gaokun_ucsi *uec)
+ 	if (ret)
+ 		return GAOKUN_UCSI_NO_PORT_UPDATE;
+ 
+-	uec->num_ports = ureg.num_ports;
+ 	idx = GET_IDX(ureg.port_updt);
+ 
+-	if (idx < 0 || idx >= ureg.num_ports)
++	if (idx < 0 || idx >= uec->num_ports)
+ 		return GAOKUN_UCSI_NO_PORT_UPDATE;
+ 
+ 	gaokun_ucsi_port_update(&uec->ports[idx], ureg.port_data);
+@@ -417,6 +416,7 @@ static int gaokun_ucsi_ports_init(struct gaokun_ucsi *uec)
+ 				  GFP_KERNEL);
+ 	if (!uec->ports)
+ 		return -ENOMEM;
++	uec->num_ports = num_ports;
+ 
+ 	for (i = 0; i < num_ports; ++i) {
+ 		ucsi_port = &uec->ports[i];

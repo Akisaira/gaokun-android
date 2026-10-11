@@ -229,6 +229,18 @@ KPATCHES=(
     # ★★ 0086：vreg_l9d常开。原先只有usb_0_qmpphy用它，combo PHY一退出就断电，而port0的USB2、
     #    多口USB控制器和PCIe也靠它：device模式挂起整板复位（#52）、port0切换后坏掉（#27一类）都是它。
     0086-arm64-dts-gaokun3-vreg-l9d-always-on.patch
+    # ★ 0087–0092：UCSI核心和ucsi_huawei_gaokun的六个修复，准备推主线（英文说明，Fixes指向主线提交）。
+    #    0087：0c8ee850572b把"对端不支持USB数据⇒角色NONE"写反了，EC从不置这个标志，每次插拔都被切成host；
+    #    0088：num_ports在probe时就设，否则插头方向报不出去；0089：离开DP模式时报HPD断开，否则另一个口的DP
+    #    分不到资源；0090：不在EC中断线程里等USB事件（原来每次等满2秒）；0091：先按EC的USB事件设插头方向
+    #    再切DP，否则翻面插显示器偶尔没画面；0092：EC丢掉的GET_CONNECTOR_STATUS重发，否则一直"忙"时两个口
+    #    的插拔都没人处理。
+    0087-usb-typec-ucsi-restore-the-USB-data-check-on-partner-change.patch
+    0088-usb-typec-ucsi-huawei_gaokun-set-the-number-of-ports-at-probe.patch
+    0089-usb-typec-ucsi-huawei_gaokun-report-HPD-when-leaving-DP-alt-mode.patch
+    0090-usb-typec-ucsi-huawei_gaokun-dont-block-the-EC-notifier.patch
+    0091-usb-typec-ucsi-huawei_gaokun-set-the-orientation-before-DP.patch
+    0092-usb-typec-ucsi-huawei_gaokun-resend-dropped-GET_CONNECTOR_STATUS.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
