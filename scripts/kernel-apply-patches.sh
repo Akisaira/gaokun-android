@@ -226,6 +226,9 @@ KPATCHES=(
     #    UTS_RELEASE 宏不变 ⇒ vermagic 不变（vermagic.h:41-42、module/main.c:1105/2658）。用户 2026-10-11 定进发版。
     0085-init-version-spoof-uts-release-for-integrity-checks.patch
     # 原 0086（KernelSU 子目录）已改名 patches/resukisu/0003，由 kernel-setup-resukisu.sh 打、release.sh 核对。
+    # ★★ 0086：vreg_l9d常开。原先只有usb_0_qmpphy用它，combo PHY一退出就断电，而port0的USB2、
+    #    多口USB控制器和PCIe也靠它：device模式挂起整板复位（#52）、port0切换后坏掉（#27一类）都是它。
+    0086-arm64-dts-gaokun3-vreg-l9d-always-on.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
