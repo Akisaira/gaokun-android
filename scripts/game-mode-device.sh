@@ -10,9 +10,12 @@
 #   * on 的最后一步是【延迟关 adb】—— 立即关会把正在执行的 shell 一起杀掉。
 #     定时器、安全网必须先布好。⚠️ USB 配置要走 setprop 才改 gadget（resetprop 不触发
 #     init 的 on property 钩子）；改 gadget 会立刻断开本会话。
-#   * ⚠️★★ 定时器必须 trap '' HUP / setsid 脱离会话：`stop adbd` 会毁掉 PTY，
-#     同进程组的定时器跟着收 SIGHUP。2026-10-10 实测没隔离的代价：定时器死在
-#     adb 前头，关掉的 adb 再也回不来，只能按电源键重启走开机兜底。
+#   * ⚠️★★★ 定时器必须先【搬出 adbd 的 cgroup】：Mac 侧 `adb shell` 拿到的 root shell（KSU 自动给的）
+#     在 adbd 的 cgroup（/system/uid_0/pid_<adbd>）里，后台起的子进程跟着在；`stop adbd` 时 init
+#     把这个 cgroup 里的进程【全部 SIGKILL】—— setsid / trap HUP 都挡不住。2026-10-10、10-11 两次
+#     定时器都是这样死的（10-10 当时误归因成 SIGHUP）。10-11 实机：普通 adb shell 起的 setsid 进程
+#     在 ctl.restart adbd 后 DEAD，`su -c` 起的（KSU su 落在根 cgroup "/"）ALIVE。
+#     ⇒ escape_cgroup：写自己的 pid 进 /sys/fs/cgroup/cgroup.procs。trap '' HUP / setsid 仍留着（PTY 销毁）。
 #   * 恢复靠三层：定时器 → game-mode.sh off → 开机安全网
 #     /data/adb/service.d/gk3-game-mode-safety.sh（active 标记还在就拉回 adb）。
 
@@ -30,8 +33,10 @@ SAFETY=/data/adb/service.d/gk3-game-mode-safety.sh
 CRDROID_PROPS="ro.crdroid.version"
 
 # 会话里要藏起来的包（baseline 实测的 dangerous_apps / root_managers 命中）。
-# 用 uninstall --user 0 而不是 disable-user：检测器走 getInstalledPackages，
-# disable 后仍算"已安装"。卸前把 APK 备份到 $DIR/apk/，unhide 原样装回（可逆）。
+# 用 uninstall -k --user 0 而不是 disable-user：检测器走 getInstalledPackages，
+# disable 后仍算"已安装"。-k 保留应用数据（不加 -k 单用户应用的 /data/data 会被删，unhide 只能装回空壳），
+# 代价：带 MATCH_UNINSTALLED_PACKAGES 查询的检测器仍能看到它。卸前把 APK 备份到 $DIR/apk/，
+# 任何一个备份失败就不卸（否则装不回来）。unhide 先 install-existing（-k 留下的就能直接恢复），不行再从备份装。
 HIDE_PKGS="com.resukisu.resukisu bin.mt.termex"
 # 残留目录：DangerousAppsCatalog 把 /sdcard/MT2 直接映射成 bin.mt.termex 命中，
 # 空目录也算。mv 到一旁而不是删（用户数据，unhide 放回）。
@@ -47,6 +52,13 @@ HIDE_PATHS="/sdcard/MT2"
 FP_PROPS="ro.build.fingerprint ro.product.build.fingerprint ro.system.build.fingerprint ro.vendor.build.fingerprint ro.product.system.build.fingerprint ro.product.vendor.build.fingerprint ro.bootimage.build.fingerprint"
 
 log() { echo "game-mode: $*"; }
+
+# 把【调用者自己】搬到根 cgroup（见文件头）。⚠️ 子 shell 里 $$ 是父脚本的 pid，
+# 所以用 read 内建读 /proc/self/stat（内建不 fork ⇒ self 就是当前这个 shell）。
+escape_cgroup() {
+  read -r me _ < /proc/self/stat
+  echo "$me" > /sys/fs/cgroup/cgroup.procs 2>/dev/null
+}
 
 need_root() {
   [ "$(id -u)" = "0" ] || { echo "需要 root（adb shell 在本机经 KSU 即 root）"; exit 1; }
@@ -88,65 +100,127 @@ do_identity() {
 # 藏包 / 恢复：只动 $HIDE_PKGS。hide 会真卸载（对 user 0），APK 备份到 $DIR/apk/。
 do_hide() {
   mkdir -p "$STATE" "$DIR/apk"
+  fail=0
   for pkg in $HIDE_PKGS; do
     pm path "$pkg" >/dev/null 2>&1 || { log "$pkg 未安装，跳过"; continue; }
     if [ ! -f "$STATE/hidden.$pkg" ]; then
-      pm path "$pkg" | sed 's/^package://' > "$STATE/hidden.$pkg"
-      # 每个 path 都备份（split APK 会有多个）
+      pm path "$pkg" | sed 's/^package://' > "$STATE/hidden.$pkg.new"
+      # 每个 path 都备份（split APK 会有多个）；有一个失败就整包不卸
+      bad=0
       while read -r apk; do
-        [ -f "$apk" ] || continue
+        [ -f "$apk" ] || { bad=1; continue; }
         base="$DIR/apk/${pkg}.$(basename "$apk")"
-        cp "$apk" "$base" 2>/dev/null || log "备份失败 $apk"
-      done < "$STATE/hidden.$pkg"
+        cp "$apk" "$base" 2>/dev/null && cmp -s "$apk" "$base" || { log "备份失败 $apk"; bad=1; }
+      done < "$STATE/hidden.$pkg.new"
+      if [ "$bad" = 1 ]; then
+        rm -f "$STATE/hidden.$pkg.new"
+        log "✗ $pkg 备份不全，不卸"; fail=1; continue
+      fi
+      mv "$STATE/hidden.$pkg.new" "$STATE/hidden.$pkg"
     fi
-    pm uninstall --user 0 "$pkg" >/dev/null 2>&1 || pm uninstall "$pkg" >/dev/null 2>&1
-    log "已隐藏 $pkg"
+    # ⚠️ 不再退回不带 --user 的 pm uninstall：那会连数据彻底删掉
+    if pm uninstall -k --user 0 "$pkg" >/dev/null 2>&1; then
+      log "已隐藏 $pkg（数据保留）"
+    else
+      log "✗ 卸载 $pkg 失败"; fail=1
+    fi
   done
   for p in $HIDE_PATHS; do
     [ -e "$p" ] || continue
     mv "$p" "$p.gk3hidden" 2>/dev/null && log "残留目录 $p 已移开"
   done
+  return $fail
 }
 
 do_unhide() {
+  fail=0
   for pkg in $HIDE_PKGS; do
     [ -f "$STATE/hidden.$pkg" ] || continue
-    pm install-existing "$pkg" >/dev/null 2>&1 && { log "已恢复（系统包）$pkg"; rm -f "$STATE/hidden.$pkg"; continue; }
-    # 用户包：从备份装回。base.apk 优先，装不上就全量试
-    ok=0
-    for f in "$DIR/apk/${pkg}."*.apk "$DIR/apk/${pkg}."*; do
-      [ -f "$f" ] || continue
-      pm install -r "$f" >/dev/null 2>&1 && ok=1 && break
-    done
-    if [ "$ok" = 1 ]; then
-      log "已恢复（备份）$pkg"
-    else
-      log "恢复失败 $pkg —— 备份在 $DIR/apk/，手动装"
+    # -k 卸的（数据与 APK 都还在）直接 install-existing 就回来
+    if pm install-existing "$pkg" >/dev/null 2>&1 && pm path "$pkg" >/dev/null 2>&1; then
+      log "已恢复 $pkg"; rm -f "$STATE/hidden.$pkg"; continue
     fi
-    rm -f "$STATE/hidden.$pkg"
+    # 否则从备份装回：split APK 必须一次装齐（单装 base 会 INSTALL_FAILED_MISSING_SPLIT）
+    set -- "$DIR/apk/${pkg}."*.apk
+    if [ ! -f "$1" ]; then
+      log "✗ 恢复失败 $pkg —— 没有备份"; fail=1; continue
+    fi
+    if [ $# -gt 1 ]; then
+      pm install-multiple -r "$@" >/dev/null 2>&1
+    else
+      pm install -r "$1" >/dev/null 2>&1
+    fi
+    if pm path "$pkg" >/dev/null 2>&1; then
+      log "已恢复（备份）$pkg"; rm -f "$STATE/hidden.$pkg"
+    else
+      # 记录留着：下次 unhide 还会再试，不会静默跳过
+      log "✗ 恢复失败 $pkg —— 备份在 $DIR/apk/，手动 pm install-multiple"; fail=1
+    fi
   done
   for p in $HIDE_PATHS; do
     [ -e "$p.gk3hidden" ] || continue
     mv "$p.gk3hidden" "$p" 2>/dev/null && log "残留目录 $p 已放回"
   done
+  return $fail
 }
 
-write_safety() {  [ -f "$SAFETY" ] && return 0
-  cat > "$SAFETY" <<'EOF'
+# ⚠️ 每次都按本脚本的版本重写（写临时文件，内容不同才替换）。原来"已存在就返回"，
+#    改过兜底逻辑后已装过旧版的设备永远拿不到新版（审查 2026-10-11）。
+write_safety() {
+  cat > "$SAFETY.new" <<'EOF'
 #!/system/bin/sh
 # gk3 游戏模式兜底：开机时若仍有残留标记，把 adb / 开发者选项恢复回来。
 # 由 scripts/game-mode.sh 的 on 安装；off 不删它（无害，平时直接退出）。
+#
+# ⚠️ 2026-10-10 实测：service.d 阶段 SettingsProvider 可能还没起来，
+#    `settings put` 会静默失败 ⇒ 开发者选项回不来。必须等 boot_completed
+#    并用读回校验重试。
 MARK=/data/local/tmp/gk3-game-mode/active
 [ -f "$MARK" ] || exit 0
-settings put global adb_enabled 1
-settings put global development_settings_enabled 1
+
+# 等 boot_completed（最长 90 秒）
+i=0
+while [ $i -lt 90 ]; do
+  [ "$(getprop sys.boot_completed)" = "1" ] && break
+  sleep 1
+  i=$((i+1))
+done
+
+# settings put 重试 + 读回校验（settings 在 provider 未就绪时返回 0 但不落盘）
+restore_setting() {
+  key=$1; want=$2
+  j=0
+  while [ $j -lt 30 ]; do
+    settings put global "$key" "$want" >/dev/null 2>&1
+    got=$(settings get global "$key" 2>/dev/null)
+    [ "$got" = "$want" ] && return 0
+    sleep 1
+    j=$((j+1))
+  done
+  echo "gk3-safety: $key 还原失败（期望 $want，实读 $got）" > /data/local/tmp/gk3-game-mode-safety.log
+  return 1
+}
+
+restore_setting development_settings_enabled 1
+restore_setting adb_enabled 1
+
 setprop persist.sys.usb.config adb
+setprop sys.usb.config adb
 setprop persist.adb.tcp.port 5555
 setprop service.adb.tcp.port 5555
-rm -f "$MARK"
+
+# 校验通过才删标记，下次开机还能再兜一次
+if [ "$(settings get global development_settings_enabled)" = "1" ] && \
+   [ "$(settings get global adb_enabled)" = "1" ]; then
+  rm -f "$MARK"
+fi
 EOF
-  chmod 755 "$SAFETY"
-  log "已安装开机兜底 $SAFETY"
+  chmod 755 "$SAFETY.new"
+  if cmp -s "$SAFETY.new" "$SAFETY"; then
+    rm -f "$SAFETY.new"
+  else
+    mv "$SAFETY.new" "$SAFETY" && log "已安装 / 更新开机兜底 $SAFETY"
+  fi
 }
 
 # 开机身份归一（独立于 game-mode 开关；resetprop 不持久，每开机都要重打）
@@ -188,12 +262,22 @@ start_timer() { # start_timer <分钟>
   #    adb 关了就再也回不来，只能按电源键重启走开机兜底。trap '' HUP 是最小隔离；
   #    有 setsid（toybox 自带）就再套一层新会话，双保险。
   if command -v setsid >/dev/null 2>&1; then
-    setsid sh -c "trap '' HUP; sleep $((min * 60)); exec sh \"$0\" off" >/dev/null 2>&1 &
+    setsid sh -c "trap '' HUP; echo \$\$ > /sys/fs/cgroup/cgroup.procs 2>/dev/null; sleep $((min * 60)); export GK3_TIMER_FIRED=1; exec sh \"$0\" off" >/dev/null 2>&1 &
   else
-    ( trap '' HUP; sleep $((min * 60)); sh "$0" off ) >/dev/null 2>&1 &
+    ( trap '' HUP; escape_cgroup; sleep $((min * 60)); GK3_TIMER_FIRED=1 sh "$0" off ) >/dev/null 2>&1 &
   fi
+  # ⚠️ toybox setsid 在后台作业里不 fork（不是进程组长 ⇒ 直接 setsid()+exec），所以 $! 就是那个
+  #    sh -c 的 pid，而它到点后 exec 成 `sh $0 off`，pid 不变 —— do_off 必须认出"这是我自己"
+  #    （GK3_TIMER_FIRED），否则会先把自己杀掉、什么都没还原（2026-10-11 实机核过 pid 关系）。
   echo $! > "$TIMER_PID"
-  log "定时器已布：$min 分钟后自动恢复（pid $!）"
+  # 核对真的搬出来了：还在 adbd 的 cgroup 里就是白布 —— 宁可不关 adb 也不把自己锁在外面
+  sleep 1
+  cg=$(grep '^0::' "/proc/$!/cgroup" 2>/dev/null)
+  case "$cg" in
+    "0::/") log "定时器已布：$min 分钟后自动恢复（pid $!，已移出 adbd 的 cgroup）" ;;
+    *) log "✗ 定时器没能移出 adbd 的 cgroup（${cg:-进程已不在}）—— stop adbd 会杀掉它，不关 adb"
+       kill "$!" 2>/dev/null; rm -f "$TIMER_PID"; return 1 ;;
+  esac
 }
 
 do_on() {
@@ -206,32 +290,41 @@ do_on() {
   [ -f "$STATE/persist.sys.usb.config" ] || getprop persist.sys.usb.config > "$STATE/persist.sys.usb.config"
   [ -f "$STATE/persist.adb.tcp.port" ] || getprop persist.adb.tcp.port > "$STATE/persist.adb.tcp.port"
   write_safety
-  start_timer "$min"
+  start_timer "$min" || exit 1
   touch "$ACTIVE"
   # ⚠️ USB / TCP 配置要走 setprop（属性服务）：resetprop 直写属性区、不触发 init 的
   #    `on property:persist.sys.usb.config=*`，gadget 不重新枚举 —— 主机侧 adb 接口
   #    会一直挂着（2026-10-10 实测）。改 gadget 会立刻断开本会话 ⇒ 定时器与安全网
   #    必须先就位（上面两行已布好）。resetprop 只用来做持久副本，兜底 setprop 被拒。
-  "$RP" persist.sys.usb.config mtp
-  setprop persist.sys.usb.config mtp
-  setprop sys.usb.config mtp
+  # ⚠️ 切 gadget 那一下，走 USB 的 adb 会话当场断（stdout 管道关闭 ⇒ 下一次 echo 收 SIGPIPE），
+  #    排在它后面的步骤就不执行了 ⇒ 不断开会话的先做，会断开的全部放进脱离会话、输出丢弃的子 shell。
   "$RP" --delete persist.adb.tcp.port
-  setprop service.adb.tcp.port ""
   settings put global development_settings_enabled 0
   log "关闭 adb……"
-  ( trap '' HUP; sleep 1; settings put global adb_enabled 0; stop adbd ) >/dev/null 2>&1 &
+  ( trap '' HUP PIPE; escape_cgroup; sleep 1
+    "$RP" persist.sys.usb.config mtp
+    setprop persist.sys.usb.config mtp
+    setprop sys.usb.config mtp
+    setprop service.adb.tcp.port ""
+    settings put global adb_enabled 0
+    stop adbd ) >/dev/null 2>&1 &
 }
 
 do_off() {
   need_root
   if [ -f "$TIMER_PID" ]; then
     old=$(cat "$TIMER_PID" 2>/dev/null)
-    [ -n "$old" ] && kill "$old" 2>/dev/null
+    # 定时器触发的 off 不杀定时器（pid 可能就是自己，见 start_timer）；手动 off 才杀
+    if [ -z "${GK3_TIMER_FIRED:-}" ] && [ -n "$old" ] && [ "$old" != "$$" ]; then
+      kill "$old" 2>/dev/null
+    fi
     rm -f "$TIMER_PID"
   fi
   for p in $FP_PROPS $CRDROID_PROPS; do
     if [ -f "$STATE/$p" ]; then
-      "$RP" "$p" "$(cat "$STATE/$p")"
+      v=$(cat "$STATE/$p")
+      # 原来就没有 / 是空的 ⇒ 删掉，别还原成一个空属性
+      if [ -n "$v" ]; then "$RP" "$p" "$v"; else "$RP" --delete "$p" >/dev/null 2>&1; fi
       rm -f "$STATE/$p"
     fi
   done
@@ -279,6 +372,62 @@ do_status() {
   echo "  adb_enabled            = $(settings get global adb_enabled)"
   echo "  development_settings   = $(settings get global development_settings_enabled)"
   [ -f "$SAFETY" ] && echo "开机兜底：已安装" || echo "开机兜底：未安装"
+  for m in tricky_store playintegrityfix zygisk_lsposed; do
+    [ -f "/data/adb/modules/$m/disable" ] && echo "  $m: DISABLED" || echo "  $m: enabled"
+  done
+}
+
+# ── D 类：关掉证明伪造链（TrickyStore + PIF），让证明变成「没有」而不是「假的」──
+# 这不是伪装——是拆掉伪装。Duck 的 verifiedBootHash 全零 / TEE generate-mode 指纹
+# 都是 TrickyStore generate 模式的固有产物（B 类，不修伪造）。
+# 关掉后 attestation 要么失败（Duck 报 Unavailable 而不是 Tampered），
+# 要么走非安全 keymint 的自签链（诚实但没有 Google root）。
+# ⚠️ 取舍：Play Integrity 会挂。游戏如果查 PI 就进不去。
+# ⚠️ zygisk 模块 disable 要重启才完全生效；TrickyStore daemon 可以当场杀。
+NOFORGE_MODULES="tricky_store playintegrityfix"
+
+do_noforge() {
+  need_root
+  echo "── 关掉证明伪造链（noforge）──"
+  for m in $NOFORGE_MODULES; do
+    MOD=/data/adb/modules/$m
+    [ -d "$MOD" ] || { echo "  $m: 未安装，跳过"; continue; }
+    touch "$MOD/disable"
+    echo "  $m: disable 标记已写"
+  done
+  # 杀 TrickyStore 进程 —— 不等重启，当场停掉 keystore 钩子。
+  # ⚠️ 它是 app_process64 起的：cmdline = "TrickyStore"，但 comm = "main"（2026-10-11 实机 /proc/891）。
+  #    toybox `pgrep -x` 比的是 comm ⇒ `pgrep -x TrickyStore` 和 `pgrep -x daemon` 都找不到；
+  #    `pidof` 比 cmdline 的 argv[0]，找得到。旧版本 / 包装没 exec 的情况再按 daemon 名找，cwd 或 cmdline 带 tricky_store 才算。
+  #    模块 service.sh 的循环是 `./daemon; [ $? -ne 0 ] && exit 1` ⇒ 被 kill（非 0 退出）后不会被拉起。
+  PIDS=$(pidof TrickyStore 2>/dev/null)
+  for pid in $(pgrep -x daemon 2>/dev/null); do
+    where="$(readlink /proc/$pid/cwd 2>/dev/null) $(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)"
+    case "$where" in *tricky_store*) PIDS="$PIDS $pid" ;; esac
+  done
+  if [ -n "$(echo $PIDS)" ]; then
+    for pid in $PIDS; do kill "$pid" 2>/dev/null && echo "  TrickyStore (pid $pid) 已杀"; done
+    sleep 2
+    again=$(pidof TrickyStore 2>/dev/null)
+    # 模块的 service.sh 可能带守护循环，会把它拉起来 —— 如实报，不假装生效
+    [ -n "$again" ] && echo "  ⚠️ TrickyStore 又起来了（pid $again）—— 被模块重启了，要重启设备才真正停"
+  else
+    echo "  TrickyStore 未在跑"
+  fi
+  echo "⚠️ zygisk 模块（PIF）要重启才完全摘掉。"
+  echo "⚠️ Play Integrity 会挂。恢复：$0 forge"
+}
+
+do_forge() {
+  need_root
+  echo "── 恢复证明链（forge）──"
+  for m in $NOFORGE_MODULES; do
+    MOD=/data/adb/modules/$m
+    [ -d "$MOD" ] || continue
+    rm -f "$MOD/disable"
+    echo "  $m: disable 已移除"
+  done
+  echo "⚠️ 完全恢复要重启（zygisk / daemon 都在开机时装载）。"
 }
 
 case "${1:-}" in
@@ -290,5 +439,7 @@ case "${1:-}" in
   uninstall) need_root; uninstall_identity_boot ;;
   hide)      need_root; do_hide ;;
   unhide)    need_root; do_unhide ;;
-  *)         echo "用法：$0 identity|on <分钟>|off|status|install|uninstall|hide|unhide"; exit 1 ;;
+  noforge)   do_noforge ;;
+  forge)     do_forge ;;
+  *)         echo "用法：$0 identity|on <分钟>|off|status|install|uninstall|hide|unhide|noforge|forge"; exit 1 ;;
 esac

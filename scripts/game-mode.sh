@@ -9,6 +9,8 @@
 #   bash scripts/game-mode.sh off          # 立刻恢复一切（需要 adb 活着）
 #   bash scripts/game-mode.sh hide         # 隐藏 root 管理器 / 破解工具包（卸载 + APK 备份）
 #   bash scripts/game-mode.sh unhide       # 把 hide 卸掉的包装回来
+#   bash scripts/game-mode.sh noforge      # 关掉 TrickyStore + PIF（证明变「没有」而非「假的」）
+#   bash scripts/game-mode.sh forge        # 恢复 TrickyStore + PIF
 #   bash scripts/game-mode.sh status       # 看当前状态
 #   bash scripts/game-mode.sh -s <serial> …  # 多设备时指定
 #
@@ -23,7 +25,7 @@
 #   3. on 额外：development_settings_enabled=0（warning 项）、adb_enabled=0、
 #      persist.sys.usb.config=mtp、persist.adb.tcp.port=空 ⇒ AdbRuntime 转绿。
 #   4. hide：卸载 com.resukisu.resukisu / bin.mt.termex（dangerous_apps 与
-#      root_managers 的命中，uninstall --user 0 + APK 备份，unhide 装回）。
+#      root_managers 的命中，uninstall -k --user 0 保留数据 + APK 备份，备份不全不卸；unhide 装回）。
 #
 # ⚠️ 边界（不在本脚本里做）：verifiedbootstate / flash.locked / vbmeta /
 #    attestation 一律不动——伪造证明链在边界外，那块归后续 TrickyStore。
@@ -45,7 +47,8 @@ DEV_SCRIPT="$HERE/game-mode-device.sh"
 REMOTE_DIR=/data/local/tmp/gk3-game-mode
 REMOTE_SCRIPT=/data/local/tmp/gk3-game-mode-device.sh
 
-usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+# 打印第 2 行起连续的注释块（不写死行号：加用法行后原来的 '2,38p' 会截断）
+usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; exit 1; }
 
 # ---- 设备选择：-s 指定；否则用第一台 device 状态的（USB/TCP 同机时都行）----
 SERIAL=""
@@ -55,32 +58,39 @@ if [ -z "$SERIAL" ]; then
   [ -n "$SERIAL" ] || { echo "没有已连接的 adb 设备"; exit 1; }
 fi
 A() { adb -s "$SERIAL" "$@"; }
+# 在设备上跑一个子命令；adb 不通或设备端失败（adb shell 回传远端退出码）就如实报错退出，
+# 不往下打印"已恢复 / 已装回"之类的成功提示。
+R() {
+  A shell "sh $REMOTE_SCRIPT $*"
+  rc=$?
+  [ "$rc" = 0 ] || { echo "✗ 设备端 '$*' 失败（退出码 ${rc}）—— 上面是设备的输出" >&2; exit "$rc"; }
+}
 
 CMD=${1:-}; [ -n "$CMD" ] || usage
 MIN=${2:-60}
 
 case "$CMD" in
-  identity|on|off|status|install|uninstall|hide|unhide) ;;
+  identity|on|off|status|install|uninstall|hide|unhide|noforge|forge) ;;
   *) usage ;;
 esac
 
 # 推设备端脚本（幂等；每次覆盖，保证改过的逻辑生效）
-A push "$DEV_SCRIPT" "$REMOTE_SCRIPT" >/dev/null
-A shell "mkdir -p $REMOTE_DIR" 2>/dev/null
+A push "$DEV_SCRIPT" "$REMOTE_SCRIPT" >/dev/null || { echo "✗ 推设备端脚本失败（adb 不通？）" >&2; exit 1; }
+A shell "mkdir -p $REMOTE_DIR" 2>/dev/null || { echo "✗ adb shell 不通" >&2; exit 1; }
 
 case "$CMD" in
   status)
-    A shell "sh $REMOTE_SCRIPT status"
+    R status
     ;;
   identity)
-    A shell "sh $REMOTE_SCRIPT identity"
+    R identity
     ;;
   install)
-    A shell "sh $REMOTE_SCRIPT install"
+    R install
     echo "开机身份归一已装好；当前值已立即生效。"
     ;;
   uninstall)
-    A shell "sh $REMOTE_SCRIPT uninstall"
+    R uninstall
     echo "开机归一已卸；如需立刻还原当前值，跑 game-mode.sh off（或重启）。"
     ;;
   on)
@@ -88,21 +98,31 @@ case "$CMD" in
     #    （$SERIAL： 的全角冒号 → "SERIAL­: unbound variable"，2026-10-10 实测）。
     echo "设备 ${SERIAL}：开游戏模式（${MIN} 分钟后自动恢复）……"
     # 定时器与安全网先布好，最后才断 adb（断开瞬间命令通道就没了）
+    # ⚠️ 不走 R：设备端最后一步会断开 adb，会话被切断时退出码不可信。
     A shell "sh $REMOTE_SCRIPT on $MIN"
     echo "adb 即将关闭。$MIN 分钟后自动恢复；中途想手动恢复：等定时器到期后跑"
     echo "  bash scripts/game-mode.sh off"
     echo "或直接重启（开机兜底会拉回 adb）。"
     ;;
   off)
-    A shell "sh $REMOTE_SCRIPT off"
+    R off
     echo "已恢复。"
     ;;
   hide)
-    A shell "sh $REMOTE_SCRIPT hide"
+    R hide
     echo "危险包已隐藏（APK 备份在设备 $REMOTE_DIR/apk/）。恢复：game-mode.sh unhide"
     ;;
   unhide)
-    A shell "sh $REMOTE_SCRIPT unhide"
+    R unhide
     echo "已装回。"
+    ;;
+  noforge)
+    R noforge
+    echo "证明链已关（TrickyStore + PIF disable）。Play Integrity 会挂。"
+    echo "恢复：game-mode.sh forge（完全生效需重启）"
+    ;;
+  forge)
+    R forge
+    echo "disable 标记已移除。完全恢复需重启。"
     ;;
 esac

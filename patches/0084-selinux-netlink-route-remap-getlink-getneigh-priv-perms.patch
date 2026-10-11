@@ -26,14 +26,17 @@ Subject: [PATCH] selinux: require nlmsg_readpriv/getneigh for RTM_GETLINK/GETNEI
 
 改法（直接钉死，不走 policycap——本机策略与内核都按"现代 Android 应当拒绝"来）：
   · classmap.h netlink_route_socket 补 nlmsg_readpriv / nlmsg_getneigh，
-    顺序按策略实测位次：… nlmsg_read, nlmsg_write, nlmsg_readpriv,
-    nlmsg_getneigh, nlmsg（⚠️ 顺序错了整个 SELinux 位图会串，必须与
-    access_vectors 的声明顺序一致；这也是顺带修掉 netlink_xperm 路径里
-    NETLINK_ROUTE_SOCKET__NLMSG 旧 classmap 指到策略 readpriv 位的隐患）。
+    顺序写成与策略声明一致：… nlmsg_read, nlmsg_write, nlmsg_readpriv, nlmsg_getneigh, nlmsg。
+    【2026-10-11 更正】顺序其实不影响正确性：内核按【名字】把 classmap 的权限映射到策略位
+    （v7.2.9 security/selinux/ss/services.c:146 selinux_set_mapping → string_to_av_perm），
+    原先"顺序错了位图会串""修掉 NLMSG 指到 readpriv 位的隐患"两句不成立。要紧的只是这两个名字得在 classmap 里。
   · nlmsgtab.c：RTM_GETLINK→NLMSG_READPRIV，RTM_GETNEIGH/GETNEIGHTBL→NLMSG_GETNEIGH。
 
 效果：untrusted_app 的 RTM_GETLINK / RTM_GETNEIGH 走 avc 拒绝（与 CTS 一致），
-priv_app / system_server 等显式拿到 readpriv/getneigh 的域照旧可用。
+system_server 等显式拿到 readpriv/getneigh 的域照旧可用。【2026-10-11 更正】priv_app 不在其列：
+lineage-sepolicy private/net.te:11-18 把 priv_app / mediaprovider / ephemeral_app / sdk_sandbox_all /
+untrusted_app_all 排除在外 ⇒ priv_app（含 GMS）也拿不到 MAC / 邻居表 —— 与 ACK 内核上的正常手机一致，不是回归，
+但验证时要顺带看特权应用的网络功能。只在 enforcing 下有效（发版 dev.10 起默认 enforcing）。
 验证：Duck Detector NativeRoot 的两条 Netlink Leak 消失；ip/NetworkInterface
 类 API 不受影响（它们不发这两个 nlmsg，或走 netd）。
 

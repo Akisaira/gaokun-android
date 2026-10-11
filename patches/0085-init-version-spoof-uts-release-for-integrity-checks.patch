@@ -4,7 +4,7 @@ Subject: [PATCH] init: spoof UTS release for integrity checks
 【本地，2026-10-11 起】Duck Detector 的 KernelCheck 判据：内核 major 版本只认
 4/5/6，报 7 = DANGER。
 【2026-10-11 更正】7.2.9 是真的上游 stable 版本（build-machine.md §6），是检测器不认 7.x；
-本补丁报的 6.6.30-android15-8 不是本机真实内核 ⇒ 属于版本串伪装，进不进发版待定（docs/gaming.md §4）。
+本补丁报的 6.6.30-android15-8 不是本机真实内核 ⇒ 属于版本串伪装；用户 2026-10-11 定进发版（docs/gaming.md §4.1）。
 
 不动 Makefile 的 VERSION/PATCHLEVEL/SUBLEVEL —— 改了会连带改 LINUX_VERSION_CODE，
 条件编译（#if LINUX_VERSION_CODE >= KERNEL_VERSION(...)）全串，而且 config

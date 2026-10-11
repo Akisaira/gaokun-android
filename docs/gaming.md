@@ -38,7 +38,7 @@ Mac 侧的 `game-mode.sh` 把 `game-mode-device.sh` 推到设备上执行，需�
 | `install` / `uninstall` | 安装 / 卸载"开机自动跑 identity"（KSU `service.d`）。**`uninstall` 只卸这一项**，不会卸 App 或模块 | — |
 | `on [分钟]` | identity，再关 adb（USB 和 TCP 5555）和开发者选项，同时启动自动还原定时器（默认 60 分钟） | 定时器到点、`off`、或开机兜底 |
 | `off` | 立即还原全部（要求 adb 还连着） | — |
-| `hide` / `unhide` | `pm uninstall --user 0` 卸载 `com.resukisu.resukisu`、`bin.mt.termex`（APK 先备份到 `apk/`）；把残留目录 `/sdcard/MT2` 改名收起 | `unhide` 从备份装回 |
+| `hide` / `unhide` | `pm uninstall -k --user 0` 卸载 `com.resukisu.resukisu`、`bin.mt.termex`（保留数据；APK 先备份到 `apk/`，备份不全就不卸）；把残留目录 `/sdcard/MT2` 改名收起 | `unhide`：先 `install-existing`，不行再从备份装（分包用 `install-multiple`）；装不回来时保留记录、返回失败 |
 | `noforge` / `forge` | 给 `tricky_store`、`playintegrityfix` 写 / 删 KSU 的 `disable` 标记，并当场杀掉 TrickyStore daemon。这样证明从"伪造的"变成"没有" | `forge`；zygisk 模块要重启才完全生效 |
 | `status` | 列出各属性、设置、兜底和模块的当前状态 | — |
 
@@ -52,11 +52,21 @@ Mac 侧的 `game-mode.sh` 把 `game-mode-device.sh` 推到设备上执行，需�
 **实测踩过的坑**（都已在脚本里修掉，改脚本时别改回去）
 
 1. macOS 自带的 bash 3.2 会把紧跟在 `$VAR` 后面的多字节字符吞进变量名（`$SERIAL：` 报 unbound variable）。Mac 侧脚本的变量一律写成 `${}`。
-2. 定时器必须脱离 adb 会话（`trap '' HUP`，有 `setsid` 就再套一层）。否则 `stop adbd` 销毁 PTY 时会把定时器一起 SIGHUP 掉，adb 就再也回不来。
+2. ⚠️★★★ **定时器必须搬出 adbd 的 cgroup。** Mac 侧直接 `adb shell` 拿到的 root shell（KSU 自动给的）在 adbd 的 cgroup（`/system/uid_0/pid_<adbd>`）里，后台起的子进程跟着也在。`stop adbd` 时 init 会把这个 cgroup 里的进程**全部 SIGKILL**，`setsid`、`trap '' HUP` 都挡不住。经 `su -c` 起的不受影响（KSU su 落在根 cgroup `0::/`）。
+   10-10 和 10-11 两次定时器都是这样死的，10-10 当时误归因成 SIGHUP。10-11 实机核过：普通 `adb shell` 起的 setsid 进程在 `setprop ctl.restart adbd` 后死了，`su -c` 起的、以及把自己 pid 写进 `/sys/fs/cgroup/cgroup.procs` 的都活着。
+   现在定时器和"断 adb"子 shell 一起来就先把自己移到根 cgroup；`start_timer` 会核对，没移出去就不关 adb。`trap '' HUP` / `setsid` 照旧保留。
 3. **resetprop 不会触发 init 的 `on property:` 钩子**：用它改 `persist.sys.usb.config` 不会让 USB gadget 重新枚举。USB 配置要用 `setprop`，并且要显式拉回 `sys.usb.config` 和 `service.adb.tcp.port`。
-4. 开机兜底跑在 `service.d` 阶段时，SettingsProvider 可能还没起来：`settings put` 返回 0 却没写进去。兜底要先等 `sys.boot_completed`，写完读回校验，校验通过才删除标记（未提交的改动，2026-10-11）。
+4. 开机兜底跑在 `service.d` 阶段时，SettingsProvider 可能还没起来：`settings put` 返回 0 却没写进去。兜底要先等 `sys.boot_completed`，写完读回校验，校验通过才删除标记。兜底脚本每次 `on` 都按当前版本重写（内容不同才替换）。
+5. **toybox `setsid` 在后台作业里不 fork**：pid 文件记下的就是到点后 `exec` 成 `off` 的那个进程。`off` 不认出自己就会先 `kill` 自己（2026-10-11 审查发现、实机核过 pid 关系）。现在由定时器触发的 `off` 带 `GK3_TIMER_FIRED=1`（`export` 后再 `exec`），不杀定时器。
+6. 走 USB adb 跑 `on` 时，切 gadget 的那一刻会话就断了。所有会断开会话的步骤（切 USB、关 5555、`adb_enabled=0`、`stop adbd`）都放进脱离会话、输出丢弃的子 shell 里做。
+7. **TrickyStore 要用 `pidof` 找。** 它是 `app_process64` 起的，`cmdline` 是 `TrickyStore`，`comm` 却是 `main`。toybox `pgrep -x` 比的是 `comm`，所以 `pgrep -x TrickyStore` 和 `pgrep -x daemon` 都找不到。模块 `service.sh` 的循环在 daemon 非 0 退出时直接 `exit 1`，所以杀掉后不会被拉起（10-11 实测）。
+8. Mac 侧每个子命令都检查 adb / 设备端的退出码，失败时不打印成功提示（`on` 除外，它会切断自己的会话）。
 
-⬜ 还没上机验过：`noforge` / `forge`，以及新版开机兜底。`noforge` 按进程名 `daemon` 找 TrickyStore，再用 cwd 是否包含 `tricky_store` 确认，换了 TrickyStore 版本要重新核对。
+**2026-10-11 上机结果**（dev 机，`_b` = `1791704075`，这次开机是 7.2.9 内核）：
+* `hide` / `unhide`：✅ 普通查询看不到、`-u` 能看到；放进去的测试标记 unhide 后还在；root 不受影响。这次是从备份装回的（`install-existing` 当时没成功，原因未查）。
+* `on 1` 走 TCP：第一次 ✗（定时器被 cgroup 杀，靠重启 + 开机兜底恢复，兜底 ✅）；修 cgroup 后 ✅，63 秒后 adb 自己回来，`state` 清空。
+* `on 1` 走 USB：✅ adbd 被停又被 `off` 拉起，设置全部恢复。
+* `noforge` / `forge`：✅ 杀掉 TrickyStore 后没被拉起；disable 标记写上、删掉都对。
 
 ---
 
@@ -105,7 +115,7 @@ Mac 侧的 `game-mode.sh` 把 `game-mode-device.sh` 推到设备上执行，需�
      现在本机根本没有可加载模块（`/proc/modules` 0 行，没有 `/lib/modules`）。⚠️ 将来要发模块时注意：Android first-stage init 按 `uname` 的 major.minor 选 `/lib/modules/<目录>`（`first_stage_init.cpp:216-257`），内核报 6.6，找不到 `7.2.*` 目录。到时要用精确同名（`uname -r`）的目录。
    * 副作用**还没排查**：bpfloader、VINTF 内核兼容矩阵、KSU manager 显示的版本、bug report 读到 6.6 会不会走别的代码路径。
 2. **原 0086 已收进 `patches/resukisu/0003`**，由 `kernel-setup-resukisu.sh` 打、`release.sh` 核对，不再只活在构建机工作区。
-3. ⚠️ **新 ROM 和新内核还没合在一起**（推断，没在 ESP 上核对）：`1791704075` 打包的 `boot_b` 用的似乎还是 `prebuilt-boot/` 里的旧内核（16:09 的报告是 7.2.9）。0085 内核只能通过直连槽条目启动（本次开机 `vendor.gaokun3.bootentry.via=direct`）。走默认入口 `gk3boot.efi` 读的是 `boot_b`，会回到 7.2.9。要固化就得把 `prebuilt-boot/` 换成新内核再打包。
+3. ⚠️ **新 ROM 和新内核还没合在一起**（10-11 18:2x 重启后证实）：`1791704075` 打包的 `boot_b` 用的似乎还是 `prebuilt-boot/` 里的旧内核（16:09 的报告是 7.2.9）。0085 内核只能通过直连槽条目启动（本次开机 `vendor.gaokun3.bootentry.via=direct`）。走默认入口 `gk3boot.efi` 读的是 `boot_b`，会回到 7.2.9。要固化就得把 `prebuilt-boot/` 换成新内核再打包。
 4. 10-11 的第一版 0085 内核 `03085d81…` 是用通用 defconfig 编的，已作废，**别用**。正确做法是以运行中的 `/proc/config.gz` 为底，`olddefconfig`，再跑 `kernel-config-android.sh` 断言（详见 `duck-detector-plan.md` 的"差点装了个起不来的内核"一节）。
 
 ---
