@@ -9,6 +9,8 @@
 #
 # ★ 不变量：wakelock `gaokun3_usbrole` 一直持有，【除非已确认 role 真的是 host】。
 #   任何失败路径都保持持有 → 结果只是"不挂起"，绝不会"带着 device 模式去挂起"。
+#   它只约束这个脚本自己：vreg_l9d 常开（patches/0086）以后 device 模式挂起不再复位，
+#   USB 端口 HAL（usb/Follow.h）按对端切角色时不看屏幕，也不拿这把锁。
 #
 # ⚠️ dwc3 的模式切换是【异步】的（dwc3_set_mode 只 queue_work），
 #    写完 sysfs 就走会漏掉切换未完成的窗口 —— 必须轮询确认。
@@ -23,7 +25,7 @@ TAG=gaokun3-usbrole
 
 say() { log -t $TAG "$*"; }
 
-# xhci 下有没有下游设备（根集线器 usbN 下出现 `1-1` 这类子设备目录）。follow 与 device 分支共用。
+# xhci 下有没有下游设备（根集线器 usbN 下出现 `1-1` 这类子设备目录）。device 分支用。
 # ★ 这是"对面是不是设备"的电气事实：只有 host 模式、xhci 绑上驱动、真枚举出东西时才成立。
 #   不用 typec 的 power_role 判断：实机上没插东西的 port1 也报 [source]，那是空口的默认值（v1.0 计划 STOR-2 复核）。
 has_downstream() {
@@ -34,6 +36,7 @@ has_downstream() {
 }
 
 # PWR-4 止损：切 host 失败（A6：待机后回插 port0，xhci 一律 -110）时置 1，确认 host 成功时清 0。
+#   USB 端口 HAL 也会设它（我方供电、切 host 后 xhci 没起来，usb/Follow.cpp）。
 #   不持久 —— 口坏了要重启才好，重启后它自然没了。Parts 据此发"USB 口异常，重启后恢复"的通知（UsbPortNotifier）。
 BROKEN=vendor.gaokun3.usbrole.broken
 
@@ -78,141 +81,14 @@ adb_gate() {
     fi
 }
 
-# ── USB-1（v1.0，2026-10-05）：插电脑时 port0 落成【我方供电】、数据连不上 ─────────────
-# 现象（10-05 实机，插 Mac：DRP 对 DRP、对端不支持 PD）：port0 有时协商成我方供电（power_role=[source]），平板给电脑
-#   充电，内核随之定成 host，两边都不枚举 ⇒ USB adb 不出现。下面的 follow 只在我方受电时纠偏，这种情况不管。
-#   拔插一次即恢复（当场验证：重插后 [sink]、UDC configured）。
-# 主动换成受电方走不通：UCSI 的 ucsi_pr_swap 要对端支持 PD，非 PD 时交换后复位连接器并返回 -EPROTO
-#   （refs/linux-v7.2-rc2/drivers/usb/typec/ucsi/ucsi.c:1607-1650）⇒ 只能请用户重插：
-#   我方供电 + 对端不支持 PD + 没有数据连接（host 且 xhci 下无设备，或 device 且没被主机枚举）持续约 6 秒
-#   ⇒ 置 vendor.gaokun3.usbrole.reversed=1，Parts（UsbPortNotifier）弹"平板正在给对方供电，请拔下重插"；
-#   条件不再成立 / 拔线 ⇒ 清 0。
-# "对端不支持 PD"的判据：port0-partner/supports_usb_power_delivery = no，或 port0/power_operation_mode 不是
-#   usb_power_delivery（typec class：linux v7.2-rc2 drivers/usb/typec/class.c:799-807、:1917-1925）。
-#   ⚠️ 没用 usb_power_delivery_revision = 0.0：1.0.0-dev.1 实机插着 Mac（Mac 供电、有 PD 合同）时对端读到的
-#   就是 supports_usb_power_delivery=yes、revision=0.0、power_operation_mode=usb_power_delivery —— 这台的 EC 不报
-#   PD 版本，拿 0.0 当"无 PD"会把有 PD 的对端也算进去。
-# 不算的：accessory_mode 不是 none 的对端（模拟音频 / 调试附件）。
-# ⚠️ 也会命中"只取电、不是 USB 设备"的东西（USB 风扇 / 灯）—— 通知的措辞因此写成"若连的是电脑"。
-REVERSED=vendor.gaokun3.usbrole.reversed
-
 case "$WANT" in
-    host|device|follow) ;;
-    *) say "用法: $0 host|device|follow"; exit 2 ;;
+    host|device) ;;
+    *) say "用法: $0 host|device"; exit 2 ;;
 esac
 
 if [ ! -e "$S" ]; then
     say "没有 $S —— 不做任何事（wakelock 保持原状）"
     exit 0
-fi
-
-# ── follow：让数据角色跟着"对面实际是什么"走（docs/stage4-findings.md #118 §6-8）──
-# 为什么不信 UCSI：EC 的 GET_CONNECTOR_STATUS 在插着能枚举我们的主机时报 partner_type=2（UFP），
-#   没插也报 2 ⇒ 内核在重新插线时照它切 host，PC 那头的 adb 就没了（#27 的另一半）。
-# 为什么不按供电方向推：带 PD 直通的 hub 给我们供电、却要我们当主机 ——
-#   "受电 ⇒ 对面是主机"会把它弄坏。
-# ★ 只信电气事实：
-#   我方受电 + device 模式 + ~6 秒没被枚举（UDC 不是 configured/addressed/default/suspended）⇒ 切 host（hub/扩展坞/充电器）
-#   我方受电 + host 模式 + ~6 秒 xhci 下没有任何下游设备 ⇒ 切 device（对面是 PC）
-#   两边都试过还是没东西（纯充电器）⇒ 停在 host（挂起安全），直到这根线拔掉
-#   我方供电（U 盘、手机）⇒ 对面只能是设备，内核给的 host 是对的，不插手
-# ⚠️ 前提是 patches/0048：没有它，任何一次切换都会把 port0 控制器弄坏（xhci -110 / gadget -524）。
-# ⚠️ 息屏且允许挂起时不插手 —— 那段时间归 host/device 两个模式管（挂起安全的不变量在那边）。
-# ★ 切到 device 之前先拿 wakelock，保持"device 模式不挂起"的不变量（#52）。
-P=/sys/class/typec/port0
-if [ "$WANT" = follow ]; then
-    partner_present() { [ -d ${P}-partner ]; }
-    we_are_sink() { case "$(cat $P/power_role 2>/dev/null)" in *"[sink]"*) return 0 ;; esac; return 1; }
-    we_are_source() { case "$(cat $P/power_role 2>/dev/null)" in *"[source]"*) return 0 ;; esac; return 1; }
-    enumerated_by_host() {
-        case "$(cat $UDC 2>/dev/null)" in
-            configured|addressed|default|suspended) return 0 ;;
-        esac
-        return 1
-    }
-    # USB-1：对端不支持 PD（判据与理由见文件开头 USB-1 一段）
-    partner_no_pd() {
-        case "$(cat ${P}-partner/accessory_mode 2>/dev/null)" in ""|none) ;; *) return 1 ;; esac
-        [ "$(cat ${P}-partner/supports_usb_power_delivery 2>/dev/null)" = no ] && return 0
-        m=$(cat $P/power_operation_mode 2>/dev/null)
-        [ -n "$m" ] && [ "$m" != usb_power_delivery ]
-    }
-    # USB-1：我方供电、对端无 PD、而且没有任何数据连接
-    source_no_data() {
-        # 口已坏（A6，broken=1）时插 U 盘也会"我方供电 + host + 无下游"，别再叠一条误导的"方向反了"（审查建议修 4）
-        [ "$(getprop $BROKEN)" = 1 ] && return 1
-        we_are_source || return 1
-        partner_no_pd || return 1
-        case "$(cat "$S" 2>/dev/null)" in
-            host)   has_downstream && return 1 ;;
-            device) enumerated_by_host && return 1 ;;
-            *) return 1 ;;
-        esac
-        return 0
-    }
-    rev_last=""
-    set_reversed() {   # $1 = 0/1；只在变化时 setprop（本进程记着上次的值，免得每 2 秒 fork 一次 getprop）
-        [ "$rev_last" = "$1" ] && return 0
-        rev_last=$1
-        rv=$(getprop $REVERSED)
-        [ "$rv" = "$1" ] && return 0
-        [ "$1" = 0 ] && [ -z "$rv" ] && return 0
-        setprop $REVERSED "$1"
-        if [ "$1" = 1 ]; then
-            say "$REVERSED=1：我方供电、对端无 PD、约 6 秒没有数据连接 ⇒ 请用户重插（USB-1）"
-        else
-            say "$REVERSED=0（USB-1 解除）"
-        fi
-    }
-    miss=0; tried=""; settled=0; srcmiss=0; last_role=""; gate_n=0
-    say "follow 启动"
-    while :; do
-        sleep 2
-        # USB-2：角色一变（包括内核 / UCSI 自己切的）就同步 adbd 的 USB 暂停开关；另外约每分钟对一次账。
-        cur_role=""; read -r cur_role 2>/dev/null < "$S"
-        gate_n=$((gate_n + 1))
-        if [ "$cur_role" != "$last_role" ] || [ $gate_n -ge 30 ]; then
-            adb_gate; last_role=$cur_role; gate_n=0
-        fi
-        if ! partner_present; then miss=0; tried=""; settled=0; srcmiss=0; set_reversed 0; continue; fi
-        if [ "$(getprop persist.vendor.gaokun3.allow_suspend)" = 1 ] &&
-           [ "$(getprop debug.tracing.screen_state)" != 2 ]; then miss=0; continue; fi
-        if ! we_are_sink; then
-            miss=0
-            # USB-1：连续 3 轮（约 6 秒）都是"我方供电、无 PD、无数据" ⇒ 置 1；一轮不成立就清
-            if source_no_data; then
-                srcmiss=$((srcmiss + 1))
-                [ $srcmiss -ge 3 ] && set_reversed 1
-            else
-                srcmiss=0; set_reversed 0
-            fi
-            continue
-        fi
-        srcmiss=0; set_reversed 0
-        [ $settled = 1 ] && continue
-        cur=$(cat "$S" 2>/dev/null)
-        case "$cur" in
-            device) enumerated_by_host && { miss=0; tried=""; continue; } ;;
-            host)   has_downstream     && { miss=0; tried=""; continue; } ;;
-            *) miss=0; continue ;;
-        esac
-        miss=$((miss + 1))
-        [ $miss -lt 3 ] && continue
-        miss=0
-        case " $tried " in *" $cur "*) ;; *) tried="$tried $cur" ;; esac
-        [ "$cur" = device ] && next=host || next=device
-        case " $tried " in
-            *" $next "*)
-                # 两边都试过：纯充电器。停在 host。
-                settled=1
-                [ "$cur" = host ] && { say "受电、两种角色都没见到对端 —— 停在 host（纯充电器？）"; continue; }
-                next=host ;;
-        esac
-        [ "$next" = device ] && echo $WL > /sys/power/wake_lock
-        echo "$next" > "$S" 2>/dev/null
-        say "受电、$cur 模式约 6 秒没见到对端 → 切 $next（已试: $tried）"
-        # 不在这里 adb_gate：dwc3 切换是异步的，下一轮（2 秒后）按读回的角色同步（见循环开头）
-    done
 fi
 
 # ★ 2026-09-14（#112）：插着 USB 主机（PC 在用 adb）时【不切 host、不放行挂起】。
@@ -263,14 +139,14 @@ echo $WL > /sys/power/wake_lock
 
 # ★ v1.0（PWR-5 / STOR-2）：切 device 之前看对面是不是设备。
 #   亮屏（usbrole.rc）和开机（init.gaokun3.usb.rc）都走这里。原先无条件写 device ⇒ port0 上由我们供电的
-#   U 盘 / 鼠标 / 手柄一亮屏就掉、follow 也不会救回来（它只管我方受电的情况）；带 PD 的扩展坞每次亮屏断约 6 秒。
+#   U 盘 / 鼠标 / 手柄一亮屏就掉；带 PD 的扩展坞每次亮屏断约 6 秒。
 #   现在：已是 host 且 xhci 下枚举着东西 ⇒ 保持 host、不写 device。对面是 PC 时 host 模式下枚举不出任何东西，照旧切 device。
 #   wakelock 照旧持有（上面刚拿）：亮屏时本来就不睡，息屏时 role_host 会重新确认 host 再放行 —— #52 的不变量不受影响。
 #   ⚠️ 开机那次可能早于 U 盘枚举完成 ⇒ 那时仍会切 device（与改之前一样），这一点没有办法在不拖慢开机的前提下根治。
 #   ⚠️ 源码推断，未实测：要用户在场插 U 盘做息屏→亮屏（v1.0 计划 PWR-5 的验收）。
 if [ "$WANT" = device ] && [ "$(cat "$S" 2>/dev/null)" = host ] && has_downstream; then
     say "role=host 且 xhci 下有下游设备（$(ls "$D"/xhci-hcd.*/usb* 2>/dev/null | grep -E '^[0-9]+-[0-9.]+$' | tr '\n' ' ')）→ 保持 host、不切 device；wakelock 保持持有"
-    adb_gate     # USB-2：停在 host ⇒ adbd 的 USB 传输停下（开机那次尤其要紧：follow 还没起来）
+    adb_gate     # USB-2：停在 host ⇒ adbd 的 USB 传输停下（开机那次尤其要紧：USB 端口 HAL 可能还没起来）
     exit 0
 fi
 

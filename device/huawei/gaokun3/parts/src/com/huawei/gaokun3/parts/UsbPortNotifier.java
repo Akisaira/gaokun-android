@@ -1,7 +1,7 @@
 /*
  * USB-C 口（port0，靠近电源键的那个）的两条提示（v1.0 PWR-4 / USB-1，2026-10-05）。
  *
- * 只看两个属性，都由 /vendor/bin/gaokun3-usbrole.sh 设（vendor_gaokun3_prop，sepolicy 给了 system_app 读）：
+ * 只看两个属性，由 /vendor/bin/gaokun3-usbrole.sh 和 USB 端口 HAL（usb/Follow.h）设（vendor_gaokun3_prop，sepolicy 给了 system_app 读）：
  *   vendor.gaokun3.usbrole.broken   = 1：息屏切 host 失败（A6：待机后回插坏口，xhci 一律 -110）。
  *       之后每次息屏都失败、一直持有 wakelock ⇒ 这次开机余下的时间整机不再待机，USB 数据也没了，只有重启能恢复。
  *       下一次切 host 成功时清 0（实际上口坏了就不会再成功）。

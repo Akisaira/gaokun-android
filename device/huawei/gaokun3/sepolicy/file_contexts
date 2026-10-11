@@ -78,6 +78,9 @@
 # （已编进本机 vendor_sepolicy.cil，构建机 out/ 里实查）；lineage 自己的条目只标它那个名字（common/vendor/file_contexts:10）。
 # 本仓只补 sysfs 那一条，见 sepolicy/hal_lineage_health_default.te。⬜ 未编译。
 /vendor/bin/hw/vendor\.lineage\.health-service\.gaokun3     u:object_r:hal_lineage_health_default_exec:s0
+# USB 端口 HAL（usb/）—— AOSP 的 hal_usb_default 域（system/sepolicy vendor/hal_usb_default.te），
+# 本仓 hal_usb_default.te 补它读 UDC 状态、EC 适配器和设 vendor.gaokun3.usbrole.* 的几条。
+/vendor/bin/hw/android\.hardware\.usb-service\.gaokun3       u:object_r:hal_usb_default_exec:s0
 
 # ── 我们自己的服务脚本：各给一个域 ───────────────────────────────────────
 #

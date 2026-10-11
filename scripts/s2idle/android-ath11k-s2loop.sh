@@ -30,17 +30,18 @@ cycle() {  # $1 = platform | none
 say "START N=$N NR=$NR kernel=$(uname -v) peer=$PEER"
 say "buddyinfo DMA: $(grep DMA /proc/buddyinfo | grep -v DMA32)"
 say "wake_lock: $(cat /sys/power/wake_lock)"
-# ★ 开发机 allow_suspend=0 ⇒ gaokun3_usbfollow 在跑：host 下约 6 秒没下游设备就切回 device（gaokun3-usbrole.sh follow），
-#   而 device 角色下挂起 = 整板静默复位。2026-10-04 前两轮的"第 2 次循环复位"就是它。测试期间停掉它。
-setprop ctl.stop gaokun3_usbfollow; sleep 1
-say "usbfollow=[$(getprop init.svc.gaokun3_usbfollow)]"
+# ★ 测试要固定在 host：USB 端口 HAL（vendor.usb-gaokun3）按对端决定角色，插着电脑或充电器（我方受电）时
+#   host 下约 6 秒没有下游设备就会切回 device，测试期间停掉它。原先做这件事的是 gaokun3_usbfollow；
+#   vreg_l9d 常开之前 device 角色下挂起 = 整板静默复位，2026-10-04 前两轮的"第 2 次循环复位"就是它。
+setprop ctl.stop vendor.usb-gaokun3; sleep 1
+say "usbhal=[$(getprop init.svc.vendor.usb-gaokun3)]"
 echo host > $S; sleep 3
 say "role=[$(cat $S)] udc=[$(ls /sys/class/udc 2>/dev/null)]"
-case "$(cat $S)" in *host*) ;; *) say "ABORT: 切不到 host"; setprop ctl.start gaokun3_usbfollow; exit 1 ;; esac
+case "$(cat $S)" in *host*) ;; *) say "ABORT: 切不到 host"; setprop ctl.start vendor.usb-gaokun3; exit 1 ;; esac
 pass=0; fail=0
 finish() {
-  echo device > $S; sleep 3; setprop ctl.start gaokun3_usbfollow
-  say "role=[$(cat $S)] udc=[$(ls /sys/class/udc 2>/dev/null)] state=[$(cat /sys/class/udc/a600000.usb/state 2>/dev/null)] usbfollow=[$(getprop init.svc.gaokun3_usbfollow)]"
+  echo device > $S; sleep 3; setprop ctl.start vendor.usb-gaokun3
+  say "role=[$(cat $S)] udc=[$(ls /sys/class/udc 2>/dev/null)] state=[$(cat /sys/class/udc/a600000.usb/state 2>/dev/null)] usbhal=[$(getprop init.svc.vendor.usb-gaokun3)]"
 }
 run() {  # $1=mode $2=label
   mark "$2 begin"

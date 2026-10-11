@@ -46,7 +46,7 @@ echo $?        # 0 = 没有 FAIL；1 = 有 FAIL；2 = adb 不通或中途掉线�
 | A2 | 开机状态 | `sys.boot_completed`、`/proc/uptime`、`persist.sys.boot.reason.history` | 1；开机 ≥10 分钟（不到判 WARN） | PERF-12 |
 | A3 | 安全默认值 | `ro.adb.secure`、`ro.debuggable`、`persist.adb.tcp.port`、`/proc/net/tcp{,6}` 里 `:15B3` 的 LISTEN、`/product/etc/security/adb_keys` | 1 / 0 / 空 / 0 个 / 不存在（D1：debuggable 一起关） | G1 |
 | A4 | 待机默认值（S1） | `grep allow_suspend /vendor/build.prop` | 镜像默认 = 1（设备当前值只记录：开发机持久 0） | v063#8 |
-| A5 | 自研服务与域 | `getprop init.svc.<名>`；`ps -AZ` | `smmustall` `hangdump` `gaokun3_usbfollow` `vendor.{boot,camera-provider,sensors,light,thermal}-gaokun3` 都 running；`smmu-nostall.sh` 在 `gaokun3_smmustall`、`gaokun3-usbrole.sh follow` 在 `gaokun3_usbrole` 域 | v063#7 |
+| A5 | 自研服务与域 | `getprop init.svc.<名>`；`ps -AZ` | `smmustall` `hangdump` `vendor.{usb,boot,camera-provider,sensors,light,thermal}-gaokun3` 都 running；`smmu-nostall.sh` 在 `gaokun3_smmustall`、`android.hardware.usb-service.gaokun3` 在 `hal_usb_default` 域 | v063#7 |
 | A6 | 三颗 DSP | `/sys/class/remoteproc/*/{name,state}` | adsp / cdsp / slpi 都 running | v063#7 |
 | A7 | 传感器 | `dumpsys sensorservice` 的 Sensor List | 有 `SH3001 Accelerometer`、`SH3001 Gyroscope` | REL-6 |
 | A8 | Wi-Fi / 热点 | `cmd overlay lookup com.android.wifi.resources com.android.wifi.resources:string/config_wifi_tcp_buffers`；`dumpsys connectivity` 的 `TcpBufferSizes`；`dumpsys wifi` 的 `config_wifiSaeUpgradeEnabled`；`/vendor/bin/hw/hostapd` | 资源值与活动网络都含 `8388608`（没有活动网络时后者 SKIP）；SAE 升级 `false`；hostapd 在 | v063#5、v070#9、v071（#11） |
