@@ -142,8 +142,9 @@ KPATCHES=(
     # ★ 0047（#116）：pressure_enabled 默认跟着轴走（轴存在却报常数是逻辑缺陷）；
     #    contacts_log 加 zone_area 列 —— ct->area 分不开手掌碎块和指尖（实测 8-20 vs 5-21），能分的是它。
     0047-Input-himax-spi-pressure-follows-axes-and-log-zone-area.patch
-    # ★ 0048（#118 §7-8，实机验证过）：usb_0 用 UTMI 当 pipe 时钟 —— 角色切换后 xhci -110 / gadget -524。
-    0048-arm64-dts-gaokun3-usb0-select-utmi-as-pipe-clk.patch
+    # ❌ 0048（usb_0 用 UTMI 当 pipe 时钟）不再列入：它要绕开的"角色切换后 xhci -110 / gadget -524"，根因是
+    #    vreg_l9d 随 combo PHY 断电（0086）；UCSI 工作以后它反而让 port0 上的 U 盘根本不枚举（USB3 链路起不来，
+    #    又不退回 USB2）。0012 里的 maximum-speed = "high-speed" 同理去掉了。文件留作案卷。
     # ★ 0049：后摄 rotation 180 经用户目视确认（2026-09-24），只去掉 FIXME、值不变 ⇒ dtb 与 0048 逐字节同。
     #    ⚠️ 同号的前身（前 90 / 后 270，按 PR #6 描述）与目视结论相反，已作废 —— 构建机树上若还打着它，
     #    先 `git apply -R` 旧版（正文在 git 历史 cecb9ec 里）再打这一版。
