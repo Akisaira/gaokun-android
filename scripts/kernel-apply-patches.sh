@@ -245,6 +245,11 @@ KPATCHES=(
     # ★ 0093：UCSI不再设置usb_0的角色（update_connector里放掉它查到的role switch）。EC对什么都报对端类型
     #    UFP、从不置USB数据标志，UCSI定的角色没有依据；角色由gaokun3-usbrole.sh的follow按电气事实决定。
     0093-usb-typec-ucsi-huawei_gaokun-leave-the-usb_0-role-to-userspace.patch
+    # ★ 0094：EC挂起期间关掉中断（disable_irq），恢复后再打开。原来处理函数碰到suspended就返回，而中断是
+    #    电平触发的，每次从休眠醒来在EC恢复之前都要空转上万次。0095：EC中断作为唤醒源，休眠中插拔充电器
+    #    或数据线能唤醒（Android再按Wake on plug亮屏）。
+    0094-platform-arm64-huawei-gaokun-ec-disable-the-IRQ-across-suspend.patch
+    0095-arm64-dts-gaokun3-EC-IRQ-as-wakeup-source.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
