@@ -242,18 +242,50 @@ AB_OTA_POSTINSTALL_CONFIG +=     RUN_POSTINSTALL_vendor=true     POSTINSTALL_PAT
 # fork，【不含 freedreno】；BOARD_MESA3D_* / BOARD_USE_CUSTOMIZED_MESA 在
 # 本 manifest 里【无任何消费者】（grep 全树验证），设了会被静默忽略，
 # 且缺失的 PRODUCT_PACKAGES 因 ALLOW_MISSING_DEPENDENCIES 不报错。
-# → Phase A（现在）：swangle = ANGLE over SwiftShader Vulkan，纯树内，
+# → Phase A（当时）：swangle = ANGLE over SwiftShader Vulkan，纯树内，
 #   CPU 渲染先出画面（dragonboard/shared/graphics/swangle/ 同款）。
-# → Phase B（Stage 5 前）：引入 GloDroid 式 mesa 胶水构建 freedreno/turnip，
-#   参考平行项目（docs/parallel-mainline-generic.md）。
-PRODUCT_REQUIRES_INSECURE_EXECMEM_FOR_SWIFTSHADER := true
+# → Phase B（Stage 5 已落地）：mesa 胶水构建 freedreno/turnip，见 device.mk 尾部
+#   `ro.hardware.vulkan=freedreno`。
+#
+# 【2026-10-11 关闭】PRODUCT_REQUIRES_INSECURE_EXECMEM_FOR_SWIFTSHADER 只有一个
+# 消费者：refs/lineage-sepolicy/build/soong/policy.go:265 →
+# `-D target_requires_insecure_execmem_for_swiftshader=` →
+# lineage-sepolicy/private/system_server.te:1468 那条 ifelse：
+#   true  ⇒ `allow system_server self:process execmem`
+#   false ⇒ `neverallow system_server self:process execmem`
+# 即【只影响 sepolicy】，别的什么都不碰（soong_config.mk:310 只是把这个 bool 传下去）。
+#
+# 关它的依据（2026-10-11 实机，dev.11 _a）：
+#   `for p in /proc/[0-9]*; do grep -iE 'swiftshader|libvk_pastel|libvulkan_pastel' $p/maps; done`
+#   → 全机 0 个进程加载 SwiftShader/pastel。system_server 的 maps 只有
+#     libEGL_angle / libGLESv*_angle / libvulkan.so / vendor/lib64/hw/vulkan.freedreno.so。
+#   `getprop ro.hardware.vulkan` = freedreno。vulkan.pastel.so 虽仍装在 /vendor/lib64/hw/
+#   （排障回退，见 device.mk），但没有进程加载它。
+#
+# 收益：Duck Detector 的 LSPosed 卡「system_server execmem: Allowed」这条 critical
+# 与 SELinux 卡「dirty sepolicy rule: system_server execmem」这条 warning 同时消失，
+# 且恢复 AOSP 原意的 neverallow。
+#
+# ⚠️ 回退到软渲染要【三处一起】改：
+#   ① 下面这行改回 `:= true`；② 下面 sepolicy 一节把 swangle/sepolicy 加回 BOARD_VENDOR_SEPOLICY_DIRS
+#   （SwiftShader 的 4 条 execmem allow 在那里，sw_execmem.te）；③ device.mk 的
+#   `ro.hardware.vulkan=freedreno` 改回 `pastel`。
+#   ✗ 只改③：开关仍是关 ⇒ 走 neverallow 分支、swangle 的 allow 也不在 ⇒ enforcing 下
+#     SwiftShader 的 JIT（system_server / surfaceflinger / App）吃 execmem deny，界面起不来。
+#   ✓ 只改①②、不改③：多允许 execmem，无害（但 Duck 的 execmem 两条会回来）。
+# PRODUCT_REQUIRES_INSECURE_EXECMEM_FOR_SWIFTSHADER := true
 
 # --------------------------------------------------------------- sepolicy
 # permissive 起步（cmdline 里也带了），但 policy 仍要能编过
 BOARD_VENDOR_SEPOLICY_DIRS += device/huawei/gaokun3/sepolicy
-# minigbm / swangle 的 sepolicy 直接复用 dragonboard 的（同一套 HAL）
+# minigbm 的 sepolicy 复用 dragonboard 的（同一套 HAL）
 BOARD_VENDOR_SEPOLICY_DIRS += device/linaro/dragonboard/shared/graphics/minigbm_msm/sepolicy
-BOARD_VENDOR_SEPOLICY_DIRS += device/linaro/dragonboard/shared/graphics/swangle/sepolicy
+# swangle/sepolicy 只有 sw_execmem.te（SwiftShader 的 4 条 allow execmem）。
+# 已切 freedreno/turnip，不走软渲染 ⇒ 不再需要。
+# 留着会跟 system_server.te:1468-1470 的 ifelse 生成的 neverallow 冲突 ——
+# swangle/device.mk 的 PRODUCT_REQUIRES_INSECURE_EXECMEM_FOR_SWIFTSHADER 没被
+# include（我们的 device.mk 只在注释里引用），所以 ifelse 走的是 neverallow 分支。
+# 2026-10-11 构建失败根因。删掉后 sepolicy 干净。
 
 # --------------------------------------------------------------- VINTF
 DEVICE_MANIFEST_FILE := device/huawei/gaokun3/manifest.xml

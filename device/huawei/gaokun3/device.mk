@@ -588,8 +588,11 @@ PRODUCT_COPY_FILES += \
 PRODUCT_PACKAGES += \
     vulkan.freedreno
 
-# 排障开关：想回软渲染就把这行改回 pastel（vulkan.pastel 包仍然装着，
+# 排障开关：想回软渲染要把这行改回 pastel（vulkan.pastel 包仍然装着，
 # 两个 HAL 共存于 /vendor/lib64/hw/，只由这条属性决定 libvulkan 加载谁）。
+# ⚠️ 2026-10-11 起光改这行不够：execmem 已关、swangle sepolicy 已移出 ⇒ 同时按
+#    BoardConfig.mk「PRODUCT_REQUIRES_INSECURE_EXECMEM_FOR_SWIFTSHADER」那段的三步回退，
+#    否则 enforcing 下 SwiftShader 吃 execmem deny。
 PRODUCT_VENDOR_PROPERTIES += \
     ro.hardware.vulkan=freedreno
 
