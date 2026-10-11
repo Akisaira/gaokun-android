@@ -49,6 +49,10 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 | G10 | 用户文档 | ◐ | README 中英、INSTALL 中英（`33faa9b`）、FAQ、known-limitations、1.0 发版说明草稿（`8ccdd35`）都有了。⬜ 定稿（V17）：草稿里十余处"⬜ 还没在真机上测过"逐条回填或删掉 | `docs/relnotes/v1.0.0-draft*.md` |
 | G11 | 回归清单与安装器一致性 | ◐ | `release-checklist.md` + `scripts/accept.sh` 已用于 dev.1–dev.9。⬜ GUI-15：RC 时用 1.0 的 boot.img 重建安装器、`release.sh` 断言两边 sha 一致 | release-checklist |
 
+**安装器触摸左右镜像（2026-10-11 用户报）** ⬜：开发机内置盘的 0.2.0-rc.1 live（cage `transform 270`，内核 = ESP `slot_b/Image` 的 0085 内核 `a8f7c90e`）里触摸**左右反**，画面方向是对的。
+已查：Android 里触摸正常且没有任何坐标补偿（无 IDC、DT 无 `touchscreen-inverted-*` / `swapped-x-y`），内核报竖屏原生 X 0–1599 / Y 0–2559 ⇒ 内核坐标与面板原生方向一致；cage 只做旋转，旋转本身产生不了镜像 ⇒ 某一层多了一次翻转。
+09-25 M0（旧内核 + 当时的 live）用户目视"方向对、触摸准"。⬜ 下一步：进 live 取 `wlr-randr`、`libinput list-devices`（校准矩阵）、`libinput debug-events` 点四角的原始坐标；对照换回旧内核 / 09-27 的 live（`.bak-0927`）各一次，判是内核还是 live 用户态引入的。
+
 **安装器控制台刷屏（2026-10-11 B5 真机时发现）** ⬜：live 的文本控制台被 `ucsi_huawei_gaokun.ucsi …: ucsi connector is not initialized yet` 刷屏（约 2 条/秒、开机起不停，13 分钟 1686 条；UCSI 老缺陷），
 终端输入照收、但看不见 ⇒ 用户要先盲打 `dmesg -n 1`。原因是 live 的 cmdline 用 `loglevel=4`（`dev_err` 是 3 级 ⇒ 上控制台）。改法：`loglevel=3`，三处一起改 —— `scripts/live/build-usb.sh:156`（U 盘）、
 `scripts/live/installer-lib.sh:1556`（安装器写救援条目）、`device/huawei/gaokun3/bin/gaokun3-ota-postinstall.sh:252`（OTA 重写救援条目），外加 `tools/gk3boot/test/postinstall/run.sh` 的期望值；要随下一次 ROM / 安装器构建走。
