@@ -80,7 +80,8 @@ adb_gate() {
 
 # ── USB-1（v1.0，2026-10-05）：插电脑时 port0 落成【我方供电】、数据连不上 ─────────────
 # 现象（10-05 实机，插 Mac：DRP 对 DRP、对端不支持 PD）：port0 有时协商成我方供电（power_role=[source]），平板给电脑
-#   充电，内核随之定成 host，两边都不枚举 ⇒ USB adb 不出现。下面的 follow 只在我方受电时纠偏，这种情况不管。
+#   充电，内核随之定成 host，两边都不枚举 ⇒ USB adb 不出现。下面的 follow 在我方供电时切 host（对面多半是
+#   U 盘这类设备），切过去仍然看不到下游设备，才是这种情况。
 #   拔插一次即恢复（当场验证：重插后 [sink]、UDC configured）。
 # 主动换成受电方走不通：UCSI 的 ucsi_pr_swap 要对端支持 PD，非 PD 时交换后复位连接器并返回 -EPROTO
 #   （refs/linux-v7.2-rc2/drivers/usb/typec/ucsi/ucsi.c:1607-1650）⇒ 只能请用户重插：
@@ -107,16 +108,23 @@ if [ ! -e "$S" ]; then
 fi
 
 # ── follow：让数据角色跟着"对面实际是什么"走（docs/stage4-findings.md #118 §6-8）──
-# 为什么不信 UCSI：EC 的 GET_CONNECTOR_STATUS 在插着能枚举我们的主机时报 partner_type=2（UFP），
-#   没插也报 2 ⇒ 内核在重新插线时照它切 host，PC 那头的 adb 就没了（#27 的另一半）。
+# 为什么不信 UCSI：EC 的 GET_CONNECTOR_STATUS 不管插的是什么、插没插，都报 partner_type=2（UFP），
+#   也从不置"对端支持 USB 数据"的标志 ⇒ 它不提供数据角色的信息。内核里 UCSI 不再持有 a600000.usb 的
+#   role switch（ucsi_huawei_gaokun 的 update_connector 放掉它），只报连接、供电方向、插头方向、PD 和 DP；
+#   角色只由这个脚本定。
 # 为什么不按供电方向推：带 PD 直通的 hub 给我们供电、却要我们当主机 ——
 #   "受电 ⇒ 对面是主机"会把它弄坏。
 # ★ 只信电气事实：
 #   我方受电 + device 模式 + ~6 秒没被枚举（UDC 不是 configured/addressed/default/suspended）⇒ 切 host（hub/扩展坞/充电器）
 #   我方受电 + host 模式 + ~6 秒 xhci 下没有任何下游设备 ⇒ 切 device（对面是 PC）
 #   两边都试过还是没东西（纯充电器）⇒ 停在 host（挂起安全），直到这根线拔掉
-#   我方供电（U 盘、手机）⇒ 对面只能是设备，内核给的 host 是对的，不插手
-# ⚠️ 前提是 patches/0048：没有它，任何一次切换都会把 port0 控制器弄坏（xhci -110 / gadget -524）。
+#   我方供电（U 盘、键盘、不带电的 hub）⇒ 对面只能是设备 ⇒ 切 host；切过去 ~6 秒 xhci 都没起来 ⇒ 口坏了
+#     （broken=1），xhci 起来了却没有下游设备 ⇒ USB-1
+#   对端拔掉：device 模式下用 soft_connect 断开再接上，把 UDC 的状态清成 not attached（dwc3 不知道 VBUS
+#     没了，状态会停在拔线前，下一个充电器或扩展坞就会被当成"已被枚举"）；亮屏时在 host ⇒ 切回 device
+#     （亮屏时的默认角色，下一根电脑的线插上来马上能枚举）
+# ⚠️ 前提是设备树里 vreg_l9d 常开（patches/0086）：否则 combo PHY 一退出（UCSI 切插头方向、切 DP 模式）l9d 就断电，
+#   port0 控制器随之坏掉（xhci -110 / gadget -524），要重启才好。
 # ⚠️ 息屏且允许挂起时不插手 —— 那段时间归 host/device 两个模式管（挂起安全的不变量在那边）。
 # ★ 切到 device 之前先拿 wakelock，保持"device 模式不挂起"的不变量（#52）。
 P=/sys/class/typec/port0
@@ -150,6 +158,21 @@ if [ "$WANT" = follow ]; then
         esac
         return 0
     }
+    xhci_bound() { [ -n "$(ls -d "$D"/xhci-hcd.*/driver 2>/dev/null)" ]; }
+    # 对端拔掉之后（规则见上）
+    on_detach() {
+        case "$(cat "$S" 2>/dev/null)" in
+            device)
+                echo disconnect > /sys/class/udc/a600000.usb/soft_connect 2>/dev/null
+                echo connect > /sys/class/udc/a600000.usb/soft_connect 2>/dev/null
+                say "对端已拔掉 → 清掉 UDC 的旧状态（现在 $(cat $UDC 2>/dev/null)）" ;;
+            host)
+                [ "$(getprop debug.tracing.screen_state)" = 2 ] || return 0
+                echo $WL > /sys/power/wake_lock
+                echo device > "$S" 2>/dev/null
+                say "对端已拔掉、亮屏 → 切回 device" ;;
+        esac
+    }
     rev_last=""
     set_reversed() {   # $1 = 0/1；只在变化时 setprop（本进程记着上次的值，免得每 2 秒 fork 一次 getprop）
         [ "$rev_last" = "$1" ] && return 0
@@ -164,7 +187,7 @@ if [ "$WANT" = follow ]; then
             say "$REVERSED=0（USB-1 解除）"
         fi
     }
-    miss=0; tried=""; settled=0; srcmiss=0; last_role=""; gate_n=0
+    miss=0; tried=""; settled=0; srcmiss=0; last_role=""; gate_n=0; attached=""
     say "follow 启动"
     while :; do
         sleep 2
@@ -174,15 +197,34 @@ if [ "$WANT" = follow ]; then
         if [ "$cur_role" != "$last_role" ] || [ $gate_n -ge 30 ]; then
             adb_gate; last_role=$cur_role; gate_n=0
         fi
-        if ! partner_present; then miss=0; tried=""; settled=0; srcmiss=0; set_reversed 0; continue; fi
+        if ! partner_present; then
+            [ -n "$attached" ] && { attached=""; on_detach; }
+            miss=0; tried=""; settled=0; srcmiss=0; set_reversed 0; continue
+        fi
+        attached=1
         if [ "$(getprop persist.vendor.gaokun3.allow_suspend)" = 1 ] &&
            [ "$(getprop debug.tracing.screen_state)" != 2 ]; then miss=0; continue; fi
         if ! we_are_sink; then
             miss=0
-            # USB-1：连续 3 轮（约 6 秒）都是"我方供电、无 PD、无数据" ⇒ 置 1；一轮不成立就清
+            # 我方供电：对面是设备（或者是 USB-1 那种反过来的电脑）⇒ 当主机
+            if we_are_source && [ "$(cat "$S" 2>/dev/null)" = device ]; then
+                echo host > "$S" 2>/dev/null
+                say "我方供电（对面是设备）→ 切 host"
+                srcmiss=0
+                continue
+            fi
+            # 切过去后连续 3 轮（约 6 秒）都是"我方供电、无 PD、无数据" ⇒ xhci 没起来算口坏了，否则是 USB-1；
+            # 一轮不成立就清
             if source_no_data; then
                 srcmiss=$((srcmiss + 1))
-                [ $srcmiss -ge 3 ] && set_reversed 1
+                if [ $srcmiss -ge 3 ]; then
+                    if [ "$(cat "$S" 2>/dev/null)" = host ] && ! xhci_bound; then
+                        setprop $BROKEN 1
+                        say "⚠️ 我方供电、切 host 后子 xhci 没起来 —— 已置 $BROKEN=1"
+                    else
+                        set_reversed 1
+                    fi
+                fi
             else
                 srcmiss=0; set_reversed 0
             fi

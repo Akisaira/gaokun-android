@@ -241,6 +241,9 @@ KPATCHES=(
     0090-usb-typec-ucsi-huawei_gaokun-dont-block-the-EC-notifier.patch
     0091-usb-typec-ucsi-huawei_gaokun-set-the-orientation-before-DP.patch
     0092-usb-typec-ucsi-huawei_gaokun-resend-dropped-GET_CONNECTOR_STATUS.patch
+    # ★ 0093：UCSI不再设置usb_0的角色（update_connector里放掉它查到的role switch）。EC对什么都报对端类型
+    #    UFP、从不置USB数据标志，UCSI定的角色没有依据；角色由gaokun3-usbrole.sh的follow按电气事实决定。
+    0093-usb-typec-ucsi-huawei_gaokun-leave-the-usb_0-role-to-userspace.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
