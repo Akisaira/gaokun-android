@@ -60,3 +60,15 @@ gcc 自带 `strncpy` 的 builtin 原型，所以编译阶段一声不吭。
 ★ 探测方向也要挑对：写成"匹配到就用 shim"是错的方向。现在是"匹配到声明才
 认为内核有"，**猜错的那一边只是多定义一个同语义的 static inline（无害）**，
 而反过来会得到一个链接错误。
+
+### 0003 —— `sched/task_stack.h` 被版本门控挡在外面（2026-10-11，原 `patches/0086`）
+
+`kernel/hook/syscall_hook_manager.c` 把 `#include <linux/sched/task_stack.h>` 放在
+`#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)` 里（pin `b2ac2fc` 的第 10–14 行），
+7.2.9 上被跳过；`:109` 的 `task_pt_regs(current)` 要用它里面的 `task_stack_page()`，
+2026-10-11 在构建机上报链接错误。修法：把这一行移到 `#if` 外面，无条件 include（头文件有 include guard，多 include 一次无害）。
+
+⚠️ **为什么 10-05 起的 7.2.9 发版内核一直不需要它，没查清。** 同一天这棵树的 `.config` 被换成了通用 defconfig
+（`docs/duck-detector-plan.md`「差点装了个起不来的内核」），**可能**是那份错配置少了某个间接把这个头带进来的选项。
+不管是哪种原因，这个 include 都该无条件写，所以照样收进来。
+2026-10-11 本机对 pin 的原文件 `git apply --check` 通过；构建机上要再跑 `kernel-setup-resukisu.sh <树> --check`。

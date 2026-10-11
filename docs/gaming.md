@@ -23,8 +23,8 @@
 | 环境 | **netlink 隐私边界**（`patches/0084`） | 普通 App 能用 `RTM_GETLINK` / `RTM_GETNEIGH` 读到 wlan0 物理 MAC 和局域网邻居。AOSP 策略本来不允许，主线内核缺这套 remap | `kernel-apply-patches.sh:221-223` | 已在 KPATCHES ⇒ 下一个发版内核会带上。开发机 10-11 实测两条泄露都被拒（`EACCES`） |
 | 环境 | **指纹变体段对齐**（tree-fix [23]） | `ro.build.type=user` 而 `Build.FINGERPRINT` 尾部写 `userdebug`，前后矛盾。`Build.FINGERPRINT` 常量由 zygote 预加载，运行时改不掉 | `crdroid-tree-fixes.py:748`、`:847` | 镜像（`1791704075` 起）：实机指纹 `…:user/release-keys` |
 | 环境 | **去掉 swangle 的 sepolicy**；`PRODUCT_REQUIRES_INSECURE_EXECMEM_FOR_SWIFTSHADER` 注释掉 | `system_server` 本不该有 `execmem`。早已改用 freedreno/turnip，SwiftShader 不再加载（10-11 全机 0 个进程映射它） | `BoardConfig.mk` sepolicy 一节（注释里有依据和回退办法） | `1791704075` 里已生效：Duck 报 `system_server execmem: Denied`。⚠️ 改动**还没提交**。回退到软渲染时，这个开关和 `ro.hardware.vulkan` 要一起改 |
-| 环境 | **内核版本串覆写**（`patches/0085`） | Duck 的 KernelCheck 只认 4/5/6 开头的内核，7.x 直接判 DANGER | `kernel-apply-patches.sh:224-226` | ⚠️ 开发机上在跑；已在 KPATCHES ⇒ **默认会进下一个发版内核**。这是伪装，不是如实修正，要用户决定，见 §4 |
-| 构建 | KernelSU `task_stack.h` include（`patches/0086`） | 7.2.9 ≥ 6.7 时这个 include 被版本门控跳过，KSU 链接失败 | 作用于 `KernelSU/` 子目录，**`kernel-apply-patches.sh` 不会打它**（`:227-230` 只留了注释） | 构建机上手动打过。⚠️ 可复现性风险，见 §4 |
+| 环境 | **内核版本串覆写**（`patches/0085`） | Duck 的 KernelCheck 只认 4/5/6 开头的内核，7.x 直接判 DANGER | `kernel-apply-patches.sh` 的 KPATCHES 链尾 | 开发机上在跑；**10-11 用户定进发版内核**（版本串伪装，见 §4.1）。vermagic 不变 |
+| 构建 | KernelSU `task_stack.h` include（原 `patches/0086`） | 7.2.9 ≥ 6.7 时这个 include 被版本门控跳过，10-11 构建机报 KSU 链接失败 | 改名 `patches/resukisu/0003-…`，由 `kernel-setup-resukisu.sh` 打、`release.sh` 核对（两版都要） | 本机对 pin `b2ac2fc` 的原文件 `--check` 过；⬜ 构建机 `kernel-setup-resukisu.sh --check`。为什么此前 7.2.9 不需要它没查清（README 0003 节） |
 
 ---
 
@@ -98,13 +98,13 @@ Mac 侧的 `game-mode.sh` 把 `game-mode-device.sh` 推到设备上执行，需�
 
 ## 4. 待定与风险（要用户看）
 
-1. ⚠️★ **0085 是伪装，而且默认会发给所有人。**
-   * 7.2.9 是真的上游 stable 版本（[`build-machine.md`](build-machine.md) §6：`~/gk3-kernel-72y` 从 stable 的 `v7.2.9` 建）。`patches/0085` 头注释和 `duck-detector-plan.md` 里"Linux 从未发过 7.x""项目自定版本号"的说法不对：真实情况是 Duck 的 KernelCheck 只认得 4/5/6。
-   * `6.6.30-android15-8-g0a4d3c12b3` 冒充的是 Android 通用内核（GKI）的版本串，末尾的 git 哈希是编出来的。构建署名 `android-build@abfarm-release` 同理。按 §3 的分类，它们属于"让检测看不出来"，不属于如实修正。memory 原本写的是"内核 7.x 没法如实变绿"，0085 改变了这个结论。
-   * 它在 `KPATCHES` 主链里，`release.sh` 编的下一个发版内核会默认带上。要不要只留在开发机或实验内核里（像 D21 处理 0050 那样）、还是进发版并在 known-limitations / 发版说明里写明，需要用户决定。
-   * 副作用**还没排查**：用户态有地方会按 `uname` 判断内核特性（bpfloader、VINTF 内核兼容矩阵、KSU manager 显示的版本、bug report）。开发机报 6.6 后能正常开机、enforcing，但我没逐项核对过这些组件读到 6.6 后有没有降级到别的代码路径。
-   * `LINUX_VERSION_CODE` 和 vermagic 不变，现有模块不用重编。
-2. ⚠️ **0086 不在补丁脚本里。** 它只活在构建机 `KernelSU/` 子目录的工作区里，和 CLAUDE.md 运维坑第 4 条是同一类风险：换树或重建工作区就丢了，下次 release 编内核会链接失败。应该让 `kernel-apply-patches.sh` 学会对子目录打补丁并加进 `--verify`。
+1. **0085 是伪装 → 用户 2026-10-11 定：进发版内核**（所有人的 `uname` 都会报 6.6.30-android15-8）。⬜ known-limitations 与发版说明要写明。
+   * 7.2.9 是真的上游 stable 版本（[`build-machine.md`](build-machine.md) §6）。真实情况是 Duck 的 KernelCheck 只认得 4/5/6，不是"项目自定版本号"。
+   * `6.6.30-android15-8-g0a4d3c12b3` 冒充的是 Android 通用内核（GKI）的版本串，末尾的 git 哈希是编出来的。构建署名 `android-build@abfarm-release` 同理。
+   * **vermagic 不变**（v7.2.9 源码核过）：`VERMAGIC_STRING` 是编译期的 `UTS_RELEASE`（`include/linux/vermagic.h:41-42`）；模块校验比的是编进内核的静态串（`kernel/module/main.c:1105`、`:2658`）；0085 只改运行时的 `init_uts_ns`，`/proc/version` 读的也是它（`fs/proc/version.c:14`）。
+     现在本机根本没有可加载模块（`/proc/modules` 0 行，没有 `/lib/modules`）。⚠️ 将来要发模块时注意：Android first-stage init 按 `uname` 的 major.minor 选 `/lib/modules/<目录>`（`first_stage_init.cpp:216-257`），内核报 6.6，找不到 `7.2.*` 目录。到时要用精确同名（`uname -r`）的目录。
+   * 副作用**还没排查**：bpfloader、VINTF 内核兼容矩阵、KSU manager 显示的版本、bug report 读到 6.6 会不会走别的代码路径。
+2. **原 0086 已收进 `patches/resukisu/0003`**，由 `kernel-setup-resukisu.sh` 打、`release.sh` 核对，不再只活在构建机工作区。
 3. ⚠️ **新 ROM 和新内核还没合在一起**（推断，没在 ESP 上核对）：`1791704075` 打包的 `boot_b` 用的似乎还是 `prebuilt-boot/` 里的旧内核（16:09 的报告是 7.2.9）。0085 内核只能通过直连槽条目启动（本次开机 `vendor.gaokun3.bootentry.via=direct`）。走默认入口 `gk3boot.efi` 读的是 `boot_b`，会回到 7.2.9。要固化就得把 `prebuilt-boot/` 换成新内核再打包。
 4. 10-11 的第一版 0085 内核 `03085d81…` 是用通用 defconfig 编的，已作废，**别用**。正确做法是以运行中的 `/proc/config.gz` 为底，`olddefconfig`，再跑 `kernel-config-android.sh` 断言（详见 `duck-detector-plan.md` 的"差点装了个起不来的内核"一节）。
 
@@ -116,3 +116,10 @@ Mac 侧的 `game-mode.sh` 把 `game-mode-device.sh` 推到设备上执行，需�
 * 搁置项：原神 1080×1728 的渲染上限只能靠伪装机型突破，有账号风险，交给用户决定（TODO E 节）。
 * 游戏音频基础延迟的剩余部分（AV-7 / B25）、PERF-2 基线：[`v1.0-plan.md`](v1.0-plan.md)。
 * Play 保护认证（T2）与本文无关，那是 Android ID 登记。银行类 App 过不了 Play Integrity 是 UEFI 解锁带来的取舍。
+
+---
+
+## 6. 不分版（2026-10-11）
+
+10-11 曾考虑把发版内核拆成"香草"（默认）和"巧克力"（游戏特化）两版。用户当天撤回：架构已经够复杂，而且自己一定用游戏那版。
+⇒ **只发一个内核**，游戏向的内核改动（0078、0084、0085）都在 `KPATCHES` 主链里。当时调研过的做法（gk3boot 按条目选内核、misc 保留区计数回落、boot.img second 段 / ESP 存放）没有落地。以后要重提，先读这一节。

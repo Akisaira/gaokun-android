@@ -218,6 +218,14 @@ KPATCHES=(
     # ★★ 0082（#29）：手的位置图：掌根以外的手（指节、平放的手指、落下和抬起时的掌根）不再报成手指，
     #    事后才认出的触点以MT_TOOL_PALM撤回（Android发ACTION_CANCEL）。参数在algo/hand_*，hand_enabled=0关闭。
     0082-Input-himax-spi-hand-map-and-palm-cancel.patch
+    # ★ 0084（#game-env）：netlink RTM_GETLINK/GETNEIGH 隐私边界 —— AOSP 策略有 readpriv/getneigh
+    #    细分权限，主线 nlmsgtab 把它们全映射到 NLMSG_READ 导致检查形同虚设。钉死 remap。
+    0084-selinux-netlink-route-remap-getlink-getneigh-priv-perms.patch
+    # ★ 0085（#game-env）：UTS_RELEASE 运行时覆写 —— 不动 Makefile 版本号（会串 LINUX_VERSION_CODE），
+    #    init 阶段把 uname 看到的版本改成 6.6.30-android15-8（版本串伪装，过 Duck KernelCheck）。
+    #    UTS_RELEASE 宏不变 ⇒ vermagic 不变（vermagic.h:41-42、module/main.c:1105/2658）。用户 2026-10-11 定进发版。
+    0085-init-version-spoof-uts-release-for-integrity-checks.patch
+    # 原 0086（KernelSU 子目录）已改名 patches/resukisu/0003，由 kernel-setup-resukisu.sh 打、release.sh 核对。
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
