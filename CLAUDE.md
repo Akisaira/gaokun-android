@@ -45,10 +45,12 @@
 > * **active = `_b` = 新 ROM 戳 `1791704075`**（10-11 构建，带 tree-fix [22]、去掉 swangle sepolicy；**不带 [23]**——`/system/build.prop` 指纹仍是 `:userdebug/`，`getprop` 的 `:user/` 是运行时改的；内核槽里是 dev.11 的 `705b1387`；载荷不在本机 `out/`），enforcing。
 >   18:2x 用户按电源键重启后走默认入口（`via=gk3boot`、`gk3boot-android-b.conf`）⇒ 内核是 `boot_b` 里的 **7.2.9**（`7.2.9-gaokun3+`）——
 >   证实 `boot_b` 没换成 0085 内核（TODO GAME-4）。0085 内核 `out/dev12-k0085/vmlinuz-a8f7c90e.efi` 只能走直连槽条目 `8a29534f…-android-b.conf` + oneshot 起。
->   ⚠️ 18:4x 跑过 `game-mode.sh noforge` 测试：TrickyStore 已被杀、disable 标记已删（forge），**重启后才回来**。
+>   10-11 21:4x 重启过（B5 测试，oneshot 进内置安装器再回来）⇒ TrickyStore 已回来、走默认入口 gk3boot 起的 7.2.9。
+  ⚠️ **内置盘的 `gaokun3 installer` 10-11 已换成 0.2.0-rc.1**（`nvme0n1p3:/gaokun3/live.squashfs` + ESP `…/live/initramfs.img`；旧 09-27 版是同目录 `.bak-0927`）。ESP `slot_b/Image` 是 0085 内核（live 里 `uname` 报 6.6.30）。
+  ✅ enforcing 下 `boot-oneshot.sh` **不用** `setenforce 0` 就能写（10-11 实测，a1d303a 生效）。
 >   设备上另有用户自装的 TrickyStore / PIF / LSPosed / HMA（`hma_oss_zygisk` disable 中）—— 测游戏流程见 `docs/gaming.md`。
 > * 以下 `_a` 一条是 10-09 的记录，10-11 未复核（其中「active = `_a`」「`_b` = rc.1」已被上一条取代）：
-> * 槽 **`_a` = `1.0.0-dev.11`**（戳 `1791554509`，内核 `705b1387…` = 7.2.9 + 0078），active = `_a`（ESP default 已同步），**SELinux enforcing**；`_b` = `1.0.0-rc.1`（戳 `1791285623`）。载荷 `out/dev11-1791554509/`（rc.1 的在 `out/rc1-1791285623/`，安装器 `out/rc1-wt/out/release-installer/0.2.0-rc.1/`）。⚠️ `a1d303a`（efivarfs 标签）已在 dev.11 里，但 enforcing 下 `boot-oneshot.sh` 不 `setenforce 0` 能否写成**没测过** —— 测之前照旧先 `setenforce 0`。
+> * 槽 **`_a` = `1.0.0-dev.11`**（戳 `1791554509`，内核 `705b1387…` = 7.2.9 + 0078），active = `_a`（ESP default 已同步），**SELinux enforcing**；`_b` = `1.0.0-rc.1`（戳 `1791285623`）。载荷 `out/dev11-1791554509/`（rc.1 的在 `out/rc1-1791285623/`，安装器 `out/rc1-wt/out/release-installer/0.2.0-rc.1/`）。`a1d303a`（efivarfs 标签）已在 dev.11 里；enforcing 下 `boot-oneshot.sh` 不 `setenforce 0` 也能写（10-11 在 `1791704075` 上实测）。
 > * ESP 上还留着实验内核目录 `android/va39w/`（15 MB）与条目 `gaokun3-va39w.conf`：0078 已进发版内核，验收完可删。
 > * ⚠️ 分派开着：**设置里的恢复出厂会真擦**（发布构建会丢 adb_keys ⇒ 连不上 adb）；`adb reboot bootloader|fastboot|recovery` 进 fastboot 执行端，Mac 上 `fastboot reboot` 回来。
 > * ESP 10-06 已清理（备份 `out/esp-backup-20261006/`）：菜单只剩 Android（入口 / 上一版入口 / fastboot / 两个直连槽）、`gaokun3 installer`（内置盘上的 live，能重装，安全网）、Ubuntu 救援。

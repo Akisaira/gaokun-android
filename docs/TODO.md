@@ -35,17 +35,21 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 
 | 编号 | 一句话 | 状态 | 下一步 | 证据 |
 |---|---|---|---|---|
-| B1 · G1 | 发布构建关掉免授权 adb、5555、debuggable、维护者公钥 | ◐ | dev.1 起每版 `release.sh` 断言过、只读判据过（`ro.adb.secure=1`、`ro.debuggable=0`）。剩 **V10 交互项**（用户在场）：全新装机没有 5555 监听、adbd 不在跑；「USB 调试」授权框、关了再开不断连、重启复位成关；「无线调试」配对码 | 下文 V1 / V10；archive [`#v1-batch01`](archive/TODO-history-2026-10.md#v1-batch01) dev.1 段 |
+| B1 · G1 | 发布构建关掉免授权 adb、5555、debuggable、维护者公钥 | ◐ | dev.1 起每版 `release.sh` 断言过、只读判据过（`ro.adb.secure=1`、`ro.debuggable=0`）。**V10 交互项 2026-10-11 在 `1791704075` 上做了能做的**（用户在场）：✅ 新电脑（临时生成的 adb 密钥）连上弹「允许 USB 调试吗？」、点允许后连上，勾「一律允许」才写进 `adb_keys`（测完已删回 2 行）；✅ 授权后 `adb shell` 直接 uid 0（`u:r:ksu:s0`，经 KSU）；✅「USB 调试」关了再开：断开约 1 秒后自己连回、不用重新授权；✅「无线调试」配对码 `adb pair` 成功、mDNS 找到连接端口、连上即 root；✅ `adb bugreport` 21 秒 5.9 MB；`logcat` 与 `logcat -b kernel`（`logd.kernel=true`）可用；`dmesg` 在真正的 `shell` 域被拒（`syslog_read`），但发布版 adb shell 经 KSU 是 root ⇒ 照样能用。⬜ 只能在全新装机上验：没有 5555 监听、adbd 不在跑、重启后 USB 调试复位成关（开发机持久化了 `persist.sys.usb.config=adb` / 5555，测不出） | 下文 V1 / V10；archive [`#v1-batch01`](archive/TODO-history-2026-10.md#v1-batch01) dev.1 段 |
 | B2 · G2 | 系统与 OTA 用 AOSP test-key 签名 | ◐ | 按 D2 不换 key，披露已进发版说明草稿。**⬜ R2 写密钥轮换 + 域名自动续费**（9-29 发版时密钥在会话输出里显示过一次；Cloudflare 后台做，不用构建） | v1.0-plan B2；archive [`#v070`](archive/TODO-history-2026-10.md#v070) 末行 |
 | B3 · G3 | `/data` 不加密 | ✅ 决定 | D3：不加密、披露（known-limitations 已写；roadmap 的"FBE 在管 /data"已改正，`7a10ae2`）。发版说明定稿时再核一遍措辞 | v1.0-plan B3 |
 | B4 · G4 | 新用户的安装路径都没在真机上跑过 | ⬜ | **M4a**：外接盘写出厂布局 → U 盘启动（两个口各一次）→ 整盘清空 → 开机并 OTA 一次 → 双系统 → 默认的"清除数据重装" → 首次开机向导走一遍；Windows 脚本找一台真 Windows（否则按 D18 标预览）。安装器代码侧（批 3 前后端、S10 / S15、Windows 伴随工具）都已写、本机测过；live 镜像 10-06 本机重建、rootfs 体检过 | 下文「等安装器」；[`stage7-flutter-debian.md`](stage7-flutter-debian.md) §5.13–§5.15 |
-| B5 · G5 | live 写盘期间电源键 / 合盖会关机或挂起 | ◐ | 代码 `3608a52`；10-06 重建镜像体检过（5 个 target masked、logind 6 个键、systemd-inhibit）。⬜ 真机：只读查 `systemd-logind` / `power-switch` / `systemd-inhibit --list`，按电源键不关机、合盖不挂起、`systemctl suspend` 被拒 | 下文「等安装器」 |
+| B5 · G5 | live 写盘期间电源键 / 合盖会关机或挂起 | ✅ 10-11 真机 | ✅ **2026-10-11 真机过**（用户在场）：开发机内置盘的 `gaokun3 installer` 换成 0.2.0-rc.1 的 live（`nvme0n1p3:/gaokun3/live.squashfs` + ESP `live/initramfs.img`，sha 与发布的 `rescue.squashfs` / `initramfs.img` 同；旧的 09-27 版改名 `.bak-0927` 留着）、oneshot 进去：5 个 sleep target masked、logind 6 个键 ignore、`systemctl suspend` → `Access denied`；短按电源键与合盖 logind 都记到（`Power key pressed short.` / `Lid closed.`）且被忽略，90 秒内 uptime 连续、`suspend_stats/success` 0 → 0。⚠️ 顺带发现：live 文本控制台被 `ucsi connector is not initialized yet` 刷屏（约 2 条/秒，开机起不停）⇒ 终端没法用，要先盲打 `dmesg -n 1`（见下文「安装器控制台刷屏」） | 下文「等安装器」 |
 | B6 · G3 | 设置里"清除所有数据"静默失效 | ◐ | 统一启动入口接管：1.0 镜像默认动作模式 + 分派开（`ca55b5c`），QEMU exec-wipe 过；**用户定 E10 不测** ⇒ 已知限制里"别指望设置里的清除数据"那段保持原样，推荐"图形安装器 → 重新安装 + 清除数据" | [`boot-entry-design.md`](boot-entry-design.md) E10；下文 A5 |
 | B7 · G7 / G8 | 用户默认配置下的待机与长稳没测过 | ⬜ | 批 4（用户在场、拔线）：`allow_suspend=1` 放 8 小时（前后读 `qcom_stats`、`charge_now`、`suspend_stats`）、亮屏硬解 1 小时、72 小时狗粮；先用 V14 验 `scripts/perf/standby.sh` 的输出格式（✅ 插线部分 10-09）。**10-09 线索**：rc.1 息屏 25.7 小时 ADSP 累计只睡 5 秒，此时无 PCM、macro 全 runtime suspended，`LPASS_HW_MACRO` / `DCODEC` 投票仍是 4/4（怀疑相关，未验证）；用户反馈待机功率仍高（版本未确认，PWR-3 只在 rc.1） | v1.0-plan B7 |
 | G6 · OTA-2 | OTA 新槽起不来时自动回落 | ◐ | 入口的启动计数与自动回滚已真机过（E5 / E6 / E8）。⬜ **E11：0.7.x → 1.0 那一跳的迁移演练**（那次 OTA 由旧 HAL 执行） | archive [`#v1-batch01`](archive/TODO-history-2026-10.md#v1-batch01) dev.5 段 |
 | G9 · SEC-4 | SELinux：1.0 切 enforcing | ◐ **用户 10-06 定：切** | ✅ dev.9 经 OneShot 真 enforcing 开机：普查只剩两类已知上游缺口；显示 / 触摸 / Wi-Fi / 传感器 / 音频 / iris 15/15 / 前后摄 / A 档 44 / s2idle 11/11（含 USB 角色切换与回插）全过（`out/sel-d5-*`）。BoardConfig 默认改 enforcing，dev.10 起。✅ enforcing → enforcing OTA：rc.1 在 dev.10（enforcing）上经 OTA 装过（10-06，第二次 enforcing 下 OTA），dev.11 再过一次；OTA-5 手工分区 ESP 名字不标准的机器 enforcing 下 OTA 失败（INSTALL 已写改名办法） | BoardConfig.mk 注释 |
 | G10 | 用户文档 | ◐ | README 中英、INSTALL 中英（`33faa9b`）、FAQ、known-limitations、1.0 发版说明草稿（`8ccdd35`）都有了。⬜ 定稿（V17）：草稿里十余处"⬜ 还没在真机上测过"逐条回填或删掉 | `docs/relnotes/v1.0.0-draft*.md` |
 | G11 | 回归清单与安装器一致性 | ◐ | `release-checklist.md` + `scripts/accept.sh` 已用于 dev.1–dev.9。⬜ GUI-15：RC 时用 1.0 的 boot.img 重建安装器、`release.sh` 断言两边 sha 一致 | release-checklist |
+
+**安装器控制台刷屏（2026-10-11 B5 真机时发现）** ⬜：live 的文本控制台被 `ucsi_huawei_gaokun.ucsi …: ucsi connector is not initialized yet` 刷屏（约 2 条/秒、开机起不停，13 分钟 1686 条；UCSI 老缺陷），
+终端输入照收、但看不见 ⇒ 用户要先盲打 `dmesg -n 1`。原因是 live 的 cmdline 用 `loglevel=4`（`dev_err` 是 3 级 ⇒ 上控制台）。改法：`loglevel=3`，三处一起改 —— `scripts/live/build-usb.sh:156`（U 盘）、
+`scripts/live/installer-lib.sh:1556`（安装器写救援条目）、`device/huawei/gaokun3/bin/gaokun3-ota-postinstall.sh:252`（OTA 重写救援条目），外加 `tools/gk3boot/test/postinstall/run.sh` 的期望值；要随下一次 ROM / 安装器构建走。
 
 ### ② 1.0 应做（v1.0-plan §3 / §4）
 
