@@ -3,13 +3,18 @@
 # 构建机上的 scripts/release.sh 做不了这一半。
 #
 #   bash scripts/live/release-installer.sh --boot-img <要发布的那一版的 boot.img> --rom v0.6.3-alpha \
-#        --firmware out/vendor-firmware                       # 只造、不传 → out/release-installer/<安装器版本>/
+#        --firmware out/vendor-firmware \
+#        --artifacts <那一版的 install-artifacts.sha256>      # 只造、不传 → out/release-installer/<安装器版本>/
+#   （带 --payload <发布目录> 时 --artifacts 默认取 <发布目录>/install-artifacts.sha256）
 #   … --upload v0.6.3-alpha                                    # 再传到那个 GitHub release（⚠️ 发布要用户点头）
 #   … --r2                                                     # 再传 R2 的 installer/<安装器版本>/（国内下得到；可与 --upload 一起）
 # 附件：<B>-usb.img.xz、<B>-windows.zip、<B>-release.txt、<B>-SHA256SUMS，以及命令行安装要的 rescue.squashfs + initramfs.img（INST-6）
 #
 # ★ --boot-img 必须是【要发布的那一版】的 boot.img（与 release.sh --no-build 同一个道理：发的就是验过的那一份）。
 #   live 与 Android 共用这个内核；安装时写进 ESP 的内核来自安装载荷，不是这个。
+# ★ G11 / GUI-15（2026-10-11）：拿 release.sh 为那一版生成的 install-artifacts.sha256 核对 --boot-img ——
+#   v0.7.0 附带的安装器用的是旧内核（GUI-15），原因就是这里只核"镜像内核来自给的文件"、不核"给的文件就是发布的那一版"。
+#   清单里 boot.img 那一行的 sha256 必须等于 --boot-img，否则在构建前就停。
 # ★ 不带 --with-rescue：装进救援分区的就是 live 镜像本身 —— 它在真机上起过十几次（M0、M4b），还能重新安装；
 #   单独的 rescue profile 在真机上一次没起过（Stage 7 M4.5 的事）。
 # ★ 不带 --m0：M0 的变体启动项是开发用的。
@@ -20,12 +25,13 @@ die() { echo "✗ $*" >&2; exit 1; }
 say() { echo; echo "══ $*"; }
 ok()  { echo "   ✓ $*"; }
 
-BOOTIMG= ROM= FW= UPLOAD= PAYLOAD= R2=
+BOOTIMG= ROM= FW= UPLOAD= PAYLOAD= R2= ARTS=
 while [ $# -gt 0 ]; do
     case "$1" in
         --boot-img) BOOTIMG=$2; shift 2 ;;
         --rom)      ROM=$2; shift 2 ;;
         --firmware) FW=$2; shift 2 ;;
+        --artifacts) ARTS=$2; shift 2 ;;        # 那一版的 install-artifacts.sha256（G11）
         --payload)  PAYLOAD=$2; shift 2 ;;      # 可选：把一整个发布目录放进 U 盘（离线装），镜像会大 1.3 GB
         --upload)   UPLOAD=$2; shift 2 ;;
         --r2)       R2=1; shift ;;            # 同时传 R2 的 installer/<版本>/（凭据从环境变量读，同 scripts/release.sh）
@@ -35,6 +41,12 @@ done
 [ -f "$BOOTIMG" ] || die "要 --boot-img <要发布的那一版的 boot.img>"
 [ -n "$ROM" ] || die "要 --rom <这个安装器随哪个 ROM 版本发，例如 v0.6.3-alpha>"
 [ -d "$FW" ] || die "要 --firmware <GPU 固件目录>（adb pull /vendor/firmware out/vendor-firmware）"
+[ -n "$ARTS" ] || { [ -n "$PAYLOAD" ] && ARTS=$PAYLOAD/install-artifacts.sha256; }
+[ -f "$ARTS" ] || die "要 --artifacts <那一版的 install-artifacts.sha256>（release.sh 生成；R2 install/<VER>/ 或 staging/<VER>/ 里有）—— G11：安装器的内核必须就是发布的那个 boot.img"
+WANT=$(awk '$2=="boot.img"{print $1}' "$ARTS")
+[[ "$WANT" =~ ^[0-9a-f]{64}$ ]] || die "$ARTS 里没有 boot.img 那一行"
+[ "$(shasum -a 256 "$BOOTIMG" | cut -d' ' -f1)" = "$WANT" ] \
+    || die "--boot-img 与 $ARTS 里发布的 boot.img 不是同一个（G11 / GUI-15）"
 # 发出去的东西必须对应一个提交：工作区有改动就停（镜像里的 GK3_GIT 会带 -dirty，发布说明对不上号）
 [ -z "$(git -C "$REPO" status --porcelain)" ] || die "工作区有没提交的改动 —— 先提交（发出去的镜像要对应一个提交）"
 
@@ -60,7 +72,7 @@ grep -qE '^GK3_MISC_SHA256=[0-9a-f]{64}$' "$L/release.txt" || die "release.txt �
 [ -f "$L/gaokun3-windows/release.txt" ] && cmp -s "$L/release.txt" "$L/gaokun3-windows/release.txt" || die "Windows 安装包里的 release.txt 不对"
 # 开发用的东西不许混进发布版
 ! grep -rqs 'gaokun3 M0' "$L/.entries" || die "带着 M0 的变体启动项（.entries 不空）"
-ok "版本、提交、内核来源都对；带着 gk3-misc；没有 M0 变体"
+ok "版本、提交、内核来源都对（= 发布清单里的 boot.img ${WANT:0:16}，G11）；带着 gk3-misc；没有 M0 变体"
 
 say "3. 打包 → $OUT"
 rm -rf "$OUT"; mkdir -p "$OUT"
