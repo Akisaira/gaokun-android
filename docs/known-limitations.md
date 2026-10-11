@@ -118,6 +118,19 @@ Problems specific to one release are in that release's [release notes](relnotes/
   off. That open boot chain is exactly what makes installing another OS on this machine possible.
 * **What to do**: nothing; this is the price of running Android on this machine at all.
 
+### The kernel reports a version that is not its real one (from 1.0.0-rc.2)
+<!-- GAME-1 (patches/0085). Evidence in the Chinese file. -->
+* **What you see**: `uname -r`, `/proc/version` and the kernel version in *Settings → About tablet* all say
+  `6.6.30-android15-8-g0a4d3c12b3`. The kernel that actually runs is mainline Linux **7.2.9** plus this project's
+  patches. The hash at the end of that string and the build signature are made up and match no real Android kernel.
+* **Why**: some games and apps run environment checks that only accept the 4.x / 5.x / 6.x versions of Android's common
+  kernel, and treat a 7.x kernel as a tampered device and refuse to run. We changed only the version string the kernel
+  *reports*; the kernel itself, its compile-time version and module checks are unchanged. It is a deliberate disguise,
+  which is why it is listed here.
+* **What to do**: to see the real version, run `dmesg | head -1` as root (the first line is `Linux version 7.2.9-gaokun3…`),
+  or read the `kernel-config.txt` / `kernel-source.txt` attached to each release. In bug reports, give the real version or
+  simply the ROM version (`getprop ro.vendor.gaokun3.version`).
+
 ---
 
 ## 2. Proprietary components shipped in the images
@@ -185,12 +198,15 @@ yourself, you should know that they contain these components.
 * **What to do**: unlock with a PIN or password. Even once fingerprint works, fingerprint payments in payment apps will
   most likely still be unavailable.
 
-### Stylus (Huawei M-Pencil) is not supported
-<!-- DISP-13. Postponed past 1.0 (needs reverse-engineering of raw frames). -->
-* **What you see**: the pen does nothing at all: no pressure, no hover.
-* **Why**: the touch points are computed by the kernel driver itself from raw capacitance data, and that algorithm only
-  knows fingers. Nobody has reverse-engineered the pen's signal format yet.
-* **What to do**: nothing.
+### Stylus (Huawei M-Pencil): has a driver from 1.0.0-rc.2, not yet checked on the developer's machine
+<!-- DISP-13. PR #27 (community contribution): patches/0079 + 0080, gk3pend, usbcore.quirks. Evidence in the Chinese file. -->
+* **What you see**: up to 1.0.0-rc.1 the pen does nothing at all. From rc.2 the kernel has a driver for it, and you should get
+  pressure, hover, tilt and the side double-tap. The contributor tested those on their own machine with the same code;
+  **we have not checked them on rc.2 yet**.
+* **Why**: the pen is sensed by the touch screen's second controller chip, which had no driver; a community contributor
+  reverse-engineered it.
+* **What to do**: if the pen does not work on rc.2 or later, open an issue with the output of `adb shell getevent -pl`
+  (needs adb).
 
 ### No automatic brightness
 <!-- DISP-8 / HW-4 / A3 (#121). -->
@@ -303,21 +319,25 @@ These are bugs, not trade-offs, and they will be removed from this list once fix
   the port's role keeps failing and keeps the machine awake.
 * **What to do**: reboot. Until then, use Wi-Fi for adb or file transfer.
 
-### A palm on the screen turns into several touches
-<!-- DISP-7 / T1 (after 1.0: needs shape tracking across frames in the driver). -->
-* **What you see**: resting your palm or the side of your hand on the screen produces several separate touches, which
-  can tap, zoom or scroll by accident.
-* **Why**: the touch points are computed by the kernel driver itself from raw capacitance data, and it cannot tell a
-  palm from fingers yet, so a large contact area is split into several touches.
-* **What to do**: keep your palm off the screen while you use it.
+### A palm on the screen turns into several touches (improved from 1.0.0-rc.2, not yet checked on the developer's machine)
+<!-- DISP-7 / T1. PR #30 (community contribution): patches/0081 + 0082. Evidence in the Chinese file. -->
+* **What you see**: up to 1.0.0-rc.1, resting your palm or the side of your hand on the screen produces several separate
+  touches, which can tap, zoom or scroll by accident. From rc.2 the driver remembers where the hand is and withdraws the
+  parts it had mistaken for fingers (apps get a *cancel*, not a tap), so this should be much rarer; **we have not checked
+  it on rc.2 yet**. The touch preset for games turns this off, so that a thumb resting near the edge is not swallowed.
+* **Why**: the touch points are computed by the kernel driver itself from raw capacitance data, and it used to be unable to
+  tell a palm from fingers.
+* **What to do**: if it still happens, keep your palm off the screen and open an issue describing the gesture.
 
-### *League of Legends: Wild Rift* closes right after launch
-<!-- #15 (docs/TODO.md:150（10-06 之前的行号，那段现在在 archive/TODO-history-2026-10.md，按节内标注的原行号找）). No log yet. -->
-* **What you see**: the game closes right after you open it.
-* **Why**: not known. It was reported in
-  [#15](https://github.com/vahiru/gaokun-android/issues/15), and we have no log yet.
-* **What to do**: if it happens to you, collect the crash log right after it closes (see the
-  [FAQ](FAQ.md#with-a-computer-when-the-machine-boots)) and attach it to that issue.
+### *League of Legends: Wild Rift*: closed right after launch up to 1.0.0-rc.1; starts from rc.2, matches not yet tested
+<!-- #15 / #17; patches/0078. Evidence in the Chinese file. -->
+* **What you see**: up to 1.0.0-rc.1 the game closes right after you open it. From rc.2 (development build dev.11 on) it
+  starts and reaches the user-agreement screen; **whether a match can be played has not been tested yet**.
+* **Why**: the game's engine assumes that a 64-bit process never gets memory addresses above 2^39, while this kernel gave
+  processes a 2^48 address space. The kernel now hands out addresses below 2^39 by default; the page tables are unchanged.
+* **What to do**: if it still closes or gets stuck somewhere else on rc.2 or later, collect the crash log right after it
+  closes (see the [FAQ](FAQ.md#with-a-computer-when-the-machine-boots)) and attach it to
+  [#15](https://github.com/vahiru/gaokun-android/issues/15).
 
 ### On a low-power charger the battery says *charging* while it drains
 <!-- BATT-1 (BATT-2 merged into it). -->

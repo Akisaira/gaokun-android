@@ -97,7 +97,7 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 
 | 编号 | 一句话 | 状态 | 下一步 | 证据 |
 |---|---|---|---|---|
-| GAME-1 | 内核版本串覆写 `patches/0085`（uname 报 `6.6.30-android15-8-…`） | ◐ 用户 10-11 定：进发版 | vermagic 不变已核（gaming.md §4.1）。⬜ known-limitations / 发版说明披露（uname 不是真实版本）；⬜ 排查 bpfloader / VINTF 内核矩阵 / KSU 读到 6.6 后的行为 | gaming.md §4.1 |
+| GAME-1 | 内核版本串覆写 `patches/0085`（uname 报 `6.6.30-android15-8-…`） | ◐ 用户 10-11 定：进发版 | vermagic 不变已核（gaming.md §4.1）。✅ 10-11 known-limitations 中英已披露（第一节「内核对外报告的版本号不是真实版本」，真实版本看 `dmesg | head -1`）；⬜ 发版说明披露（rc.2 的说明定稿时写）；⬜ 排查 bpfloader / VINTF 内核矩阵 / KSU 读到 6.6 后的行为 | gaming.md §4.1 |
 | GAME-2 | netlink 隐私边界 `patches/0084` | ◐ | 开发机 10-11 两条泄露都 `EACCES` ✅。⬜ 随下一个发版内核走 `--verify` + A 档；⬜ Wi-Fi / 热点 / `ip neigh`（root）照常 | gaming.md §1 |
 | GAME-3 | `system_server execmem` 去掉（swangle sepolicy 移出、`…EXECMEM_FOR_SWIFTSHADER` 注释掉） | ◐ 已提交 `53b34ff` | `1791704075` 实测 Denied ✅。⬜ enforcing 下全机 avc 无 `execmem` | BoardConfig.mk 注释 |
 | GAME-4 | 0085 内核固化进 `boot_b`（现在只能走直连槽条目） | ◐ 已进 rc.2 镜像 | **10-11 证实**：走默认入口起的是 7.2.9（`boot_b` 里没换）。✅ 10-11 rc.2：`prebuilt-boot/` 换成 `a0ea6ea4`（含 0079–0085）、`release.sh` 断言 boot.img 的 kernel 与它逐字节同。⬜ 装上 rc.2 后默认入口起来 `uname -r` = `6.6.30-android15-8-…` | gaming.md §4.3 |
