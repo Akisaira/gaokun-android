@@ -41,7 +41,12 @@
 > * ⚠️★★ **ROM 变体只用 `lineage_gaokun3-bp4a-userdebug`**：`-user` 的 init 强制 enforcing（`selinux.cpp:112-116`），装上去起不来（#117 §15）。
 > * **推仓库、发版要用户点头**；其余（本地提交、构建、staging、设备实验）直接做。
 >
-> ### 现在设备上跑的是什么（2026-10-09 22:4x 起；历次状态见 project-log）
+> ### 现在设备上跑的是什么（2026-10-11 17:0x 实机读到；历次状态见 project-log）
+> * **active = `_b` = 新 ROM 戳 `1791704075`**（10-11 构建，带 tree-fix [22][23]、去掉 swangle sepolicy；载荷不在本机 `out/`，来历待补），
+>   内核 **0085 版**（`uname -r` = `6.6.30-android15-8-g0a4d3c12b3`，`out/dev12-k0085/vmlinuz-a8f7c90e.efi` 那一支），
+>   本次开机经**直连槽条目**（`vendor.gaokun3.bootentry.via=direct`），enforcing。⚠️ 走默认入口读的是 `boot_b`，**推断**仍是 7.2.9 旧内核（TODO GAME-4）。
+>   设备上另有用户自装的 TrickyStore / PIF / LSPosed / HMA（`hma_oss_zygisk` disable 中）—— 测游戏流程见 `docs/gaming.md`。
+> * 以下 `_a` 一条是 10-09 的记录，10-11 未复核（其中「active = `_a`」「`_b` = rc.1」已被上一条取代）：
 > * 槽 **`_a` = `1.0.0-dev.11`**（戳 `1791554509`，内核 `705b1387…` = 7.2.9 + 0078），active = `_a`（ESP default 已同步），**SELinux enforcing**；`_b` = `1.0.0-rc.1`（戳 `1791285623`）。载荷 `out/dev11-1791554509/`（rc.1 的在 `out/rc1-1791285623/`，安装器 `out/rc1-wt/out/release-installer/0.2.0-rc.1/`）。⚠️ `a1d303a`（efivarfs 标签）已在 dev.11 里，但 enforcing 下 `boot-oneshot.sh` 不 `setenforce 0` 能否写成**没测过** —— 测之前照旧先 `setenforce 0`。
 > * ESP 上还留着实验内核目录 `android/va39w/`（15 MB）与条目 `gaokun3-va39w.conf`：0078 已进发版内核，验收完可删。
 > * ⚠️ 分派开着：**设置里的恢复出厂会真擦**（发布构建会丢 adb_keys ⇒ 连不上 adb）；`adb reboot bootloader|fastboot|recovery` 进 fastboot 执行端，Mac 上 `fastboot reboot` 回来。
@@ -66,6 +71,7 @@
 | 构建机 | `docs/build-machine.md` + `scripts/cicd.sh` |
 | 图形安装器 | `docs/stage7-flutter-debian.md`；`scripts/live/installer-lib.sh`、`scripts/live/README.md` |
 | 指纹 | `docs/fingerprint-driver-design.md`；案卷 #120/#123/#124/#125；`tools/fingerprint-bringup/` |
+| 游戏特化（兼容 / 延迟 / 触摸 / 游戏模式 / 检测边界） | `docs/gaming.md`；过程 `docs/duck-detector-plan.md`；TODO「②′ 游戏环境」GAME-1–8 |
 
 ⚠️ **冲突时**：实机实测 > 案卷 > 本文件 > `project-log.md`。历史里大量结论已被实测推翻（推翻过程故意留着），别当现状。
 

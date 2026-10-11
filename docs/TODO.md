@@ -89,6 +89,19 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 | 执行端余项 | fastboot 执行端 | ⬜ | 主菜单的电源键确认路径（Reboot to Android）、`flash` 都没真机验过 |
 | 批 4 测量 | 只在 1.0 前做一次（v1.0-plan 批 4） | ⬜ | PERF-2 游戏基线 + UBWC A/B（B5b）、APP-5 熄屏推送延迟、AV-3 蓝牙耳机、AV-8/15 播放回归与 Histen 插耳机、AV-13/14、LIVE-7 60/120 Hz 电流、PERF-5、DISP-4 DP 输出、DISP-5/11/12、HW-10 人脸解锁、BATT-5/6/10、OTA-15、APP-19 QQ 平板模式、BKUP-10 —— 多数要用户在场或要外设 |
 
+### ②′ 游戏环境（2026-10-10 起；总览 [`gaming.md`](gaming.md)，过程 [`duck-detector-plan.md`](duck-detector-plan.md)）
+
+| 编号 | 一句话 | 状态 | 下一步 | 证据 |
+|---|---|---|---|---|
+| GAME-1 | 内核版本串覆写 `patches/0085`（uname 报 `6.6.30-android15-8-…`） | ◐ 开发机在跑 | ⬜ **用户定**：是伪装不是如实修正（7.2.9 是真 stable 版本），却在 KPATCHES 主链、默认进发版 ⇒ 只留开发机 / 实验内核（像 D21），还是进发版并在 known-limitations 披露；⬜ 排查 bpfloader / VINTF 内核矩阵 / KSU 读到 6.6 后的行为 | gaming.md §4.1 |
+| GAME-2 | netlink 隐私边界 `patches/0084` | ◐ | 开发机 10-11 两条泄露都 `EACCES` ✅。⬜ 随下一个发版内核走 `--verify` + A 档；⬜ Wi-Fi / 热点 / `ip neigh`（root）照常 | gaming.md §1 |
+| GAME-3 | `system_server execmem` 去掉（swangle sepolicy 移出、`…EXECMEM_FOR_SWIFTSHADER` 注释掉） | ◐ **未提交** | `1791704075` 实测 Denied ✅。⬜ 提交 `BoardConfig.mk`；⬜ enforcing 下全机 avc 无 `execmem` | BoardConfig.mk 注释 |
+| GAME-4 | 0085 内核固化进 `boot_b`（现在只能走直连槽条目） | ⬜ | `prebuilt-boot/` 换成新内核再打包，或先定 GAME-1 再说；在此之前走默认入口会回到 7.2.9（推断，ESP 未核对） | gaming.md §4.3 |
+| GAME-5 | `patches/0086`（KernelSU 子目录）进补丁脚本 | ⬜ | `kernel-apply-patches.sh` 支持子目录补丁并纳入 `--verify`；否则换树后发版内核链接失败 | gaming.md §4.2 |
+| GAME-6 | `game-mode.sh` 未验的部分 | ◐ | ⬜ `noforge` / `forge` 上机；⬜ 新开机兜底（等 `boot_completed` + 读回校验，未提交）在 `on` 后重启一次验证 adb 回来 | gaming.md §2 |
+| GAME-7 | 验收：英雄联盟手游 / Wild Rift 进对局 | ⬜ | `on` + `hide` 后测（先 forge，不行再 noforge 对比）；记卡在哪一层 | #17、gaming.md §3 |
+| GAME-8 | 低延迟音频 0083 发版构建复测 | ◐ | `1791704075` 上 FastMixer `mixPeriod=10 ms` ✅；⬜ Arcaea 端到端延迟、满载欠载复测 | gaming.md §1 |
+
 ### ③ 等用户 / 等硬件
 
 | 编号 | 事情 | 状态 | 要什么 |

@@ -46,6 +46,8 @@
 | [installer-rust-design.md](installer-rust-design.md) | 安装器后端用 Rust 重写（并行轨道）：不静默失败的规则、迁移顺序、协议兼容与偏差表、对拍、进镜像的方式；对着 shell 版查出的问题 S1–S5 | 现行（阶段 0 + 1a 完成，未替换任何东西；代码 [`tools/gk3-installer/`](../tools/gk3-installer/)） | 维护者 · AI |
 | [stage7-live-installer.md](stage7-live-installer.md) | 第一版 Stage 7 设计（C + cairo 安装器 + Alpine 救援）与 M0 实测 | 部分有效：一套镜像 / 共用内核与 dtb / ESP 约束 / M0 实测仍被 `scripts/live/` 引用；界面与底座已被 [stage7-flutter-debian.md](stage7-flutter-debian.md) 取代 | 维护者 |
 | [fingerprint-driver-design.md](fingerprint-driver-design.md) | 指纹（FTE7001）：TA 已加载进 QSEE（M1），M2 发真命令暂停；架构、复现步骤 | 现行（暂停中） | 维护者 · AI |
+| [gaming.md](gaming.md) | 游戏特化总览：39 位地址窗口、着色器缓存、低延迟音频、触摸 game 预设、游戏模式脚本、netlink 边界、版本串覆写；边界（如实修正 / 不伪造）与待定项 | 现行 | 维护者 · AI |
+| [duck-detector-plan.md](duck-detector-plan.md) | Duck Detector 体检的逐项诊断、A–D 分类、每次上机后的 delta（10-11）；文首有更正 | 现行（过程记录；结论以 [gaming.md](gaming.md) 为准） | 维护者 · AI |
 | [upstream/README.md](upstream/README.md) | 5 份待投上游的相机 / camcc 补丁稿与收件人（未发，等用户点头） | 现行 | 维护者 |
 
 ## 案卷与证据（"某个结论是怎么来的"）

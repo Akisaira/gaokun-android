@@ -1,0 +1,29 @@
+From: gaokun-android <local>
+Subject: [PATCH] KernelSU: fix task_stack.h version-gated include
+
+【本地，2026-10-11 起】syscall_hook_manager.c 把
+`#include <linux/sched/task_stack.h>` 放在
+`#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)` 里。
+本机内核 7.2.9（上游 stable）≥ 6.7.0 ⇒ include 被跳过 ⇒
+`task_pt_regs(current)` 展开的 `task_stack_page()` 看不到
+`static __always_inline` 定义 ⇒ 链接报 undefined reference。
+
+把 include 移出版本门控（无条件 include）。
+
+---
+ kernel/hook/syscall_hook_manager.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/kernel/hook/syscall_hook_manager.c b/kernel/hook/syscall_hook_manager.c
+--- a/kernel/hook/syscall_hook_manager.c
++++ b/kernel/hook/syscall_hook_manager.c
+@@ -10,8 +10,8 @@
+ #include <linux/version.h>
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
+ #include <linux/compat.h>
+-#include <linux/sched/task_stack.h>
+ #endif
++#include <linux/sched/task_stack.h>
+
+ #include "arch.h"
+ #include "klog.h" // IWYU pragma: keep
