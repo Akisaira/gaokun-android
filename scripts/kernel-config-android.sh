@@ -476,6 +476,10 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 #   80 秒后 "PPM init failed, stop trying"，/sys/class/typec 为空（#27 / #112 / #118 里的"UCSI 坏了"）。
 ./scripts/config --file "$OUT/.config" --enable TYPEC_MUX_GPIO_SBU
 
+# ★ USB 传文件（MTP/PTP）与"设置"里的 USB 页面：UsbService 只在 /sys/class/android_usb 存在时才建
+#   UsbDeviceManager。主线没有这个类，patches/0096 补上它（连接状态由 USB 端口 HAL 写）。
+./scripts/config --file "$OUT/.config" --enable USB_ANDROID_USB_STATE
+
 # ─── olddefconfig + 断言（止损"=m 坑"）───
 # 这个坑已经踩了 13 次：`scripts/config --enable X` 写进去了，olddefconfig
 # 却可能因为依赖把它降回 =m（或压根没有该符号），而 Android **不加载任何模块**
@@ -550,7 +554,7 @@ NETFILTER_XT_MATCH_MAC NETFILTER_XT_MATCH_STATISTIC NETFILTER_XT_MATCH_STRING NE
 CRYPTO_CHACHA20POLY1305 CRYPTO_MD5 CRYPTO_XCBC
 DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR ANON_VMA_NAME THERMAL_STATISTICS
 ARMV8_DEPRECATED SWP_EMULATION CP15_BARRIER_EMULATION SETEND_EMULATION
-TOUCHSCREEN_HIMAX_HX83121A_PEN TYPEC_MUX_GPIO_SBU
+TOUCHSCREEN_HIMAX_HX83121A_PEN TYPEC_MUX_GPIO_SBU USB_ANDROID_USB_STATE
 "
 # 接了 ReSukiSU 才断言 KSU —— 没接的树上断言它只会误报。
 if [ "$RESUKISU" = 1 ]; then

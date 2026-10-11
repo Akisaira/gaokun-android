@@ -3,9 +3,14 @@
  *
  * It reports port0 to UsbPortManager (UsbManager.getPorts(), `dumpsys usb`)
  * and decides port0's data role from what is attached (Follow.h). Without a
- * port HAL, getPorts() is empty. Settings' USB page (the data role and "Use
- * USB for") also needs UsbDeviceManager, which the framework only creates
- * when /sys/class/android_usb exists.
+ * port HAL, getPorts() is empty.
+ *
+ * It also feeds UsbDeviceManager, which runs Settings' USB page ("USB
+ * controlled by", "Use USB for") and MTP/PTP. The framework only creates it
+ * when /sys/class/android_usb exists, and takes the gadget's connection state
+ * from android0/state and its uevents, which Android kernels send from their
+ * configfs gadget. patches/0096 adds that class with a writable state; this
+ * HAL writes it (GadgetState), as the UDC state alone does not show an unplug.
  *
  * Only port0 is reported: the USB-C port on the dwc3 controller a600000.usb,
  * the only one that can be a USB device. The other USB-C port (a800000.usb) is
@@ -43,8 +48,9 @@
  * which changes without a uevent while a host enumerates the tablet.
  *
  * Debug: `dumpsys android.hardware.usb.IUsb/default`, or run the binary with
- * --status as root; both print the inputs and the status they map to. Changes
- * and role decisions are logged under the tag gaokun3-usb.
+ * --status as root; both print the inputs, the status they map to and the
+ * gadget state. Changes and role decisions are logged under the tag
+ * gaokun3-usb.
  */
 #define LOG_TAG "gaokun3-usb"
 
@@ -114,6 +120,19 @@ PortStatus ToStatus(const Inputs& in, bool following) {
     bool source = in.powerRole.empty() ? host : in.powerRole == "source";
     s.currentPowerRole = source ? PortPowerRole::SOURCE : PortPowerRole::SINK;
     return s;
+}
+
+// The gadget's connection state as Android kernels report it from their
+// configfs gadget: CONFIGURED once a host has configured it, CONNECTED while a
+// host is attached, else DISCONNECTED. The UDC state stays "configured" after
+// the cable is pulled, so a host only counts while the EC reports the adapter
+// online (as in ToStatus, an unreadable adapter node counts as online). A
+// suspended bus keeps the last state.
+std::string GadgetState(const Inputs& in, const std::string& last) {
+    if (in.adapter == "0" || in.udc.empty() || in.udc == "not attached") return "DISCONNECTED";
+    if (in.udc == "configured") return "CONFIGURED";
+    if (in.udc == "suspended") return last.empty() ? "CONNECTED" : last;
+    return "CONNECTED";
 }
 
 std::string Describe(const PortStatus& s) {
@@ -284,6 +303,8 @@ class Usb : public BnUsb {
                               : std::string("not decided here (needs the Type-C port and "
                                             "vreg_l9d always on)")) +
                   (mSwitch ? "; switching to " + mSwitch->target : "") +
+                  "\ngadget state: " +
+                  (mGadgetState.empty() ? std::string("not written") : mGadgetState) +
                   "\ncallback: " + (mCallback ? "registered" : "none") + "\n";
         }
         if (write(fd, out.data(), out.size()) < 0) return -errno;
@@ -349,6 +370,22 @@ class Usb : public BnUsb {
                         : "the Type-C port is gone: no longer deciding the data role");
     }
 
+    // Mirrors the gadget's connection state into the android_usb class for
+    // UsbDeviceManager. Called with mLock held.
+    void UpdateGadgetState(const Inputs& in) {
+        std::string s = GadgetState(in, mGadgetState);
+        if (s == mGadgetState) return;
+        if (!HasGadgetState()) {
+            if (!mNoGadgetStateLogged) LOGW("no %s: the gadget state is not mirrored", kGadgetState);
+            mNoGadgetStateLogged = true;
+            return;
+        }
+        if (!WriteGadgetState(s)) return;
+        LOGI("gadget state %s (UDC %s, adapter %s)", s.c_str(),
+             in.udc.empty() ? "absent" : in.udc.c_str(), in.adapter.empty() ? "?" : in.adapter.c_str());
+        mGadgetState = s;
+    }
+
     // Reports the pending switchRole once the controller is up in the new
     // role, or when it times out or no longer applies. Called with mLock held.
     void FinishSwitch(const Inputs& in, Clock::time_point now) {
@@ -378,6 +415,7 @@ class Usb : public BnUsb {
         UpdateFollowing(in);
         mFollowDue = mFollowing ? mFollow.Tick(in, now) : std::nullopt;
         Report(Evaluate(in, now), false);
+        UpdateGadgetState(in);
         FinishSwitch(in, now);
     }
 
@@ -470,6 +508,8 @@ class Usb : public BnUsb {
     RoleFollow mFollow;
     std::optional<Clock::time_point> mFollowDue;
     std::optional<PendingSwitch> mSwitch;
+    std::string mGadgetState;
+    bool mNoGadgetStateLogged = false;
 };
 
 }  // namespace aidl::android::hardware::usb
@@ -479,9 +519,11 @@ int main(int argc, char** argv) {
 
     if (argc > 1 && !strcmp(argv[1], "--status")) {
         Inputs in = ReadInputs();
-        printf("%s: %s\n%s\nvreg_l9d always on: %s\n", kPortName,
-               Describe(ToStatus(in, false)).c_str(), Describe(in).c_str(),
-               L9dAlwaysOn() ? "yes" : "no");
+        std::string gadget = ReadAttr(kGadgetState);
+        printf("%s: %s\n%s\nvreg_l9d always on: %s\ngadget state: %s (from these inputs: %s)\n",
+               kPortName, Describe(ToStatus(in, false)).c_str(), Describe(in).c_str(),
+               L9dAlwaysOn() ? "yes" : "no", gadget.empty() ? "no android_usb class" : gadget.c_str(),
+               GadgetState(in, gadget).c_str());
         return 0;
     }
 

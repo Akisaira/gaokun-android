@@ -217,6 +217,14 @@ void RestartPullup() {
     WriteAttr(kUdcSoftConnect, "connect");
 }
 
+bool HasGadgetState() {
+    return Exists(kGadgetState);
+}
+
+bool WriteGadgetState(const std::string& state) {
+    return WriteAttr(kGadgetState, state.c_str());
+}
+
 bool L9dAlwaysOn() {
     Dir regs = OpenDir(kRegulators);
     if (!regs) return false;

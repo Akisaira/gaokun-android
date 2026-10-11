@@ -250,6 +250,9 @@ KPATCHES=(
     #    或数据线能唤醒（Android再按Wake on plug亮屏）。
     0094-platform-arm64-huawei-gaokun-ec-disable-the-IRQ-across-suspend.patch
     0095-arm64-dts-gaokun3-EC-IRQ-as-wakeup-source.patch
+    # ★ 0096：android_usb类（android0/state）。UsbService只在/sys/class/android_usb存在时才建UsbDeviceManager
+    #    （USB用途、MTP/PTP）；连接状态由USB端口HAL写（device/huawei/gaokun3/usb）。要=y（kernel-config-android.sh）。
+    0096-usb-gadget-add-android_usb-class-for-UsbDeviceManager.patch
     # ★★ 0097–0099：ath11k固件崩溃恢复，准备推主线（英文说明，0097、0098的Fixes指向主线提交）。打开WoWLAN
     #    （#40）以后，固件偶尔在休眠中崩溃，崩溃恢复又和系统挂起撞在一起：内核panic，或者WLAN的PCIe链路断掉。
     #    0097：恢复失败时不再释放HAL。32be3ca4cf78以后成功路径只清零、复用HAL，失败路径却还释放它，下一次
