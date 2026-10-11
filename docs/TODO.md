@@ -95,7 +95,7 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 |---|---|---|---|---|
 | GAME-1 | 内核版本串覆写 `patches/0085`（uname 报 `6.6.30-android15-8-…`） | ◐ 用户 10-11 定：进发版 | vermagic 不变已核（gaming.md §4.1）。⬜ known-limitations / 发版说明披露（uname 不是真实版本）；⬜ 排查 bpfloader / VINTF 内核矩阵 / KSU 读到 6.6 后的行为 | gaming.md §4.1 |
 | GAME-2 | netlink 隐私边界 `patches/0084` | ◐ | 开发机 10-11 两条泄露都 `EACCES` ✅。⬜ 随下一个发版内核走 `--verify` + A 档；⬜ Wi-Fi / 热点 / `ip neigh`（root）照常 | gaming.md §1 |
-| GAME-3 | `system_server execmem` 去掉（swangle sepolicy 移出、`…EXECMEM_FOR_SWIFTSHADER` 注释掉） | ◐ **未提交** | `1791704075` 实测 Denied ✅。⬜ 提交 `BoardConfig.mk`；⬜ enforcing 下全机 avc 无 `execmem` | BoardConfig.mk 注释 |
+| GAME-3 | `system_server execmem` 去掉（swangle sepolicy 移出、`…EXECMEM_FOR_SWIFTSHADER` 注释掉） | ◐ 已提交 `53b34ff` | `1791704075` 实测 Denied ✅。⬜ enforcing 下全机 avc 无 `execmem` | BoardConfig.mk 注释 |
 | GAME-4 | 0085 内核固化进 `boot_b`（现在只能走直连槽条目） | ⬜ | **10-11 证实**：走默认入口起的是 7.2.9（`boot_b` 里没换）。`prebuilt-boot/` 换成新内核再打包（0084 / 0085 已在主链） | gaming.md §4.3 |
 | GAME-5 | 原 `patches/0086`（KernelSU 子目录）进正规入口 | ◐ | 已改名 `patches/resukisu/0003-…`（`kernel-setup-resukisu.sh` 打、`release.sh` 核）；本机对 pin `--check` 过。⬜ 构建机 `kernel-setup-resukisu.sh <树> --check` | gaming.md §4.2 |
 | GAME-6 | `game-mode.sh` 10-11 审查修复 + 上机 | ✅ 10-11 上机 | ✅ hide / unhide（数据保留）、`on 1` 走 TCP 与 USB 都自动恢复、开机兜底、noforge / forge。上机挖出的真凶：定时器在 adbd 的 cgroup 里被 init 一起杀（gaming.md §2 第 2 条）。⬜ `unhide` 里 `install-existing` 为什么失败（从备份装回能用） | gaming.md §2 |
