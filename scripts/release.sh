@@ -71,6 +71,9 @@
 #     --dry-run 与 --stage-only 只警告 —— 候选版就是用 --dry-run 构建出来的，那时它的戳刚生成、
 #     不可能已经有验收报告；验完再用 --no-build（可先加 --dry-run 彩排一遍看警告）发。
 #
+#   ★ R2 滚动清理（2026-10-11）：上传完自动跑 scripts/r2-prune.py --go（--stage-only 只滚 staging）。
+#     正式版留当前 + 前两版、staging 留最新 2 组、installer 留最新 2 个，最新发布页引用的另外保留。GK3_R2_PRUNE=0 跳过。
+#
 #   ★ REL-13 同名覆盖闸门（2026-10-05）：正式上传前，builds/<zip> 与 install/<ver>/ 的三个载荷若在 R2 上
 #     已存在且字节不同（同一天的另一版已经发过 —— OTA 包名只含日期）就停下、一个都不传。
 #     GK3_R2_OVERWRITE=1 才照样覆盖（撤回坏包之类，对外可见，先想清楚）。用的是 scripts/r2-upload.py --check。
@@ -612,6 +615,19 @@ for v in R2_ENDPOINT R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
     [ -n "${!v:-}" ] || die "环境变量 $v 未设置（凭据只从环境变量读）"
 done
 
+# ★ R2 滚动清理（2026-10-11 用户定）：正式版留 OTA 清单指向的当前版 + 前两版；staging 留最新 2 组；
+#   installer 留最新 2 个；另外都保留最新正式 release / 最新 pre-release 的 GitHub 发布页链接到的分组。
+#   规则与失败即停的条件见 scripts/r2-prune.py 头注释。它删的是对外可见的下载链接，撤不回 ——
+#   这一版只想传、不想删：GK3_R2_PRUNE=0。清理失败只告警：产物与清单已经传完，发版本身是成功的。
+r2_prune() {
+    if [ "${GK3_R2_PRUNE:-1}" = 0 ]; then
+        echo "· GK3_R2_PRUNE=0：跳过 R2 滚动清理（计划：python3 $REPO/scripts/r2-prune.py $*）"; return 0
+    fi
+    echo "═══ 5. R2 滚动清理 $* ═══"
+    BUCKET="$BUCKET" python3 "$REPO/scripts/r2-prune.py" --go "$@" \
+        || echo "⚠️ R2 滚动清理没做完（见上）—— 不影响本次发版；修好后手工跑 scripts/r2-prune.py --go $*" >&2
+}
+
 if [ "$STAGE_ONLY" = 1 ]; then
     echo "═══ 4. 传到 staging/$VER/（不更新清单，没有用户会收到）═══"
     for f in boot.img super.img.zst install-artifacts.sha256 gaokun3.json "$(basename "$ZIP")"; do
@@ -627,6 +643,7 @@ if [ "$STAGE_ONLY" = 1 ]; then
         echo "  staging/$VER/$f"
     done
     echo "  （经 $HOST 取时 URL 是 $HOST/staging/$VER/<文件名>，前提是自定义域对整个桶开放 —— 本脚本不核实）"
+    r2_prune --only staging
     exit 0
 fi
 
@@ -693,6 +710,7 @@ print("  download -> %s" % r["download"])
 PY
 python3 "$UPLOAD" "$BUCKET" "$S/gaokun3.json" "ota/gaokun3.json" application/json
 ok "清单已发布 —— 设备端「系统更新」现在能看到 $VER"
+r2_prune                                          # 必须在清单之后：它按清单认"当前版"
 
 # INST-5：本版全部 R2 链接，贴进发版说明 Files 表的 R2 列（docs/relnotes/TEMPLATE.md）。
 #   与上面的上传路径一一对应：OTA 包在 builds/，其余在 install/$VER/。

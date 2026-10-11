@@ -176,8 +176,9 @@ def delete(bucket, key):
 
 
 
-def list_objects(bucket, prefix=''):
-    """列出桶里的对象。返回 [(key, size), ...]。
+def list_objects(bucket, prefix='', with_mtime=False):
+    """列出桶里的对象。返回 [(key, size), ...]；with_mtime=True 时返回 [(key, size, LastModified), ...]
+    （LastModified 是 ISO 8601 字符串，按字典序比较即按时间比较；r2-prune.py 用它给不带日期的分组排序）。
 
     ★ 需要 ListObjectsV2，也就是【带查询串】的 GET —— 这正是本文件的 SigV4
       原来签不了的那种请求（规范请求第 3 行以前写死成空行）。
@@ -205,14 +206,16 @@ def list_objects(bucket, prefix=''):
         for child in root:
             n = tag(child)
             if n == 'Contents':
-                k = sz = None
+                k = sz = mt = None
                 for f in child:
                     if tag(f) == 'Key':
                         k = f.text
                     elif tag(f) == 'Size':
                         sz = int(f.text)
+                    elif tag(f) == 'LastModified':
+                        mt = f.text
                 if k is not None:
-                    out.append((k, sz or 0))
+                    out.append((k, sz or 0, mt or '') if with_mtime else (k, sz or 0))
             elif n == 'IsTruncated':
                 trunc = (child.text == 'true')
             elif n == 'NextContinuationToken':

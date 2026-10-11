@@ -113,7 +113,7 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 | V7c | issue 表单渲染核对；v0.7.1 GPL 附件补传 | ⬜ | 仓库已推送 ⇒ 去 `issues/new/choose` 把 7 个表单打开看一遍；补传 release 附件要用户点头 |
 | B2 R2 轮换 | 见阻断表 B2 | ⬜ | 用户在 Cloudflare 后台做 |
 | B12 · D8 | OTA 与下载的长期基础设施（R2 / Worker 反代） | ⬜ | 用户定方案，改完在国内网络实测下载 |
-| 原 D7 | v0.2.0-alpha 的 R2 产物删不删 | ⬜ | 用户定（删了老发布页链接 404） |
+| 原 D7 | v0.2.0-alpha 的 R2 产物删不删 | ✅ 10-11 删 | 并入 R2 滚动机制（下文 D7） |
 | 原 D5 | PR #3 的回复 | ⬜ | 用户定措辞 |
 | 原 D6 · 上游 | `drm_crtc` BUG_ON 报 dri-devel；`docs/upstream/` 5 份内核补丁稿；libcamera `0002`（hi846）/ `0004`（ov13b10）；camcc RCG shared | ⬜ | 对外发言，用户点头 |
 | T2 | Google 未认证 | ⬜ | 用户自己拿 Android ID 去登记（工具与文档就位） |
@@ -467,10 +467,15 @@ present fence 的名字就能把整机 panic 掉。稿子照那个补丁的 comm
 ### D8. ✅ v0.6.1-alpha 已发布（2026-09-14）
 见 [archive/TODO-history-2026-10.md#d8](archive/TODO-history-2026-10.md#d8)；那里列的"闪光 EV 负补偿与 AWB 剔饱和"归 T3（A7）。
 
-### D7. v0.2.0-alpha 的 R2 产物要不要删（2.1 GiB，等你定）
-`install/v0.2.0-alpha/` + `builds/…20260820….zip`。**它们正被 v0.2.0-alpha 的
-GitHub 发布页链接着**，删了那个页面的下载链接会 404。桶现在 6.6 GiB，
-免费额度 10 GB，不删也还撑得住。
+### D7. ✅ v0.2.0-alpha 的 R2 产物要不要删 —— 2026-10-11 并入 R2 滚动机制、已删
+用户 10-11 定滚动规则：正式版留 OTA 清单指向的当前版 + 前两版；staging 留最新 2 组；installer 留最新 2 个；
+最新正式 release / 最新 pre-release 发布页链接到的另外保留。实现 `scripts/r2-prune.py`（默认只打印计划，`--go` 才删；
+取不到 GitHub 发布页 / OTA 清单、或清单指向的 zip 不在就整体不删），`release.sh` 上传完自动跑（`--stage-only` 只滚 staging，
+`GK3_R2_PRUNE=0` 跳过）。10-11 首次执行：38.6 GiB / 81 个对象 → **15.8 GiB / 38 个**，删 11 组 22.8 GiB ——
+正式版 0820 / 0821 / 0822 / 0824 / 0913 / 0914 与 `install/v0.2.0-alpha/`，staging 0913 / 0914 / 0916 与 `dev11-1791554509`；
+公开域名抽查当前版、rc.2 payload、installer 0.2.0-rc.1 都 200，删掉的 404。
+⚠️ 后果：**v0.2.0–v0.5.0 四个 GitHub 发布页正文里的 R2 链接现在 404**（v0.6.0 起的正文本来就没有 R2 链接）。
+⬜ 要不要在那四页正文里加一句"R2 下载已下线"（改公开页面，等用户点头）。
 
 ---
 
