@@ -51,7 +51,7 @@ python3 scripts/selinux/avc-summary.py --enforcing logcat.txt dmesg.txt
 敢这么做是因为本机的 adbd / su 跑在 permissive 的 `ksu` 域，全局 enforcing 锁不住 adb；
 脚本自带 300 秒看门狗。它看不到只在开机 / 服务启动时发生的访问 —— 那一半靠第 1 步。
 ⚠️ 新策略装上之前，试跑会让 usbrole 切到 host、USB adb 掉线；结束后
-`adb shell su -c 'setprop ctl.restart gaokun3_usbfollow'`。
+`adb shell su -c 'setprop ctl.restart vendor.usb-gaokun3'`（USB 端口 HAL）。
 
 ## 4. 真的 enforcing 开机
 

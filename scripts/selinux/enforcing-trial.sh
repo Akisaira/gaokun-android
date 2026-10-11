@@ -14,7 +14,7 @@
 # ⚠️ 看不到的：只在开机 / 服务启动那一瞬发生的访问（试跑时它们早就发生过了）。
 #   那一半要靠完整开机的 permissive 普查（logd 的 kernel 缓冲从 0 秒起，dmesg 会滚掉）。
 # ⚠️ 已知副作用：usbrole 在 enforcing 下读不到 UDC ⇒ 会切到 host、USB adb 掉线（#126 已写规则，
-#   新策略装上之前）。结束后 `setprop ctl.restart gaokun3_usbfollow` 让它重新判断。TCP adb 不受影响。
+#   新策略装上之前）。结束后 `setprop ctl.restart vendor.usb-gaokun3`（USB 端口 HAL）让它重新判断。TCP adb 不受影响。
 # 看门狗：无论中间发生什么，T+300s 一定 setenforce 0。
 L=/data/local/tmp/enf-trial.log
 echo "start $(cat /proc/uptime)" > $L

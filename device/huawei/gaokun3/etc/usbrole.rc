@@ -33,12 +33,8 @@ service gaokun3_role_device /vendor/bin/gaokun3-usbrole.sh device
     oneshot
     disabled
 
-# 数据角色跟着"对面实际是什么"走（gaokun3-usbrole.sh 的 follow 模式，#118 §8）。
-# 与 allow_suspend 无关，常驻；息屏且允许挂起时它自己让开。前提是 dtb 带 patches/0048。
-service gaokun3_usbfollow /vendor/bin/gaokun3-usbrole.sh follow
-    class late_start
-    user root
-    group root wakelock
+# 数据角色跟着"对面实际是什么"走（#118 §8）原先是这里的常驻服务 gaokun3_usbfollow（gaokun3-usbrole.sh 的
+# follow 模式，每 2 秒轮询一次），现在由 USB 端口 HAL 按 uevent 做（usb/Follow.h）。
 
 # 开机就把门关上：role 出厂是 device，未经确认一律不放行挂起。
 on init
@@ -59,7 +55,7 @@ on property:persist.vendor.gaokun3.allow_suspend=1 && property:debug.tracing.scr
 # 来龙去脉在 bin/gaokun3-usbrole.sh 的 USB-2 一段：adbd 等不到 FUNCTIONFS_BIND 就每秒重开 functionfs、
 # 重设 sys.usb.ffs.ready=1，init.usb.configfs.rc 每秒重写 UDC 报 busy。上游给的开关是 sys.usb.adb.disabled，
 # 由 system 的 init.usb.rc:23-24 从 vendor.sys.usb.adb.disabled 拷过去。
-# 脚本只能设 vendor.gaokun3.*（vendor.sys.usb.adb.disabled 是 vendor_default_prop，只有 init / vendor_init 能设，
+# 脚本和 USB 端口 HAL 只能设 vendor.gaokun3.*（vendor.sys.usb.adb.disabled 是 vendor_default_prop，只有 init / vendor_init 能设，
 # refs/lineage-sepolicy/private/domain.te:802），所以这里转一手。用两条字面量而不是 ${…} 展开：
 # 展开在 vendor_init 里做，它没有读 vendor_gaokun3_prop 的规则；触发条件由 init 自己判断，不受影响。
 # 上机判据（⬜ 未上机）：port0 插 U 盘停在 host 时 `getprop sys.usb.adb.disabled` = 1、dmesg 不再每秒出现
