@@ -22,10 +22,10 @@ Assisted-by: Claude:claude-opus-5-5
  1 file changed, 16 insertions(+), 6 deletions(-)
 
 diff --git a/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c b/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c
-index 3fe5378..d43044f 100644
+index 04608af..fa1775f 100644
 --- a/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c
 +++ b/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c
-@@ -94,6 +94,7 @@ struct gaokun_ucsi_port {
+@@ -98,6 +98,7 @@ struct gaokun_ucsi_port {
  	u16 svid;
  	u8 hpd_state;
  	u8 hpd_irq;
@@ -33,7 +33,7 @@ index 3fe5378..d43044f 100644
  };
  
  struct gaokun_ucsi {
-@@ -313,12 +314,21 @@ static void gaokun_ucsi_handle_usb_mode(struct gaokun_ucsi_port *port)
+@@ -317,12 +318,21 @@ static void gaokun_ucsi_handle_usb_mode(struct gaokun_ucsi_port *port)
  	if (ret)
  		dev_err(uec->dev, "failed to set mux %d\n", ret);
  

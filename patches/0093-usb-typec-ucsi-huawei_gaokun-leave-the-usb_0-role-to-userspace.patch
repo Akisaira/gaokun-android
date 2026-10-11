@@ -20,10 +20,10 @@ switch（这个钩子在查找role switch之后、第一次设角色之前调用
  1 file changed, 11 insertions(+)
 
 diff --git a/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c b/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c
-index dafd4c1..67d947d 100644
+index 6491e48..13efcae 100644
 --- a/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c
 +++ b/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c
-@@ -225,6 +225,17 @@ static void gaokun_ucsi_update_connector(struct ucsi_connector *con)
+@@ -238,6 +238,17 @@ static void gaokun_ucsi_update_connector(struct ucsi_connector *con)
  {
  	struct gaokun_ucsi *uec = ucsi_get_drvdata(con->ucsi);
  

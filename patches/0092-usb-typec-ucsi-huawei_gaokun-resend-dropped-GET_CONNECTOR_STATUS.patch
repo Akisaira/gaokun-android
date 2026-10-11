@@ -26,6 +26,11 @@ read CCI once more in case the EC completed the command after all. Other
 commands, including the acknowledgements and any CANCEL, are passed
 through as before.
 
+BUSY is a legal state, and the command is sent again without a CANCEL.
+That relies on the EC's behaviour in the test below, where a dropped
+command never completed later; the comment spells out what would go
+wrong if one did.
+
 Tested on a MateBook E Go with eight plugs of a DP monitor, flipping the
 plug each time. Before, GET_CONNECTOR_STATUS timed out twice, and after
 the second timeout the next 32 notifications were all BUSY. With this
@@ -37,11 +42,11 @@ Fixes: 00327d7f2c8c ("usb: typec: ucsi: add Huawei Matebook E Go ucsi driver")
 Cc: stable@vger.kernel.org
 Assisted-by: Claude:claude-opus-5-5
 ---
- drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c | 77 ++++++++++++++++++++-
- 1 file changed, 76 insertions(+), 1 deletion(-)
+ drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c | 86 ++++++++++++++++++++-
+ 1 file changed, 85 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c b/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c
-index 3f5a10a..dafd4c1 100644
+index 45851aa..6491e48 100644
 --- a/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c
 +++ b/drivers/usb/typec/ucsi/ucsi_huawei_gaokun.c
 @@ -8,7 +8,9 @@
@@ -64,7 +69,7 @@ index 3f5a10a..dafd4c1 100644
  #define CCX_TO_ORI(ccx) (++(ccx) % 3) /* convert ccx to enum typec_orientation */
  
  /* Configuration Channel Extension */
-@@ -105,8 +110,10 @@ struct gaokun_ucsi {
+@@ -109,8 +114,10 @@ struct gaokun_ucsi {
  	struct notifier_block nb;
  	u16 version;
  	u8 num_ports;
@@ -75,7 +80,7 @@ index 3f5a10a..dafd4c1 100644
  };
  
  /* -------------------------------------------------------------------------- */
-@@ -163,6 +170,57 @@ static int gaokun_ucsi_async_control(struct ucsi *ucsi, u64 command)
+@@ -167,6 +174,66 @@ static int gaokun_ucsi_async_control(struct ucsi *ucsi, u64 command)
  	return gaokun_ec_ucsi_write(uec->ec, buf);
  }
  
@@ -85,6 +90,15 @@ index 3f5a10a..dafd4c1 100644
 + * instead of completing the command, or sets BUSY and keeps it set. It
 + * does take the next command, so send this one again; it only reads state.
 + * gaokun_ucsi_notify() ends the wait when it sees either.
++ *
++ * This relies on what the EC was seen to do. BUSY is a legal state, so a slow
++ * command looks like a dropped one at first: the CCI is read again 200 ms
++ * later, and a completion that arrived meanwhile is taken as the result. The
++ * command is then sent again without a CANCEL first: a dropped command was
++ * never seen to complete later, the resent one completed within 50 ms, and
++ * how the EC handles CANCEL was not tried. Should a dropped command complete
++ * after all, its COMMAND_COMPLETE could end the wait for the next command
++ * early, and that command would read the wrong MESSAGE_IN.
 + */
 +static int gaokun_ucsi_sync_control(struct ucsi *ucsi, u64 command, u32 *cci,
 +				    void *data, size_t size, void *msg_out,
@@ -133,7 +147,7 @@ index 3f5a10a..dafd4c1 100644
  static void gaokun_ucsi_update_connector(struct ucsi_connector *con)
  {
  	struct gaokun_ucsi *uec = ucsi_get_drvdata(con->ucsi);
-@@ -208,7 +266,7 @@ static const struct ucsi_operations gaokun_ucsi_ops = {
+@@ -212,7 +279,7 @@ static const struct ucsi_operations gaokun_ucsi_ops = {
  	.read_cci = gaokun_ucsi_read_cci,
  	.poll_cci = gaokun_ucsi_read_cci,
  	.read_message_in = gaokun_ucsi_read_message_in,
@@ -142,7 +156,7 @@ index 3f5a10a..dafd4c1 100644
  	.async_control = gaokun_ucsi_async_control,
  	.update_connector = gaokun_ucsi_update_connector,
  	.connector_status = gaokun_ucsi_connector_status,
-@@ -392,6 +450,22 @@ static void gaokun_ucsi_usb_work(struct work_struct *work)
+@@ -400,6 +467,22 @@ static void gaokun_ucsi_usb_work(struct work_struct *work)
  			break;
  }
  
@@ -165,7 +179,7 @@ index 3f5a10a..dafd4c1 100644
  static int gaokun_ucsi_notify(struct notifier_block *nb,
  			      unsigned long action, void *data)
  {
-@@ -411,6 +485,7 @@ static int gaokun_ucsi_notify(struct notifier_block *nb,
+@@ -419,6 +502,7 @@ static int gaokun_ucsi_notify(struct notifier_block *nb,
  		if (ret)
  			return NOTIFY_DONE;
  
