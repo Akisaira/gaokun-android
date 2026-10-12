@@ -644,9 +644,19 @@ int main(int argc, char **argv)
 			int taps = 0, eraser_set = -1;
 
 			while (ioctl(mcu.fd, USBDEVFS_REAPURBNDELAY, &u) == 0) {
-				if (u->status == 0)
-					taps += mcu_events(&mcu, u->buffer, u->actual_length, t, &eraser_set,
-							   bat);
+				/*
+				 * A reset of the controller, as on every resume (even one
+				 * too short for the check above), kills the URBs and drops
+				 * our claim on the interface, and the controller then needs
+				 * the handshake again: reopen rather than resubmit.
+				 */
+				if (u->status != 0) {
+					printf("%lld mcu: urb status %d, reopening\n", t, u->status);
+					mcu_close(&mcu, t);
+					mcu_open(&mcu, t);
+					break;
+				}
+				taps += mcu_events(&mcu, u->buffer, u->actual_length, t, &eraser_set, bat);
 				if (mcu_submit(&mcu, (int)(u - mcu.urb)) < 0) {
 					printf("mcu: gone (%d)\n", errno);
 					mcu_close(&mcu, t);
