@@ -261,6 +261,15 @@ KPATCHES=(
     0097-wifi-ath11k-keep-the-HAL-when-crash-recovery-fails.patch
     0098-wifi-ath11k-dont-reap-rings-that-crash-recovery-frees-on-suspend.patch
     0099-wifi-ath11k-keep-firmware-crash-recovery-away-from-system-suspend.patch
+    # ★★ 0100–0102：接着0097–0099，待机测试里又找到的三处，同样准备推主线。0100：醒来时发现固件在睡眠中崩了
+    #    （RDDM/SYS_ERR）就交给崩溃恢复：原来强行恢复MHI，等满超时失败，mac80211判定硬件丢失、关掉接口，Wi-Fi到
+    #    下次冷启动前都起不来，之后每次唤醒还要多等约20秒；0101：崩溃恢复成功后再保持唤醒10秒
+    #    （ATH11K_RECOVERY_SETTLE_MS），否则系统立刻挂起，WoW落在刚重启、还没连上的固件上，又把它弄崩，循环下去；
+    #    0102：“断线唤醒”对应固件的四个唤醒事件（WOW_DEAUTH_RECVD_EVENT、WOW_DISASSOC_RECVD_EVENT、WOW_BMISS_EVENT、
+    #    WOW_CSA_IE_EVENT），都是用来发现已有连接断开的；原来没连上路由器时进WoW也打开，现在只在arvif->is_up时打开。
+    0100-wifi-ath11k-hand-a-firmware-crash-found-on-resume-to-crash-recovery.patch
+    0101-wifi-ath11k-stay-awake-for-a-while-after-crash-recovery.patch
+    0102-wifi-ath11k-arm-the-WoW-disconnect-events-only-when-connected.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
