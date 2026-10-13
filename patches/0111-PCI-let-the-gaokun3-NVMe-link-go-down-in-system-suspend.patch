@@ -1,0 +1,93 @@
+From: Akisaira <akisaira@outlook.com>
+Subject: [PATCH] PCI: let the gaokun3 NVMe link go down in system suspend
+
+On these Qualcomm hosts the nvme driver already shuts the disk down on
+every system suspend (broken_l1ss_resume), but the link stays up:
+dw_pcie_suspend_noirq() only sends PME_Turn_Off when
+pci_host_common_d3cold_possible() agrees, and that wants every device
+under the host bridge in D3hot. On gaokun3 the Root Ports are still in
+D0 when the controller suspends, so the check never passes, and the
+controller, its PHY and clocks and the disk's 3.3 V supply stay on
+through every sleep.
+
+A Root Port is part of the controller and goes down with it. Ignore it
+when only NVMe controllers sit below it, and let the endpoints decide
+as before. Other links are left alone; the Wi-Fi one has to stay up for
+WoWLAN.
+
+With the link down, qcom_pcie_suspend_noirq() drops the controller's
+vote for DDR bandwidth. Once no master votes for DDR during s2idle this
+tablet hangs until the watchdog resets it, also when both links are
+taken down by other means, while a vote of 1 kB/s avoids that. Keep
+that token vote instead of disabling the path.
+
+This is a workaround for gaokun3: why the Root Ports stay in D0, and
+why dropping the last DDR vote hangs the SoC, are both still open.
+
+Assisted-by: Claude:claude-opus-5-5
+---
+ drivers/pci/controller/dwc/pcie-qcom.c   |  7 +++++-
+ drivers/pci/controller/pci-host-common.c | 27 ++++++++++++++++++++++++
+ 2 files changed, 33 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/pci/controller/dwc/pcie-qcom.c b/drivers/pci/controller/dwc/pcie-qcom.c
+index d62cf302d..a213d3f07 100644
+--- a/drivers/pci/controller/dwc/pcie-qcom.c
++++ b/drivers/pci/controller/dwc/pcie-qcom.c
+@@ -2207,7 +2207,12 @@ static int qcom_pcie_suspend_noirq(struct device *dev)
+ 		return ret;
+ 
+ 	if (pcie->pci->suspended) {
+-		ret = icc_disable(pcie->icc_mem);
++		/*
++		 * gaokun3: keep a token vote for DDR bandwidth with the link
++		 * down. Once no master votes for DDR during s2idle, the tablet
++		 * hangs until the watchdog resets it.
++		 */
++		ret = icc_set_bw(pcie->icc_mem, 0, kBps_to_icc(1));
+ 		if (ret)
+ 			dev_err(dev, "Failed to disable PCIe-MEM interconnect path: %d\n", ret);
+ 
+diff --git a/drivers/pci/controller/pci-host-common.c b/drivers/pci/controller/pci-host-common.c
+index 2ce6f4b66..5cac27633 100644
+--- a/drivers/pci/controller/pci-host-common.c
++++ b/drivers/pci/controller/pci-host-common.c
+@@ -283,11 +283,38 @@ void pci_host_common_remove(struct platform_device *pdev)
+ }
+ EXPORT_SYMBOL_GPL(pci_host_common_remove);
+ 
++/*
++ * gaokun3: the Root Ports are still in D0 when the controller suspends, so
++ * the check below never lets a link go down. A Root Port is part of the
++ * controller and goes down with it, so let the endpoints decide where they
++ * are all NVMe controllers: on these hosts the nvme driver shuts the disk
++ * down on every suspend anyway (broken_l1ss_resume). Leave other links
++ * alone, the Wi-Fi one has to stay up for WoWLAN.
++ */
++static bool pci_host_common_nvme_only(struct pci_dev *port)
++{
++	struct pci_dev *dev;
++
++	if (!port->subordinate || list_empty(&port->subordinate->devices))
++		return false;
++
++	/* pci_walk_bus() holds pci_bus_sem */
++	list_for_each_entry(dev, &port->subordinate->devices, bus_list)
++		if (dev->class != PCI_CLASS_STORAGE_EXPRESS)
++			return false;
++
++	return true;
++}
++
+ static int __pci_host_common_d3cold_possible(struct pci_dev *pdev,
+ 					     void *userdata)
+ {
+ 	u32 *flags = userdata;
+ 
++	if (pci_pcie_type(pdev) == PCI_EXP_TYPE_ROOT_PORT &&
++	    pci_host_common_nvme_only(pdev))
++		return 0;
++
+ 	if (!pdev->dev.driver && !pci_is_enabled(pdev))
+ 		return 0;
+ 
