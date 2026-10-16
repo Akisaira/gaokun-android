@@ -76,7 +76,7 @@ on boot
 # system 的 init.usb.configfs.rc 给 mtp / ptp 链接的是 Android 内核的 f_mtp（functions/mtp.gs0、ptp.gs1），
 # 主线没有，它那句 symlink 会失败（无害）。本文件先于它被 import（init.rc 先导入 init.${ro.hardware}.rc），
 # 同一触发条件下这里先执行：把 FunctionFS 的实例链接成 f1、换上对应的 Google 产品 ID，再由它写 UDC。
-# 切换时 UsbDeviceManager 先经过 none，那一步会删掉 f1–f4。
+# 切换时 UsbDeviceManager 先经过 none，init.usb.configfs.rc 在那一步删掉 f1–f3（这里只用到 f1）。
 on property:sys.usb.config=mtp && property:sys.usb.configfs=1
     write /config/usb_gadget/g1/idProduct 0x4EE1
     symlink /config/usb_gadget/g1/functions/ffs.mtp /config/usb_gadget/g1/configs/b.1/f1

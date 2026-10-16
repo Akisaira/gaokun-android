@@ -247,8 +247,13 @@ class Usb : public BnUsb {
 
     ScopedAStatus enableUsbData(const std::string& in_portName, bool in_enable,
                                 int64_t in_transactionId) override {
-        LOGI("enableUsbData(%s, %d): not supported", in_portName.c_str(), in_enable);
         std::lock_guard<std::mutex> lock(mLock);
+        // Lineage's setTrustRestrictUsb calls this on every state change.
+        if (!mEnableUsbDataLogged) {
+            LOGI("enableUsbData(%s, %d): not supported (logged once)", in_portName.c_str(),
+                 in_enable);
+            mEnableUsbDataLogged = true;
+        }
         if (mCallback) {
             Check(mCallback->notifyEnableUsbDataStatus(in_portName, in_enable,
                                                        Status::NOT_SUPPORTED, in_transactionId),
@@ -380,7 +385,12 @@ class Usb : public BnUsb {
             mNoGadgetStateLogged = true;
             return;
         }
-        if (!WriteGadgetState(s)) return;
+        // Retried on every update: log only the first failure in a row.
+        if (!WriteGadgetState(s, !mGadgetStateWriteFailed)) {
+            mGadgetStateWriteFailed = true;
+            return;
+        }
+        mGadgetStateWriteFailed = false;
         LOGI("gadget state %s (UDC %s, adapter %s)", s.c_str(),
              in.udc.empty() ? "absent" : in.udc.c_str(), in.adapter.empty() ? "?" : in.adapter.c_str());
         mGadgetState = s;
@@ -510,6 +520,8 @@ class Usb : public BnUsb {
     std::optional<PendingSwitch> mSwitch;
     std::string mGadgetState;
     bool mNoGadgetStateLogged = false;
+    bool mGadgetStateWriteFailed = false;
+    bool mEnableUsbDataLogged = false;
 };
 
 }  // namespace aidl::android::hardware::usb

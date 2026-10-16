@@ -55,7 +55,7 @@ BROKEN=vendor.gaokun3.usbrole.broken
 #   to bind to the USB gadget…"，读 sys.usb.adb.disabled，为真就在 open_functionfs 之后停在 PropertyMonitor 里等它
 #   变回假（:751-755）；init.usb.rc:23-24（refs/lineage-system-core/rootdir/）把 vendor.sys.usb.adb.disabled 拷过去。
 # ⇒ 我们按【实际角色】设它：host ⇒ 1，device ⇒ 0。只停 adbd 的 USB 传输：不动 sys.usb.config（B1 的「USB 调试」
-#   开关语义、init.gaokun3.usb.rc 里 init.svc.adbd 的桥接都不受影响），TCP / 无线调试照常。
+#   开关语义和 UsbDeviceManager 选的「USB 用途」都不受影响），TCP / 无线调试照常。
 #   切回 device、设回 0 之后：adbd 起连接 → 1 秒等不到 BIND → 重开 ffs → ffs.ready=1 → init 写 UDC（此时 UDC 已在）
 #   → 绑上，USB adb 约 1–2 秒回来 —— 与现在"切回 device 后靠每秒重试碰上"是同一条路，只是 host 期间不再空转。
 # 属性链：本脚本 setprop vendor.gaokun3.usbrole.adb_pause（vendor_gaokun3_prop，本域有 set_prop）→ etc/usbrole.rc

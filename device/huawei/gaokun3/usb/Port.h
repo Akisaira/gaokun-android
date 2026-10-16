@@ -52,8 +52,9 @@ void RestartPullup();
 
 // Whether kGadgetState exists, and writes "DISCONNECTED", "CONNECTED" or
 // "CONFIGURED" to it; the class sends UsbDeviceManager a uevent on a change.
+// logError = false leaves a failed write unlogged.
 bool HasGadgetState();
-bool WriteGadgetState(const std::string& state);
+bool WriteGadgetState(const std::string& state, bool logError = true);
 
 // Whether the DT keeps vreg_l9d on (regulator-always-on, patches/0086).
 // Without it the controller must not be suspended in the device role (case
