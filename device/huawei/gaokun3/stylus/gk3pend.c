@@ -564,6 +564,7 @@ int main(int argc, char **argv)
 
 	for (;;) {
 		int frame_valid = -1;	/* -1: no new frame this round */
+		int reopened = 0;	/* pf[2].revents below belong to the old fd */
 		long long t;
 
 		pf[2].fd = mcu.fd;	/* negative fds are ignored by poll() */
@@ -587,6 +588,7 @@ int main(int argc, char **argv)
 			if (mcu.fd >= 0) {
 				mcu_close(&mcu, t);
 				mcu_open(&mcu, t);
+				reopened = 1;
 			}
 		}
 
@@ -654,6 +656,7 @@ int main(int argc, char **argv)
 					printf("%lld mcu: urb status %d, reopening\n", t, u->status);
 					mcu_close(&mcu, t);
 					mcu_open(&mcu, t);
+					reopened = 1;
 					break;
 				}
 				taps += mcu_events(&mcu, u->buffer, u->actual_length, t, &eraser_set, bat);
@@ -663,7 +666,12 @@ int main(int argc, char **argv)
 					break;
 				}
 			}
-			if (mcu.fd >= 0 && (pf[2].revents & (POLLERR | POLLHUP))) {
+			/*
+			 * A hangup on the fd we polled; after a reopen in this round
+			 * it says nothing about the new one, which would otherwise be
+			 * closed again and wait out MCU_RETRY_MS for nothing.
+			 */
+			if (!reopened && mcu.fd >= 0 && (pf[2].revents & (POLLERR | POLLHUP))) {
 				printf("mcu: hangup\n");
 				mcu_close(&mcu, t);
 			}
