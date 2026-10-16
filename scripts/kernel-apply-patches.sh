@@ -288,11 +288,6 @@ KPATCHES=(
     0108-ASoC-codecs-lpass-wsa-macro-Use-devm_clk_hw_register-for-MCLK-output.patch
     0109-ASoC-codecs-lpass-tx-macro-switch-to-PM-clock-framework-for-runtime-PM.patch
     0110-ASoC-codecs-lpass-rx-macro-switch-to-PM-clock-framework-for-runtime-PM.patch
-    # ★ 0111：gaokun3的权宜之计，系统挂起时让NVMe那条PCIe链路进L2、断掉控制器和硬盘的电。根端口在控制器挂起时
-    #    还是D0，pci_host_common_d3cold_possible()从不放行；改为根端口下面全是NVMe时不看根端口，其余链路不变
-    #    （Wi-Fi要为WoWLAN保持连接）。链路断开后仍保留1kB/s的DDR带宽投票：s2idle中一旦没有任何主控投DDR，
-    #    平板就卡死，等看门狗复位。根端口为什么停在D0、撤掉最后一票为什么会卡死，都还没查清。
-    0111-PCI-let-the-gaokun3-NVMe-link-go-down-in-system-suspend.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
