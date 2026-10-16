@@ -12,7 +12,7 @@ Return -EBUSY from ath11k_wow_enable() in that case and fail the system
 suspend instead, up to ATH11K_WOW_DECLINED_MAX times in a row; the
 system tries again shortly. Undo the WoW setup done so far, as the
 device keeps running. A firmware that keeps declining still gets the
-fallback to a suspend without WoW.
+fallback to a suspend without WoW, after which the count starts over.
 
 Tested-on: WCN6855 hw2.1 PCI WLAN.HSP.1.1-03125-QCAHSPSWPL_V1_V2_SILICONZ_LITE-3.6510.41
 
@@ -23,7 +23,7 @@ Assisted-by: Claude:claude-opus-5-5
  2 files changed, 37 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/net/wireless/ath/ath11k/wow.c b/drivers/net/wireless/ath/ath11k/wow.c
-index fa3fa4724..51f5bcc86 100644
+index fa3fa4724..5b79530d8 100644
 --- a/drivers/net/wireless/ath/ath11k/wow.c
 +++ b/drivers/net/wireless/ath/ath11k/wow.c
 @@ -60,7 +60,8 @@ int ath11k_wow_enable(struct ath11k_base *ab)
@@ -74,9 +74,7 @@ index fa3fa4724..51f5bcc86 100644
  		ret = 0;
  	}
  
-+	if (!ret) {
-+		ar->wow.declined = 0;
-+	} else if (declined && ++ar->wow.declined <= ATH11K_WOW_DECLINED_MAX) {
++	if (declined && ++ar->wow.declined <= ATH11K_WOW_DECLINED_MAX) {
 +		/*
 +		 * Returning 1 makes cfg80211 disconnect and power the device
 +		 * down for the whole sleep, which is a high price for a
@@ -89,6 +87,8 @@ index fa3fa4724..51f5bcc86 100644
 +		mutex_unlock(&ar->conf_mutex);
 +		return -EBUSY;
 +	}
++	/* Suspended, failed for another reason or fell back: start over. */
++	ar->wow.declined = 0;
 +
  	mutex_unlock(&ar->conf_mutex);
  	return ret ? 1 : 0;
