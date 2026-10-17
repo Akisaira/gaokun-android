@@ -94,7 +94,7 @@ fi
 # ★ 2026-09-14（#112）：插着 USB 主机（PC 在用 adb）时【不切 host、不放行挂起】。
 #   依据：#56 实测 device 模式带着已枚举的 gadget 挂起照样整板复位，所以"插着线睡"在这块板子上
 #   目前不可能安全；而切 host 就等于把用户正在用的 adb 拔掉。折中：插着主机 → 息屏但不睡（反正在充电），
-#   拔线后再切 host 放行挂起（role_host 进程原地每 2 秒看一次 UDC 状态）。判据用 UDC 的 state：
+#   拔线后再切 host 放行挂起（role_host 进程原地每 2 秒看一次，见下面的 host_unplugged）。判据用 UDC 的 state：
 #   configured/addressed = 有主机在总线另一端；not attached = 没有。
 #   ⚠️ 这不是根治。根治是让 dwc3 device 模式的挂起不复位（见 docs/stage4-findings.md #112）。
 #   ⚠️ 拔线之后 UDC 的 state 不会变：一直停在 configured，直到重新插上、主机再次枚举（dwc3 没有得知
@@ -114,6 +114,17 @@ host_attached() {
     esac
 }
 
+# 确认插着主机以后，等拔线时只看适配器在线（#41 评审）：切"USB 用途"时 gadget 要重绑，dwc3 断开上拉，
+#   UDC 会短暂变成 not attached；2 秒一次的轮询碰上这一瞬，就会当成拔线、切 host，把正在用的连接断掉。
+#   适配器节点读不到时只能照旧看 UDC。主机让总线休眠（UDC=suspended，比如电脑睡了）也接着等，直到拔线或亮屏。
+host_unplugged() {
+    case "$(cat $ADAPTER 2>/dev/null)" in
+        0) return 0 ;;
+        1) return 1 ;;
+        *) ! host_attached ;;
+    esac
+}
+
 if [ "$WANT" = host ] && host_attached; then
     # 息屏期间插着主机：先关门，再【就在这个进程里】等到拔线（或亮屏）再切 host。
     # ⚠️★ 2026-09-29 改（SELinux 第七轮审计）：原先是 `(setsid "$0" watch &)` 另起一个 watch 进程、
@@ -127,7 +138,7 @@ if [ "$WANT" = host ] && host_attached; then
     #   现在：role_host 自己留着等；亮屏时 usbrole.rc 先 `stop gaokun3_role_host` 再起 role_device。
     echo $WL > /sys/power/wake_lock
     say "USB 主机在线（UDC=$(cat $UDC 2>/dev/null)，适配器在线=$(cat $ADAPTER 2>/dev/null)）→ 保持 device、不放行挂起（充电中，息屏不睡）；拔线后自动切 host"
-    while host_attached; do
+    until host_unplugged; do
         [ "$(getprop debug.tracing.screen_state)" = 2 ] && exit 0
         sleep 2
     done
