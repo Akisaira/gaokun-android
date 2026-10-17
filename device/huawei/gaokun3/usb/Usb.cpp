@@ -125,11 +125,14 @@ PortStatus ToStatus(const Inputs& in, bool following) {
 // The gadget's connection state as Android kernels report it from their
 // configfs gadget: CONFIGURED once a host has configured it, CONNECTED while a
 // host is attached, else DISCONNECTED. The UDC state stays "configured" after
-// the cable is pulled, so a host only counts while the EC reports the adapter
-// online (as in ToStatus, an unreadable adapter node counts as online). A
-// suspended bus keeps the last state.
+// the cable is pulled, so a host only counts while something is attached: a
+// partner when the Type-C class is up, else the EC's adapter online (as in
+// ToStatus, an unreadable adapter node counts as online). The adapter is not
+// used with the Type-C class: it reads 0 while we supply power. A suspended
+// bus keeps the last state.
 std::string GadgetState(const Inputs& in, const std::string& last) {
-    if (in.adapter == "0" || in.udc.empty() || in.udc == "not attached") return "DISCONNECTED";
+    bool attached = in.typec ? in.partner : in.adapter != "0";
+    if (!attached || in.udc.empty() || in.udc == "not attached") return "DISCONNECTED";
     if (in.udc == "configured") return "CONFIGURED";
     if (in.udc == "suspended") return last.empty() ? "CONNECTED" : last;
     return "CONNECTED";
@@ -375,6 +378,20 @@ class Usb : public BnUsb {
                         : "the Type-C port is gone: no longer deciding the data role");
     }
 
+    // While the HAL does not decide the data role, does what RoleFollow does
+    // when the partner detaches in the device role: restart the gadget's
+    // pullup. dwc3 does not see VBUS go away, so the UDC state would keep the
+    // last host's "configured", and the next partner, a charger too, would
+    // look enumerated. Called with mLock held.
+    void UpdatePartner(const Inputs& in) {
+        bool detached = in.typec && mPartner && !in.partner;
+        mPartner = in.typec && in.partner;
+        if (!detached || mFollowing || in.role != "device") return;
+        RestartPullup();
+        LOGI("partner detached; restarted the gadget pullup (UDC %s)",
+             ReadAttr(kUdcState).c_str());
+    }
+
     // Mirrors the gadget's connection state into the android_usb class for
     // UsbDeviceManager. Called with mLock held.
     void UpdateGadgetState(const Inputs& in) {
@@ -424,6 +441,7 @@ class Usb : public BnUsb {
         Inputs in = ReadInputs();
         UpdateFollowing(in);
         mFollowDue = mFollowing ? mFollow.Tick(in, now) : std::nullopt;
+        UpdatePartner(in);
         Report(Evaluate(in, now), false);
         UpdateGadgetState(in);
         FinishSwitch(in, now);
@@ -515,6 +533,7 @@ class Usb : public BnUsb {
     bool mRegistered = false;
     std::optional<bool> mL9d;
     bool mFollowing = false;
+    bool mPartner = false;
     RoleFollow mFollow;
     std::optional<Clock::time_point> mFollowDue;
     std::optional<PendingSwitch> mSwitch;
