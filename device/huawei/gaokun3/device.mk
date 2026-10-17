@@ -77,6 +77,14 @@ PRODUCT_PROPERTY_OVERRIDES += \
 PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.hardware.usb.host.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.usb.host.xml
 
+# MIDI：SystemServer 只在声明了 android.software.midi 时才起 MidiService（frameworks/base android-16.0.0_r4
+#   services/java/com/android/server/SystemServer.java:2488），Settings 的 USB 页也只在有这个特性时列出 MIDI
+#   （packages/apps/Settings connecteddevice/usb/UsbBackend.java:77、:100）。没有它，"USB 用途"里没有 MIDI，
+#   插上 USB MIDI 键盘 App 也看不到。gadget 侧要内核的 USB_CONFIGFS_F_MIDI（scripts/kernel-config-android.sh）
+#   和 functions/midi.gs5（init.gaokun3.usb.rc）。
+PRODUCT_COPY_FILES += \
+    frameworks/native/data/etc/android.software.midi.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.software.midi.xml
+
 # USB 端口 HAL（usb/）：向 UsbPortManager 报告 port0 的状态，并按插进来的东西决定 port0 的数据角色
 # （原先 gaokun3-usbrole.sh 每 2 秒轮询一次的 follow 模式），还把 gadget 的连接状态写给 UsbDeviceManager
 # （patches/0096 的 android_usb 类）。设置里的 USB 页面（数据角色、USB 用途）和 MTP / PTP 都由 UsbDeviceManager 管，

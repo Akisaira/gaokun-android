@@ -164,10 +164,10 @@
      以后，MTP / PTP 走 FunctionFS（init.gaokun3.usb.rc），协议由 MtpService 在用户态实现。
      不弹通知：键盘接口的 MCU（12d1:10b8）一直挂在 USB 上、带 HID 接口，UsbDeviceManager 看到这类设备就隐藏 USB 连接通知。
      速度：靠近电源键的口（a600000.usb）在设备模式下只有 high-speed。
-     USB 网络共享（RNDIS）和 MIDI 的入口会出现在设置里，还没有测通。 -->
+     同一页的 USB 网络共享（RNDIS）和 MIDI 见 init.gaokun3.usb.rc 的"USB 网络共享（RNDIS）、MIDI"一段。 -->
 * **现象**：插上电脑后，平板上不会弹出"USB 用途"的通知。要传文件，到 **设置 > 已连接的设备 > USB** 里选
   "文件传输"或"PTP"，电脑上随后会出现"MateBook E Go"这个便携设备。传输速度只有 USB 2.0 的水平（约 30 MB/s）。
-  同一个页面里还有"USB 网络共享"和"MIDI"，这两项目前还不能用。
+  同一个页面里还有"USB 网络共享"和"MIDI"。
 * **原因**：键盘接口在系统里是一个一直插着的 USB 键盘，Android 看到这类设备时不显示 USB 连接的通知。
   靠近电源键的 USB-C 口在设备模式下只能跑 USB 2.0。
 * **替代办法**：

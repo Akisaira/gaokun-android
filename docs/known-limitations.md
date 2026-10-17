@@ -156,7 +156,7 @@ yourself, you should know that they contain these components.
 * **What you see**: when you connect the tablet to a computer, the tablet shows no "USB preferences" notification. To
   transfer files, go to **Settings > Connected devices > USB** and choose "File transfer" or "PTP"; "MateBook E Go" then
   appears on the computer as a portable device. Transfers run at USB 2.0 speed (about 30 MB/s). The same page also
-  offers "USB tethering" and "MIDI", which do not work yet.
+  offers "USB tethering" and "MIDI".
 * **Why**: the keyboard connector shows up as a USB keyboard that is always plugged in, and Android hides the USB
   connection notification while such a device is present. The USB-C port next to the power button only runs at USB 2.0
   in device mode.
