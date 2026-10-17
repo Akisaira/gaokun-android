@@ -564,6 +564,7 @@ int main(int argc, char **argv)
 
 	for (;;) {
 		int frame_valid = -1;	/* -1: no new frame this round */
+		int reopened = 0;	/* pf[2].revents below belong to the old fd */
 		long long t;
 
 		pf[2].fd = mcu.fd;	/* negative fds are ignored by poll() */
@@ -587,6 +588,7 @@ int main(int argc, char **argv)
 			if (mcu.fd >= 0) {
 				mcu_close(&mcu, t);
 				mcu_open(&mcu, t);
+				reopened = 1;
 			}
 		}
 
@@ -644,16 +646,32 @@ int main(int argc, char **argv)
 			int taps = 0, eraser_set = -1;
 
 			while (ioctl(mcu.fd, USBDEVFS_REAPURBNDELAY, &u) == 0) {
-				if (u->status == 0)
-					taps += mcu_events(&mcu, u->buffer, u->actual_length, t, &eraser_set,
-							   bat);
+				/*
+				 * A reset of the controller, as on every resume (even one
+				 * too short for the check above), kills the URBs and drops
+				 * our claim on the interface, and the controller then needs
+				 * the handshake again: reopen rather than resubmit.
+				 */
+				if (u->status != 0) {
+					printf("%lld mcu: urb status %d, reopening\n", t, u->status);
+					mcu_close(&mcu, t);
+					mcu_open(&mcu, t);
+					reopened = 1;
+					break;
+				}
+				taps += mcu_events(&mcu, u->buffer, u->actual_length, t, &eraser_set, bat);
 				if (mcu_submit(&mcu, (int)(u - mcu.urb)) < 0) {
 					printf("mcu: gone (%d)\n", errno);
 					mcu_close(&mcu, t);
 					break;
 				}
 			}
-			if (mcu.fd >= 0 && (pf[2].revents & (POLLERR | POLLHUP))) {
+			/*
+			 * A hangup on the fd we polled; after a reopen in this round
+			 * it says nothing about the new one, which would otherwise be
+			 * closed again and wait out MCU_RETRY_MS for nothing.
+			 */
+			if (!reopened && mcu.fd >= 0 && (pf[2].revents & (POLLERR | POLLHUP))) {
 				printf("mcu: hangup\n");
 				mcu_close(&mcu, t);
 			}
