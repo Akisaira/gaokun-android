@@ -97,6 +97,34 @@ on property:sys.usb.ffs.ready=1 && property:sys.usb.config=ptp,adb && property:s
     write /config/usb_gadget/g1/idProduct 0x4EE6
     symlink /config/usb_gadget/g1/functions/ffs.ptp /config/usb_gadget/g1/configs/b.1/f1
 
+# ── USB 网络共享（RNDIS）────────────────────────────────────────────────────
+# system 的 init.usb.configfs.rc 在 rndis / rndis,adb 时建 functions/rndis.gs4、链接成 f1、写 UDC，本文件的同名
+# 触发器先执行。RNDIS 的功能类改成 E0/01/03（无线控制器类下的 RNDIS）：Windows 10 / 11 据此装自带的 RNDIS 驱动；
+# 主线 f_rndis 的默认值是 02/02/FF，Windows 不认。class / subclass / protocol 写的是接口关联描述符
+# （drivers/usb/gadget/function/f_rndis.c 的 rndis_bind）。实例在切走时被 init.usb.configfs.rc 删掉，每次都要重设。
+# ⚠️ 值写两位十六进制、不带 0x：这三个属性用 sscanf("%02hhx") 解析（u_ether_configfs.h 的
+#    USB_ETHER_CONFIGFS_ITEM_ATTR_U8_RW），"0xe0" 只读到 "0x"，结果是 0。
+# 网卡名改成 rndis%d（默认是 usb%d）：Android 15 起 EthernetService 默认接管名字匹配 (eth|usb)\d+ 的网卡
+# （packages/modules/Connectivity ServiceConnectivityResources config.xml:216-219，config_ethernet_iface_regex 为
+# "*"），会在 usb0 上跑 DHCP 客户端、登记成有线网络；网络共享把它当上游，发现和自己分出去的网段相同，就不停
+# 重启（PrivateAddressCoordinator 的网段冲突）。网络共享认 rndis\d（tetherableUsbRegexs），EthernetService 不认。
+# ifname 要在绑定之前写，正好跟在 mkdir 后面。
+on property:sys.usb.config=rndis && property:sys.usb.configfs=1
+    mkdir /config/usb_gadget/g1/functions/rndis.gs4
+    write /config/usb_gadget/g1/functions/rndis.gs4/class e0
+    write /config/usb_gadget/g1/functions/rndis.gs4/subclass 01
+    write /config/usb_gadget/g1/functions/rndis.gs4/protocol 03
+    write /config/usb_gadget/g1/functions/rndis.gs4/ifname rndis%d
+    write /config/usb_gadget/g1/idProduct 0x4EE3
+
+on property:sys.usb.ffs.ready=1 && property:sys.usb.config=rndis,adb && property:sys.usb.configfs=1
+    mkdir /config/usb_gadget/g1/functions/rndis.gs4
+    write /config/usb_gadget/g1/functions/rndis.gs4/class e0
+    write /config/usb_gadget/g1/functions/rndis.gs4/subclass 01
+    write /config/usb_gadget/g1/functions/rndis.gs4/protocol 03
+    write /config/usb_gadget/g1/functions/rndis.gs4/ifname rndis%d
+    write /config/usb_gadget/g1/idProduct 0x4EE4
+
 # 切回只有 adb 时换回 adb 的产品 ID（post-fs-data 里设的初值）。
 on property:sys.usb.ffs.ready=1 && property:sys.usb.config=adb && property:sys.usb.configfs=1
     write /config/usb_gadget/g1/idProduct 0x4EE7
