@@ -12,7 +12,8 @@ r_dir_file(hal_usb_default, sysfs_udc)
 # sysfs_batteryinfo（对它的 neverallow 只限 coredomain，见 gaokun3_scripts.te 里 gaokun3_usbrole 的同一条）。
 r_dir_file(hal_usb_default, sysfs_batteryinfo)
 
-# vendor.gaokun3.usbrole.adb_pause / .reversed / .broken：etc/usbrole.rc 和 Parts 的 UsbPortNotifier 据此动作。
+# vendor.gaokun3.usbrole.adb_pause / .reversed / .broken：etc/usbrole.rc 和 Parts 的 UsbPortNotifier 据此动作；
+# vendor.gaokun3.usb.no_android_usb：内核没有 android_usb 类时设，init.gaokun3.usb.rc 据此自己把 adb 写进 sys.usb.config。
 set_prop(hal_usb_default, vendor_gaokun3_prop)
 
 # gadget 的连接状态写进 /sys/class/android_usb/android0/state（patches/0096），UsbDeviceManager 读它和它的 uevent。

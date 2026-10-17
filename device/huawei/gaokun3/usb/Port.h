@@ -16,6 +16,10 @@ constexpr char kAdapterName[] = "gaokun-ec-adapter";
 // android_usb class that patches/0096 adds.
 constexpr char kGadgetState[] = "/sys/class/android_usb/android0/state";
 
+// Set to 1 when that class is missing: init.gaokun3.usb.rc then puts adb in
+// sys.usb.config itself, as there is no UsbDeviceManager to do it.
+constexpr char kNoAndroidUsb[] = "vendor.gaokun3.usb.no_android_usb";
+
 struct Inputs {
     std::string role;     // usb_role: "device", "host" or "none"
     std::string udc;      // UDC state; "" while the controller is a host

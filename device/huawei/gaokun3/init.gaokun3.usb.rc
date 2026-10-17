@@ -70,7 +70,11 @@ on boot
 # 「USB 调试」/「无线调试」打开时，AdbService 起 adbd，把 adb 写进 sys.usb.config 的是 UsbDeviceManager
 # （它也管"USB 用途"）。框架只在 /sys/class/android_usb 存在时才建它，patches/0096 补上了这个类，
 # 连接状态由 USB 端口 HAL 写（usb/Usb.cpp）。原先这里有一条"adbd 一跑起来就把 config 落成 adb"的规则，
-# 是没有 UsbDeviceManager 时的顶替；留着它会把 UsbDeviceManager 切出的 mtp,adb 又改回 adb。
+# 是没有 UsbDeviceManager 时的顶替；无条件留着它会把 UsbDeviceManager 切出的 mtp,adb 又改回 adb。
+# 现在只在内核没有 android_usb 类（没有 0096 的旧内核）时生效：那时没有 UsbDeviceManager，不补这条的话
+# adbd 起来了、gadget 却永远不绑 UDC。USB 端口 HAL 启动时查这个类，没有就设 vendor.gaokun3.usb.no_android_usb=1。
+on property:init.svc.adbd=running && property:sys.usb.configfs=1 && property:vendor.gaokun3.usb.no_android_usb=1
+    setprop sys.usb.config adb
 
 # ── MTP / PTP 的配置（UsbDeviceManager 切"USB 用途"时设 sys.usb.config）──────────────
 # system 的 init.usb.configfs.rc 给 mtp / ptp 链接的是 Android 内核的 f_mtp（functions/mtp.gs0、ptp.gs1），

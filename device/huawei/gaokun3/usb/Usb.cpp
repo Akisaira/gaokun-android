@@ -11,6 +11,8 @@
  * from android0/state and its uevents, which Android kernels send from their
  * configfs gadget. patches/0096 adds that class with a writable state; this
  * HAL writes it (GadgetState), as the UDC state alone does not show an unplug.
+ * On a kernel without the class, it sets vendor.gaokun3.usb.no_android_usb,
+ * and init.gaokun3.usb.rc puts adb in sys.usb.config as before 0096.
  *
  * Only port0 is reported: the USB-C port on the dwc3 controller a600000.usb,
  * the only one that can be a USB device. The other USB-C port (a800000.usb) is
@@ -162,6 +164,12 @@ class Usb : public BnUsb {
     // Starts the thread that pushes status changes and follows the partner;
     // it runs for the life of the process.
     void Start() {
+        // Without the class the framework has no UsbDeviceManager to put adb
+        // in sys.usb.config; init.gaokun3.usb.rc then does.
+        if (!HasGadgetState()) {
+            LOGW("no android_usb class (a kernel without patches/0096): %s=1", kNoAndroidUsb);
+            SetProp(kNoAndroidUsb, "1");
+        }
         std::thread([this] { Monitor(); }).detach();
     }
 
