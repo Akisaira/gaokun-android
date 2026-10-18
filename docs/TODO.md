@@ -18,7 +18,7 @@ D1–D23 是 v1.0-plan §6 的决定，其余是 v1.0-plan 与本文件的条目
 
 **2026-10-18 用户定：rc.2 先不发，能做完的都做完再发。** 当天无人值守能做的已做完（V0 余项、V2、V5、GAME-1 源码排查、GAME-6、HAL 误报 Windows、
 WoWLAN 说法订正、live 控制台刷屏、#46 合入并修 0105、rc.2 第三次构建 `1792312407` + 安装器 `0.2.0-rc.2`）。**剩下的全要用户在场或用户拍板**：
-上机装 `1792312407` 并验收（下一段「下一步」）、② 表「要用户在场的」各项、批 4 测量、B4 新装机、B2 R2 密钥轮换、推送本地提交、③ 表的决定。
+~~上机装 `1792312407` 并验收~~（✅ 10-18 已装、A 档零 FAIL）、rc.2 发版说明定稿与发布、② 表「要用户在场的」各项、批 4 测量、B4 新装机、B2 R2 密钥轮换、推送本地提交、③ 表的决定。
 
 **设备现状**：槽 `_b` = **`1.0.0-rc.1`**（戳 `1791285623`，内核 `912f22c3`），**SELinux enforcing**，active = `_b`。**rc.1 验收（10-06）**：在 dev.10（enforcing）上经 OTA 装（第二次 enforcing 下 OTA ✅），A 档 **PASS 47 · FAIL 0**（发布闸门要的零 FAIL：验收期间临时关了开发机的 5555，跑完恢复）、iris 15/15、前后摄、s2idle 11/11、稳定 MAC、fcitx5 是系统应用（`UPDATED_SYSTEM_APP`，签名吻合）。载荷 `out/rc1-1791285623/`；安装器 `0.2.0-rc.1`（U 盘镜像带 rc.1 系统，Windows 包不带）在 `out/rc1-wt/out/release-installer/0.2.0-rc.1/`。踩到：enforcing 下 Android 侧写 EFI 变量被拒（efivarfs 没标签，`a1d303a` 修，进下一版；只影响开发脚本）。✅ **2026-10-06 21:xx 发布为候选版**：ROM `release.sh --no-build --stage-only` → R2 `staging/crDroidAndroid-16.0-20261006-gaokun3-v12.11/`（8 个文件 HTTP 200，校验清单与本机逐字节同；**不动 OTA 清单**）；安装器 `0.2.0-rc.1` 6 个文件 → R2 `installer/0.2.0-rc.1/`（公开域名逐个核字节数）；GitHub **pre-release** `v1.0.0-rc.1`（tag = `8b7c5ab`，不标 Latest），12 个附件服务端字节数逐一核对一致（OTA 包只在 R2）。安装器产物另存 `out/rc1-installer-0.2.0-rc.1/`。⚠️ 用户这次在聊天里贴了 R2 S3 密钥与 Cloudflare 账户令牌 ⇒ 要轮换（B2）。⚠️ 分派开着：设置里的恢复出厂会真擦。
 
@@ -31,7 +31,7 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 
 **dev.11 带上的（上面已上机）**：`5c48d08` fcitx5 原样安装、`309f735` HAL 的 ESP 认法（EBUSY / enforcing）、`ec5f2a5` 相机 HAL 用合成器栅栏（issue #23）、`a3c354c` crash_dump 的 memfd（enforcing 下无 tombstone）、**内核：`5b5534c` 0078 进链（要重编内核）**，`ro.egl.blobcache.multifile=true`（issue #34），安装器 S1 / S2 修复与风险确认页（安装器侧，重建 live 镜像时带上）。
 
-**★★ 2026-10-18 `1.0.0-rc.2` 第三次构建（rc2c，戳 `1792312407`）已传 staging，⬜ 未上机；用户定：rc.2 先不发，能做完的做完再发**：本地 main `4bf5e42`
+**★★ 2026-10-18 `1.0.0-rc.2` 第三次构建（rc2c，戳 `1792312407`）已传 staging，✅ 10-18 已装上开发机 `_a` 并验收（A 档零 FAIL）；用户定：rc.2 先不发，能做完的做完再发；长跑测试不做**：本地 main `4bf5e42`
 （= origin `8552266`〔#44 / #45 已合〕+ 本地合入 #46〔`c14ec82`〕+ 0105 修复 `c7e7c0c` + live loglevel=3 `2567f1d` + 文档；**均未推送**）；`git archive` 到构建机
 `~/v1-work/repo-rc2c/`（947 个文件 sha 一致）。内核树应用模式打 0097–0110（0018 / 0089 是 #110 的已知误报），`--verify` 打不上 0 / fuzz 0 / 69 文件一致；
 配置与 rc2b 无差别；vmlinuz **`2d6de830…`**、dtb `a1f7abfc…`（与 rc2b 同，没改 dts）；本机 `prebuilt-boot/` 已换（上一版备份 `out/prebuilt-boot-backup-rc2-1791727610/`）。
@@ -39,9 +39,17 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 （9 个文件 HTTP 200，**这次带 `crdroid-manifest.xml`**：`release.sh` 找不到 `repo` 的问题已修 `a996be0`；r2-prune 删了 10-11 那组和 `rc2-1791720612`）；
 开发机 payload `staging/rc2-1792312407/`（sha256 `6dbf37fe…`）。boot.img `c4bc8695…`。小文件与脚本留档 `out/rc2-1792312407/`。构建机已停（回读 deallocated）。
 安装器 `0.2.0-rc.2`（`7274398`，GUI-15：用的就是这一版的 boot.img，`--artifacts` 核过）：✅ 本机造好、未上传（`release-installer.sh` 核对：版本 / 提交 / 内核 = 发布清单里的 boot.img `c4bc8695`、带 gk3-misc、无 M0 变体）；6 个产物留档 `out/rc2-1792312407/installer-0.2.0-rc.2/`，SHA256SUMS 全部复核（含 xz 解压后的 usb.img `a3234d3c…`）。上传 GitHub / R2 `installer/0.2.0-rc.2/` 要用户点头。
-**⬜ 下一步**（用户在场）：adb 便利持久化 → 下 payload → `install-ota-local.sh --go` → `accept.sh --stamp 1792312407` → 下面两段的 USB 系列 / #40 WoWLAN 验收项，
-外加 #44 / #46：s2loop 与息屏一夜看 dmesg 无 `failed to start wow` 之外的 WoW / 恢复错误、`ath11k_scan` wakeup source、息屏中断线后能自己连回（0104）、
-`qcom_stats` 里 ADSP 睡眠计数在涨（0106–0110）、空闲后第一声录音 / 播放正常；GAME-4（默认入口 `uname -r` = 6.6.30）与 GAME-1 上机 5 项。过了再写 `docs/relnotes/v1.0.0-rc.2*.md`。
+**✅ 10-18 22:1x–22:3x 上机**（用户说"继续"，在场）：payload 从 R2 下回本机核 sha → push → `install-ota-local.sh --go`（装进 `_a`、BCAB 撤回 `_b`、OneShot 走直连条目）→
+`adb reboot` **46 秒起来**（`_a` = `1792312407`，enforcing，`uname -r` = `6.6.30-android15-8-…`）→ 验收过后 `bootctl set-active-boot-slot 0`（ESP default 跟成 `*-android-a.conf`）。
+**A 档**：照常 PASS 45 · FAIL 2（A3 = 开发机持久化的 5555）· WARN 1（已知两类 avc：HID `country`、`com.android.se`）· SKIP 1（没给 --video）；
+**发版闸门用的那份**（同 rc.1：临时关 5555、跑完恢复）`out/accept/1792312407-20261018-222504/report.txt` = **PASS 47 · FAIL 0 · WARN 1 · SKIP 1**。
+追加实测：WoWLAN enabled（`disconnect`、`gtk_rekey_failure`）；`ath11k_scan` wakeup source 在工作（开机扫描 19 次）；四个 LPASS 宏 runtime suspended、autosuspend 100 ms；
+**ADSP 睡眠计数 6**（rc.1 时代一直 0）；s2loop `WOW=1`（`f2c3979`）real 3/3 PASS、Wi-Fi 没断、declined 0（用户定长跑不做，停在第 3 轮）；
+GAME-1 上机 5 项全符合源码排查（只有 `reports kernel level` 一条 WARNING、无 LTS 告警、`ksud` KMI = android15-6.6、`ro.kernel.version` = 6.6、`CONFIG_USERFAULTFD` 没开）；
+GAME-3 全机 0 条 `execmem`；GAME-4：直连条目起的是 0085 内核（默认入口用同一个 boot.img，⬜ 下次自然重启核）；gk3pend 常驻、0 次崩溃；NET-7 国家码 CN；
+NET-10 开机探测打到 hicloud 与 miui 两个端点都 204；fcitx5 在输入法列表里；root 进程 `kill -SEGV` 出 tombstone（a3c354c）。
+⬜ 解锁后才能测的：应用进程崩溃出 tombstone、相机预览 5 分钟（#23）、fcitx5 实际打字。⬜ 要人与外设的：笔 / 手掌、USB 系列、关开路由器、音游延迟。
+⬜ 长跑（用户定不做）：s2loop 100 轮、息屏过夜。发版说明草稿 `docs/relnotes/v1.0.0-rc.2*.md` 已写（`d4397d2`），等用户定稿。
 
 **（被 rc2c 取代）****★ 2026-10-11 23:3x `1.0.0-rc.2` 重新构建完、已传 staging，⬜ 未上机（发布构建，戳 `1791727610`）**：仓库 `ce06b1b`（本地 main = origin `90f4185`〔PR #36–#40〕+ 另一会话 5 个本地提交 + 文档；`git archive` 到构建机 `~/v1-work/repo-rc2b/`，931 个文件 sha 一致）。构建机树先 `git apply -R` 旧 0048、旧版 0012（备份 `~/v1-work/rc2b/gaokun3.dts.before-migrate`），再打新 0012 + 0086–0095（fuzz 0）。⚠️ 打满的树上再跑应用模式会把 0018、**0089** 误报"打不上"（#110 盲区，0089 被 0090–0092 叠改），判据只看 `--verify`：打不上 0 / fuzz 0 / 55 文件一致。配置与上一版只差 `TYPEC_MUX_GPIO_SBU=y`。vmlinuz **`d5023d96…`**、dtb **`a1f7abfc…`**（核过：l9d `regulator-always-on`、usb_0 otg + role switch、无 `select-utmi-as-pipe-clk` / high-speed、EC `wakeup-source`）；本机 `prebuilt-boot/` 已换（上一版备份 `out/prebuilt-boot-backup-rc2-1791720612/`）。`release.sh --dry-run`（D16）第 2 步断言全过；镜像核对：`wowlan_triggers=disconnect gtk_rekey_failure`、`android.hardware.usb-service.gaokun3` + rc + VINTF、`hal_usb_default` 有 `sysfs_udc` 的 `lnk_file` 读、ueventd 两行、指纹 `…:user/release-keys`。`--no-build --stage-only` → `staging/crDroidAndroid-16.0-20261011-gaokun3-v12.11/`（**同名，覆盖了上一版**；8 个文件 HTTP 200，不动 OTA 清单，r2-prune 删 0 组）；开发机 payload `staging/rc2-1791727610/`（`payload.bin` 1396319495 字节、sha256 `56bbb86f…`）。boot.img `5ea003e6…`。小文件与脚本留档 `out/rc2-1791727610/`。构建机已停（回读 deallocated，机型 D16）。**⬜ 下一步**同下面那版的"下一步"（`--stamp 1791727610`），再加本段下一段列的 USB 系列与 #40 验收项。
 
@@ -81,7 +89,7 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 |---|---|---|---|---|
 | NET-4 · B20 | 稳定的 Wi-Fi MAC | ◐ | dev.9 上查出原修法没生效（随机化总开关关着时框架不碰 MAC）⇒ `b2c8c44`：开机在 Wi-Fi 打开前把 `wlan0` 写成序列号派生值；手动验证过、挂起 11 轮固件重载后地址不变。⬜ dev.10：两次重启 `wlan0` 相同且首字节含 0x02 | 下文「批 2 · 网络」 |
 | NET-2 | 热点与 Wi-Fi 同时开 | ◐ | dev.9 `wlan1` 预建就位。⬜ 用户在场：连着 Wi-Fi 开热点，Wi-Fi 不断、另一台手机连热点能上网（顺带收掉 #11 的尾巴） | 同上 |
-| NET-7 / NET-10 | 热点 5 GHz / WPA3 / 国家码；联网探测备用地址 | ◐ | ⬜ `cmd wifi get-country-code` 非 null、手机连 5 GHz / WPA3 热点；`dumpsys network_stack` 两项 URL（NET-10 可静默做） | 同上 |
+| NET-7 / NET-10 | 热点 5 GHz / WPA3 / 国家码；联网探测备用地址 | ◐ | ✅ 10-18：国家码 CN；NET-10 开机探测打到 hicloud 与 miui 两个端点都 204（overlay `com.android.networkstack.overlay` 生效；settings 里的两项是 null，正常）。⬜ 手机连 5 GHz / WPA3 热点 | 同上 |
 | NET-1 | 息屏时 AP 断开后自动重连（软件 PNO） | ◐ | DeviceConfig 那道门已去（`e3c5ba3`，tree-fix [18]，dev.2 起）。⬜ V13 实测 | 下文 V3 / V13 |
 | AV-4 / AV-10 / AV-16 | USB 声卡、有线耳机麦、裁掉示例设备 | ◐ | dev.9 静态项在（`IModule/usb`、cmdline 的 `snd_usb_audio.index`）。⬜ 插 USB 声卡（port1）+ 开机前插着冷启动一次；带麦耳机录 5 秒；`dumpsys media.audio_policy` 静默核对 —— 全部不放音 | 下文「批 2 · 音频」 |
 | PWR-16 | Parts 待机开关 | ◐ | ⬜ 开关在「电池」页、拨关拨开属性随动、重启保留、开发机以前 setprop 的 0 显示成"关"；enforcing 下 avc 为 0 | archive `#v1-batch01`「批 2 ROM 侧」 |
@@ -123,10 +131,10 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 
 | 编号 | 一句话 | 状态 | 下一步 | 证据 |
 |---|---|---|---|---|
-| GAME-1 | 内核版本串覆写 `patches/0085`（uname 报 `6.6.30-android15-8-…`） | ◐ 用户 10-11 定：进发版 | vermagic 不变已核（gaming.md §4.1）。✅ 10-11 known-limitations 中英已披露（第一节「内核对外报告的版本号不是真实版本」，真实版本看 `dmesg | head -1`）；⬜ 发版说明披露（rc.2 的说明定稿时写）；✅ 10-18 源码排查：无功能影响（libvintf 多一条 WARNING、NetBpfLoad 非 LTS 告警消失、ART UFFDIO_MOVE 退回 COPY；ksud 把 KMI 认成 android15-6.6 ⇒ 已知限制已提醒别用 LKM 安装）；⬜ 0085 内核下上机核对 5 项（gaming.md §4.1 末） | gaming.md §4.1 |
+| GAME-1 | 内核版本串覆写 `patches/0085`（uname 报 `6.6.30-android15-8-…`） | ◐ 用户 10-11 定：进发版 | vermagic 不变已核（gaming.md §4.1）。✅ 10-11 known-limitations 中英已披露（第一节「内核对外报告的版本号不是真实版本」，真实版本看 `dmesg | head -1`）；⬜ 发版说明披露（rc.2 的说明定稿时写）；✅ 10-18 源码排查：无功能影响（libvintf 多一条 WARNING、NetBpfLoad 非 LTS 告警消失、ART UFFDIO_MOVE 退回 COPY；ksud 把 KMI 认成 android15-6.6 ⇒ 已知限制已提醒别用 LKM 安装）；✅ 10-18 在 `1792312407` 上上机核对 5 项全符合 | gaming.md §4.1 |
 | GAME-2 | netlink 隐私边界 `patches/0084` | ◐ | 开发机 10-11 两条泄露都 `EACCES` ✅。⬜ 随下一个发版内核走 `--verify` + A 档；⬜ Wi-Fi / 热点 / `ip neigh`（root）照常 | gaming.md §1 |
-| GAME-3 | `system_server execmem` 去掉（swangle sepolicy 移出、`…EXECMEM_FOR_SWIFTSHADER` 注释掉） | ◐ 已提交 `53b34ff` | `1791704075` 实测 Denied ✅。⬜ enforcing 下全机 avc 无 `execmem` | BoardConfig.mk 注释 |
-| GAME-4 | 0085 内核固化进 `boot_b`（现在只能走直连槽条目） | ◐ 已进 rc.2 镜像 | **10-11 证实**：走默认入口起的是 7.2.9（`boot_b` 里没换）。✅ 10-11 rc.2：`prebuilt-boot/` 换成 `a0ea6ea4`（含 0079–0085）、`release.sh` 断言 boot.img 的 kernel 与它逐字节同。⬜ 装上 rc.2 后默认入口起来 `uname -r` = `6.6.30-android15-8-…` | gaming.md §4.3 |
+| GAME-3 | `system_server execmem` 去掉（swangle sepolicy 移出、`…EXECMEM_FOR_SWIFTSHADER` 注释掉） | ◐ 已提交 `53b34ff` | `1791704075` 实测 Denied ✅。✅ 10-18 `1792312407` enforcing 下全机 avc 0 条 `execmem` | BoardConfig.mk 注释 |
+| GAME-4 | 0085 内核固化进 `boot_b`（现在只能走直连槽条目） | ◐ 10-18（`1792312407` 装进 `_a`，直连条目起来 `uname -r` = 6.6.30；`boot_a` 与 ESP `slot_a/Image` 出自同一个 boot.img ⇒ 默认入口应同样是 6.6.30 —— 推断，⬜ 下次自然重启走默认入口时核一次） | **10-11 证实**：走默认入口起的是 7.2.9（`boot_b` 里没换）。✅ 10-11 rc.2：`prebuilt-boot/` 换成 `a0ea6ea4`（含 0079–0085）、`release.sh` 断言 boot.img 的 kernel 与它逐字节同。⬜ 装上 rc.2 后默认入口起来 `uname -r` = `6.6.30-android15-8-…` | gaming.md §4.3 |
 | GAME-5 | 原 `patches/0086`（KernelSU 子目录）进正规入口 | ✅ 10-11 | 已改名 `patches/resukisu/0003-…`（`kernel-setup-resukisu.sh` 打、`release.sh` 核）；本机对 pin `--check` 过。✅ 10-11 构建机：0001–0003 都已在树里、脚本幂等跳过、rc.2 内核编过；树上另一处手改（`adb_root.c` 的 include）撤掉后照样编过 ⇒ 不需要（`patches/resukisu/README.md`） | gaming.md §4.2 |
 | GAME-6 | `game-mode.sh` 10-11 审查修复 + 上机 | ✅ 10-11 上机 | ✅ hide / unhide（数据保留）、`on 1` 走 TCP 与 USB 都自动恢复、开机兜底、noforge / forge。上机挖出的真凶：定时器在 adbd 的 cgroup 里被 init 一起杀（gaming.md §2 第 2 条）。✅ 10-18 查明 `unhide` 的 `install-existing` 必然失败：单用户第三方应用 `uninstall --user 0` 是整包删除、`-k` 只留数据（`DeletePackageHelper.java:494-504`），备份那条才是主路径 | gaming.md §2 |
 | GAME-7 | 验收：英雄联盟手游 / Wild Rift 进对局 | ⬜ | `on` + `hide` 后测（先 forge，不行再 noforge 对比）；记卡在哪一层 | #17、gaming.md §3 |

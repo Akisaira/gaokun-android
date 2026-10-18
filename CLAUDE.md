@@ -4,7 +4,7 @@
 
 ## 现在（2026-10-18；每次开工更新，旧内容搬进 project-log）
 
-* **阶段：1.0 发版前。** 最新发布 v0.7.1-alpha（2026-10-04）。**`1.0.0-rc.1`（戳 `1791285623`）2026-10-06 已作为候选版发布**（GitHub pre-release + R2 staging / installer，**没进 OTA 清单**），装在开发机 `_b`、验收零 FAIL。最新正式版仍是 v0.7.1-alpha。**`1.0.0-rc.2`：用户 10-18 定"先不发，能做完的都做完再发"。** 现行候选是第三次构建 **戳 `1792312407`**（本地 `4bf5e42`：#36–#40 + #44 ath11k 崩溃恢复 + #45 手写笔 + #46 待机 Wi-Fi / LPASS 撤票〔本地合入，0105 另修一处〕+ live loglevel=3；内核 `2d6de830`），已传 R2 staging（开发机 payload `staging/rc2-1792312407/`），安装器 `0.2.0-rc.2` 本机已造，**⬜ 未上机、未发 pre-release**；`1791727610` / `1791720612` 作废。**本地 main 有十几个提交没推**（含 #46 的本地合并，推了 GitHub 才会把 #46 标成已合并；推送要用户点头）。剩什么看 `docs/TODO.md` 顶部「▶ 1.0」；发版标准 / 阻断项 / 待定决定看 `docs/v1.0-plan.md`。
+* **阶段：1.0 发版前。** 最新发布 v0.7.1-alpha（2026-10-04）。**`1.0.0-rc.1`（戳 `1791285623`）2026-10-06 已作为候选版发布**（GitHub pre-release + R2 staging / installer，**没进 OTA 清单**），装在开发机 `_b`、验收零 FAIL。最新正式版仍是 v0.7.1-alpha。**`1.0.0-rc.2`：用户 10-18 定"先不发，能做完的都做完再发"。** 现行候选是第三次构建 **戳 `1792312407`**（本地 `4bf5e42`：#36–#40 + #44 ath11k 崩溃恢复 + #45 手写笔 + #46 待机 Wi-Fi / LPASS 撤票〔本地合入，0105 另修一处〕+ live loglevel=3；内核 `2d6de830`），已传 R2 staging（开发机 payload `staging/rc2-1792312407/`），安装器 `0.2.0-rc.2` 本机已造，**✅ 10-18 已装上开发机 `_a` 并验收（A 档零 FAIL），⬜ 未发 pre-release**（发版说明草稿 `docs/relnotes/v1.0.0-rc.2*.md`）；`1791727610` / `1791720612` 作废。**本地 main 有十几个提交没推**（含 #46 的本地合并，推了 GitHub 才会把 #46 标成已合并；推送要用户点头）。剩什么看 `docs/TODO.md` 顶部「▶ 1.0」；发版标准 / 阻断项 / 待定决定看 `docs/v1.0-plan.md`。
 * 内核 v7.2.9 stable + `patches/0076`（撤回 stable 撤掉的双 DSI 绑定 PLL 修复，否则黑屏）；dev.9 起发布内核不带指纹的 0050（D21，只进实验内核）。
 * 统一启动入口 `gk3boot.efi` + fastboot 执行端：E3–E8（含 OTA 自动回滚）、E6、E7 真机过；镜像默认动作模式 + BCB 分派开；E10 恢复出厂用户定不测（`docs/boot-entry-design.md`）。
 * 发布构建（dev.1 起）= 关免授权 adb、`ro.debuggable=0`，变体仍是 userdebug。SELinux 默认 enforcing（用户 10-06 定 D5，dev.10 起）。
@@ -41,8 +41,11 @@
 > * ⚠️★★ **ROM 变体只用 `lineage_gaokun3-bp4a-userdebug`**：`-user` 的 init 强制 enforcing（`selinux.cpp:112-116`），装上去起不来（#117 §15）。
 > * **推仓库、发版要用户点头**；其余（本地提交、构建、staging、设备实验）直接做。
 >
-> ### 现在设备上跑的是什么（2026-10-11 18:4x 实机读到；历次状态见 project-log）
-> * **10-18 16:2x 只读复核**：跑的仍是 `_b` = `1791704075`、内核 `7.2.9-gaokun3+`、enforcing（USB adb 在，5555 局域网里没扫到）。
+> ### 现在设备上跑的是什么（2026-10-18 22:3x 实机读到；历次状态见 project-log）
+> * ★ **10-18 22:1x 起：active = `_a` = rc.2 候选 `1792312407`**（`install-ota-local.sh --go` 装、OneShot 直连条目起来、验收后 `set-active-boot-slot 0`，ESP default = `*-android-a.conf`），
+>   内核 0085 版（`uname -r` = `6.6.30-android15-8-…`，真实 7.2.9）、enforcing；`_b` 仍是 `1791704075`。adb 便利持久化照旧（USB + TCP 5555 都通）。
+>   ⚠️ 屏幕锁着（开机后没人解锁，焦点 `FallbackHome`），解锁前普通 App 的入口解析不到。
+> * （以下是装 rc.2 之前的记录）**10-18 16:2x 只读复核**：跑的仍是 `_b` = `1791704075`、内核 `7.2.9-gaokun3+`、enforcing（USB adb 在，5555 局域网里没扫到）。
 >   ⚠️ 但 **active 槽是 `_a`**（`bootctl get-active-boot-slot` = 0、`_a` 已不可启动），这次开机（10-18 14:28）是 gk3boot **回落**到 `_b`
 >   （`androidboot.gk3boot.event=fallback`、`streak=1`）—— 之前有人把 active 设成了 `_a`、`_a` 没起来；谁设的、`_a` 为什么起不来没查（开机日志已滚掉）。
 >   `vendor.gk3pend` 在 7.2.9 上每 10 秒崩一次重启（没有 `gk3_pen` 设备，PR #27 的内核侧不在这个内核里），无害但刷日志。
