@@ -136,7 +136,14 @@ CLAUDE.md「环境」一节有简版；本文是细则与依据。
 | `GK3_VERSION` | 无 | 项目版本号（如 `0.8.0-alpha`），构建时写进 vendor 属性 `ro.vendor.gaokun3.version`（REL-5）。非 `--stage-only` 必须设；**构建候选版时和用 `--no-build` 发它时要设同一个值** —— 属性是构建时烤进去的，发版时设的只用来核对 |
 | `GK3_ACCEPT_REPORT` | `$GK3_REPO/out/accept/<戳>-*/report.txt` 里最新的一份 | 这个戳的 A 档验收报告（REL-6 / G11）。`scripts/accept.sh` 在**维护者的 Mac** 上跑（走 adb），报告写在 Mac 的 `out/accept/<戳>-<时间>/report.txt`；`release.sh` 在构建机上跑 —— 两台机器，所以要先 `scp` 过去再设这个变量。正式发版（不带 `--dry-run` / `--stage-only`）时报告不过关就停；判据见 `release.sh` 头注释 |
 
-### ⚠️ 待构建机核实：两个开关变量能不能进 Kati
+### ◐ 两个开关变量能不能进 Kati —— `GK3_VERSION` 已由产物证实，`GAOKUN3_DEV_BUILD=1` 那一向没直接看过
+
+**2026-10-18 回填**：rc.1（`1791285623`）、rc.2 的三次构建（`1791720612`、`1791727610`）都是 `release.sh` 在构建机上
+带 `GK3_VERSION=1.0.0-rc.*` 跑的，第 2 步 REL-5 断言（`release.sh` 里 `grep -Fqx "ro.vendor.gaokun3.version=$GK3_VERSION" vendor/build.prop`）
+全部通过 ⇒ 环境变量**确实传进了** Kati 的产品配置。`GAOKUN3_DEV_BUILD` 走的是同一条路（`lineage_gaokun3.mk` 里 `$(GAOKUN3_DEV_BUILD)`），
+不设时产物是发布构建也已由第 2 步断言反复证实；设成 1 时产物带不带开发便利，dev.1 起没再出过开发构建，没直接看过。
+下面的对照仍可在下次开机时顺手做（只差 `GAOKUN3_DEV_BUILD=1` 那两行）。
+
 
 `GAOKUN3_DEV_BUILD` 与 `GK3_VERSION` 都是靠**环境变量**传进产品配置（`lineage_gaokun3.mk` / `device.mk`）的。
 本地参考树里查不到 crDroid 16 的 soong_ui 是否把任意环境变量透传给 Kati 的产品配置阶段，**没在构建机上验过**。
