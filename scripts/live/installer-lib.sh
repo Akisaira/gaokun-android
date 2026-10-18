@@ -2623,7 +2623,8 @@ gk3_job_start() {
     if command -v "$sr" >/dev/null 2>&1 && { [ -n "${GK3_SYSTEMD_RUN:-}" ] || [ -d /run/systemd/system ]; }; then
         mode=systemd-run; unit=gk3-job-$id
         while IFS='=' read -r v _; do env+=(--setenv="$v"); done < <(env | grep '^GK3_[A-Za-z0-9_]*=' || true)
-        "$sr" --quiet --collect --unit="$unit" --service-type=exec --description="gaokun3 installer: $1" \
+        # 脚本留给 bash 展开：systemd 默认会把 $$ 变成 $，导致 pid 文件无效、跟读误报 job-lost。
+        "$sr" --quiet --collect --expand-environment=no --unit="$unit" --service-type=exec --description="gaokun3 installer: $1" \
               --working-directory="$PWD" "${env[@]}" \
               ${pre[@]+"${pre[@]}"} "$(command -v bash)" -c "$GK3__JOB_BODY" gk3-job "$d" "$GK3_LIBDIR/installer-lib.sh" "$@" >&2 \
             || { echo "systemd-run 起不来 $unit" > "$d/start-error"; gk3_fail job-start -- "systemd-run 起不来写盘单元（${unit}）"; return 1; }

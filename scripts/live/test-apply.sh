@@ -1053,7 +1053,8 @@ FSR
 chmod +x "$W/fake-systemd-run"
 GOT=$(cd "$W" && GK3_TEST_SRLOG=$W/sr.args GK3_SYSTEMD_RUN=$W/fake-systemd-run gk3_job_run gk3_release_info "$REL" 2>"$W/j4.err"); rc=$?
 [ "$rc" = 0 ] && [ "$GOT" = "$WANT" ] && grep -q '^JOB id=.* mode=systemd-run unit=gk3-job-' "$W/j4.err" \
-  && grep -qx -- '--collect' "$W/sr.args" && grep -qx -- '--service-type=exec' "$W/sr.args" && grep -q -- '^--unit=gk3-job-' "$W/sr.args" \
+  && grep -qx -- '--collect' "$W/sr.args" && grep -qx -- '--expand-environment=no' "$W/sr.args" \
+  && grep -qx -- '--service-type=exec' "$W/sr.args" && grep -q -- '^--unit=gk3-job-' "$W/sr.args" \
   && grep -qx -- '--setenv=GK3_MACHINE_ID' "$W/sr.args" && grep -qx -- "--working-directory=$W" "$W/sr.args" \
     && ok "有 systemd 时：systemd-run --unit=gk3-job-… --collect --service-type=exec，GK3_* 用 --setenv 带过去，工作目录带过去；输出照样一致" \
     || { bad "systemd-run 那条路不对（rc=${rc}）"; sed 's/^/      /' "$W/sr.args"; }

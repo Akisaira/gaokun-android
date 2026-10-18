@@ -250,6 +250,26 @@ KPATCHES=(
     #    或数据线能唤醒（Android再按Wake on plug亮屏）。
     0094-platform-arm64-huawei-gaokun-ec-disable-the-IRQ-across-suspend.patch
     0095-arm64-dts-gaokun3-EC-IRQ-as-wakeup-source.patch
+    # ★★ 0097–0099：ath11k固件崩溃恢复，准备推主线（英文说明，0097、0098的Fixes指向主线提交）。打开WoWLAN
+    #    （#40）以后，固件偶尔在休眠中崩溃，崩溃恢复又和系统挂起撞在一起：内核panic，或者WLAN的PCIe链路断掉。
+    #    0097：恢复失败时不再释放HAL。32be3ca4cf78以后成功路径只清零、复用HAL，失败路径却还释放它，下一次
+    #    恢复就解引用空的srng_config；0098：挂起时先拿core_lock，等进行中的恢复做完，环被恢复释放了就不碰；
+    #    WoW挂起在恢复期间改走不带WoW的挂起；0099：固件一崩溃就让发给它的命令立即失败。系统挂起、恢复期间
+    #    （PM_SUSPEND_PREPARE到PM_POST_SUSPEND）不做重置，交给恢复：断电挂起醒来本来就重新加载固件，否则在
+    #    ath11k_mac_op_start()里先断电、上电再让mac80211配置；醒着时照常重置，并在恢复完成之前不让系统挂起
+    #    （wakeup source "ath11k_recovery"，最长60秒）。
+    0097-wifi-ath11k-keep-the-HAL-when-crash-recovery-fails.patch
+    0098-wifi-ath11k-dont-reap-rings-that-crash-recovery-frees-on-suspend.patch
+    0099-wifi-ath11k-keep-firmware-crash-recovery-away-from-system-suspend.patch
+    # ★★ 0100–0102：接着0097–0099，待机测试里又找到的三处，同样准备推主线。0100：醒来时发现固件在睡眠中崩了
+    #    （RDDM/SYS_ERR）就交给崩溃恢复：原来强行恢复MHI，等满超时失败，mac80211判定硬件丢失、关掉接口，Wi-Fi到
+    #    下次冷启动前都起不来，之后每次唤醒还要多等约20秒；0101：崩溃恢复成功后再保持唤醒10秒
+    #    （ATH11K_RECOVERY_SETTLE_MS），否则系统立刻挂起，WoW落在刚重启、还没连上的固件上，又把它弄崩，循环下去；
+    #    0102：“断线唤醒”对应固件的四个唤醒事件（WOW_DEAUTH_RECVD_EVENT、WOW_DISASSOC_RECVD_EVENT、WOW_BMISS_EVENT、
+    #    WOW_CSA_IE_EVENT），都是用来发现已有连接断开的；原来没连上路由器时进WoW也打开，现在只在arvif->is_up时打开。
+    0100-wifi-ath11k-hand-a-firmware-crash-found-on-resume-to-crash-recovery.patch
+    0101-wifi-ath11k-stay-awake-for-a-while-after-crash-recovery.patch
+    0102-wifi-ath11k-arm-the-WoW-disconnect-events-only-when-connected.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
