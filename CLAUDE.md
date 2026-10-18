@@ -2,13 +2,13 @@
 
 在华为 MateBook E Go 上跑原生 AOSP（现基于 crDroid 16），目标是稳定运行 arm64 手游。本文件每个会话都整份读入 —— **只放"现在"和规矩**，历史进 `docs/project-log.md`。
 
-## 现在（2026-10-06；每次开工更新，旧内容搬进 project-log）
+## 现在（2026-10-18；每次开工更新，旧内容搬进 project-log）
 
-* **阶段：1.0 发版前。** 最新发布 v0.7.1-alpha（2026-10-04）。**`1.0.0-rc.1`（戳 `1791285623`）2026-10-06 已作为候选版发布**（GitHub pre-release + R2 staging / installer，**没进 OTA 清单**），装在开发机 `_b`、验收零 FAIL。最新正式版仍是 v0.7.1-alpha。**`1.0.0-rc.2` 已按 10-11 用户的决定推迟重建：新戳 `1791727610`**（仓库 `ce06b1b`，含 PR #36–#40：l9d 常开 / UCSI / EC 唤醒 / USB 端口 HAL / WoWLAN；内核 `d5023d96`）已构建、传 R2 staging（开发机 payload `staging/rc2-1791727610/`），**⬜ 未上机、未发 pre-release**；早先的 `1791720612` 作废（TODO「① 」上方一段）。剩什么看 `docs/TODO.md` 顶部「▶ 1.0」；发版标准 / 阻断项 / 待定决定看 `docs/v1.0-plan.md`。
+* **阶段：1.0 发版前。** 最新发布 v0.7.1-alpha（2026-10-04）。**`1.0.0-rc.1`（戳 `1791285623`）2026-10-06 已作为候选版发布**（GitHub pre-release + R2 staging / installer，**没进 OTA 清单**），装在开发机 `_b`、验收零 FAIL。最新正式版仍是 v0.7.1-alpha。**`1.0.0-rc.2`：用户 10-18 定"先不发，能做完的都做完再发"。** 现行候选是第三次构建 **戳 `1792312407`**（本地 `4bf5e42`：#36–#40 + #44 ath11k 崩溃恢复 + #45 手写笔 + #46 待机 Wi-Fi / LPASS 撤票〔本地合入，0105 另修一处〕+ live loglevel=3；内核 `2d6de830`），已传 R2 staging（开发机 payload `staging/rc2-1792312407/`），安装器 `0.2.0-rc.2` 本机已造，**⬜ 未上机、未发 pre-release**；`1791727610` / `1791720612` 作废。**本地 main 有十几个提交没推**（含 #46 的本地合并，推了 GitHub 才会把 #46 标成已合并；推送要用户点头）。剩什么看 `docs/TODO.md` 顶部「▶ 1.0」；发版标准 / 阻断项 / 待定决定看 `docs/v1.0-plan.md`。
 * 内核 v7.2.9 stable + `patches/0076`（撤回 stable 撤掉的双 DSI 绑定 PLL 修复，否则黑屏）；dev.9 起发布内核不带指纹的 0050（D21，只进实验内核）。
 * 统一启动入口 `gk3boot.efi` + fastboot 执行端：E3–E8（含 OTA 自动回滚）、E6、E7 真机过；镜像默认动作模式 + BCB 分派开；E10 恢复出厂用户定不测（`docs/boot-entry-design.md`）。
-* 发布构建（dev.1 起）= 关免授权 adb、`ro.debuggable=0`，变体仍是 userdebug。SELinux 默认 permissive，1.0 切不切 enforcing 待定（v1.0-plan SEC-4 / D5）。
-* 图形安装器（Flutter + Debian live，`0.1.0-preview`）真机装过、网络安装通；双系统 / Windows 伴随工具已写，多数没上过真 Windows（`docs/stage7-flutter-debian.md`）。
+* 发布构建（dev.1 起）= 关免授权 adb、`ro.debuggable=0`，变体仍是 userdebug。SELinux 默认 enforcing（用户 10-06 定 D5，dev.10 起）。
+* 图形安装器（Flutter + Debian live，现行 `0.2.0-rc.x`，随 rc 发）真机装过、网络安装通；双系统 / Windows 伴随工具已写，多数没上过真 Windows（`docs/stage7-flutter-debian.md`）。
 * 指纹：华为签名 TA 已在本机加载进 QSEE（app_id=5，#125）；剩 client driver + HAL（TODO T6）。
 
 > ## ★★★ 开工前先读
@@ -42,6 +42,10 @@
 > * **推仓库、发版要用户点头**；其余（本地提交、构建、staging、设备实验）直接做。
 >
 > ### 现在设备上跑的是什么（2026-10-11 18:4x 实机读到；历次状态见 project-log）
+> * **10-18 16:2x 只读复核**：跑的仍是 `_b` = `1791704075`、内核 `7.2.9-gaokun3+`、enforcing（USB adb 在，5555 局域网里没扫到）。
+>   ⚠️ 但 **active 槽是 `_a`**（`bootctl get-active-boot-slot` = 0、`_a` 已不可启动），这次开机（10-18 14:28）是 gk3boot **回落**到 `_b`
+>   （`androidboot.gk3boot.event=fallback`、`streak=1`）—— 之前有人把 active 设成了 `_a`、`_a` 没起来；谁设的、`_a` 为什么起不来没查（开机日志已滚掉）。
+>   `vendor.gk3pend` 在 7.2.9 上每 10 秒崩一次重启（没有 `gk3_pen` 设备，PR #27 的内核侧不在这个内核里），无害但刷日志。
 > * **active = `_b` = 新 ROM 戳 `1791704075`**（10-11 构建，带 tree-fix [22]、去掉 swangle sepolicy；**不带 [23]**——`/system/build.prop` 指纹仍是 `:userdebug/`，`getprop` 的 `:user/` 是运行时改的；内核槽里是 dev.11 的 `705b1387`；载荷不在本机 `out/`），enforcing。
 >   18:2x 用户按电源键重启后走默认入口（`via=gk3boot`、`gk3boot-android-b.conf`）⇒ 内核是 `boot_b` 里的 **7.2.9**（`7.2.9-gaokun3+`）——
 >   证实 `boot_b` 没换成 0085 内核（TODO GAME-4）。0085 内核 `out/dev12-k0085/vmlinuz-a8f7c90e.efi` 只能走直连槽条目 `8a29534f…-android-b.conf` + oneshot 起。
