@@ -574,8 +574,8 @@ into Windows); delete that folder and restart once.
 
 ## Erasing your data (factory reset)
 
-⚠️ **Settings → System → Reset options → *Erase all data* currently does
-nothing.** That path writes `boot-recovery` into the bootloader control block
+⚠️ **Settings → System → Reset options → *Erase all data (factory reset)*
+currently does nothing.** That path writes `boot-recovery` into the bootloader control block
 in `misc` and reboots, expecting the bootloader to hand control to recovery.
 systemd-boot does not read that block and there is no working recovery here
 (see below), so the request lands nowhere — your data is still there

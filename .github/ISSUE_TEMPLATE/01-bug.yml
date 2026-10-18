@@ -66,10 +66,10 @@ body:
         The **build stamp** (`ro.build.date.utc`, a 10-digit number) says exactly which build you are on; every release note lists it. Paste the output of this, over adb:
         **构建戳**（`ro.build.date.utc`，一个 10 位数字）能精确确定你装的是哪一版，每份发版说明里都写着它。请用 adb 跑下面这条并贴输出：
         ```
-        getprop ro.build.date.utc; getprop ro.build.version.incremental; getprop ro.build.fingerprint; uname -a; getprop ro.boot.slot_suffix
+        getprop ro.build.date.utc; getprop ro.build.version.incremental; getprop ro.build.fingerprint; getprop ro.vendor.gaokun3.version; uname -a; getprop ro.boot.slot_suffix
         ```
-        No computer at hand? Write the version line from *Settings → About* (looks like `v12.11-20261003`) and say that is what it is. Note that `12.11` is crDroid's version number, not this project's.
-        手边没电脑：写下「设置 → 关于」里的版本那一行（形如 `v12.11-20261003`）并注明来源。注意 `12.11` 是 crDroid 的版本号，不是本项目的版本。
+        No computer at hand? Write the *crDroid version* line in *Settings → About tablet* (looks like `v12.11-20261003`) and say that is what it is. Note that `12.11` is crDroid's version number, not this project's.
+        手边没电脑：写下「设置 → 关于本机」里"crDroid 版本"那一行（形如 `v12.11-20261003`）并注明来源。注意 `12.11` 是 crDroid 的版本号，不是本项目的版本。
       render: shell
     validations:
       required: true

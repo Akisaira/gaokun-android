@@ -74,9 +74,9 @@ body:
         The build stamp (`ro.build.date.utc`) says exactly which build you tested; every release note lists it. Over adb:
         构建戳（`ro.build.date.utc`）能精确确定你测的是哪一版，每份发版说明里都写着它。adb 下跑：
         ```
-        getprop ro.build.date.utc; getprop ro.build.version.incremental; uname -a; getprop ro.boot.slot_suffix
+        getprop ro.build.date.utc; getprop ro.build.version.incremental; getprop ro.vendor.gaokun3.version; uname -a; getprop ro.boot.slot_suffix
         ```
-        Without a computer, the version line from *Settings → About* (looks like `v12.11-20261003`) will do. / 没电脑的话，写「设置 → 关于」里的版本那一行（形如 `v12.11-20261003`）。
+        Without a computer, the *crDroid version* line in *Settings → About tablet* (looks like `v12.11-20261003`) will do. / 没电脑的话，写「设置 → 关于本机」里"crDroid 版本"那一行（形如 `v12.11-20261003`）。
       render: shell
     validations:
       required: true

@@ -131,13 +131,17 @@
      uname() / /proc/version（v7.2.9 fs/proc/version.c:14 读的是 utsname）都报 6.6.30-android15-8-g0a4d3c12b3；
      dmesg 第一行的 linux_banner 是编译期常量、仍是真实版本（构建机 init/version.o 里两串都在，10-11 核过）。
      LINUX_VERSION_CODE 与模块 vermagic 不变（include/linux/vermagic.h:41-42、kernel/module/main.c:1105/2658）；本机没有可加载模块。
-     ⬜ 待核：bpfloader / VINTF 内核矩阵 / KSU 管理器读到 6.6 后的行为（TODO GAME-1）。 -->
-* **现象**：`uname -r`、`/proc/version`、设置"关于平板电脑"里的内核版本都显示 `6.6.30-android15-8-g0a4d3c12b3`。
+     10-18 按源码排查（out/v5-game1-findings.md 任务 B；gaming.md §4.1）：bpf 加载器门槛都 ≤6.1、加载的程序集不变（NetBpfLoad 的"非 LTS"告警反而消失）；
+     libvintf 把内核级别认成 V(202404)，多一条 WARNING，运行时检查不比内核；KSU 内核侧没有按 uname 的分支，
+     ksud 会把 KMI 认成 android15-6.6（KernelUtils / boot_patch.rs:82-117）；ART 的 UFFDIO_MOVE 探测会退回 COPY（仅当内核开 USERFAULTFD）。
+     ⬜ 0085 内核下上机核对（TODO GAME-1）。 -->
+* **现象**：`uname -r`、`/proc/version`、设置"关于本机 → Android 版本"里的"内核版本"都显示 `6.6.30-android15-8-g0a4d3c12b3`。
   实际跑的是主线 Linux **7.2.9** 加本项目的补丁。版本号末尾那串哈希和构建署名都是编出来的，对不上任何真实的 Android 内核。
 * **原因**：一些游戏和 App 的环境检测只认 Android 通用内核的 4.x / 5.x / 6.x 版本号，见到 7.x 就判定设备异常、拒绝运行。
   我们只改了内核**对外报告**的版本字符串；内核本身、编译期的版本号和模块校验都没变。这是有意的伪装，所以写在这里。
 * **替代办法**：要看真实版本，以 root 运行 `dmesg | head -1`（第一行是 `Linux version 7.2.9-gaokun3…`），或者看发版说明附带的
-  `kernel-config.txt` / `kernel-source.txt`。报告问题时请写真实版本，或者直接写 ROM 版本（`getprop ro.vendor.gaokun3.version`）。
+  `kernel-config.txt` / `kernel-source.txt`。报告问题时请写真实版本，或者直接写 ROM 版本（`getprop ro.vendor.gaokun3.version`）；bug 报告和崩溃记录里的内核版本也是这个伪装值。
+  KernelSU 管理器也会把内核认成 `android15-6.6`：**不要用管理器里的"安装" / LKM 修补**，本机的 KernelSU 是编进内核的。
 
 ---
 
@@ -368,5 +372,5 @@
      ⬜ 还没上机核对：rc.1 的系统应用列表里有它、下面的菜单名、实体键盘怎么切中英文（与 Ctrl+Space 冲不冲突）；核对后改写这一条。 -->
 * **现象**：默认的键盘不支持中文。
 * **原因**：从 1.0.0-rc.1 起预装了中文输入法（fcitx5，自带拼音 / 双拼 / 五笔），但没有设成默认。v0.7.1 及以前没有。
-* **替代办法**：设置 → 系统 → 键盘 → 屏幕键盘 → 打开 *Fcitx5*，再切换过去（菜单名还没在本机核对）。以后从项目的 GitHub release 更新
+* **替代办法**：设置 → 系统 → 键盘 → 屏幕键盘 → 打开 *Fcitx5*，再切换过去。以后从项目的 GitHub release 更新
   （F-Droid 版签名不同，装不上覆盖）。实体键盘怎么切中英文还没核对过。

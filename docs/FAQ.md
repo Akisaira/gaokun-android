@@ -147,7 +147,7 @@ adb shell getprop ro.build.date.utc               # the build stamp, e.g. 179105
 ```
 
 ### Without a computer
-Whether *Take bug report* in Developer options works on this machine has not been checked yet (to be added). For now,
+Whether *Bug report* in Developer options works on this machine has not been checked yet (to be added). For now,
 please use a computer as above.
 
 ### Collecting logs when the machine won't boot Android

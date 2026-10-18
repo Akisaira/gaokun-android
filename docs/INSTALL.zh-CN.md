@@ -4,7 +4,7 @@
     改一份就改另一份；事实以英文版与它注释里的出处为准，这里不另加内容。
   * 命令、文件名、属性名、开机菜单条目（systemd-boot 菜单只有英文）原样保留。图形安装器有中文界面：
     页面 / 选项写中文界面上的字（live/installer-flutter/lib/l10n/app_zh.arb），括号里附英文原文。
-    Windows 与 Android 设置里的菜单路径保留英文原文，括号里的中文叫法没在中文版系统上逐字核对过（待核实）。
+    Windows 与 Android 设置里的菜单路径保留英文原文；Android 那边括号里的中文叫法 10-18 按 crDroid 16 的 Settings 字符串核过，Windows 那边仍待核实。
   * 用词与 FAQ.zh-CN.md / known-limitations.zh-CN.md 统一。
   * scripts/release.sh 在有这个文件时把它（而不是英文版）传到 R2 的 relnotes/INSTALL.md —— 系统更新里
     "无法更新（版本不受支持）"的说明链接指向那里。
@@ -302,7 +302,7 @@ gk3-boot-android --clear       # 撤销
 ### adb
 
 安装和使用平板都用不到它。想用的话：打开 *开发者选项*（在 Settings → About tablet 里连点 *Build number* 七次；
-中文界面大致是"设置 → 关于平板电脑 → 版本号"），再打开 *USB debugging*（USB 调试）或 *Wireless debugging*（无线调试）。
+中文界面是"设置 → 关于本机 → Build 号"），再打开 *USB debugging*（USB 调试）或 *Wireless debugging*（无线调试）。
 两者都按 Android 的标准方式工作：平板会让你给每台电脑授权。
 
 在 v0.7.1-alpha 之后的发布构建里，*USB 调试*每次重启都会自己变回关闭，所以每次重启后要重新打开。
@@ -416,7 +416,7 @@ Windows 和救援系统也仍然归它管；gk3boot 只是它默认启动的那�
 
 ## 清除数据（恢复出厂）
 
-⚠️ **Settings → System → Reset options → *Erase all data*（设置 → 系统 → 重置选项 → 清除所有数据）目前什么都不做。**
+⚠️ **Settings → System → Reset options → *Erase all data (factory reset)*（设置 → 系统 → 重置选项 → 清除所有数据（恢复出厂设置））目前什么都不做。**
 那条路径会往 `misc` 里的 bootloader 控制块写 `boot-recovery` 然后重启，指望 bootloader 把控制权交给 recovery。
 systemd-boot 不读这个块，这里也没有能用的 recovery（见下），所以这个请求无人接手 —— 之后你的数据还在。
 从 1.0 起，这个请求打算交给启动入口的 fastboot 环境来执行（[见上](#启动入口与-fastboot10-起)）；那条路径在模拟器测试里通过了，

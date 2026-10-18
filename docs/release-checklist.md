@@ -95,7 +95,7 @@ A 档里不在 `accept.sh` 的这几项（要手动，但不用人在场；A28�
 | B2 | USB 拔插 | 拔插一次 USB 线；port0 / port1 各插一次 U 盘，亮屏、息屏各一次 | USB adb 能回来（0048 + follow）；U 盘能挂上。⚠️ 待机后回插 port0 失败是已知问题 A6 | v063#4、批 1 |
 | B3 | USB 授权弹窗 | 发布构建插 USB | 弹 RSA 授权框；不授权时 `adb devices` 是 unauthorized | G1 |
 | B4 | 真实待机 | 临时 `setprop persist.vendor.gaokun3.allow_suspend 1` → 拔 USB → 息屏等它睡 → 电源键唤醒 → 插回 USB → 改回原值 | `suspend_stats/success` 涨了；TCP adb 回来；插回后 USB adb 回来。⚠️ 别插着线直接 `echo mem`（device 角色挂起会整板复位，#128 §17） | v070#8 |
-| B5 | 扬声器增强开关 | 设置 › 声音里的开关：开 / 关两向，各放一段音乐；有耳机时插耳机再来一遍 | 默认关；关着时音频正常（bypass）；开着时 logcat 有 `Histen chain up`；耳机不走扬声器链 | v070#5（B2-1…B2-5） |
+| B5 | 扬声器增强开关 | 设置 › 提示音和振动里的开关：开 / 关两向，各放一段音乐；有耳机时插耳机再来一遍 | 默认关；关着时音频正常（bypass）；开着时 logcat 有 `Histen chain up`；耳机不走扬声器链 | v070#5（B2-1…B2-5） |
 | B6 | 出声音频 | 扬声器、耳机、双麦录音、蓝牙耳机各放 / 录一段；音游跑一遍出声回归（#130 §7） | 都有声、无爆音；音游卡顿后下一声即恢复。⚠️ 回环工具 `gaokun3-loopback` 10-04 自己崩过一次，回归前先修稳 | Stage 4、v071、PERF-12 |
 | B7 | 热点让真设备连上 | **先连着 Wi-Fi**，再开热点，手机连上并打开网页 | 平板自己的 Wi-Fi **不断**（NET-2 起；断了说明 STA+AP 没生效，已知限制里那条不能删）；手机连得上、能上网 | v071 未测、NET-2 |
 | B8 | 混合 WPA2/WPA3 路由器 | 连一台 WPA2/WPA3 混合模式的路由器 | 连得上、不反复断 | v071 未测 |

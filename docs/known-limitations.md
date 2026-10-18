@@ -120,7 +120,7 @@ Problems specific to one release are in that release's [release notes](relnotes/
 
 ### The kernel reports a version that is not its real one (from 1.0.0-rc.2)
 <!-- GAME-1 (patches/0085). Evidence in the Chinese file. -->
-* **What you see**: `uname -r`, `/proc/version` and the kernel version in *Settings → About tablet* all say
+* **What you see**: `uname -r`, `/proc/version` and *Kernel version* under *Settings → About tablet → Android version* all say
   `6.6.30-android15-8-g0a4d3c12b3`. The kernel that actually runs is mainline Linux **7.2.9** plus this project's
   patches. The hash at the end of that string and the build signature are made up and match no real Android kernel.
 * **Why**: some games and apps run environment checks that only accept the 4.x / 5.x / 6.x versions of Android's common
@@ -129,7 +129,9 @@ Problems specific to one release are in that release's [release notes](relnotes/
   which is why it is listed here.
 * **What to do**: to see the real version, run `dmesg | head -1` as root (the first line is `Linux version 7.2.9-gaokun3…`),
   or read the `kernel-config.txt` / `kernel-source.txt` attached to each release. In bug reports, give the real version or
-  simply the ROM version (`getprop ro.vendor.gaokun3.version`).
+  simply the ROM version (`getprop ro.vendor.gaokun3.version`); bug reports and crash records carry the disguised
+  version too. The KernelSU manager also takes the kernel for `android15-6.6`: **do not use its "Install" / LKM patching**,
+  KernelSU is built into this kernel.
 
 ---
 
@@ -371,6 +373,6 @@ These are bugs, not trade-offs, and they will be removed from this list once fix
 * **What you see**: the default keyboard has no Chinese.
 * **Why**: from 1.0.0-rc.1 a Chinese input method (fcitx5, pinyin / shuangpin / wubi built in) is preinstalled, but it is
   not made the default. v0.7.1 and earlier had none.
-* **What to do**: Settings → System → Keyboard → On-screen keyboard → turn on *Fcitx5*, then switch to it (menu names not yet checked on the machine). Updates come
+* **What to do**: Settings → System → Keyboard → On-screen keyboard → turn on *Fcitx5*, then switch to it. Updates come
   from the project's GitHub releases (the F-Droid build is signed differently and will not install over it).
   How the hardware keyboard switches between Chinese and English has not been checked yet.
