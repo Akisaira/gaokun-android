@@ -63,7 +63,7 @@ Mac 侧的 `game-mode.sh` 把 `game-mode-device.sh` 推到设备上执行，需�
 8. Mac 侧每个子命令都检查 adb / 设备端的退出码，失败时不打印成功提示（`on` 除外，它会切断自己的会话）。
 
 **2026-10-11 上机结果**（dev 机，`_b` = `1791704075`，这次开机是 7.2.9 内核）：
-* `hide` / `unhide`：✅ 普通查询看不到、`-u` 能看到；放进去的测试标记 unhide 后还在；root 不受影响。这次是从备份装回的（`install-existing` 当时没成功，原因未查）。
+* `hide` / `unhide`：✅ 普通查询看不到、`-u` 能看到；放进去的测试标记 unhide 后还在；root 不受影响。这次是从备份装回的；`install-existing` 对这两个包**必然失败**（10-18 查明：只装给 user 0 的第三方应用，`uninstall --user 0` 是整包删除、`-k` 只留数据，`installExistingPackageAsUser` 在 `getPkg() == null` 处返回 `INSTALL_FAILED_INVALID_URI`；出处见 `scripts/game-mode-device.sh` 文件头 ⓘ）⇒ 备份那条才是主路径，不是故障。
 * `on 1` 走 TCP：第一次 ✗（定时器被 cgroup 杀，靠重启 + 开机兜底恢复，兜底 ✅）；修 cgroup 后 ✅，63 秒后 adb 自己回来，`state` 清空。
 * `on 1` 走 USB：✅ adbd 被停又被 `off` 拉起，设置全部恢复。
 * `noforge` / `forge`：✅ 杀掉 TrickyStore 后没被拉起；disable 标记写上、删掉都对。

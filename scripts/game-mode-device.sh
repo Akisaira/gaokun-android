@@ -36,7 +36,11 @@ CRDROID_PROPS="ro.crdroid.version"
 # 用 uninstall -k --user 0 而不是 disable-user：检测器走 getInstalledPackages，
 # disable 后仍算"已安装"。-k 保留应用数据（不加 -k 单用户应用的 /data/data 会被删，unhide 只能装回空壳），
 # 代价：带 MATCH_UNINSTALLED_PACKAGES 查询的检测器仍能看到它。卸前把 APK 备份到 $DIR/apk/，
-# 任何一个备份失败就不卸（否则装不回来）。unhide 先 install-existing（-k 留下的就能直接恢复），不行再从备份装。
+# 任何一个备份失败就不卸（否则装不回来）。unhide 先 install-existing，不行再从备份装。
+# ⓘ 这两个包都是只装给 user 0 的第三方应用：uninstall --user 0 时"其他用户都没装" ⇒ 整包删除（APK 删掉、-k 只留数据，
+#   crDroid frameworks/base …/pm/DeletePackageHelper.java:494-504），install-existing 必然 INSTALL_FAILED_INVALID_URI
+#   （InstallPackageHelper.java installExistingPackageAsUser 里 pkgSetting.getPkg() == null）⇒ 实际总是走备份。
+#   留着 install-existing 是给多用户 / 系统应用的情况。
 HIDE_PKGS="com.resukisu.resukisu bin.mt.termex"
 # 残留目录：DangerousAppsCatalog 把 /sdcard/MT2 直接映射成 bin.mt.termex 命中，
 # 空目录也算。mv 到一旁而不是删（用户数据，unhide 放回）。
@@ -136,7 +140,7 @@ do_unhide() {
   fail=0
   for pkg in $HIDE_PKGS; do
     [ -f "$STATE/hidden.$pkg" ] || continue
-    # -k 卸的（数据与 APK 都还在）直接 install-existing 就回来
+    # 别的用户还装着（APK 还在）时 install-existing 就回来；单用户第三方应用走下面的备份（见文件头 ⓘ）
     if pm install-existing "$pkg" >/dev/null 2>&1 && pm path "$pkg" >/dev/null 2>&1; then
       log "已恢复 $pkg"; rm -f "$STATE/hidden.$pkg"; continue
     fi
