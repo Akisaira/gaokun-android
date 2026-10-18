@@ -153,7 +153,7 @@ if [ -n "$CMDLINE" ]; then
     OPTS=$(gk3__rescue_cmdline "$(tr -d '\r\n' < "$CMDLINE")")
     ok "内核参数从 $(basename "$CMDLINE") 派生"
 else
-    OPTS="console=tty0 clk_ignore_unused pd_ignore_unused arm64.nopauth iommu.passthrough=0 iommu.strict=0 efi=noruntime fbcon=rotate:1 usbhid.quirks=0x12d1:0x10b8:0x20000000 loglevel=4 gk3.squash=/gaokun3/rescue.squashfs"
+    OPTS="console=tty0 clk_ignore_unused pd_ignore_unused arm64.nopauth iommu.passthrough=0 iommu.strict=0 efi=noruntime fbcon=rotate:1 usbhid.quirks=0x12d1:0x10b8:0x20000000 loglevel=3 gk3.squash=/gaokun3/rescue.squashfs"
     echo "   ⚠️ 没给 --cmdline：用脚本里手抄的内核参数（会漂，TODO B15）"
 fi
 

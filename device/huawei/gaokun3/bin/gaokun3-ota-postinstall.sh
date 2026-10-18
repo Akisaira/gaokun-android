@@ -236,7 +236,7 @@ fi
 #   <MID>-rescue-b.conf 借 slot_b 的，initramfs 共用 <MID>/rescue/initramfs.img。上面刚把这个槽的内核换了 ——
 #   借它的那条救援条目的 options 原先是装机当天写死的，与新内核的 cmdline 会漂（与直连条目 #116 §17 是同一种漂移）。
 # 规则与安装器的 gk3__rescue_cmdline【逐字相同】（改一边就要改另一边；tools/gk3boot/test/postinstall/run.sh 的 R 组交叉核对）：
-#   去掉 androidboot.* / init= / firmware_class.path=，末尾加 loglevel=4 panic=10 gk3.squash=/gaokun3/rescue.squashfs。
+#   去掉 androidboot.* / init= / firmware_class.path=，末尾加 loglevel=3 panic=10 gk3.squash=/gaokun3/rescue.squashfs。
 # 只动安装器写的那种：文件名 <MID>-rescue*.conf、linux 行正好是 /<MID>/android/slot_<槽>/Image、options 里有
 #   gk3.squash=/gaokun3/rescue.squashfs。别的（手写的、指向别处的）一概不碰。
 # v1.0 之前装的机器只有借 slot_a 的那一条：目标是 b 时从它派生借 slot_b 的那条（只多一个 .conf，不占 ESP 空间）；
@@ -249,7 +249,7 @@ rescue_cmdline() {   # $1 = Android 的 cmdline
         case "$_t" in androidboot.*|init=*|firmware_class.path=*) ;; *) _rk="$_rk$_t " ;; esac
     done
     set +f
-    echo "${_rk}loglevel=4 panic=10 gk3.squash=/gaokun3/rescue.squashfs"
+    echo "${_rk}loglevel=3 panic=10 gk3.squash=/gaokun3/rescue.squashfs"
 }
 rescue_ours() {   # $1=条目 $2=槽字母：是安装器写的、借这个槽内核的救援条目时返回 0
     _rl=$(sed -n 's/^linux[[:space:]][[:space:]]*//p' "$1" | head -1 | tr -d '\r' | sed 's/[[:space:]]*$//')

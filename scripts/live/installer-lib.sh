@@ -1553,7 +1553,7 @@ gk3__rescue_cmdline() {
     keep=$(printf '%s\n' "$1" | tr ' ' '\n' \
            | grep -v -e '^androidboot\.' -e '^init=' -e '^firmware_class\.path=' -e '^$' \
            | tr '\n' ' ')
-    echo "${keep}loglevel=4 panic=10 gk3.squash=/gaokun3/rescue.squashfs"
+    echo "${keep}loglevel=3 panic=10 gk3.squash=/gaokun3/rescue.squashfs"
 }
 
 # 解析分区节点，解析不出来就直接失败。
