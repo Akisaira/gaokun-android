@@ -242,7 +242,9 @@ PY
 
     # ---- ROM 侧：repo manifest -r（当前目录就是 ANDROID_BUILD_TOP）----
     local MAN="crdroid-manifest.xml was not generated; in the crDroid tree run: repo manifest -r -o crdroid-manifest.xml"
-    if command -v repo >/dev/null 2>&1 && repo manifest -r -o "$s/crdroid-manifest.xml" >/dev/null 2>&1; then
+    # 构建机上 repo 装在 ~/bin，非交互 ssh 的 PATH 里没有它（V2，2026-10-18 查明这就是以前"没跑成"的原因）
+    local REPO_BIN; REPO_BIN=$(command -v repo 2>/dev/null || { [ -x "$HOME/bin/repo" ] && echo "$HOME/bin/repo"; })
+    if [ -n "$REPO_BIN" ] && "$REPO_BIN" manifest -r -o "$s/crdroid-manifest.xml" >/dev/null 2>&1; then
         GPL_FILES+=(crdroid-manifest.xml)
         MAN="crdroid-manifest.xml  sha256 $(sha256sum "$s/crdroid-manifest.xml" | cut -c1-64)"
     else
