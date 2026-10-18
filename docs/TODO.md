@@ -18,7 +18,8 @@ D1–D23 是 v1.0-plan §6 的决定，其余是 v1.0-plan 与本文件的条目
 
 **2026-10-18 用户定：rc.2 先不发，能做完的都做完再发。** 当天无人值守能做的已做完（V0 余项、V2、V5、GAME-1 源码排查、GAME-6、HAL 误报 Windows、
 WoWLAN 说法订正、live 控制台刷屏、#46 合入并修 0105、rc.2 第三次构建 `1792312407` + 安装器 `0.2.0-rc.2`）。**剩下的全要用户在场或用户拍板**：
-~~上机装 `1792312407` 并验收~~（✅ 10-18 已装、A 档零 FAIL）、rc.2 发版说明定稿与发布、② 表「要用户在场的」各项、批 4 测量、B4 新装机、B2 R2 密钥轮换、推送本地提交、③ 表的决定。
+~~上机装 `1792312407` 并验收~~（✅ 10-18 已装、A 档零 FAIL）、rc.2 发版说明定稿与发布、② 表「要用户在场的」各项、批 4 测量、B4 新装机、B2 R2 密钥轮换、~~推送本地提交~~（✅ 10-19 推到 `origin/dev`；`main` 等发版时从 dev 合并）、③ 表的决定。
+**10-19 起分支规矩**：所有修改在 `dev` 上改、推 `dev`；`main` 只在发版时从 `dev` 合并；PR 提到 `dev`（CLAUDE.md「发布与构建」、CONTRIBUTING.md）。⬜ 要 `gh` 登录才能做：现有 PR（#41）改目标分支为 `dev`、仓库默认分支设成 `dev`、#46 留言说明 0105 的修改。
 
 **设备现状**：槽 `_b` = **`1.0.0-rc.1`**（戳 `1791285623`，内核 `912f22c3`），**SELinux enforcing**，active = `_b`。**rc.1 验收（10-06）**：在 dev.10（enforcing）上经 OTA 装（第二次 enforcing 下 OTA ✅），A 档 **PASS 47 · FAIL 0**（发布闸门要的零 FAIL：验收期间临时关了开发机的 5555，跑完恢复）、iris 15/15、前后摄、s2idle 11/11、稳定 MAC、fcitx5 是系统应用（`UPDATED_SYSTEM_APP`，签名吻合）。载荷 `out/rc1-1791285623/`；安装器 `0.2.0-rc.1`（U 盘镜像带 rc.1 系统，Windows 包不带）在 `out/rc1-wt/out/release-installer/0.2.0-rc.1/`。踩到：enforcing 下 Android 侧写 EFI 变量被拒（efivarfs 没标签，`a1d303a` 修，进下一版；只影响开发脚本）。✅ **2026-10-06 21:xx 发布为候选版**：ROM `release.sh --no-build --stage-only` → R2 `staging/crDroidAndroid-16.0-20261006-gaokun3-v12.11/`（8 个文件 HTTP 200，校验清单与本机逐字节同；**不动 OTA 清单**）；安装器 `0.2.0-rc.1` 6 个文件 → R2 `installer/0.2.0-rc.1/`（公开域名逐个核字节数）；GitHub **pre-release** `v1.0.0-rc.1`（tag = `8b7c5ab`，不标 Latest），12 个附件服务端字节数逐一核对一致（OTA 包只在 R2）。安装器产物另存 `out/rc1-installer-0.2.0-rc.1/`。⚠️ 用户这次在聊天里贴了 R2 S3 密钥与 Cloudflare 账户令牌 ⇒ 要轮换（B2）。⚠️ 分派开着：设置里的恢复出厂会真擦。
 
@@ -100,7 +101,7 @@ NET-10 开机探测打到 hicloud 与 miui 两个端点都 204；fcitx5 在输�
 | DISP-15 · HW-6 | 键盘关着时拔插仍关；去掉 vibrator example | ◐ | dev.9 已无 vibrator HAL ✅。⬜ 用户拔插键盘盖；设置里"振动和触感"一项消失 | 下文 V18 |
 | BKUP-5 · D15 | 备份默认 Seedvault；默认时区上海 | ◐ | 只在全新 `/data` 上看得到 ⇒ 并进 B4 的新装机验收；"从没设过时区的老机器 OTA 后变上海时间"写进发版说明 | 下文 V18 |
 | DISP-3 · D10 | 中文输入法 fcitx5-android | ◐ | APK 已入构建（`f2fd400`），dev.10 起进镜像。⬜ 上机：设置里能启用、拼音出字、实体键盘中英切换（与 Android 自己的 Ctrl+Space 冲不冲突）、候选窗 | 下文 B12a |
-| PWR-4 · USB-1 · USB-2 | USB-C 口异常 / 插电脑落成我方供电时弹通知；host 时不再每秒重绑 UDC | ◐ | 代码 dev.2 起在（`5dfe7dd` / `ccd54f9` / `d511d18`）。⬜ V11 里复现时看通知（插 Mac 落成我方供电、待机后回插坏口）；小改进：接收器改 directBootAware，解锁前也能报 | 下文 A6 |
+| PWR-4 · USB-1 · USB-2 | USB-C 口异常 / 插电脑落成我方供电时弹通知；host 时不再每秒重绑 UDC | ◐ | 代码 dev.2 起在（`5dfe7dd` / `ccd54f9` / `d511d18`）。⬜ V11 里复现时看通知（插 Mac 落成我方供电、待机后回插坏口）；~~小改进：接收器改 directBootAware~~（10-19 核：10-05 起 `UsbPortNotifier` 与 `BootReceiver` 都已 `directBootAware`、收 `LOCKED_BOOT_COMPLETED`，`parts/AndroidManifest.xml:149-178`） | 下文 A6 |
 | PWR-5 · STOR-1 · STOR-2 · STOR-5 | port0 有下游时保持 host；U 盘挂载；`/data` 保留块 | ◐ | STOR-5 dev.1 实测 ✅（保留块 32768 / gid 1065）。⬜ V11：U 盘 FAT32 / exFAT 插 port1 出现在「文件」；port0 插外设息屏亮屏 5 次仍是 host；开机插着 U 盘再换插 PC 时 adb 能否回来 | 下文 V11 |
 | BATT-1/2/3 · DISP-1 | 电池按位解码（0072）；EC 初始 LID（0073） | ◐ | dev.3 起在。⬜ 用户在场：插电脑 USB 口带负载放电采 `ec_raw` / `current_now` 正负 / `capacity_level`；合盖开机一次看 `initial lid state: closed`；三种合盖姿态 getevent ⇒ 再决定 lid overlay | archive `#v1-batch01` dev.3 段 |
 | PWR-13 · LIVE-13 · APP-17 | 内核配置项 | ◐ | dev.9 看到 THERMAL_STATISTICS、ARMV8_DEPRECATED ✅。⬜ PWR-13 另一半：SKIN 温度其实是芯片温度，要标定 EC 温度通道 | 同上「批 2 ROM 侧」 |
@@ -158,7 +159,7 @@ NET-10 开机探测打到 hicloud 与 miui 两个端点都 204；fcitx5 在输�
 | #12 / #15 | 抖音（已不复现）/ 英雄联盟秒退 | ⬜ | 要 tombstone / logcat |
 | A6 硬件 | U 盘、纯充电器、扩展坞各跑一次 `scripts/usb/ucsi-snapshot.sh` | ⬜ | 用户手边的外设 |
 | 外设清单 | USB 声卡、带麦耳机、DP 显示器、U 盘、蓝牙耳机、外接 NVMe、带 Windows 的 MateBook E Go | — | 分别对应 AV-4 / AV-10 / DISP-4 / STOR-1 / AV-3 / B4 / GUI-7 |
-| 开发机清理 | `/data/local/tmp` 约 2.8 GB 历次测试内核（现状未核）；Ubuntu 救援分区（24.6 GiB）回收 | ⬜ | 删东西等用户点头 |
+| 开发机清理 | `/data/local/tmp` 约 2.8 GB 历次测试内核（现状未核）；Ubuntu 救援分区（24.6 GiB）回收 | ◐ 10-19 | ✅ ESP 上的 `va39w` 实验内核与 `gaokun3-va39w.conf` 已删（用户"能做就做"；备份 `out/esp-backup-20261019-va39w/`，sha 核过；ESP 可用 53 → 69 MB）。`/data/local/tmp` 现 2.2 GB，混着还在用的（测试视频、`esp-bak`、`boot.img`、`playprobe/`），`/data` 只用 23% ⇒ 不动；Ubuntu 救援分区回收等用户 |
 
 ### ④ 1.0 之后（v1.0-plan §7 + 本文件的长期项）
 

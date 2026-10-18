@@ -4,7 +4,7 @@
 
 ## 现在（2026-10-18；每次开工更新，旧内容搬进 project-log）
 
-* **阶段：1.0 发版前。** 最新发布 v0.7.1-alpha（2026-10-04）。**`1.0.0-rc.1`（戳 `1791285623`）2026-10-06 已作为候选版发布**（GitHub pre-release + R2 staging / installer，**没进 OTA 清单**），装在开发机 `_b`、验收零 FAIL。最新正式版仍是 v0.7.1-alpha。**`1.0.0-rc.2`：用户 10-18 定"先不发，能做完的都做完再发"。** 现行候选是第三次构建 **戳 `1792312407`**（本地 `4bf5e42`：#36–#40 + #44 ath11k 崩溃恢复 + #45 手写笔 + #46 待机 Wi-Fi / LPASS 撤票〔本地合入，0105 另修一处〕+ live loglevel=3；内核 `2d6de830`），已传 R2 staging（开发机 payload `staging/rc2-1792312407/`），安装器 `0.2.0-rc.2` 本机已造，**✅ 10-18 已装上开发机 `_a` 并验收（A 档零 FAIL），⬜ 未发 pre-release**（发版说明草稿 `docs/relnotes/v1.0.0-rc.2*.md`）；`1791727610` / `1791720612` 作废。**本地 main 有十几个提交没推**（含 #46 的本地合并，推了 GitHub 才会把 #46 标成已合并；推送要用户点头）。剩什么看 `docs/TODO.md` 顶部「▶ 1.0」；发版标准 / 阻断项 / 待定决定看 `docs/v1.0-plan.md`。
+* **阶段：1.0 发版前。** 最新发布 v0.7.1-alpha（2026-10-04）。**`1.0.0-rc.1`（戳 `1791285623`）2026-10-06 已作为候选版发布**（GitHub pre-release + R2 staging / installer，**没进 OTA 清单**），装在开发机 `_b`、验收零 FAIL。最新正式版仍是 v0.7.1-alpha。**`1.0.0-rc.2`：用户 10-18 定"先不发，能做完的都做完再发"。** 现行候选是第三次构建 **戳 `1792312407`**（本地 `4bf5e42`：#36–#40 + #44 ath11k 崩溃恢复 + #45 手写笔 + #46 待机 Wi-Fi / LPASS 撤票〔本地合入，0105 另修一处〕+ live loglevel=3；内核 `2d6de830`），已传 R2 staging（开发机 payload `staging/rc2-1792312407/`），安装器 `0.2.0-rc.2` 本机已造，**✅ 10-18 已装上开发机 `_a` 并验收（A 档零 FAIL），⬜ 未发 pre-release**（发版说明草稿 `docs/relnotes/v1.0.0-rc.2*.md`）；`1791727610` / `1791720612` 作废。**10-19 已推到 `origin/dev`**（rc.2 全部改动 + 分支规矩；`gh` 登录过期，是走 SSH 推的）；**`origin/main` 仍停在 `8552266`**（直接推 main 被拦，按新规矩等发版时从 dev 合并）⇒ #46 在 GitHub 上要等 dev 合进 main 才显示已合并。剩什么看 `docs/TODO.md` 顶部「▶ 1.0」；发版标准 / 阻断项 / 待定决定看 `docs/v1.0-plan.md`。
 * 内核 v7.2.9 stable + `patches/0076`（撤回 stable 撤掉的双 DSI 绑定 PLL 修复，否则黑屏）；dev.9 起发布内核不带指纹的 0050（D21，只进实验内核）。
 * 统一启动入口 `gk3boot.efi` + fastboot 执行端：E3–E8（含 OTA 自动回滚）、E6、E7 真机过；镜像默认动作模式 + BCB 分派开；E10 恢复出厂用户定不测（`docs/boot-entry-design.md`）。
 * 发布构建（dev.1 起）= 关免授权 adb、`ro.debuggable=0`，变体仍是 userdebug。SELinux 默认 enforcing（用户 10-06 定 D5，dev.10 起）。
@@ -60,7 +60,7 @@
 >   设备上另有用户自装的 TrickyStore / PIF / LSPosed / HMA（`hma_oss_zygisk` disable 中）—— 测游戏流程见 `docs/gaming.md`。
 > * 以下 `_a` 一条是 10-09 的记录，10-11 未复核（其中「active = `_a`」「`_b` = rc.1」已被上一条取代）：
 > * 槽 **`_a` = `1.0.0-dev.11`**（戳 `1791554509`，内核 `705b1387…` = 7.2.9 + 0078），active = `_a`（ESP default 已同步），**SELinux enforcing**；`_b` = `1.0.0-rc.1`（戳 `1791285623`）。载荷 `out/dev11-1791554509/`（rc.1 的在 `out/rc1-1791285623/`，安装器 `out/rc1-wt/out/release-installer/0.2.0-rc.1/`）。`a1d303a`（efivarfs 标签）已在 dev.11 里；enforcing 下 `boot-oneshot.sh` 不 `setenforce 0` 也能写（10-11 在 `1791704075` 上实测）。
-> * ESP 上还留着实验内核目录 `android/va39w/`（15 MB）与条目 `gaokun3-va39w.conf`：0078 已进发版内核，验收完可删。
+> * ESP 上的实验内核 `android/va39w/` 与条目 `gaokun3-va39w.conf` 10-19 已删（备份 `out/esp-backup-20261019-va39w/`）。
 > * ⚠️ 分派开着：**设置里的恢复出厂会真擦**（发布构建会丢 adb_keys ⇒ 连不上 adb）；`adb reboot bootloader|fastboot|recovery` 进 fastboot 执行端，Mac 上 `fastboot reboot` 回来。
 > * ESP 10-06 已清理（备份 `out/esp-backup-20261006/`）：菜单只剩 Android（入口 / 上一版入口 / fastboot / 两个直连槽）、`gaokun3 installer`（内置盘上的 live，能重装，安全网）、Ubuntu 救援。
 > * 10-06 Mac 与设备都在热点「Xiaomi 17」（设备 `10.146.153.115`）。
