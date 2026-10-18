@@ -22,8 +22,8 @@ SER=gaokun3 bash scripts/perf/game-perf.sh -p com.hypergryph.arknights -t 1800  
 产物在 `out/perf/<包名>-<时间>/`：`header.txt`（构建戳、刷新率、帧率上限相关属性、图层的 frameRate 投票）、
 `samples.csv`、`frames.txt`、`summary.txt`。包名是 2026-10-04 实机 `pm list packages -3` 里的。
 
-* **fps**：`dumpsys SurfaceFlinger --latency <图层>` 只给最近 128 帧，120 Hz 下约 1.067 秒，所以两次抓取的间隔必须小于
-  128 / 刷新率：每轮 `sleep 0.5` 加一次 adb，按上屏时刻去重拼接（原来 `sleep 1` 加 adb 一轮就超窗口）。
+* **fps**：`dumpsys SurfaceFlinger --latency <图层>` 只给 FrameTimeline 最近 64 个合成帧（crDroid 16 开着 `deprecate_frame_tracker`；
+  旧路径是 128 帧），120 Hz 下约 0.53 秒，所以两次抓取的间隔必须小于 64 / 刷新率：每轮 `sleep 0.2` 加一次 adb，按上屏时刻去重拼接。
   两次之间没有重叠 = 中间丢了帧：`frames.txt` 记 `GAP`，CSV 的 `gap` 列为 1，跨 GAP 的间隔不进帧时间统计。
   结尾另用 `--timestats -dump` 的 `totalFrames` 增量交叉核对一次整段平均。
 * **1% low** = 最慢的 1% 帧的平均帧时间换算成 fps；另给 p99 帧时间与最长帧。

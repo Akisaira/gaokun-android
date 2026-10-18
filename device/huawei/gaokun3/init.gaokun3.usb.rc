@@ -36,7 +36,9 @@ on post-fs-data
     # 写 UDC 要等 device 角色就位。原先的 write 写完就返回（dwc3 的切换本身是异步的），脚本则轮询到
     # UDC 出现才退出，顺序只会更稳。代价：切不成（口坏）时 init 在这里最多等约 6 秒。
     # ⚠️ 保持 host 的那种开机，init.usb.configfs.rc 写 UDC 会落空（UDC 不在）⇒ 之后换插 PC、USB 端口 HAL 切回
-    #    device 时 USB adb 能不能自己回来，取决于 gadget 有没有挂上 —— 未实测（见 v1.0 计划 PWR-5 验收）。
+    #    device 时 USB adb 能不能自己回来：内核不留 pending（configfs.c:300-303 + udc/core.c:1760-1771，失败即注销驱动），
+    #    靠 adbd 每秒重开 ffs → sys.usb.ffs.ready → init.usb.configfs.rc 重写 UDC；前提是切回 device 后
+    #    sys.usb.adb.disabled 回到 0。源码结论（10-18），上机待 V11 / PWR-5 验收。
     exec_start gaokun3_role_device
     # configfs=1 必须在 post-fs-data 就设好：system 的 init.usb.rc:109 在 boot
     # 触发时就会把 config 设成 adb，届时 configfs 若还是 0 就走 legacy 死路。
@@ -64,7 +66,7 @@ on boot
 #   · 只在会话内有效：重启后 AdbService 按 persist.sys.usb.config（发布构建为空）把开关复位成关。
 #   · 开发构建里 config 本来就是 adb：同值 setprop 照样触发（property_service.cpp:434 无条件
 #     NotifyPropertyChange），再走一遍绑定动作 —— 与 adb root 重启 adbd 时那一遍相同，
-#     symlink 已存在 / UDC 已绑定只会各报一条错，不断连（UDC 那半句待上机核实）。
+#     symlink 已存在 / UDC 已绑定只会各报一条错，不断连（UDC 已绑定时重写同名 UDC 在 configfs.c:295-297 直接 -EBUSY、不碰现有绑定 —— 10-18 源码已核）。
 # ⚠️ "AdbService 只 ctl.start adbd、不碰 sys.usb.config"与"重启后按 persist 复位"是按 frameworks/base 写的，本地 refs
 #   没有那棵树，待构建机核实（services/core/java/com/android/server/adb/AdbService.java）。
 on property:init.svc.adbd=running && property:sys.usb.configfs=1

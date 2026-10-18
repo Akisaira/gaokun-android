@@ -86,7 +86,8 @@ bool ReadInt(const std::string& path, int* out) {
 
 bool WriteInt(const std::string& path, int v) {
     if (!::android::base::WriteStringToFile(std::to_string(v), path, /*follow_symlinks=*/true)) {
-        // errno 可能被 WriteStringToFile 内部的 close 覆盖，只作参考。
+        // 失败时 errno 是 open/write 的原值：libbase file.cpp:272-278 与 unique_fd.h:108-121 都会还原（10-18 核过），PLOG 可信。
+        // 失败后它还会 unlink 目标路径（file.cpp:275），对 sysfs 节点无害。
         PLOG(ERROR) << "写 " << path << " = " << v << " 失败";
         return false;
     }

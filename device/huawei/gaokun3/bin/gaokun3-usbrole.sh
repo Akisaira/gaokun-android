@@ -49,8 +49,8 @@ BROKEN=vendor.gaokun3.usbrole.broken
 #     （f_fs 打 "read descriptors"）并 SetProperty("sys.usb.ffs.ready", "1")；
 #   · 同值 setprop 也会触发（init 无条件 NotifyPropertyChange），于是 init.usb.configfs.rc:20-24 每秒重跑一遍：
 #     symlink 已存在、写 UDC 失败 —— host 模式下 a600000.usb 这个 UDC 根本不存在，configfs 的 gadget 驱动是
-#     match_existing_only（linux v7.2-rc2 drivers/usb/gadget/configfs.c:1985），注册时找不到 UDC 就返回 -EBUSY
-#     （drivers/usb/gadget/udc/core.c:1733-1737），udc_name 随即清空（configfs.c:295-303）⇒ 不会挂起等待，下一秒再来。
+#     match_existing_only（linux v7.2.9 drivers/usb/gadget/configfs.c:1985），注册时找不到 UDC 就返回 -EBUSY
+#     并注销驱动（drivers/usb/gadget/udc/core.c:1760-1771），udc_name 随即清空（configfs.c:295-303）⇒ 不会挂起等待，下一秒再来。
 # 上游早就留了开关，正是为这种情况：usb.cpp:728-740 —— "When the device is acting as a USB host, we'll be unable
 #   to bind to the USB gadget…"，读 sys.usb.adb.disabled，为真就在 open_functionfs 之后停在 PropertyMonitor 里等它
 #   变回假（:751-755）；init.usb.rc:23-24（refs/lineage-system-core/rootdir/）把 vendor.sys.usb.adb.disabled 拷过去。

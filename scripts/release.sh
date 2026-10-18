@@ -332,8 +332,8 @@ else
     #   见 docs/stage4-findings.md #113。
     export BUILD_NUMBER=${BUILD_NUMBER:-$(date -u +%Y%m%d%H%M%S)}
     echo "  BUILD_NUMBER=${BUILD_NUMBER}（进指纹的 incremental）"
-    # ★ OTA-11：vendor/build.prop 是 Make 生成的（build/make/core/sysprop.mk:208），规则只依赖
-    #   属性文件（同文件 :119），日期是命令运行时才 `cat` 的（config.mk:870 BUILD_DATETIME_FROM_FILE）
+    # ★ OTA-11：vendor/build.prop 是 Make 生成的（crDroid 16 build/make/core/sysprop.mk:216），规则只依赖
+    #   属性文件（同文件 :127），日期是命令运行时才 `cat` 的（config.mk:874 BUILD_DATETIME_FROM_FILE）
     #   ⇒ 增量构建里 vendor 属性没变就不重生成，日期 / 指纹 / incremental 停在老构建
     #   （v0.7.0–v0.7.1 的 vendor 一直是 09-28 的 1790597477）。删掉输出逼它重跑。
     #   （行号取自 refs/aosp-build，crDroid 16 的 build/make 待构建机核实；第 2 步有断言兜底。）

@@ -709,7 +709,7 @@ def patch_build_fingerprint_variant_user(tree: pathlib.Path) -> str:
       ro.build.type=user              ← soong gen_build_prop.get_build_variant()：
       ro.system.build.type=user         非 eng 一律按 user 处理（lineage_gaokun3.mk
       ro.build.flavor=gaokun3-user      注释引 gen_build_prop.py:28；#117 §16）
-      ro.build.fingerprint=…:userdebug/release-keys   ← build/make/core/config.mk:1308
+      ro.build.fingerprint=…:userdebug/release-keys   ← build/make/core/config.mk:1308（refs）/ :1371（crDroid 16）
       ro.system.build.fingerprint=…:userdebug/release-keys
                                         用 $(TARGET_BUILD_VARIANT)=userdebug 拼尾部
     ⇒ 半截身份：type 一侧已是 user，fingerprint 一侧还写着 userdebug。Duck Detector
@@ -737,6 +737,7 @@ def patch_build_fingerprint_variant_user(tree: pathlib.Path) -> str:
       update_engine 的 payload_properties 也不带 pre-build。
     ⚠️ 锚点按 refs/aosp-build（build/make）写的；构建机 crDroid 树若与 AOSP 16
       的 config.mk 有出入会报 ⚠️ 并被 step() 记为失败，不会悄悄跳过。
+      （10-18 核过：crDroid 16 原文两处锚点俱在，[23] 已在构建机工作区生效。）
     上机判据：`getprop ro.build.fingerprint` 与新装后的 Build.FINGERPRINT 都是
       …:user/release-keys，且不再与 Build.TYPE 漂移；Duck Detector 的
       system_properties 3 条 danger / "Suspicious fingerprint pattern 'userdebug'" 消失。

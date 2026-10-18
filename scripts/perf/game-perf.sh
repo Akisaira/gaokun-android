@@ -9,10 +9,12 @@
 #   产物：samples.csv（每行一个间隔）、frames.txt（每帧的上屏时刻，ns）、summary.txt、header.txt
 #
 # 每一列从哪来（都是只读的 sysfs / dumpsys，2026-10-04 在 1791053208 上逐个核对过路径）：
-#   帧          dumpsys SurfaceFlinger --latency <图层名>：最近 128 帧的 desired / actual present / frame ready 三列（ns）。
-#               取第 2 列（实际上屏时刻），去掉 0 与 INT64_MAX（还没上屏）。窗口只有 128 帧 ⇒ 120 Hz 下约 1.067 秒
-#               （实机刷新周期 8333341 ns），所以两次抓取的间隔必须 < 128 / 刷新率：每轮 sleep 0.5 再加一次 adb
-#               （USB 约 30 ms，TCP 更慢）与宿主机上的 awk / sort —— 原来 sleep 1 一轮就超窗口，120 fps 时 GAP 会成常态。
+#   帧          dumpsys SurfaceFlinger --latency <图层名>：desired / actual present / frame ready 三列（ns），首行是 vsync 周期。
+#               crDroid 16（bp4a）开着 deprecate_frame_tracker ⇒ 数据来自 FrameTimeline 最近 **64 个 SF 合成帧**
+#               （FrameTimeline.h:559），只含已上屏的帧，120 Hz 下约 0.53 秒；旧 FrameTracker 路径才是 127 行、含 0 / INT64_MAX
+#               （两种都按第 2 列 >0 且 <9e18 取，解析不变）。所以两次抓取的间隔必须 < 64 / 刷新率：每轮 sleep 0.2 再加一次 adb
+#               （USB 约 30 ms，TCP 更慢）与宿主机上的 awk / sort。图层计数每 65536 帧回绕一次（Layer.h:444），那一轮会短暂变空、记成 GAP。
+#               （10-18 构建机按源码核过，⬜ 上机数一次行数应 ≤ 64。）
 #               按时间戳去重拼接；两次之间没有重叠 = 中间丢了帧，frames.txt 里记一行 GAP，
 #               跨 GAP 的间隔不进帧时间统计（CSV 的 gap 列 = 1 说明这一行的 fps 偏低是采样丢的，不是游戏掉的）。
 #               图层名从 --list 里找 "SurfaceView[包名/…](BLAST)"（游戏都画在 SurfaceView 上，2026-10-04 timestats 里
@@ -164,7 +166,7 @@ while [ "$STOP" = 0 ] && [ $(( $(date +%s) - START )) -lt "$DUR" ]; do
         echo "$(( $(date +%s) - START )),$FPS,$NEWN,$GAPIN,$D" | tee -a "$OUT/samples.csv"
         mv "$TMPD/cur.txt" "$TMPD/prev.txt"; NEWN=0; GAPIN=0
     fi
-    sleep 0.5   # 必须让一轮 < 128 / 刷新率（120 Hz 下 1.067 s），见头注释；macOS 与 Linux 的 sleep 都认小数
+    sleep 0.2   # 必须让一轮 < 64 / 刷新率（120 Hz 下 0.53 s），见头注释；macOS 与 Linux 的 sleep 都认小数
 done
 trap - INT TERM
 

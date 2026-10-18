@@ -29,9 +29,10 @@ echo "设备: $DEV"
 
 echo
 echo "══ 1. 内核 ══"
-u=$(sh uname -a)
+# uname / /proc/version 从 rc.2 起是伪装值（patches/0085，GAME-1）⇒ 看 dmesg 第一行的 linux_banner（编译期常量，真实版本）
+u=$(sh 'dmesg 2>/dev/null | head -1')
 echo "  $u"
-ck "内核是 gaokun3 主线" '7\.[0-9]+\.[0-9]+-rc[0-9]+-gaokun3' "$u"
+ck "内核是 gaokun3 主线" 'Linux version 7\.[0-9]+\.[0-9]+(-rc[0-9]+)?-gaokun3' "$u"
 
 echo
 echo "══ 2. CONFIG_QCOM_FASTRPC=y（不再需要 insmod）══"

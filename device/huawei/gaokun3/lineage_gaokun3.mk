@@ -106,8 +106,9 @@ WITH_ADB_INSECURE := true
 #    与 /product/etc/build.prop 都写 user），而指纹里是 :userdebug —— 不一致（SEC-5）。
 #    没改：发布构建 ro.debuggable=0、ro.adb.secure=1，运行期行为本来就和 user 一致，
 #    "user" 反倒是对外如实的身份；指纹里的 userdebug 是真实变体，也不该改。
-#    ⚠️ docs/TODO.md 另有一说"是 crDroid 的 spoof 只改了一半"；本地 refs 没有 soong 源码，
-#    两说哪个对待构建机核实：`grep -n -A6 'def get_build_variant' build/soong/scripts/gen_build_prop.py`。
+#    ✅ 10-18 构建机核实：是 crDroid 自己的改动（soong 45aecb5b2 / build/make 74b87074f7，"Turn off debug props on
+#    userdebug builds"），gen_build_prop.py:28-32 与 sysprop.mk 的分区 build.type 都改成"非 eng 即 user"；
+#    指纹那头没改，由 scripts/crdroid-tree-fixes.py 的 tree-fix [23] 补齐。
 #
 # 2) init 的属性加载是【后来者覆盖】（property_service.cpp:807-815
 #    的 map 插入：已存在且不同就 it->second = value），
