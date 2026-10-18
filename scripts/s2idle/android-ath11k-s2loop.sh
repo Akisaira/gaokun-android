@@ -7,12 +7,16 @@
 N=${1:-10}; NR=${2:-3}; PEER=${3:?第三个参数：同网段一台能 ping 的主机（别猜网关：Android 的默认路由在策略路由表里）}
 D=/data/local/tmp/mhi-test; mkdir -p $D; L=$D/log; : > $L
 S=/sys/class/usb_role/a600000.usb-role-switch/role
+# ★ WOW=1（2026-10-18，#40 / #44 / #46 之后）：开着 WoWLAN 时挂起走 WoW、芯片不断电、连接不断 ⇒ 不重载固件、
+#   也不会重新关联。判据改成：挂起成功 + ping 通 + 本轮没有 WoW / 恢复类错误。固件拒绝进 WoW（0105 让那次挂起
+#   返回 -EBUSY、cycle 里重试）单独计数（declined=），不算失败。WOW=0（默认）是 #16 的断电挂起判据。
+WOW=${WOW:-0}
 say() { echo "[$(date +%H:%M:%S) up=$(cut -d' ' -f1 /proc/uptime)] $*" >> $L; sync; }
 mark() { echo "MHITEST $*" > /dev/kmsg; }
 since() { dmesg | sed -n "/MHITEST $1 begin/,\$p"; }   # ★ 只看本轮标记之后：dmesg 环形缓冲会写满，按全量计数会失真
 wifi_ok() {  # $1=label。最多等 60 秒：本轮之后重新关联 + ping 通 PEER
   i=0; while [ $i -lt 30 ]; do
-    since $1 | grep -q "wlan0: associated" && ping -c1 -W1 $PEER >/dev/null 2>&1 && { echo "$((i*2))s"; return 0; }
+    { [ "$WOW" = 1 ] || since $1 | grep -q "wlan0: associated"; } && ping -c1 -W1 $PEER >/dev/null 2>&1 && { echo "$((i*2))s"; return 0; }
     sleep 2; i=$((i+1)); done; echo FAIL; return 1; }
 cycle() {  # $1 = platform | none
   case "$(cat $S)" in *"[host]"*|host) ;; *) say "ABORT: 挂起前 role=[$(cat $S)] 不是 host —— device 角色挂起会整板复位"; finish; exit 1 ;; esac
@@ -27,7 +31,7 @@ cycle() {  # $1 = platform | none
   echo none > /sys/power/pm_test
   return $RC
 }
-say "START N=$N NR=$NR kernel=$(uname -v) peer=$PEER"
+say "START N=$N NR=$NR WOW=$WOW kernel=$(uname -v) peer=$PEER"
 say "buddyinfo DMA: $(grep DMA /proc/buddyinfo | grep -v DMA32)"
 say "wake_lock: $(cat /sys/power/wake_lock)"
 # ★ 测试要固定在 host：USB 端口 HAL（vendor.usb-gaokun3）按对端决定角色，插着电脑或充电器（我方受电）时
@@ -48,10 +52,13 @@ run() {  # $1=mode $2=label
   cycle $1; rc=$?
   w=$(wifi_ok $2)
   fw=$(since $2 | grep -c "ath11k_pci.*fw_version")
-  bad=$(since $2 | grep -c -E "page allocation failure|failed to power up mhi|failed to early resume|DPM device timeout|did not load")
+  bad=$(since $2 | grep -c -E "page allocation failure|failed to power up mhi|failed to early resume|DPM device timeout|did not load|failed to wakeup wow|failed to resume hif|failed to suspend hif|firmware crashed")
+  # 断电路径（WOW=0）本来就会断开重连；WoW 下连接不该断
+  [ "$WOW" = 1 ] && bad=$((bad + $(since $2 | grep -c "wlan0: deauthenticating")))
+  dec=$(since $2 | grep -c "firmware declined wow")
   mark "$2 end"
-  if [ $rc -eq 0 ] && [ "$w" != FAIL ] && [ $bad -eq 0 ] && [ $fw -ge 1 ]; then pass=$((pass+1)); r=PASS; else fail=$((fail+1)); r=FAIL; fi
-  say "$r $2 rc=$rc wifi=$w fw_reload=$fw errlines=$bad"
+  if [ $rc -eq 0 ] && [ "$w" != FAIL ] && [ $bad -eq 0 ] && { [ "$WOW" = 1 ] || [ $fw -ge 1 ]; }; then pass=$((pass+1)); r=PASS; else fail=$((fail+1)); r=FAIL; fi
+  say "$r $2 rc=$rc wifi=$w fw_reload=$fw errlines=$bad declined=$dec"
   dmesg > $D/dmesg-$2.txt; logcat -d -b main,system -t 400 > $D/logcat-$2.txt 2>/dev/null
   say "   wlan0=[$(ip -4 addr show wlan0 | awk '/inet/{print $2}')] supplicant=[$(pidof wpa_supplicant)] link=[$(cat /sys/class/net/wlan0/operstate 2>/dev/null)]"; sync
 }
