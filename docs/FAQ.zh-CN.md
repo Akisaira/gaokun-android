@@ -252,7 +252,7 @@ adb shell getprop ro.build.date.utc               # 构建戳，例如 179105320
 
 ## 开发者选项、USB 调试与无线调试
 
-<!-- 菜单名 2026-10-18 按 crDroid 16 的 Settings 字符串核过（product=tablet 变体；out/v5-game1-findings.md A-5）。 -->
+<!-- 菜单名 2026-10-18 按 crDroid 16 的 Settings 字符串核过（product=tablet 变体；docs/source-audit-20261018.md A-5）。 -->
 菜单名称以设备上显示的为准。
 
 ### 打开开发者选项

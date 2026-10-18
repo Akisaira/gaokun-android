@@ -131,7 +131,7 @@
      uname() / /proc/version（v7.2.9 fs/proc/version.c:14 读的是 utsname）都报 6.6.30-android15-8-g0a4d3c12b3；
      dmesg 第一行的 linux_banner 是编译期常量、仍是真实版本（构建机 init/version.o 里两串都在，10-11 核过）。
      LINUX_VERSION_CODE 与模块 vermagic 不变（include/linux/vermagic.h:41-42、kernel/module/main.c:1105/2658）；本机没有可加载模块。
-     10-18 按源码排查（out/v5-game1-findings.md 任务 B；gaming.md §4.1）：bpf 加载器门槛都 ≤6.1、加载的程序集不变（NetBpfLoad 的"非 LTS"告警反而消失）；
+     10-18 按源码排查（docs/source-audit-20261018.md 任务 B；gaming.md §4.1）：bpf 加载器门槛都 ≤6.1、加载的程序集不变（NetBpfLoad 的"非 LTS"告警反而消失）；
      libvintf 把内核级别认成 V(202404)，多一条 WARNING，运行时检查不比内核；KSU 内核侧没有按 uname 的分支，
      ksud 会把 KMI 认成 android15-6.6（KernelUtils / boot_patch.rs:82-117）；ART 的 UFFDIO_MOVE 探测会退回 COPY（仅当内核开 USERFAULTFD）。
      ⬜ 0085 内核下上机核对（TODO GAME-1）。 -->

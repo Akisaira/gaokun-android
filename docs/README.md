@@ -62,6 +62,7 @@
 | [stage6-crdroid.md](stage6-crdroid.md) | Stage 6：转 crDroid 16.0 与产品化（OTA / root / SELinux / 传感器 / 硬解） | 参考 / 历史 | 维护者 · AI |
 | [camera-photo-rotation-2026-09-19.md](camera-photo-rotation-2026-09-19.md) | 前后摄照片转 90° 的根因与修复（一次事故的完整记录） | 历史（事故记录） | 维护者 |
 | [`evidence-58-drm-crtc-panic.txt`](evidence-58-drm-crtc-panic.txt) | 案卷 #58 的 efi_pstore 原始崩溃日志 | 参考（证据） | 维护者 |
+| [source-audit-20261018.md](source-audit-20261018.md) | 构建机源码核对：V5 六条出处（libbase errno、vold、sysprop.mk、configfs UDC、Settings 文案、SF `--latency` 64 帧）与 GAME-1（0085 版本串伪装）的副作用排查 | 参考（2026-10-18；上机核对项见 TODO GAME-1） | 维护者 · AI |
 | [project-log.md](project-log.md) | CLAUDE.md 曾经的前言框与 Stage 里程碑（按时间倒序，原样搬来） | 历史 | 维护者 · AI |
 
 ## 硬件与协议参考

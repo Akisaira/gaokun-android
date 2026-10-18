@@ -95,11 +95,11 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 
 | 编号 | 一句话 | 状态 | 下一步 |
 |---|---|---|---|
-| V0 余项 | 批 0 只读核查的子项 | ⬜ | lpdumpd 的 tombstone；修 `gaokun3-loopback` 的 SIGSEGV（release-checklist 的 B6 / A13 要用它）；Histen 关着时音频 HAL 的 maps 里有没有 `libhw_histen_processing.so`（裁决 effects/README 与旧"发版暂停"一节的矛盾）；`mEnablePalmRejection`（DISP-6）、`LID_BEHAVIOR_NONE`（DISP-1）复核 |
-| V2 · REL-7 | v0.7.1 的 GPL 源码补录 | ⬜ | 构建机（light 档）补 `v0.7.1-alpha-sources.md` 文末 "Not yet recorded"；查 `repo manifest -r` 为什么没跑成 |
-| V5 | "待构建机核实"的源码出处 | ⬜ | 见下文 V5（libbase errno、vold 行号、sysprop.mk、configfs 的 UDC pending、Settings 菜单文案、SurfaceFlinger `--latency` 格式） |
-| V14 | 采样脚本 | ◐ | ✅ 10-09 rc.1 插线验 `standby.sh` once / start / status / stop / pull 与摘要格式；`adb reconnect device`（adbd pid 不变）后采样器照跑；新增 `wl` / `ws_act` / `ws_top` / `lpass` 字段与 qcom_stats 睡眠时长占比。⬜ 真拔 USB 后存活 / `ev=wake` 行（随 B7 一起）；`game-perf.sh` 图层名与 128 帧窗口 |
-| HAL 误报 Windows | 手工删过 Windows 的机器 ESP 上留着 `bootmgfw.efi` ⇒ Parts 显示"重启到 Windows" | ◐ | 开发机的残留 10-06 已删（备份 `out/esp-backup-20261006/`），⬜ 下次开机确认 `bootentry.windows=0`；检测加"盘上有 NTFS / BitLocker 卷"，或在文档里写清 |
+| V0 余项 | 批 0 只读核查的子项 | ✅ 10-18 | 开发机 `1791704075` 只读：**lpdumpd** tombstone_10（10-04 22:26）是 `SlotSuffixForSlotNumber` 的 `slot_number == 0 \|\| 1` 检查失败 —— 有人传了非 0 / 1 的槽号（元数据有 3 个槽）；现在 `lpdump`、`lpdump -s 1` 都正常、无新 tombstone。**loopback** 的 SIGSEGV（tombstone_49）是 14:12 重编之前那版写 `corr[24096]` 越界一个（x20 + 0x2F100 = 分配长度），入库版有 `z - a > RATE/2` 跳过、走不到（`4bf5e42` 顺手改了过时的头注释；没放音重跑）。**Histen** 关着时音效 HAL（pid 742）只映射我们的 `libgaokunhisteneffect.so`、没有 `libhw_histen_processing.so` ⇒ effects/README「关着不加载任何库」成立。`mEnablePalmRejection: 0`、`getLidBehavior=LID_BEHAVIOR_NONE` 复核如旧 |
+| V2 · REL-7 | v0.7.1 的 GPL 源码补录 | ◐ 10-18 | ✅ `v0.7.1-alpha-sources.md` 文末改成 "Recorded afterwards"：buildbot 层 20 个提交（iris 树 reflog 09-28 后没动）、`--verify` 44 / 1（camera.dtsi 后来被动过）、KernelSU `b2ac2fc8`、ROM 清单 `v0.7.1-alpha-crdroid-manifest.xml`。"没跑成"= 非交互 ssh 的 PATH 没有 `~/bin/repo`（`release.sh` 已改，rc2c 起清单随 staging）。⬜ 补传 release 附件 `out/v071src/kernel-base-patches.tar.gz`（要用户点头，同 V7c） |
+| V5 | "待构建机核实"的源码出处 | ✅ 10-18 | 六条都按构建机源码核完、引用处已改（[`source-audit-20261018.md`](source-audit-20261018.md) 任务 A）。要点：configfs 写 UDC 失败**不留 pending**，adb 回来靠 adbd 重试 ⇒ V11 盯 `sys.usb.adb.disabled` 回 0；Settings 文案 7 处对不上（「关于本机」「Build 号」「提示音和振动」「Bug 报告」…）已改；SF `--latency` 在 crDroid 16 只给 **64 帧** ⇒ `game-perf.sh` 改 `sleep 0.2` |
+| V14 | 采样脚本 | ◐ | ✅ 10-09 rc.1 插线验 `standby.sh` once / start / status / stop / pull 与摘要格式；`adb reconnect device`（adbd pid 不变）后采样器照跑；新增 `wl` / `ws_act` / `ws_top` / `lpass` 字段与 qcom_stats 睡眠时长占比。⬜ 真拔 USB 后存活 / `ev=wake` 行（随 B7 一起）；`game-perf.sh` 图层名与 64 帧窗口（源码已核，上机数一次行数应 ≤ 64） |
+| HAL 误报 Windows | 手工删过 Windows 的机器 ESP 上留着 `bootmgfw.efi` ⇒ Parts 显示"重启到 Windows" | ✅ 10-18 | 开发机 `vendor.gaokun3.bootentry.windows=0`（10-06 删残留之后）；选"文档写清"：INSTALL 中英双系统一节加了原因与办法（删 ESP 上的 `EFI/Microsoft`），英文页名顺手改成 Parts 实际的 *Startup options* |
 | 执行端余项 | fastboot 执行端 | ⬜ | 主菜单的电源键确认路径（Reboot to Android）、`flash` 都没真机验过 |
 | 批 4 测量 | 只在 1.0 前做一次（v1.0-plan 批 4） | ⬜ | PERF-2 游戏基线 + UBWC A/B（B5b）、APP-5 熄屏推送延迟、AV-3 蓝牙耳机、AV-8/15 播放回归与 Histen 插耳机、AV-13/14、LIVE-7 60/120 Hz 电流、PERF-5、DISP-4 DP 输出、DISP-5/11/12、HW-10 人脸解锁、BATT-5/6/10、OTA-15、APP-19 QQ 平板模式、BKUP-10 —— 多数要用户在场或要外设 |
 
@@ -107,12 +107,12 @@ D17 充电上限保持现状、**不做写 EC 的上机实测**（2026-10-06）�
 
 | 编号 | 一句话 | 状态 | 下一步 | 证据 |
 |---|---|---|---|---|
-| GAME-1 | 内核版本串覆写 `patches/0085`（uname 报 `6.6.30-android15-8-…`） | ◐ 用户 10-11 定：进发版 | vermagic 不变已核（gaming.md §4.1）。✅ 10-11 known-limitations 中英已披露（第一节「内核对外报告的版本号不是真实版本」，真实版本看 `dmesg | head -1`）；⬜ 发版说明披露（rc.2 的说明定稿时写）；⬜ 排查 bpfloader / VINTF 内核矩阵 / KSU 读到 6.6 后的行为 | gaming.md §4.1 |
+| GAME-1 | 内核版本串覆写 `patches/0085`（uname 报 `6.6.30-android15-8-…`） | ◐ 用户 10-11 定：进发版 | vermagic 不变已核（gaming.md §4.1）。✅ 10-11 known-limitations 中英已披露（第一节「内核对外报告的版本号不是真实版本」，真实版本看 `dmesg | head -1`）；⬜ 发版说明披露（rc.2 的说明定稿时写）；✅ 10-18 源码排查：无功能影响（libvintf 多一条 WARNING、NetBpfLoad 非 LTS 告警消失、ART UFFDIO_MOVE 退回 COPY；ksud 把 KMI 认成 android15-6.6 ⇒ 已知限制已提醒别用 LKM 安装）；⬜ 0085 内核下上机核对 5 项（gaming.md §4.1 末） | gaming.md §4.1 |
 | GAME-2 | netlink 隐私边界 `patches/0084` | ◐ | 开发机 10-11 两条泄露都 `EACCES` ✅。⬜ 随下一个发版内核走 `--verify` + A 档；⬜ Wi-Fi / 热点 / `ip neigh`（root）照常 | gaming.md §1 |
 | GAME-3 | `system_server execmem` 去掉（swangle sepolicy 移出、`…EXECMEM_FOR_SWIFTSHADER` 注释掉） | ◐ 已提交 `53b34ff` | `1791704075` 实测 Denied ✅。⬜ enforcing 下全机 avc 无 `execmem` | BoardConfig.mk 注释 |
 | GAME-4 | 0085 内核固化进 `boot_b`（现在只能走直连槽条目） | ◐ 已进 rc.2 镜像 | **10-11 证实**：走默认入口起的是 7.2.9（`boot_b` 里没换）。✅ 10-11 rc.2：`prebuilt-boot/` 换成 `a0ea6ea4`（含 0079–0085）、`release.sh` 断言 boot.img 的 kernel 与它逐字节同。⬜ 装上 rc.2 后默认入口起来 `uname -r` = `6.6.30-android15-8-…` | gaming.md §4.3 |
 | GAME-5 | 原 `patches/0086`（KernelSU 子目录）进正规入口 | ✅ 10-11 | 已改名 `patches/resukisu/0003-…`（`kernel-setup-resukisu.sh` 打、`release.sh` 核）；本机对 pin `--check` 过。✅ 10-11 构建机：0001–0003 都已在树里、脚本幂等跳过、rc.2 内核编过；树上另一处手改（`adb_root.c` 的 include）撤掉后照样编过 ⇒ 不需要（`patches/resukisu/README.md`） | gaming.md §4.2 |
-| GAME-6 | `game-mode.sh` 10-11 审查修复 + 上机 | ✅ 10-11 上机 | ✅ hide / unhide（数据保留）、`on 1` 走 TCP 与 USB 都自动恢复、开机兜底、noforge / forge。上机挖出的真凶：定时器在 adbd 的 cgroup 里被 init 一起杀（gaming.md §2 第 2 条）。⬜ `unhide` 里 `install-existing` 为什么失败（从备份装回能用） | gaming.md §2 |
+| GAME-6 | `game-mode.sh` 10-11 审查修复 + 上机 | ✅ 10-11 上机 | ✅ hide / unhide（数据保留）、`on 1` 走 TCP 与 USB 都自动恢复、开机兜底、noforge / forge。上机挖出的真凶：定时器在 adbd 的 cgroup 里被 init 一起杀（gaming.md §2 第 2 条）。✅ 10-18 查明 `unhide` 的 `install-existing` 必然失败：单用户第三方应用 `uninstall --user 0` 是整包删除、`-k` 只留数据（`DeletePackageHelper.java:494-504`），备份那条才是主路径 | gaming.md §2 |
 | GAME-7 | 验收：英雄联盟手游 / Wild Rift 进对局 | ⬜ | `on` + `hide` 后测（先 forge，不行再 noforge 对比）；记卡在哪一层 | #17、gaming.md §3 |
 | GAME-8 | 低延迟音频 0083 发版构建复测 | ◐ | `1791704075` 上 FastMixer `mixPeriod=10 ms` ✅；⬜ Arcaea 端到端延迟、满载欠载复测 | gaming.md §1 |
 
@@ -194,7 +194,7 @@ B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 
 | V2 | GPL 补录与构建脚本 | ⬜ | 见 ② 表 |
 | V3 | NET-1 第二道门 | ✅ 代码 | `e3c5ba3`；实测归 V13 |
 | V4 | PWR-4 止损通知 | ◐ | `5dfe7dd`；坏口复现时看弹窗（V11） |
-| V5 | 其余"待构建机核实"的出处 | ⬜ | 见下 |
+| V5 | 其余"待构建机核实"的出处 | ✅ 10-18 | 见 ② 表 V5 行 |
 | V6 | 编译 + 发布产物断言 | ✅ | dev.1 起每版；REL-5 版本属性 `ro.vendor.gaokun3.version`、`ssc_test` 的 toggle 模式都已写 |
 | V7a | 开发机迁移（adb_keys、持久化 adb 属性） | ✅ | dev.1 之前 |
 | V7b | 预装管理器 APK | ⬜ | 等用户（③） |
@@ -202,7 +202,7 @@ B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 
 | V8 | 新 HAL 前的同会话开关实验 | ✅（被 V9 覆盖） | toggle 模式已写；PWR-3 新 HAL 已随 dev.1 上机，亮灭屏 20 次"使能 / 停用"各 21 次、读数正常、无看门狗误报 |
 | V9 | 新构建装后检查 | ◐ | dev.1 过（传感器功耗、STOR-5、NTP、usbrole、avc）。剩：亮灭屏 ≥50 次 + lights 的 errno 记录、二次开机不再 `Setting reserved block count`、B21 被动检查、"连上网到第一次对时"的耗时 |
 | V10 | B1 上机验收（交互） | ◐ | 见阻断表 B1；另：开发构建 `adb root` 时桥接只报 EEXIST / EBUSY；发布构建上 `dmesg` / `logcat -b kernel` / `bugreport` 能不能用 |
-| V11 | USB / 存储 / usbrole（用户在场，全程 TCP adb） | ⬜ | STOR-1 两种格式插 port1；PWR-5 port0 插外设息屏亮屏 5 次；开机插 U 盘再换插 PC 看 UDC；PWR-4 坏口时 `vendor.gaokun3.usbrole.broken=1`。STOR-3（port0 = 靠近电源键的口）✅ |
+| V11 | USB / 存储 / usbrole（用户在场，全程 TCP adb） | ⬜ | STOR-1 两种格式插 port1；PWR-5 port0 插外设息屏亮屏 5 次；开机插 U 盘再换插 PC 看 UDC（判据：切回 device 后 `getprop sys.usb.adb.disabled` 为 0，2 秒内 `cat /config/usb_gadget/g1/UDC` 非空 —— 内核不留 pending，见 V5）；PWR-4 坏口时 `vendor.gaokun3.usbrole.broken=1`。STOR-3（port0 = 靠近电源键的口）✅ |
 | V12 | 亮屏后方向、陀螺仪、亮度 | ⬜ | 旋转及时、三种陀螺仪情形、融合传感器；亮度只有出现可见后果才做内核侧根治（`himax_bl_update_status`） |
 | V13 | NET 实测 | ⬜ | 息屏醒着时 AP 断开再恢复 2 分钟内重连；`allow_suspend=1` 定时唤醒后重连；软件 PNO 的耗电；`ntp.aliyun.com` 海外可达（要海外用户） |
 | V14 | 采样脚本与 A22 | ⬜ | 见 ② 表；A22 = 在 USB adb 下真跑一次 `cmd wifi start-softap` |
@@ -211,7 +211,7 @@ B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 
 | V17 | 1.0 发版说明与"从 1.0 起"的说法 | ◐ | 草稿 `8ccdd35`（中英）；定稿前在已验收的发布构建上确认 `ro.adb.secure=1` / `ro.debuggable=0` / 没有 5555 |
 | V18 | 传感器恢复、键盘拔插、振动器、备份、时区 | ◐ | HW-6 dev.9 静态过；B21、DISP-15、BKUP-5、D15、D10 见 ② 表 |
 
-**V5 要核的出处**（结论回填到 FAQ / INSTALL / issue 模板 / 注释）：`system/libbase/file.cpp` 写失败后 errno 是否保留；`system/vold` 的 `DiskSource::matches` fnmatch flags 与 `vold.has_reserved` 出处；crDroid `build/make/core/sysprop.mk` / `config.mk` 与 `refs/aosp-build` 是否一致；
+**V5 要核的出处**（✅ 2026-10-18 全部核完、已回填，结论见 [`source-audit-20261018.md`](source-audit-20261018.md)；下面是原清单）：`system/libbase/file.cpp` 写失败后 errno 是否保留；`system/vold` 的 `DiskSource::matches` fnmatch flags 与 `vold.has_reserved` 出处；crDroid `build/make/core/sysprop.mk` / `config.mk` 与 `refs/aosp-build` 是否一致；
 内核 `drivers/usb/gadget/configfs.c` 写 UDC 失败后 gadget 是否留在 pending（决定 V11 里 adb 能否自己回来）；crDroid 16 Settings 的实际菜单文案；`dumpsys SurfaceFlinger --latency` 的列格式与 128 帧窗口。
 
 **等安装器**（`scripts/live/`、`live/installer-flutter/`、`scripts/windows/`；代码都已写、本机测过，下面全是真机项，并进 B4 一次做）：
