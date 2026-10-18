@@ -411,6 +411,8 @@ Windows 和救援系统也仍然归它管；gk3boot 只是它默认启动的那�
 安装器的确认页会让你选开机默认进入哪个系统（预选 Android）。选 Windows 的话，装完前两次开机仍进 Android；
 之后冷开机才默认进 Windows。以后在 Android 的「设置 → 系统 → 启动选项」里改。
 小于 200 MiB 的 EFI 分区（重装 Windows 时建的那种 100 MiB）不支持；安装器会在上面给 Windows 更新和固件至少留 32 MiB。
+删掉 Windows 以后「启动选项」里还有"重启到 Windows"：这一项只看 EFI 分区上有没有 `EFI/Microsoft/Boot/bootmgfw.efi`。
+自己删了 Windows 分区、却没删 EFI 分区上的 `EFI/Microsoft` 目录时它还会出现（点了也进不去 Windows）；删掉那个目录，重启一次就没了。
 
 ## 清除数据（恢复出厂）
 

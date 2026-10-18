@@ -562,10 +562,15 @@ not been tested on a real dual-boot machine yet**.
 The installer's confirmation page asks which system starts by default
 (Android is preselected). If you pick Windows, the first two starts after the
 install still go into Android; from then on, a cold start goes into Windows.
-Change it later in Android under Settings → System → Boot options. An EFI
+Change it later in Android under Settings → System → Startup options. An EFI
 partition smaller than 200 MiB (the 100 MiB kind a Windows reinstall creates)
 is not supported; the installer keeps at least 32 MiB free on it for Windows
 updates and the firmware.
+If "Restart to Windows" is still in Startup options after you removed Windows:
+that entry only checks whether `EFI/Microsoft/Boot/bootmgfw.efi` is on the EFI
+partition. If you deleted the Windows partition yourself but left the
+`EFI/Microsoft` folder on the EFI partition, it stays (and does not get you
+into Windows); delete that folder and restart once.
 
 ## Erasing your data (factory reset)
 
