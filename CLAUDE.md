@@ -40,6 +40,8 @@
 > * 发版一律 **`release.sh --no-build`** —— 重跑构建发出去的不是硬件上验过的那一版。
 > * ⚠️★★ **ROM 变体只用 `lineage_gaokun3-bp4a-userdebug`**：`-user` 的 init 强制 enforcing（`selinux.cpp:112-116`），装上去起不来（#117 §15）。
 > * **推仓库、发版要用户点头**；其余（本地提交、构建、staging、设备实验）直接做。
+> * ★ **分支（用户 2026-10-18 定，有协作者了）：所有修改都在开发分支 `dev` 上改、提交、推 `dev`，不直接提交 / 推 `main`。**
+>   `main` 只在发版时从 `dev` 合并（什么时候合由用户定）；协作者的 PR 也提到 `dev`。开工先 `git switch dev && git pull`。
 >
 > ### 现在设备上跑的是什么（2026-10-18 22:3x 实机读到；历次状态见 project-log）
 > * ★ **10-18 22:1x 起：active = `_a` = rc.2 候选 `1792312407`**（`install-ota-local.sh --go` 装、OneShot 直连条目起来、验收后 `set-active-boot-slot 0`，ESP default = `*-android-a.conf`），
