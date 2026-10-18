@@ -170,6 +170,11 @@ quota / projid / casefold · FUSE passthrough · zram · Wi-Fi Direct · 海外 
 B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 的 39 位地址空间测试内核起不来（搁置）· iris 零碎（`venus_compat_gfmt=N` 复测、HAL 的 POLLPRI 空转、SYS_ERROR 后 `invalid uc_region`）·
 #16 尾巴（`ath11k_mhi_start` 失败不 unprepare，每次漏约 4 MB DMA，`mhi.c:446-450`）· recovery、原神渲染上限（见 E 节）。
 
+**ART 的 GC（10-19 发现，下一版再定）**：发版内核 `# CONFIG_USERFAULTFD is not set`（`1792312407` 上 `zcat /proc/config.gz` 实测；`scripts/kernel-config-android.sh` 里没提过它，
+不是有意关的），而镜像里 `ro.dalvik.vm.enable_uffd_gc=true` ⇒ ART 用不上 uffd 的 CMC 收集器，实际是 *Background concurrent copying GC*（logcat 实测）。
+功能没问题，只是少一项内存 / 停顿上的优化。要开的话：`kernel-config-android.sh` 加 `USERFAULTFD=y` 并断言、重编内核、跑 A 档 + 一段游戏对比；
+⚠️ 配上 0085 后 ART 的 UFFDIO_MOVE 探测会失败、退回 COPY 模式（`docs/source-audit-20261018.md` 任务 B #9b），仍是 CMC，只是少了 MOVE。
+
 ### 旧编号索引（原第一 / 第二梯队表与对账表里的号，原表见 archive [`#tier1`](archive/TODO-history-2026-10.md#tier1) / [`#tier2`](archive/TODO-history-2026-10.md#tier2) / [`#user-actions`](archive/TODO-history-2026-10.md#user-actions) / [`#paused`](archive/TODO-history-2026-10.md#paused) / [`#reconcile`](archive/TODO-history-2026-10.md#reconcile)）
 
 | 号 | 现状 | 去处 |
