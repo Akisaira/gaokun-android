@@ -244,13 +244,15 @@ yourself, you should know that they contain these components.
   takes a different path and is not affected, though it has not been fully tested on hardware yet.
 
 ### No push notifications while in standby
-<!-- APP-5 / NET-9 / PWR-12 (1.0: measure, then disclose; WoW after 1.0). Fill in measured delays after batch 4.
+<!-- APP-5 / NET-9 / PWR-12 (1.0: measure, then disclose; waking on incoming packets after 1.0). Evidence: PR #40 (Wi-Fi stays
+     connected in standby) and the PR #46 author's measurements of 2026-10-17 — see the zh-CN file.
      The standby switch is the Parts one from 1.0 on (PWR-16); its place and wording on the Battery page still have to be checked on hardware. -->
 * **What you see**: once the screen is off and the machine is in standby, new WeChat, QQ and other messages do not
-  arrive in real time. They arrive together when you turn the screen on (or when the system wakes up on a timer).
-  After each wake, Wi-Fi takes a few seconds to reconnect.
-* **Why**: in standby the Wi-Fi chip is powered off completely, so nothing arriving over the network can wake the
-  machine. Chinese apps also have no vendor push channel available on this system.
+  arrive in real time. They arrive at the system's next timed wake-up (or when you turn the screen on), usually a
+  minute or two late, occasionally around three. Wi-Fi stays connected in standby, so nothing has to reconnect.
+* **Why**: we have not yet got the Wi-Fi chip to wake the machine from standby when data arrives, so messages are
+  picked up when the system wakes on its own. Chinese apps also have no vendor push channel available on this
+  system.
 * **What to do**:
   * When you need messages promptly, keep the screen on, or receive them on your phone.
   * Or turn standby off completely, which costs noticeably more battery with the screen off: **Settings → Battery →
