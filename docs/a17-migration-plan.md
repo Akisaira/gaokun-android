@@ -121,8 +121,10 @@
 | M0 | ✅ 分支 `a17-migration`：cp2a lunch 项、manifest（cinnamonbun）、tree-fixes 严格模式、`sync-device-tree.sh` 不再删 fcitx5 APK |
 | M1 | ✅ 没加盘，`~/crdroid` 就地 `repo init -b 17.0 --git-lfs` + sync（A16 不入库的输入先备份到 `~/keep`）；`lunch lineage_gaokun3-cp2a-userdebug` 过 |
 | M2 | ✅ tree-fix [1]–[25] 在真树上全打上；[9] 废弃；新增 [24]（adb_root 只随 WITH_SU）、[25]（KeyGestureController 包 LineageSettings 读取，补 10-11 救砖时没入库的那一处） |
-| M3 | ⏳ 音频补丁按 A17 的 StreamAlsa 拆分重写、effects 改用 `libaudioeffectaidlcommon`；sepolicy 静态编译过；libcamera 树准备入库为 `scripts/camera/setup-libcamera-tree.sh`；第一次冷编卡在 `libcamera_gk3` 未定义，修后第二次冷编进行中 |
+| M3 | ✅ 10-25 第一个完整构建：戳 `1792943610`，`crDroidAndroid-17.0-20261025-gaokun3-v13.0.zip`（1.41 GB）+ `super.img`（3.4 GB），发布构建（未设 GAOKUN3_DEV_BUILD）。音频补丁按 A17 的 StreamAlsa 拆分重写、effects 改用 `libaudioeffectaidlcommon`；libcamera 树准备入库为 `scripts/camera/setup-libcamera-tree.sh`。产物核过：`ro.bpf.kver_override=7.2.9`、`debug.graphics.game_default_frame_rate.disabled=true`、无 adb_root、`ro.debuggable=0`、`vulkan.freedreno.so`、`libcamera_gk3.so` 与各 HAL 在。payload 在 R2 `staging/a17-1792943610/`（payload.bin sha256 `38df053d…`）、构建机 `~/a17-work/a17-1792943610/payload/`。`prebuilts/build-tools` 的 date / tar 没删也编过了 —— 那一步不需要 |
 | M6 | ✅ 提前做了：mesa 26.1 用 meson2hermetic 重新生成（`scripts/mesa-a17/`，check-output 全过，490 个模块），0004 改成 v3、0005 不用 |
 | M4 / M5 / M7 | ⬜ 要等 M3 出镜像；M4 首次上机要用户在场。0085 的 6.6.30 版本串本会让 A17 netd 走 6.1–6.18 才有的 L4S SOCK_OPS 路径与开机自检；已在 device.mk 设 `ro.bpf.kver_override=7.2.9`（Lineage 的覆盖属性，只影响 BPF 网络栈，App 仍看到 6.6.30）绕开，未上机验证 |
 
-`prebuilts/build-tools` 下 A16 树删过 `date` / `tar` 两个预编译件，A17 没有编码这一步，冷编要看会不会因此报错。
+**盘**：冷编两次在打包阶段写满 504 GB 盘（siso 写日志失败后 abort，不是代码错误）。用户 10-25 定删 A16 旧载荷：`~/v1-work` 里 payload*/rc1-out/rc2–rc2d 的大文件、`~/rel2`、`~/stage` 的 08-20 包，`repo gc` 删掉 A17 清单里没有的 90 个项目（6.4 GB），再删 ThinLTO 缓存。完整构建后剩约 20 GB，打包时最低 8 GB —— 下一次冷编（如 QPR1 跟版）还会紧，届时要么扩盘、要么再清。
+
+**M4 的一个没核实的风险**：A17 首次开机会升级 /data 上的数据（包管理、数据库、ART 产物等）。A17 起不来时回落到 A16 槽，A16 能否在被 A17 动过的 /data 上正常开机没验证过，可能要清数据；/data 又没有 checkpoint。上机前要先决定要不要备份 /data。
