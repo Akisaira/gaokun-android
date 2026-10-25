@@ -1052,6 +1052,52 @@ def patch_adb_root_only_with_su(tree: pathlib.Path) -> str:
     return "adb_root 挪进 ifeq ($(WITH_SU),true)"
 
 
+def patch_keygesture_lineagesettings_guard(tree: pathlib.Path) -> str:
+    """—— 修补 25：KeyGestureController 读 LineageSettings 失败不致命 ——
+
+    来历（2026-10-11 救砖，见 memory「lineagesettings 被卸 → system_server 循环崩」）：
+    有人为"隐藏 ROM 痕迹"把 org.lineageos.lineagesettings 对 user 0 卸掉，
+    KeyGestureController 读 LineageSettings.System 抛异常 ⇒ system_server 每 5 秒崩一次、整机起不来。
+    当时在构建机树上直接给这两处读取包了 try/catch，**从没写进本脚本、全仓零记录**，
+    却编进了之后每一版（含 rc2e）。2026-10-25 A17 迁移 reset 树时，对照 A16 树的改动普查才发现。
+    A17（crDroid 17.0）frameworks/base 的 KeyGestureController.java:333-338 仍是同样没有防护的写法。
+    ⓘ 这只是兜底：根本的规矩仍是"别隐藏 lineagesettings / lineageparts"（docs/gaming.md）。
+       读失败时两个开关保持默认 false（不启用部分截图 / 音量上下同按静音），与没装 Lineage 设置时一致。
+    """
+    p = tree / "frameworks/base/services/core/java/com/android/server/input/KeyGestureController.java"
+    if not p.exists():
+        return f"⚠️ 找不到 KeyGestureController.java（{p}），上游可能挪了文件"
+    s = io.open(p, encoding="utf-8").read()
+    marker = "gaokun3 tree-fix [25]"
+    if marker in s:
+        return "已改（幂等，无需改动）"
+    old = ("        mClickPartialScreenshot = LineageSettings.System.getIntForUser(resolver,\n"
+           "                LineageSettings.System.CLICK_PARTIAL_SCREENSHOT, 0,\n"
+           "                UserHandle.USER_CURRENT) == 1;\n"
+           "        mVolUpAndDownMute = LineageSettings.System.getIntForUser(resolver,\n"
+           "                LineageSettings.System.VOLUME_UP_AND_DOWN_MUTE, 0,\n"
+           "                UserHandle.USER_CURRENT) == 1;\n")
+    if s.count(old) != 1:
+        return "⚠️ 找不到读 CLICK_PARTIAL_SCREENSHOT / VOLUME_UP_AND_DOWN_MUTE 的那段（或不唯一），上游可能改了写法"
+    new = ("        // " + marker + ": a missing/hidden LineageSettings provider must not crash-loop system_server.\n"
+           "        try {\n"
+           "            mClickPartialScreenshot = LineageSettings.System.getIntForUser(resolver,\n"
+           "                    LineageSettings.System.CLICK_PARTIAL_SCREENSHOT, 0,\n"
+           "                    UserHandle.USER_CURRENT) == 1;\n"
+           "        } catch (Exception e) {\n"
+           "            android.util.Log.w(\"KeyGestureController\", \"Failed to read CLICK_PARTIAL_SCREENSHOT\", e);\n"
+           "        }\n"
+           "        try {\n"
+           "            mVolUpAndDownMute = LineageSettings.System.getIntForUser(resolver,\n"
+           "                    LineageSettings.System.VOLUME_UP_AND_DOWN_MUTE, 0,\n"
+           "                    UserHandle.USER_CURRENT) == 1;\n"
+           "        } catch (Exception e) {\n"
+           "            android.util.Log.w(\"KeyGestureController\", \"Failed to read VOLUME_UP_AND_DOWN_MUTE\", e);\n"
+           "        }\n")
+    io.open(p, "w", encoding="utf-8", newline="").write(s.replace(old, new, 1))
+    return "两处 LineageSettings 读取包上 try/catch"
+
+
 def main():
     tree = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else pathlib.Path.home() / "crdroid").expanduser()
     if not (tree / "build/envsetup.sh").exists():
@@ -1134,6 +1180,7 @@ def main():
     step(" [23] BUILD_FINGERPRINT/THUMBPRINT/SYSTEM_FINGERPRINT 变体段改写成 user（与 ro.build.type 对齐）: ",
          patch_build_fingerprint_variant_user(tree))
     step(" [24] adb_root 只在 WITH_SU=true 时装（发布构建没有 adb root）: ", patch_adb_root_only_with_su(tree))
+    step(" [25] KeyGestureController 读 LineageSettings 失败不致命（10-11 救砖兜底）: ", patch_keygesture_lineagesettings_guard(tree))
     if failed:
         print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))
         sys.exit(1)
