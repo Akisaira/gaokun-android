@@ -1,0 +1,153 @@
+# Copyright 2026 The Magma GPU Project
+# SPDX-License-Identifier: MIT
+#
+# gaokun3（sc8280xp / Adreno 690）在 A17 上的 meson2hermetic 项目配置。
+#
+# 来源：mesa main 的 src/gfxstream/hermetic/android/aosp_mesa3d.toml
+#   （MR !42932 入库，2026-07-16；注释里说它"就是 Android17+ external/mesa3d 用的那份"）。
+# 改动三处，都标了「gaokun」：
+#   1. 去掉上游的 aosp_reference_embedded_drivers（freedreno-kmds = "msm,kgsl"），
+#      换成 gaokun_turnip：只要 msm（主线 DRM）。kgsl 是高通闭源内核接口，本机不存在。
+#   2. target_renames 里留着 vulkan_freedreno → vulkan.freedreno（上游同名）。
+#   3. aosp_reference_drivers 与 gaokun_turnip 都设 platform-sdk-version = 37（理由见下）。
+# 其余三个配置原样保留：它们产出的 gfxstream / lavapipe 模块（vulkan.ranchu、vulkan.lvp、
+# mesa_* 手写兼容块）被 device/generic/goldfish、hardware/google/gfxstream 按名引用，
+# 删掉会让 Soong 在解析期报未定义模块，哪怕我们的产品根本不编它们。
+#
+# ⚠️ 生成器把同一平台（android_arm64）上几个配置的结果合并成 select()；
+#    凡是会改动**公共**编译参数的选项，gaokun_turnip 必须和 aosp_reference_drivers 取同值，
+#    否则公共模块（mesa_util、vulkan_runtime …）的参数会分叉。所以：
+#    - zlib / zstd 两边一致（zlib on、zstd off，见 dependencies.toml 的说明）；
+#    - platform-sdk-version 两边都设 37（gaokun 改动 3；meson.options 默认 35，A16 的 gaokun.toml 是 36）。
+#      它不只管 meson.build:1001-1019 的 >=26 / >=35 依赖分支：-DANDROID_API_LEVEL 还决定
+#      ANDROID_STRICT 下放行哪些扩展（src/vulkan/util/vk_extensions.py:52-61 + :385-389）——
+#      默认 35 会藏掉 turnip 支持、A16（36）时暴露过的 VK_KHR_maintenance7 /
+#      compute_shader_derivatives / shader_relaxed_extended_instruction（tu_device.cc:177/215/245）。
+#      只在 gaokun_turnip 里设 = 根 Android.bp 同时出现 -DANDROID_API_LEVEL=35（"android" 分支）
+#      和 =37（("arm64","android") 分支），宏重定义（10-25 评审在构建机副本上实测）；两边都设则只有一个 37。
+#      reference 配置的其他平台（x86 / x86_64 模拟器）我们不编；26.1 里 >=37 的门槛只有 intel anv。
+#    - android-strict：上游 reference 配置设 false；A16 的 turnip 是默认 true
+#      （归档 Android.bp 里 54 处 -DANDROID_STRICT）。gaokun_turnip 不写这一项 = 默认 true，与 A16 一致；
+#      按并集规则，根 Android.bp 的 ("arm64","android") 分支对所有 arm64 模块都带 -DANDROID_STRICT（实测）。
+[project]
+project_name = 'aosp_mesa3d'
+project_path = 'external/mesa3d'
+build_system = 'soong'
+handwritten_modules = 'gfxstream_workaround.txt'
+
+[copyright]
+license_name = "external_mesa3d_license"
+licenses = ["MIT", "Apache-2.0", "GPL-1.0-or-later", "GPL-2.0-only"]
+license_texts = ["LICENSE"]
+
+[target_renames]
+vulkan_lvp = "vulkan.lvp"
+vulkan_gfxstream = "vulkan.ranchu"
+vulkan_freedreno = "vulkan.freedreno"
+
+[custom_target]
+[custom_target.workarounds]
+skip_export_include_dirs = [
+    "gfxstream_guest_vk_autogen",
+    "vulkan_gfxstream_header",
+]
+
+[[custom_variable]]
+namespace = "aosp_mesa3d"
+name = "perfetto"
+possible_values = ["true", "default"]
+default_value = "default"
+
+[[config]]
+config_name = 'aosp_reference_drivers'
+
+[config.platforms]
+host_platforms = [
+    "android_arm64",
+    "android_x86_64",
+    "android_x86"
+]
+build_platforms = ["linux_glibc_x86_64"]
+
+[config.static_options]
+glx = "disabled"
+# Lavapipe is loaded into SP-HAL clients (SurfaceFlinger, apps), which
+# can only load vendor libraries labeled same_process_hal_file.
+# libz is labeled, libzstd is not.
+zlib = "enabled"
+zstd = "disabled"
+platforms = "android"
+android-strict = false
+# gaokun：与 gaokun_turnip 同值，免得 arm64 上并出两个 -DANDROID_API_LEVEL（见文件头）
+platform-sdk-version = 37
+vulkan-drivers = "gfxstream,swrast"
+gallium-drivers = ""
+virtgpu_kumquat = true
+opengl = false
+egl = "disabled"
+
+[config.variable_options]
+perfetto = [
+    { value = true, select = "aosp_mesa3d:perfetto=true" },
+    { value = false, select = "aosp_mesa3d:perfetto=default" }
+]
+
+# gaokun：turnip（freedreno Vulkan），只编 arm64、只要 msm KMD。
+# 产物 cc_library_shared "vulkan.freedreno" → /vendor/lib64/hw/vulkan.freedreno.so，
+# 由 device.mk 的 ro.hardware.vulkan=freedreno 选中。
+# GLES 由系统 ANGLE 跑在它上面，所以 EGL / GBM / GL 全关（与 A16 的 gaokun.toml 相同）。
+[[config]]
+config_name = 'gaokun_turnip'
+
+[config.platforms]
+host_platforms = [
+    "android_arm64",
+]
+build_platforms = ["linux_glibc_x86_64"]
+
+[config.static_options]
+glx = "disabled"
+zlib = "enabled"
+zstd = "disabled"
+platforms = "android"
+vulkan-drivers = "freedreno"
+freedreno-kmds = "msm"
+# A17 = SDK 37；ANDROID_STRICT 的扩展放行按它判（见文件头）
+platform-sdk-version = 37
+gallium-drivers = ""
+opengl = false
+egl = "disabled"
+
+[[config]]
+config_name = 'aosp_emulated_android_gfxstream'
+
+[config.platforms]
+host_platforms = ["linux_glibc_x86_64", "linux_musl_x86_64", "linux_musl_aarch64"]
+build_platforms = ["linux_glibc_x86_64"]
+
+[config.static_options]
+glx = "disabled"
+zlib = "disabled"
+platforms = "android"
+android-stub = true
+vulkan-drivers = "gfxstream"
+gallium-drivers = ""
+virtgpu_kumquat = true
+opengl = false
+egl = "disabled"
+
+[[config]]
+config_name = 'aosp_host_lavapipe'
+
+[config.platforms]
+host_platforms = ["linux_glibc_x86_64", "linux_musl_x86_64", "linux_musl_aarch64"]
+build_platforms = ["linux_glibc_x86_64"]
+
+[config.static_options]
+glx = "disabled"
+zlib = "disabled"
+platforms = ""
+vulkan-drivers = "swrast"
+gallium-drivers = ""
+opengl = false
+egl = "disabled"

@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """补齐 AOSP external/mesa3d 里 meson_to_hermetic 工具与 mesa 25.3 的 API 差距。
 
+⚠️ **仅 A16（crDroid 16.0，mesa 25.3 / 26.0.3 + 旧工具 meson_to_hermetic）。**
+A17（crDroid 17.0，mesa 26.1.0-devel）的 external/mesa3d 已删掉 meson_to_hermetic，
+改用 meson2hermetic（`meson convert`）；A17 的管线见 docs/mesa-a17.md 与
+scripts/mesa-a17/regen.sh。本文件只作 A16 历史留档，在 A17 树上运行会直接退出。
+
 背景：AOSP 的 external/mesa3d（mesa 25.3.0-devel）自带 meson_to_hermetic 工具，
 能把 meson 构建翻译成 Soong（Android.bp），官方脚本 build-android-turnip.sh 就是
 用它生成 turnip（freedreno Vulkan）的。但该工具快照落后于同仓库的 mesa 源码，
@@ -27,6 +32,10 @@
 import os
 import re
 import sys
+
+if not os.path.isdir('meson_to_hermetic'):
+    sys.exit('本脚本只适用于带 meson_to_hermetic 的 A16 mesa 树；'
+             'A17（mesa 26.1）请用 scripts/mesa-a17/regen.sh（见 docs/mesa-a17.md）')
 
 COMMON = 'meson_to_hermetic/meson_common.py'
 IMPL = 'meson_to_hermetic/meson_impl.py'

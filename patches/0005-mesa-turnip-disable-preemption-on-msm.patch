@@ -1,3 +1,9 @@
+⚠️⚠️ 已证伪、不要应用（A16 / A17 都不用）。
+D3 时代"抢占是 GMU 死亡主嫌"那条错误主线的产物；真凶是 0004 v1 造成的 iova 0 →
+SMMU fault（stage5-freedreno.md D9 / D10）。A16 最终实测 fault=0 的归档树里抢占是开着的
+（stage6-crdroid.md M3「顺带发现」）。A17 管线（scripts/mesa-a17/regen.sh）不打这个补丁；
+文件只作侦查史留档。
+
 From: gaokun-Android project
 Subject: [PATCH] tu/msm: do not use preemption on sc8280xp (A690)
 

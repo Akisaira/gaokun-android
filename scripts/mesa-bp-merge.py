@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """把 meson_to_hermetic 生成的 Android_res.bp 合进 external/mesa3d/Android.bp。
 
+⚠️ **仅 A16（crDroid 16.0，mesa 25.3 / 26.0.3 + 旧工具 meson_to_hermetic）。**
+A17（crDroid 17.0，mesa 26.1.0-devel）的 external/mesa3d 已删掉 meson_to_hermetic，
+改用 meson2hermetic（`meson convert`）；A17 的管线见 docs/mesa-a17.md 与
+scripts/mesa-a17/regen.sh。本文件只作 A16 历史留档，在 A17 树上运行会直接退出。
+
 在 external/mesa3d 目录下运行，幂等（每次从 Android.bp.gaokun-orig 重来）。
 
 要处理的坑（都是"工具快照 vs mesa 25.3 / AOSP 现状"的落差）：
@@ -36,6 +41,10 @@ import os
 import re
 import shutil
 import sys
+
+if not os.path.isdir('meson_to_hermetic'):
+    sys.exit('本脚本只适用于带 meson_to_hermetic 的 A16 mesa 树；'
+             'A17（mesa 26.1）请用 scripts/mesa-a17/regen.sh（见 docs/mesa-a17.md）')
 
 ORIG = 'Android.bp'
 GEN = 'Android_res.bp'

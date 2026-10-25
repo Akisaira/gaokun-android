@@ -1,97 +1,158 @@
 From: gaokun-Android project
-Subject: [PATCH] tu: handle VkBindImageMemoryInfo with no memory for
- Android native buffer images
+Subject: [PATCH] tu: implement deferred VkNativeBufferANDROID binding
+ (VkBindImageMemoryInfo with NULL memory)
 
-在 Android 上跑 turnip 时，任何 GL/Vulkan 应用一开始渲染就崩：
+现行版本 = **v3，按 A17 的 mesa 26.1.0-devel 重做**（2026-10-25；
+`external/mesa3d` 来自 crDroid 17.0 / android-17.0.0_r1）。
+由 `scripts/mesa-a17/regen.sh` 在生成 Android.bp 之前打上（幂等）。
 
-    #00 vulkan.freedreno.so  tu_BindImageMemory2
-    #01 libvulkan.so         vulkan::driver::AcquireNextImageKHR
-    #02 libGLESv2_angle.so   rx::WindowSurfaceVk::prepareSwap
-    #07 libhwui.so           EglManager::queryBufferAge → beginFrame
-    signal 11 (SIGSEGV), fault addr 0x70, tid RenderThread >>> system_server <<<
-
-（system_server 的 RenderThread 一崩，整个框架 DeadSystemException 崩溃循环，
-永远进不了桌面。）
-
-原因：ANB（VkNativeBufferANDROID）图像的内存是在 **vkCreateImage** 里就由
-`vk_android_import_anb()` 导入并绑定好的（它自己会调一次 BindImageMemory2）。
-Android 平台的 libvulkan 在 swapchain 路径上会**再绑一次**，而这次
-`VkBindImageMemoryInfo::memory` 是 VK_NULL_HANDLE。turnip 的实现里这条路
-只有一句 TODO：
-
-    if (!mem) {
-    #if DETECT_OS_ANDROID
-       /* TODO handle VkNativeBufferANDROID */
-       UNREACHABLE("VkBindImageMemoryInfo with no memory");
-
-release 构建下 UNREACHABLE 展开成 __builtin_unreachable()，于是变成未定义
-行为 —— 表现为紧随其后的空指针解引用。
-
-修法：ANB 图像遇到"无 memory 的重复绑定"时按 no-op 成功返回（内存已在创建
-时绑好），仅对真正非法的情况保留 UNREACHABLE。
-
-⚠️⚠️ **v1（下面这个 diff）和 v2 都不对，权威实现是 v3 ——
-`scripts/gmu-forensics/apply-0004v3.py`（幂等，直接在 mesa 树上跑）。**
-
-v3 的判决依据（2026-08-19 三探针实测，见 docs/stage5-freedreno.md D10）：
-**Android 的 libvulkan 走延迟绑定** —— `vkCreateImage` 时**不带** ANB
-（所以 `vk_android_import_anb()` 从未运行、`vk.anb_memory` 是空的），
-gralloc buffer 是在 `vkBindImageMemory2` 这一刻才通过
-`pNext` 的 `VkNativeBufferANDROID` 递进来的：
+问题：Android 的 libvulkan 对 swapchain image 走**延迟绑定** ——
+vkCreateImage 时**不带** VkNativeBufferANDROID（于是 vk_android_import_anb()
+从未运行、vk.anb_memory 为空），gralloc buffer 是在 vkBindImageMemory2 这一刻
+才通过 pNext 递进来的，而 `VkBindImageMemoryInfo::memory` 是 VK_NULL_HANDLE：
 
     P1 NULL-bind pNext=[1000010000, 1000060009]   ← NATIVE_BUFFER_ANDROID
                                                     + BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR
     caller: libGLESv2_angle.so → libvulkan.so → vulkan.freedreno.so
 
-也就是说 turnip 那句 `/* TODO handle VkNativeBufferANDROID */` 说的就是这条路，
-**从来没人实现过**。v3 实现它：用 bind info 的 ANB 造等价 create info →
-`vk_android_get_anb_layout()` + `tu_image_update_layout()` 按 gralloc 的真实
-modifier 重算布局（image 默认 UBWC，gralloc 可能是 LINEAR，不重算就错位/越界）
-→ `vk_android_import_anb()` 导入并绑定（重复绑定先 FreeMemory 掉上一块）。
-实测：SMMU fault 66 → **0**，screencap 从永久卡死变成 3.27MB 正常出图。
+turnip 在这条路上只有一句 `/* TODO handle VkNativeBufferANDROID */` +
+`UNREACHABLE(...)`（26.1 仍然如此，tu_image.cc 的 tu_image_bind()）。release 下
+UNREACHABLE 是 UB；就算"安全跳过"，image 也永远没有内存、iova 恒 0 →
+GPU 往地址 0 写 → 本平台 GPU SMMU translation fault → context-fault 中断打不到
+CPU → stall 死锁（docs/stage5-freedreno.md D5–D10）。
 
-v1 的致命缺陷（2026-08-18 用 addr2line + BuildId 核对定位）：no-op 分支
-**从不给 `image->mem` 赋值**，于是 `image->mem` 保持 NULL，同一个 NULL
-制造两个看似无关的故障：
+v3 的修法（全用 runtime 现成 helper，可直接提上游）：
+  ① 用 bind info 里的 ANB 造一份等价 VkImageCreateInfo；
+  ② vk_android_get_anb_layout() 取 gralloc buffer 的真实 modifier / plane layout
+     → tu_image_update_layout() 重算布局（image 默认 UBWC，gralloc 可能给 LINEAR，
+     不重算就错位 + 越界写）；
+  ③ vk_android_import_anb() 导入 dma-buf 并绑定（它自己再调一次 BindImageMemory2，
+     那次 memory 非空，走正常路径落 mem / iova）；重复绑定先 FreeMemory 上一块，
+     否则 BufferQueue 每轮转一次漏一个 dma-buf；
+  ④ 既无 ANB 又无已导入内存：跳过而不是 UB，mesa_logw 限流吼一声；
+  ⑤ tu_allocate_transient_attachments() 加 `iview->image->mem &&`，
+     未绑定内存的 attachment 不解引用 mem。
+实测（A16，mesa 26.0.3 上的同一份逻辑）：SMMU fault 66 → 0，screencap 从永久卡死
+变成正常出图（stage5-freedreno.md D10）。
 
-  1. 用户态：`tu_allocate_transient_attachments()` 里
-     `!iview->image->mem->bo` 解引用 NULL → SIGSEGV
-     （tu_cmd_buffer.cc:3955，fault addr 0xd0 = offsetof(mem, bo)）
-  2. 内核态：该 image 的 `iova` 无效 → GPU 访问非法地址 → **GPU SMMU
-     translation fault** → 本平台 context-fault 中断不通、无人 resume
-     → SMMU 永久 stall → AHB stall → CP 断粮 → GMU 投票超时 → 看门狗
-     → 掉电失败 → 死循环（追了两天的"GMU 必死"，见 docs D4–D8）
+与 A16 归档树（~/keep/mesa3d-patched.tar.zst，26.0.3）里那份的差别：
+  * 去掉了 B1 诊断探针 P1 / P2 / P3 和 gaokun_dump_image() / gaokun_dump_callers()
+    （D10 定案后只剩打日志的作用；P2 在 tu_image_view_init 里每个未绑定 view 都要判断）；
+  * 注释改成英文，便于提上游；逻辑逐行相同。
+  * 26.1 的 tu_image_bind() 结构与 26.0.3 相同（逐个 bind_info 调用），锚点只是行号变了。
 
-v2 的修法：NULL memory 时改用 `image->vk.anb_memory`
-（vkCreateImage 时 `vk_android_import_anb()` 导入的真实内存）装进
-`image->mem`；连它也没有才安全跳过（不再走 UB）。同时给
-`tu_allocate_transient_attachments()` 加 `iview->image->mem &&` 防御
-——没有内存自然不需要惰性分配。
+历史：v1（no-op 返回，从不给 image->mem 赋值 → 用户态 NULL 解引用 + iova 0）
+与 v2（只找 create 时的 anb_memory，延迟绑定下它当然是空的）都错，见
+stage5-freedreno.md D9 / D10；当年的增量脚本在 scripts/gmu-forensics/apply-0004v{2,3}.py。
 
-Apply to: external/mesa3d/src/freedreno/vulkan/tu_image.cc
+Apply to: external/mesa3d（A17，mesa 26.1.0-devel）
 
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+index 42a0416..9a2246e 100644
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -3679,8 +3679,13 @@ tu_allocate_transient_attachments(struct tu_cmd_buffer *cmd, bool sysmem)
+ 
+    for (unsigned i = 0; i < fb->attachment_count; i++) {
+       const struct tu_image_view *iview = cmd->state.attachments[i];
++      /* An attachment without bound memory (see the NULL-memory bind path in
++       * tu_image_bind) needs no lazy allocation; don't dereference mem.
++       * (gaokun patch 0004)
++       */
+       if (iview && !(iview->image->vk.create_flags &
+                      VK_IMAGE_CREATE_SPARSE_BINDING_BIT) &&
++          iview->image->mem &&
+           !iview->image->mem->bo &&
+           (sysmem || rp->attachments[i].load ||
+            rp->attachments[i].load_stencil ||
+diff --git a/src/freedreno/vulkan/tu_image.cc b/src/freedreno/vulkan/tu_image.cc
+index 88df2a0..e838efd 100644
 --- a/src/freedreno/vulkan/tu_image.cc
 +++ b/src/freedreno/vulkan/tu_image.cc
-@@ -913,8 +913,20 @@ tu_BindImageMemory2(VkDevice _device,
-       VK_FROM_HANDLE(tu_device_memory, mem, pBindInfos[i].memory);
-
-       if (!mem) {
+@@ -1010,8 +1010,84 @@ tu_image_bind(struct tu_device *device,
+ 
+    if (!mem) {
  #if DETECT_OS_ANDROID
--         /* TODO handle VkNativeBufferANDROID */
-+         /* Android's libvulkan re-binds swapchain images with a NULL memory
-+          * handle: for VkNativeBufferANDROID images the memory was already
-+          * imported and bound inside vkCreateImage (vk_android_import_anb),
-+          * so this is a no-op.
+-      /* TODO handle VkNativeBufferANDROID */
+-      UNREACHABLE("VkBindImageMemoryInfo with no memory");
++      /* Android's libvulkan uses deferred binding for swapchain images: the
++       * image is created without VkNativeBufferANDROID and the gralloc buffer
++       * only arrives here, chained into the VkBindImageMemoryInfo with a NULL
++       * memory handle (observed pNext: NATIVE_BUFFER_ANDROID +
++       * BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR, caller ANGLE -> libvulkan).
++       * Leaving the image unbound means iova == 0 and the GPU writes to
++       * address 0 (SMMU translation faults).  (gaokun patch 0004 v3)
++       */
++      const VkNativeBufferANDROID *anb =
++         vk_find_struct_const(bind_info->pNext, NATIVE_BUFFER_ANDROID);
++      if (anb) {
++         /* Build an equivalent create info pointing at this ANB so the two
++          * runtime helpers (both keyed on VkImageCreateInfo) can be reused.
 +          */
-+         if (vk_image_is_android_native_buffer(&image->vk)) {
-+            const VkBindMemoryStatusKHR *anb_status =
-+               vk_find_struct_const(pBindInfos[i].pNext,
-+                                    BIND_MEMORY_STATUS_KHR);
-+            if (anb_status)
-+               *anb_status->pResult = VK_SUCCESS;
-+            continue;
++         VkImageCreateInfo anb_ci = {
++            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
++            .pNext = (const void *) anb,
++            .flags = image->vk.create_flags,
++            .imageType = image->vk.image_type,
++            .format = image->vk.format,
++            .extent = image->vk.extent,
++            .mipLevels = image->vk.mip_levels,
++            .arrayLayers = image->vk.array_layers,
++            .samples = (VkSampleCountFlagBits) image->vk.samples,
++            .tiling = image->vk.tiling,
++            .usage = image->vk.usage,
++            .sharingMode = image->vk.sharing_mode,
++            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
++         };
++
++         /* Recompute the layout from the gralloc buffer's real modifier and
++          * plane layout: the image defaults to UBWC while gralloc may hand us
++          * LINEAR, and a stale layout means misplaced rendering and
++          * out-of-bounds writes.
++          */
++         VkImageDrmFormatModifierExplicitCreateInfoEXT anb_eci;
++         VkSubresourceLayout anb_plane_layouts[TU_MAX_PLANE_COUNT];
++         result = vk_android_get_anb_layout(&anb_ci, &anb_eci,
++                                            anb_plane_layouts,
++                                            TU_MAX_PLANE_COUNT);
++         if (result != VK_SUCCESS)
++            return result;
++
++         result = TU_CALLX(device, tu_image_update_layout)(
++            device, image, anb_eci.drmFormatModifier, anb_plane_layouts);
++         if (result != VK_SUCCESS)
++            return result;
++
++         /* Import the dma-buf and bind it.  vk_android_import_anb() stores the
++          * dedicated allocation in vk.anb_memory and calls BindImageMemory2
++          * again with a real memory handle, which takes the normal path below
++          * and sets mem/iova.  BufferQueue re-binds the same image, so free
++          * the previous import first or every rotation leaks a dma-buf.
++          */
++         if (image->vk.anb_memory != VK_NULL_HANDLE) {
++            device->vk.dispatch_table.FreeMemory(tu_device_to_handle(device),
++                                                 image->vk.anb_memory, NULL);
++            image->vk.anb_memory = VK_NULL_HANDLE;
 +         }
 +
-          UNREACHABLE("VkBindImageMemoryInfo with no memory");
++         return vk_android_import_anb(&device->vk, &anb_ci, NULL, &image->vk);
++      }
++
++      if (image->vk.anb_memory != VK_NULL_HANDLE) {
++         /* Re-bind of an image whose ANB was imported at vkCreateImage time. */
++         mem = tu_device_memory_from_handle(image->vk.anb_memory);
++         offset = 0;
++      } else {
++         /* Nothing to bind.  Skip instead of hitting UNREACHABLE (UB in
++          * release builds), but complain: this image will render at iova 0.
++          */
++         static unsigned n_unbindable = 0;
++         if (n_unbindable++ < 8)
++            mesa_logw("NULL-memory bind without VkNativeBufferANDROID or "
++                      "imported ANB memory (#%u), image %p stays unbound",
++                      n_unbindable, (void *) image);
++         return VK_SUCCESS;
++      }
  #else
-          const VkBindImageMemorySwapchainInfoKHR *swapchain_info =
+       const VkBindImageMemorySwapchainInfoKHR *swapchain_info =
+          vk_find_struct_const(bind_info->pNext,
