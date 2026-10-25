@@ -1008,6 +1008,50 @@ def patch_build_fingerprint_variant_user(tree: pathlib.Path) -> str:
     return f"已把指纹/拇指纹/系统指纹的变体段改成 user（{want} 处）"
 
 
+def patch_adb_root_only_with_su(tree: pathlib.Path) -> str:
+    """—— 修补 24：adb_root 只在 WITH_SU=true 时装（恢复 crDroid 16.0 的行为）——
+
+    crDroid 17.0 的 vendor/lineage/config/common.mk:244-247 对所有非 user 变体无条件
+    `PRODUCT_PACKAGES += adb_root`（16.0 时它在 `ifeq ($(WITH_SU),true)` 里面，和 su 一起）。
+    我们的发布构建是 userdebug 变体（-user 的 init 强制 enforcing、起不来，#117 §15），
+    adbd 按变体编成 ANDROID_DEBUGGABLE=1（packages/modules/adb/Android.bp:47-55）；装了
+    adbroot_service 之后，restart_service.cpp 的 root 路径不再看 ro.debuggable，
+    用户在开发者选项里一开「adb root」，`adb root` 就成了。
+    ⇒ 发布构建 D1「没有 adb root」（docs/v1.0-plan.md、release-checklist）被悄悄打开。
+    设备树去不掉一个 PRODUCT_PACKAGES（没有 PRODUCT_PACKAGES_REMOVE），只能改这里。
+    开发机照旧用 KSU 拿 root（`adb shell` 经 KSU 即 root，从来没有 `adb root`）。
+    上机判据：`pm list packages`/`ls /system_ext/bin /system/bin | grep adb_root` 为空；
+      开发者选项里没有「Rooted debugging / adb root」开关；`adb root` 报 adbd cannot run as root。
+    """
+    p = tree / "vendor/lineage/config/common.mk"
+    if not p.exists():
+        return f"⚠️ 找不到 vendor/lineage/config/common.mk（{p}）"
+    s = io.open(p, encoding="utf-8").read()
+    marker = "gaokun3 tree-fix [24]"
+    if marker in s:
+        return "已改（幂等，无需改动）"
+    old = ("# Root\n"
+           "ifneq ($(TARGET_BUILD_VARIANT),user)\n"
+           "PRODUCT_PACKAGES += \\\n"
+           "    adb_root\n"
+           "ifeq ($(WITH_SU),true)\n"
+           "PRODUCT_PACKAGES += \\\n"
+           "    su\n")
+    if s.count(old) != 1:
+        return "⚠️ 找不到 common.mk 里「# Root」那段（或不唯一），上游可能改了写法；什么都没动"
+    new = ("# Root\n"
+           "# " + marker + ": adb_root only with WITH_SU=true (as in crDroid 16.0); release\n"
+           "# builds are the userdebug variant and must not offer adb root.\n"
+           "ifneq ($(TARGET_BUILD_VARIANT),user)\n"
+           "ifeq ($(WITH_SU),true)\n"
+           "PRODUCT_PACKAGES += \\\n"
+           "    adb_root\n"
+           "PRODUCT_PACKAGES += \\\n"
+           "    su\n")
+    io.open(p, "w", encoding="utf-8", newline="").write(s.replace(old, new, 1))
+    return "adb_root 挪进 ifeq ($(WITH_SU),true)"
+
+
 def main():
     tree = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else pathlib.Path.home() / "crdroid").expanduser()
     if not (tree / "build/envsetup.sh").exists():
@@ -1089,6 +1133,7 @@ def main():
     # （Duck Detector system_properties 3 条 danger 的根；运行时改不掉 Build.FINGERPRINT 常量）
     step(" [23] BUILD_FINGERPRINT/THUMBPRINT/SYSTEM_FINGERPRINT 变体段改写成 user（与 ro.build.type 对齐）: ",
          patch_build_fingerprint_variant_user(tree))
+    step(" [24] adb_root 只在 WITH_SU=true 时装（发布构建没有 adb root）: ", patch_adb_root_only_with_su(tree))
     if failed:
         print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))
         sys.exit(1)
