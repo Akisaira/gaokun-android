@@ -4,6 +4,15 @@
 在构建机上执行：
     python3 <repo>/scripts/crdroid-tree-fixes.py ~/crdroid
 
+目标树：crDroid 17.0（crDroid 13 / Android 17 = lineage-24.0、android-17.0.0_r1、release config cp2a），
+2026-10-25 起。crDroid 16.0（A16 / bp4a）不再维护，锚点只按 17.0 写，不再兼容 16.0。
+
+★ 严格模式（A17 迁移时改的）：每一条要么生效（或已生效），要么在下面 main() 里明确写着"A17 上废弃"。
+  * 结果以 ✗ / ⚠️ 开头 = 没做成，记失败、整个脚本退 1。17.0 树里【一定有】的项目缺文件、缺锚点都算这一类
+    —— 以前"跳过（找不到 …）"不算失败，上游一挪文件，修补就悄悄没了。
+  * 只有 [4] 的 vendor/gapps 是可选项目（不装 GApps 就不同步），没同步时打印"跳过"、不算失败。
+  * "已废弃（A17）"开头 = 上游已经不需要这条（例如 [11] 的 flag 被上游删掉了），照常打印、不算失败。
+
 —— 修补 1：关掉 SPOOF_SAFETYNET ——
 
 crDroid 在 system/core/init/property_service.cpp 里加了 SetSafetyNetProps()，
@@ -36,17 +45,25 @@ crDroid 在 system/core/init/property_service.cpp 里加了 SetSafetyNetProps()�
 慢到不可接受。所以直接把默认值改成 0。
 
 我们本来就不追求 Play Integrity（这是台开发机），关掉没有副作用。
+
+A17（crDroid 17.0）原样还在：system/core/init/Android.bp:133、:499 两处 "-DSPOOF_SAFETYNET=1"，
+eng 分支各有一对 "-USPOOF_SAFETYNET" / "-DSPOOF_SAFETYNET=0"（:163-164、:529-530）；
+property_service.cpp:1383-1385 照旧按它调 SetSafetyNetProps()。
 """
-import io, re, sys, pathlib, shutil, subprocess, tempfile
+import io, os, re, sys, pathlib, shutil, subprocess, tempfile
 
 def patch_spoof_safetynet(tree: pathlib.Path) -> str:
     p = tree / "system/core/init/Android.bp"
     if not p.exists():
-        return f"跳过（找不到 {p}）"
+        return f"✗ 找不到 {p}"
     s = io.open(p, encoding="utf-8").read()
     n = s.count('"-DSPOOF_SAFETYNET=1"')
     if n == 0:
-        return "已是 0（幂等，无需改动）" if '"-DSPOOF_SAFETYNET=0"' in s else "⚠️ 找不到 SPOOF_SAFETYNET，上游可能改了写法"
+        # eng 分支本来就成对写着 -USPOOF_SAFETYNET / -DSPOOF_SAFETYNET=0；只有比 -U 多出来的 =0 才是我们改的。
+        # 光看"有没有 =0"会把"上游整个删掉了 =1"误判成已改过。
+        n0, nu = s.count('"-DSPOOF_SAFETYNET=0"'), s.count('"-USPOOF_SAFETYNET"')
+        return ("已是 0（幂等，无需改动）" if n0 > nu
+                else "⚠️ 找不到 -DSPOOF_SAFETYNET=1（也不是我们改过的样子），上游可能改了写法")
     s = s.replace('"-DSPOOF_SAFETYNET=1"', '"-DSPOOF_SAFETYNET=0"')
     io.open(p, "w", encoding="utf-8", newline="").write(s)
     return f"已把 {n} 处 -DSPOOF_SAFETYNET=1 改为 =0"
@@ -66,10 +83,13 @@ def patch_hexagonfs_cr(tree: pathlib.Path) -> str:
       构建系统造不出带控制字符的文件名。
 
     完整背景见 docs/stage4-findings.md #37。
+
+    external/hexagonrpc 来自本仓 manifests/local_manifest_gaokun3.xml（钉 435ed1c），A17 树上照样同步；
+    构建机 17.0 树上的副本（2026-10-25 核过）锚点原样在。没有这个项目 = 传感器全没 ⇒ 缺了算失败。
     """
     p = tree / "external/hexagonrpc/hexagonrpcd/hexagonfs.c"
     if not p.exists():
-        return f"跳过（找不到 {p} —— local manifest 同步过了吗）"
+        return f"✗ 找不到 {p} —— local manifest 同步过了吗"
     s = io.open(p, encoding="utf-8").read()
     if "segment[--segment_len] = 0;" in s:
         return "已打过（幂等，无需改动）"
@@ -112,10 +132,12 @@ def patch_v4l2_input_size(tree: pathlib.Path) -> str:
 
     修法：传设备自报的最小分辨率 —— 与同文件 setupMinimalOutputFormat()
     对输出队列的做法完全一致。真实分辨率随后由 source-change 事件带来。
+
+    A17：锚点在 V4L2Decoder.cpp:205，原样未变（V4L2Decoder.cpp 本身比 16.0 有改动，这一行没动）。
     """
     p = tree / "external/v4l2_codec2/v4l2/V4L2Decoder.cpp"
     if not p.exists():
-        return f"跳过（找不到 {p}）"
+        return f"✗ 找不到 {p}"
     s = io.open(p, encoding="utf-8").read()
     if "inputMinRes" in s:
         return "已打过（幂等，无需改动）"
@@ -146,7 +168,7 @@ def patch_v4l2_device_scan_range(tree: pathlib.Path) -> str:
     media_codecs_c2.xml 驱动的，但底下一个设备都没匹配上），一切回落软解。
 
     ★ 根因：`V4L2Device::getDeviceInfosForType()` 里写死
-        for (int i = 0; i < 10; ++i)        // v4l2/V4L2Device.cpp:2565
+        for (int i = 0; i < 10; ++i)        // v4l2/V4L2Device.cpp:2567（A17；16.0 是 :2565）
       只探 /dev/video0..video9。而 Stage 6 M22 把 camss 编进内核之后，
       **camss 一家就占了 32 个 video 节点**（msm_vfeN_videoM，实测 video0-31），
       Venus 被挤到 **video32 / video33**（实测 `cat /sys/class/video4linux/*/name`）。
@@ -161,7 +183,7 @@ def patch_v4l2_device_scan_range(tree: pathlib.Path) -> str:
     """
     p = tree / "external/v4l2_codec2/v4l2/V4L2Device.cpp"
     if not p.exists():
-        return f"跳过（找不到 {p}）"
+        return f"✗ 找不到 {p}"
     s = io.open(p, encoding="utf-8").read()
     if "kMaxVideoDeviceIndex" in s:
         return "已打过（幂等，无需改动）"
@@ -224,14 +246,32 @@ def patch_gapps_conflicts(tree: pathlib.Path) -> str:
     ★ 冲突是**一次性全找出来的**，不是一个个撞：36 个 gapps 模块名与全树
       逐个比对（只有 b），13 个 gapps etc 文件名与全树 PRODUCT_COPY_FILES
       逐个比对（只有 c）。
+    ★ A17 复查（2026-10-25，构建机 17.0 树，vendor/gapps = MindTheGapps cinnamonbun 分支 bfa45ac「17_202606」之后一提交）：
+      34 个模块名对全树 Android.bp / Android.mk 逐个比对，仍只撞 libjni_latinimegoogle
+      （packages/inputmethods/LatinIME/java/Android.bp:81）；15 个 etc 文件名对 vendor/lineage、vendor/addons、
+      device/huawei、build/make/target 的 PRODUCT_COPY_FILES 逐个比对，仍只撞 google.xml（vendor/addons/config.mk:32）。
+      三处锚点都在：arm64-vendor.mk:9 libjni_latinimegoogle、:15 SetupWizard；arm64/Android.bp:98；
+      common-vendor.mk:24 google.xml；common/Android.bp:192。GmsSetupWizardOverlay 的目标包仍是
+      org.lineageos.setupwizard（overlay/GmsSetupWizardOverlay/AndroidManifest.xml:5）。
 
     ⚠️ repo sync 会还原 vendor/gapps，所以每次构建前都要跑本脚本（幂等）。
+    ★ 严格判据：某个名字在列表 / Android.bp 里找不到时，看 vendor/gapps 的 git 工作区 ——
+      有本地改动 = 我们以前删过（幂等）；工作区是干净的 = 上游自己没了这一项（改名或删了），
+      那就要重新做一遍上面的冲突比对，报 ⚠️ 而不是当成"已是干净的"。
     """
     NL = chr(10)
     BS = chr(92)
     root = tree / "vendor/gapps"
-    if not (root / "arm64/arm64-vendor.mk").exists():
+    if not root.is_dir():
+        # 全脚本唯一一处可选项目：不装 GApps 就不同步 vendor/gapps
         return "跳过（没同步 vendor/gapps —— 不装 GApps 就不需要这一步）"
+    # 同步了 vendor/gapps 却没有 arm64-vendor.mk = MindTheGapps 改了布局，不是"没装"，不能当跳过
+    # （下面 mk_names / bp_names 的存在性检查会报 ⚠️）
+    st = subprocess.run(["git", "-C", str(root), "status", "--porcelain", "--", "arm64", "common"],
+                        capture_output=True, text=True)
+    if st.returncode != 0:
+        return "✗ vendor/gapps 不是 git 仓库，分不出是我们改过还是上游变了"
+    pristine = st.stdout.strip() == ""
 
     msgs = []
 
@@ -255,10 +295,30 @@ def patch_gapps_conflicts(tree: pathlib.Path) -> str:
             io.open(mk, "w", encoding="utf-8", newline="").write(NL.join(lines))
         return gone
 
-    g1 = drop_from_mk(root / "arm64/arm64-vendor.mk",
-                      ["SetupWizard", "libjni_latinimegoogle"])
-    g2 = drop_from_mk(root / "common/common-vendor.mk", ["google.xml"])
-    gone = g1 + g2
+    mk_names = (("arm64/arm64-vendor.mk", ["SetupWizard", "libjni_latinimegoogle"]),
+                ("common/common-vendor.mk", ["google.xml"]))
+    bp_names = (("arm64/Android.bp", "libjni_latinimegoogle"),
+                ("common/Android.bp", "google.xml"))
+    for rel in [r for r, _ in mk_names] + [r for r, _ in bp_names]:
+        if not (root / rel).exists():
+            return f"⚠️ vendor/gapps 里找不到 {rel}，MindTheGapps 可能改了布局；什么都没动"
+
+    # 先在干净树上核对全部锚点再动手：别删了一半才发现另一半上游已经变了
+    if pristine:
+        for rel, names in mk_names:
+            lines = io.open(root / rel, encoding="utf-8").read().split(NL)
+            for name in names:
+                if not any(ln.strip().rstrip(BS).strip() == name for ln in lines):
+                    return f"⚠️ {rel} 的包列表里没有 {name}（vendor/gapps 是干净的 ⇒ 上游改了），要重新比对冲突；什么都没动"
+        for rel, name in bp_names:
+            # 与 drop_module() 同一个判据（整行等于 name: "…",），别出现"核对通过、删除却没匹配上"
+            if not any(ln.strip() == 'name: "%s",' % name
+                       for ln in io.open(root / rel, encoding="utf-8").read().split(NL)):
+                return f"⚠️ {rel} 里没有模块 {name}（vendor/gapps 是干净的 ⇒ 上游改了），要重新比对冲突；什么都没动"
+
+    gone = []
+    for rel, names in mk_names:
+        gone += drop_from_mk(root / rel, names)
     msgs.append("从包列表删掉 " + "/".join(gone) if gone else "包列表已是干净的")
 
     # ★★ 删掉模块定义【本身】——只从 PRODUCT_PACKAGES 里拿掉是不够的。
@@ -292,8 +352,7 @@ def patch_gapps_conflicts(tree: pathlib.Path) -> str:
         return True
 
     dropped = []
-    for rel, name in (("arm64/Android.bp", "libjni_latinimegoogle"),
-                      ("common/Android.bp", "google.xml")):
+    for rel, name in bp_names:
         if drop_module(root / rel, name):
             dropped.append(name)
     msgs.append("从 Android.bp 删掉模块 " + "/".join(dropped)
@@ -323,21 +382,23 @@ def patch_v4l2_initial_output(tree: pathlib.Path) -> str:
     的一个优化（预先备一个 EOS 缓冲区），在守规范的驱动上必然失败。
 
     ⇒ 改成**失败不致命**：真正的输出队列本来就在分辨率变更事件里建
-      （changeResolution() -> startOutputQueue()，同文件第 753 行附近）。
+      （changeResolution() -> startOutputQueue()，A17 同文件 :738-747）。
 
     ★ 安全性判据（逐个查过，不是猜的）：`mInitialEosBuffer` 的**每一处使用
-      都已经有空指针判断**（V4L2Decoder.cpp 的 112 / 375 / 454 / 749 行），
-      也就是说"它是空"本来就是被支持的状态。那三处分别是：
-        · 375 提前判 DRC —— 跳过后 mPendingDRC 保持 false，只是少一个优化；
-        · 454 "没有码流就直接结束 drain" —— 是 ARCVM 特有的捷径，
+      都已经有空指针判断**（A17 V4L2Decoder.cpp 的 112 / 369 / 448 / 743 行；16.0 是 112 / 375 / 454 / 749），
+      也就是说"它是空"本来就是被支持的状态。setupInitialOutput() 自己里面的 :244-255 是分配它的地方，不算使用。
+      那几处分别是：
+        · 369 提前判 DRC —— 跳过后 mPendingDRC 保持 false，只是少一个优化；
+        · 448 "没有码流就直接结束 drain" —— 是 ARCVM 特有的捷径，
           不走它就落到 `sendV4L2DecoderCmd(false)`，那才是**标准**的 V4L2 drain；
-        · 112 / 749 是清理。
+        · 112 / 743 是清理。
+    A17：锚点在 V4L2Decoder.cpp:175-178，原样未变。
       并且 `startOutputQueue()` 是在**第一步** getFormatInfo() 就返回 false 的，
       此时还没碰过队列，所以不会留下半配置状态。
     """
     p = tree / "external/v4l2_codec2/v4l2/V4L2Decoder.cpp"
     if not p.exists():
-        return f"跳过（找不到 {p}）"
+        return f"✗ 找不到 {p}"
     s = io.open(p, encoding="utf-8").read()
     if "venus 在收到 SOURCE_CHANGE 之前" in s:
         return "已打过（幂等，无需改动）"
@@ -388,10 +449,14 @@ def patch_disable_desktop_mode(tree: pathlib.Path) -> str:
       Lineage 系的树是**正确且充分**的 —— 因为 Lineage 自己已经把
       config_isDesktopModeSupported 设成 true 了。只查 AOSP 默认值（false）
       而不查 ROM 自己的 overlay，就会得出"他们漏了一个"的错误结论。
+
+    A17：crDroid 17.0 的 vendor/lineage（= android_vendor_crdroid@17.0）照旧在
+    overlay/common/frameworks/base/core/res/res/values/config.xml:98 写 true。
+    ⚠️ A17 的桌面模式是否还有别的开关（aconfig flag 等）能绕过这个资源，没核实 —— 上机看一眼应用是不是还进 freeform。
     """
     p = tree / "vendor/lineage/overlay/common/frameworks/base/core/res/res/values/config.xml"
     if not p.exists():
-        return f"跳过（找不到 {p}）"
+        return f"✗ 找不到 {p}"
     s = io.open(p, encoding="utf-8").read()
     old = '<bool name="config_isDesktopModeSupported">true</bool>'
     new = '<bool name="config_isDesktopModeSupported">false</bool>'
@@ -408,7 +473,7 @@ def apply_patch_file(tree: pathlib.Path, project: str, patch_name: str,
                      covered_by: tuple = ()) -> str:
     """把 <repo>/patches/<patch_name> 用 git apply 打进 AOSP 树的 <project>（幂等）。
 
-    ★ 为什么要有这个助手：本仓 `patches/` 里的 **AOSP 侧**补丁（0003 glslang、
+    ★ 为什么要有这个助手：本仓 `patches/` 里的 **AOSP 侧**补丁（0003 glslang〔A17 上废弃，见 main() 的 [9]〕、
     0010 audio HAL、0019 v4l2_codec2；后来又有 0008 tinyalsa、0051 / 0052 / 0063 audio HAL）**一直没有任何消费者** —— 全靠人手动
     `git apply`。而本仓已经为"没有消费者的配置一定会漂"付过三次账
     （M13 的 BOARD_KERNEL_CMDLINE、M17 的上游 Venus 补丁集、以及 2026-09-12
@@ -430,7 +495,8 @@ def apply_patch_file(tree: pathlib.Path, project: str, patch_name: str,
         return f"⚠️ 找不到补丁 {patch}"
     proj = tree / project
     if not (proj / ".git").exists():
-        return f"跳过（{project} 不是 git 仓库或不存在）"
+        # 这里打补丁的项目（v4l2_codec2 / tinyalsa_new / hardware/interfaces）在 17.0 树里都一定有 ⇒ 缺了算失败
+        return f"✗ {project} 不存在或不是 git 仓库"
 
     def git(*args):
         return subprocess.run(["git", "-C", str(proj), *args],
@@ -490,18 +556,184 @@ def patch_connected_displays_flag(tree: pathlib.Path) -> str:
         在没有可用外接显示的机器上打开，合理推测是有害无益的。
     ⚠️ 但**"合理推测"不是证据** —— 如果将来 A6 修好了外接显示，
     应当先把这条去掉再验一次，别让它变成又一条没人敢动的祖传配置。
+
+    ★ A17：**上游已经把这个 flag 删了**（构建机 17.0 树：frameworks/libs/systemui 提交 ab3c44e、
+      frameworks/base 提交 c6b29cd899a0，标题都是 "Flag removal: com.android.systemui.status_bar_connected_displays"；
+      frameworks/libs/systemui/aconfig/*.aconfig 里已经没有它的声明）。按 Android 的惯例 "Flag removal" =
+      功能转正、永久打开（这一点没逐行核实）。build/release 里残留的值文件
+      （aconfig/bp4a/com.android.systemui.shared/status_bar_connected_displays_flag_values.textproto）
+      aconfig 会悄悄跳过：未声明的 flag 不报错（build/make/tools/aconfig/aconfig/src/commands.rs:297-303）。
+      ⇒ 先查声明：没有声明就报"已废弃（A17）"、什么都不改；外接显示（TODO A6）修好时要验状态栏在外屏上的表现。
+    ★ 声明还在时（例如以后上游又加回来），值文件**不再写死 bp4a**，而是沿 TARGET_RELEASE 的继承链去找
+      实际生效的那一份 —— 见 _release_aconfig_value_sets()。A17 的 cp2a 链上（cp2a → mainline_2026_04 → … →
+      cp1a → bp4a → …）只有 bp4a 那一份，但只要以后 cp* 自己覆盖了这个 flag，写死 bp4a 就会悄悄失效。
     """
-    p = (tree / "build/release/aconfig/bp4a/com.android.systemui.shared"
-              / "status_bar_connected_displays_flag_values.textproto")
-    if not p.exists():
-        return f"跳过（找不到 {p.name}）"
-    s = io.open(p, encoding="utf-8").read()
-    if "state: DISABLED" in s:
-        return "已是 DISABLED（幂等，无需改动）"
-    if "state: ENABLED" not in s:
-        return "⚠️ 既不是 ENABLED 也不是 DISABLED，上游可能改了格式"
-    io.open(p, "w", encoding="utf-8").write(s.replace("state: ENABLED", "state: DISABLED", 1))
-    return "ENABLED -> DISABLED"
+    pkg, flag = "com.android.systemui.shared", "status_bar_connected_displays"
+    # 1) flag 还在不在：com.android.systemui.shared 包声明在 frameworks/libs/systemui/aconfig/（A17 两个 .aconfig 文件第 1 行）
+    decl_dir = tree / "frameworks/libs/systemui/aconfig"
+    decls = [io.open(f, encoding="utf-8").read() for f in sorted(decl_dir.glob("*.aconfig"))]
+    pkg_decls = [d for d in decls if re.search(r'^package:\s*"%s"' % re.escape(pkg), d, re.M)]
+    if not pkg_decls:
+        return f"✗ {decl_dir} 里找不到 package {pkg} 的声明，判不出这个 flag 还在不在"
+    if not any(re.search(r'^\s*name:\s*"%s"' % flag, d, re.M) for d in pkg_decls):
+        return ("已废弃（A17）：上游删掉了 " + pkg + "/" + flag
+                + "（功能常开），build/release 里残留的值文件 aconfig 会忽略；什么都没改")
+    # 2) 声明还在：沿继承链找实际生效的值文件
+    release, src = _target_release(tree)
+    if not release:
+        return "✗ 定不了 TARGET_RELEASE（没有环境变量，也读不到 vendor/lineage/vars/aosp_target_release）"
+    try:
+        sets = _release_aconfig_value_sets(tree, release)
+    except ValueError as e:
+        return f"✗ 解析 release config {release} 失败：{e}"
+    hit = None
+    for set_name, set_dir in reversed(sets):   # aconfig 的 --values 是后者覆盖前者，所以从后往前找第一份
+        for f in sorted((set_dir / pkg).glob("*_flag_values.textproto")):
+            s = io.open(f, encoding="utf-8").read()
+            for m in re.finditer(r"flag_value\s*\{[^}]*\}", s):
+                if (re.search(r'package:\s*"%s"' % re.escape(pkg), m.group(0))
+                        and re.search(r'name:\s*"%s"' % flag, m.group(0))):
+                    hit = (f, s, m)
+                    break
+            if hit:
+                break
+        if hit:
+            break
+    if not hit:
+        return (f"⚠️ {release}（来自 {src}）的 {len(sets)} 个 aconfig_value_set 里都没有 {flag} 的值文件，"
+                "要另加一份")
+    f, s, m = hit
+    block = m.group(0)
+    where = f.relative_to(tree)
+    if "state: DISABLED" in block:
+        return f"已是 DISABLED（幂等，无需改动；{where}）"
+    if "state: ENABLED" not in block:
+        return f"⚠️ {where} 里既不是 ENABLED 也不是 DISABLED，上游可能改了格式"
+    s = s[:m.start()] + block.replace("state: ENABLED", "state: DISABLED", 1) + s[m.end():]
+    io.open(f, "w", encoding="utf-8").write(s)
+    return f"ENABLED -> DISABLED（{where}，TARGET_RELEASE={release}）"
+
+
+def _target_release(tree: pathlib.Path):
+    """TARGET_RELEASE：lunch 过就用环境变量；否则用 brunch 的默认值
+    vendor/lineage/vars/aosp_target_release（A17 = cp2a；vendor/lineage/build/envsetup.sh:47、:62 拿它拼 lunch 目标）。"""
+    env = os.environ.get("TARGET_RELEASE", "").strip()
+    if env:
+        return env, "环境变量 TARGET_RELEASE"
+    p = tree / "vendor/lineage/vars/aosp_target_release"
+    if p.exists():
+        m = re.search(r"^aosp_target_release=(\S+)", io.open(p, encoding="utf-8").read(), re.M)
+        if m:
+            return m.group(1), "vendor/lineage/vars/aosp_target_release"
+    return None, None
+
+
+def _release_aconfig_value_sets(tree: pathlib.Path, release: str, variant: str = "") -> list:
+    """按 release config 的规则算出 RELEASE_ACONFIG_VALUE_SETS：[(value_set 名, 目录), …]，前者先生效、后者覆盖。
+
+    照着 A17 的实现抄的（不是猜的）：
+      * 参与的 release_config_map：build/release，再加 device/*/release、device/*/*/release、vendor/*/release、
+        vendor/*/*/release（按路径排序）—— build/make/core/release_config.mk:53-63。
+        （PRODUCT_RELEASE_CONFIG_MAPS 另加的 build/release/gms_mainline/required 等只有 name、没有 aconfig_value_sets，不影响结果。）
+      * 每个 map 目录下 release_configs/<名>.textproto 是对同名 config 的一份"贡献"（A17 cp2a 有两份：
+        build/release 与 vendor/lineage/release）；map 里的 aliases 把别名指到真名。
+      * 一个 config 的列表 = 先按 inherits 顺序依次展开被继承的 config（有 root 就先放 root），再接上自己各份贡献的
+        aconfig_value_sets；最后去重、保留第一次出现的位置 —— build/soong/cmd/release_config/release_config_lib/
+        release_config.go:230-261（继承）、:283-290（接上自己的）、:389-398（去重）、:186-192（InheritConfig 拼接）。
+      * 接完自己的之后，若 build flag RELEASE_BUILD_USE_VARIANT_FLAGS 为真（自己的 <map>/flag_values/<名>/ 里设的，
+        或从被继承的 config 带下来的），再继承一次构建变体同名的 BUILD_VARIANT config（userdebug / user / eng）——
+        release_config.go:359-386。A17 是 bp3a 打开的（build/release/flag_values/bp3a/RELEASE_BUILD_USE_VARIANT_FLAGS.textproto），
+        所以 cp2a 的列表里 userdebug 排在 bp3a 与 bp4a 之间。
+      * 2026-10-25 对过构建机 17.0 树 lunch 出来的 out/soong/release-config/release_config-lineage_gaokun3-cp2a.varmk：
+        RELEASE_ACONFIG_VALUE_SETS 共 14 项，与本函数算出来的逐项一致（maps_list 里也只有 build/release 与 vendor/lineage/release）。
+      * aconfig_value_set 名 → 目录：<map>/aconfig/<子目录>/Android.bp 里的 aconfig_value_set { name: … }，
+        值文件在 <子目录>/<包名>/*_flag_values.textproto（例如 build/release/aconfig/bp4a/Android.bp）。
+      * 同一个 flag 多份值：aconfig create-cache 按 --values 顺序后者覆盖前者（aconfig/src/commands.rs:285-325），
+        --values 的顺序就是上面这个列表（build/soong/aconfig/aconfig_declarations.go:93-97、:148-163）。
+    任何一步对不上都抛 ValueError（严格模式：宁可报错，也不悄悄改错文件）。
+    """
+    map_dirs = [tree / "build/release"]
+    extra = []
+    for pat in ("device/*/release", "device/*/*/release", "vendor/*/release", "vendor/*/*/release"):
+        extra += [d for d in tree.glob(pat) if (d / "release_config_map.textproto").exists()]
+    map_dirs += sorted(set(extra), key=lambda d: str(d.relative_to(tree)))
+    if not (map_dirs[0] / "release_config_map.textproto").exists():
+        raise ValueError("找不到 build/release/release_config_map.textproto")
+
+    # 构建变体：lunch 过就用 TARGET_BUILD_VARIANT；否则按本机唯一用的 lineage_gaokun3-cp2a-userdebug
+    variant = variant or os.environ.get("TARGET_BUILD_VARIANT", "").strip() or "userdebug"
+    aliases, inherits, own_sets, set_dirs, rc_type, own_uv = {}, {}, {}, {}, {}, {}
+    for d in map_dirs:
+        mtxt = io.open(d / "release_config_map.textproto", encoding="utf-8").read()
+        for a in re.finditer(r'aliases\s*:?\s*\{\s*name:\s*"([^"]+)"\s*target:\s*"([^"]+)"', mtxt):
+            aliases[a.group(1)] = a.group(2)
+        for rc in sorted((d / "release_configs").glob("*.textproto")):
+            t = io.open(rc, encoding="utf-8").read()
+            nm = re.search(r'^name:\s*"([^"]+)"', t, re.M)
+            if not nm:
+                continue
+            name = nm.group(1)
+            inherits.setdefault(name, []).extend(re.findall(r'^inherits:\s*"([^"]+)"', t, re.M))
+            own_sets.setdefault(name, []).extend(re.findall(r'^aconfig_value_sets:\s*"([^"]+)"', t, re.M))
+            ty = re.search(r'^release_config_type:\s*(\w+)', t, re.M)
+            if ty:
+                rc_type[name] = ty.group(1)
+            uvf = d / "flag_values" / name / "RELEASE_BUILD_USE_VARIANT_FLAGS.textproto"
+            if uvf.exists():
+                bv = re.search(r'bool_value:\s*(true|false)', io.open(uvf, encoding="utf-8").read())
+                if not bv:
+                    raise ValueError(f"{uvf.relative_to(tree)} 不是 bool_value，看不懂")
+                own_uv[name] = bv.group(1) == "true"
+        for bp in sorted((d / "aconfig").glob("*/Android.bp")):
+            for n in re.findall(r'aconfig_value_set\s*\{\s*name:\s*"([^"]+)"', io.open(bp, encoding="utf-8").read()):
+                set_dirs[n] = bp.parent
+
+    def real(name):
+        seen = set()
+        while name in aliases and name not in seen:
+            seen.add(name)
+            name = aliases[name]
+        return name
+
+    memo, busy, uv_of = {}, set(), {}
+
+    def expand(name):
+        name = real(name)
+        if name in memo:
+            return memo[name]
+        if name not in own_sets:
+            raise ValueError(f"没有 release config {name}")
+        if name in busy:
+            raise ValueError(f"release config 继承成环：{name}")
+        busy.add(name)
+        out, done, uv = [], set(), None
+        for i in (["root"] if "root" in own_sets and name != "root" else []) + inherits[name]:
+            if i in done:
+                continue
+            done.add(i)
+            out += expand(i)
+            if uv_of.get(real(i)) is not None:      # 后继承的覆盖先继承的（InheritConfig :193-197）
+                uv = uv_of[real(i)]
+        out += own_sets[name]
+        if name in own_uv:
+            uv = own_uv[name]
+        if (uv and rc_type.get(name, "RELEASE_CONFIG") == "RELEASE_CONFIG" and name != variant
+                and rc_type.get(variant) == "BUILD_VARIANT"):
+            out += expand(variant)
+        uv_of[name] = uv
+        busy.discard(name)
+        memo[name] = out
+        return out
+
+    result, seen = [], set()
+    for v in expand(release):
+        if v in seen:
+            continue
+        seen.add(v)
+        if v not in set_dirs:
+            raise ValueError(f"aconfig_value_set {v} 找不到定义它的 Android.bp")
+        result.append((v, set_dirs[v]))
+    return result
 
 
 def patch_wifi_sw_pno_gate(tree: pathlib.Path) -> str:
@@ -515,24 +747,22 @@ def patch_wifi_sw_pno_gate(tree: pathlib.Path) -> str:
         } else if (mWifiGlobals.isSwPnoEnabled()
                 && mDeviceConfigFacade.isSoftwarePnoEnabled()) {
 
-    （LineageOS packages_modules_Wifi lineage-23.2：scanner/WifiScanningServiceImpl.java:2676-2677；
-      isSoftwarePnoEnabled() = DeviceConfig wifi/software_pno_enabled，DeviceConfigFacade.java:420-421、:898-899，
+    （crDroid 17.0 / A17：scanner/WifiScanningServiceImpl.java:2695-2696（16.0 是 :2676-2677）；
+      isSoftwarePnoEnabled() = DeviceConfig wifi/software_pno_enabled，DeviceConfigFacade.java:407-408、:885-886，
       默认 false。）实机 `device_config get wifi software_pno_enabled` = false，而且是**显式下发**的值
     （list 里有这一项）—— 多半是 GMS Phenotype 推的，所以改默认值没用，只能去掉这道门。
-    ⇒ 把条件改成只看 mWifiGlobals.isSwPnoEnabled()（= overlay 的 config_wifiSwPnoEnabled，WifiGlobals.java:573-576）。
-      不碰 DeviceConfigFacade：别处没有用 isSoftwarePnoEnabled()（上游副本里只此一处），dumpsys 里那个值照旧如实显示。
-      isPnoSupported()（WifiServiceImpl.java:8469）本来就只看 isSwPnoEnabled()，不用改。
+    ⇒ 把条件改成只看 mWifiGlobals.isSwPnoEnabled()（= overlay 的 config_wifiSwPnoEnabled，A17 WifiGlobals.java:589-592）。
+      不碰 DeviceConfigFacade：别处没有用 isSoftwarePnoEnabled()（A17 的 service/java 里 grep 只有这一处调用），
+      dumpsys 里那个值照旧如实显示。isPnoSupported()（A17 WifiServiceImpl.java:8655-8658）本来就只看 isSwPnoEnabled()，不用改。
 
-    ⚠️ 锚点是按上游 lineage-23.2 的副本写的，本机没有构建机那棵 crDroid 树：
-       构建机上核对 packages/modules/Wifi/service/java/com/android/server/wifi/scanner/WifiScanningServiceImpl.java
-       里这两行还在（`grep -n isSoftwarePnoEnabled` 应当只有这一处调用），并确认 com.android.wifi APEX 是从源码编的
-       （不是预编译的 Google 模块 —— 那样改源码不进镜像；Play 系统更新也换不掉它：包名 / 签名都不同）。
+    ⚠️ 还没在构建机上确认的一条：com.android.wifi APEX 是从源码编的（不是预编译的 Google 模块 —— 那样改源码不进镜像；
+       Play 系统更新也换不掉它：包名 / 签名都不同）。
     上机判据（V9 / V13）：`dumpsys wifi` 里 PNO 失败不再是 "reason: -3 not supported"，mPnoScanMetrics 的
       numPnoScanAttempts 开始增长；息屏但醒着时让 AP 断开再恢复，2 分钟内自动回连。
     ⓘ 耗电（V13 问的"SwPnoScanState 用什么闹钟"，上游副本里查到了）：schedulePnoTimer 用
-      setExactAndAllowWhileIdle(ELAPSED_REALTIME_WAKEUP, …)（WifiScanningServiceImpl.java:2979-2996）⇒ 会把机器从
+      setExactAndAllowWhileIdle(ELAPSED_REALTIME_WAKEUP, …)（A17 WifiScanningServiceImpl.java:3001、:3011）⇒ 会把机器从
       s2idle 叫醒去扫。次数有上限：默认 config_wifiSwPnoFastTimerMs=300000 × 3 次、SlowTimerMs=1200000 × 10 次
-      （另有 MobilityStateTimerIterations=2；ServiceWifiResources config.xml:705-739），之后不再排程 ——
+      （另有 MobilityStateTimerIterations=2；A17 ServiceWifiResources config.xml:740-761），之后不再排程 ——
       只在"息屏 + 断网"时才有，批 4 量一次待机电流。
     ⚠️ 写法：正则只容忍空白差异；找不到锚点就报 ⚠️（step() 记为失败、整个脚本退 1），不会悄悄跳过。
     """
@@ -564,21 +794,23 @@ def patch_wifi_stable_factory_mac(tree: pathlib.Path) -> str:
 
     v1.0 NET-4（2026-10-05，构建机 crDroid 树核实）。本机 WCN6855 板子上没烧 MAC：固件每次开机给一个
     00:03:7f:12:xx:xx（只有后两字节随机，见 CLAUDE.md 的路由器静态租约），ath11k 拿它当 perm_addr。
-    框架拿"出厂 MAC"的链路：ClientModeImpl.retrieveFactoryMacAddressAndStoreIfNecessary（:8065-8095）
-      → WifiNative.getStaFactoryMacAddress（:2609-2610）→ WifiVendorHal.getStaFactoryMacAddress（:989-993）
+    框架拿"出厂 MAC"的链路（行号是 crDroid 17.0 / A17 的）：ClientModeImpl.retrieveFactoryMacAddressAndStoreIfNecessary（:8351）
+      → WifiNative.getStaFactoryMacAddress（:2616）→ WifiVendorHal.getStaFactoryMacAddress（:989）
       → HAL IWifiStaIface.getFactoryMacAddress → WifiIfaceUtil::getFactoryMacAddress
-        （hardware/interfaces/wifi/aidl/default/wifi_iface_util.cpp:49-51）
+        （hardware/interfaces/wifi/aidl/default/wifi_iface_util.cpp:54-56）
       → InterfaceTool::GetFactoryMacAddress = ETHTOOL_GPERMADDR（frameworks/opt/net/wifi/libwifi_system_iface/
         interface_tool.cpp:144-165），读的是 netdev 的 perm_addr。
     ⇒ 开机脚本里 `ip link set wlan0 address …` 改不到这一层（只改 dev_addr，不改 perm_addr）：
        用户选"使用设备 MAC"时框架会在连接前把 MAC 设回 HAL 给的出厂值（ClientModeImpl.setCurrentMacToFactoryMac，
-       :4420-4436）。所以改在 HAL 这一层：WifiIfaceUtil::getFactoryMacAddress 先读
+       :4604）。所以改在 HAL 这一层：WifiIfaceUtil::getFactoryMacAddress 先读
        /sys/devices/soc0/serial_number（qcom socinfo），对 "gaokun3-wifi-mac:<接口名>:<序列号>" 做 FNV-1a 64，
        取低 6 字节、置本地管理位、清组播位；读不到序列号就照旧返回 perm_addr。
        接口名进哈希 ⇒ wlan0 / wlan1（热点）各有一个固定地址、互不相同。
     SELinux：hal_wifi 已能读所有 sysfs 类型（system/sepolicy/private/hal_wifi.te:11 r_dir_file(hal_wifi, sysfs_type)），不用加规则。
+    A17 锚点（wifi_iface_util.cpp:18 的 macros.h include、:32 的 kMacAddressLocallyAssignedMask、:54-56 的函数体）原样在；
+    HAL 仍链 libbase（wifi/aidl/default/Android.bp:104）。
     配套：rro/Gaokun3WifiOverlay 把 config_wifiSaveFactoryMacToWifiConfigStore 设成 false —— 默认 true 时框架把
-      【第一次】拿到的出厂 MAC 存进 WifiSettingsConfigStore 永久复用（ClientModeImpl.java:8068-8085），
+      【第一次】拿到的出厂 MAC 存进 WifiSettingsConfigStore 永久复用（ClientModeImpl.retrieveFactoryMacAddressAndStoreIfNecessary），
       老机器存的是当年那个固件随机地址，派生地址就永远用不上。
     ⚠️ 序列号是 32 位的，派生地址能被穷举反推出序列号 —— 它不是秘密，只是别直接把序列号写进 MAC。
     上机判据：两次重启后 `cmd wifi status` / Settings「关于」里的 Wi-Fi MAC 相同、首字节第 2 位为 1；
@@ -634,25 +866,30 @@ def patch_wifi_stable_factory_mac(tree: pathlib.Path) -> str:
 def patch_wifi_mac_randomization_default(tree: pathlib.Path) -> str:
     """—— 修补 20：新网络的 MAC 随机化默认值从"每次连接都换"（ALWAYS）改回 AOSP 的 AUTO（按网络固定）——
 
-    v1.0 NET-4 / D14（用户 2026-10-04 定：持久模式 + 稳定的设备 MAC）。2026-10-05 构建机核实：
+    v1.0 NET-4 / D14（用户 2026-10-04 定：持久模式 + 稳定的设备 MAC）。2026-10-05 构建机核实（16.0），10-25 按 17.0 复核：
       * 这个默认值【没有资源可改】：crDroid 带的 GrapheneOS 补丁把字段默认写死成 RANDOMIZATION_ALWAYS（=100）——
-        packages/modules/Wifi 提交 06bc263807：framework/java/android/net/wifi/WifiConfiguration.java:1964、
+        packages/modules/Wifi 提交 09e2d601ef（17.0；16.0 是 06bc263807）"add option of always randomizing MAC addresses"：
+        framework/java/android/net/wifi/WifiConfiguration.java:1934、
         service/java/com/android/server/wifi/WifiConfigurationUtil.java:284（比较基准随之改成 ALWAYS）；
-        frameworks/opt/net/wifi 提交 3bf65d873：WifiTrackerLib StandardWifiEntry.getPrivacy() 无配置时返回
-        PRIVACY_RANDOMIZATION_ALWAYS（:611）。
-      * Settings 的连接对话框对新网络不设隐私下拉框的初值（WifiConfigController2.java:401-404 只给已保存的网络设），
-        于是停在第 0 项 = PRIVACY_PREF_INDEX_PER_CONNECTION_RANDOMIZED_MAC（WifiConfigController.java:155），
-        保存时写成 ALWAYS（WifiConfigController2.java:895-897 → WifiPrivacyPreferenceController2.java:132）。
-    ⇒ 四处一起改回 AOSP 原值（字段默认与比较基准必须成对改，否则普通 App 的 addNetwork 会因"改了随机化设置"
-       被 WifiConfigManager.java:1650-1665 拒掉）：字段默认 AUTO、比较基准 AUTO、无配置时 PRIVACY_RANDOMIZED_MAC、
-       对话框对新网络预选"按网络随机"。用户仍可在网络详情里选"每次连接都换"（ALWAYS 的逻辑一行没删）。
-    ⓘ AUTO 的实际行为 = 按网络固定的随机 MAC（WifiConfigManager.shouldUseNonPersistentRandomization:553-588：
+        frameworks/opt/net/wifi 提交 a731178c0（17.0；16.0 是 3bf65d873）：WifiTrackerLib StandardWifiEntry.getPrivacy()
+        无配置时返回 PRIVACY_RANDOMIZATION_ALWAYS（:612）。
+      * ★ 17.0 的变化：**Settings 那半边 GrapheneOS 补丁没有跟过来**。packages/apps/Settings 里已经没有
+        wifi_privacy_entries_ext / "每次连接都换"这一项，连接对话框用的是 AOSP 的 wifi_privacy_entries
+        （WifiConfigController2.java:366；res/values/arrays.xml:1238-1241 只有"随机 MAC / 设备 MAC"两项），
+        新网络停在第 0 项，保存时经 WifiPrivacyPreferenceController2.translatePrefValueToWifiConfigSetting
+        （:120-123）写成 RANDOMIZATION_AUTO ⇒ 16.0 时的第四处（对话框给新网络预选"按网络随机"）**在 17.0 上不需要了**，
+        已删掉；其余三处照旧要改：别的路径（App 的 addNetwork / 建议网络等）建出来的配置仍取字段默认值 ALWAYS。
+    ⇒ 三处一起改回 AOSP 原值（字段默认与比较基准必须成对改，否则普通 App 的 addNetwork 会因"改了随机化设置"
+       被 WifiConfigManager.java:1706-1716（A17）拒掉）：字段默认 AUTO、比较基准 AUTO、无配置时 PRIVACY_RANDOMIZED_MAC。
+       ALWAYS 的框架逻辑一行没删（WifiConfigManager.shouldUseNonPersistentRandomization:558-561）。
+    ⓘ AUTO 的实际行为 = 按网络固定的随机 MAC（WifiConfigManager.shouldUseNonPersistentRandomization:558-597（A17）：
        只有开放网络 + config_wifiAllowNonPersistentMacRandomizationOnOpenSsids（默认 false）或 SSID 在白名单里才换），
        地址由 keystore 里的 MacRandSecret 密钥对 SSID 做 HMAC（MacAddressUtil），与出厂 MAC 无关。
-    ⚠️ 只管新加的网络。老用户已保存的网络存的是 ALWAYS（此前随机化总开关 config_wifi_connected_mac_randomization_supported
-       是 false，隐私选项根本不显示 —— WifiConfigController2.java:341、WifiPrivacyPreferenceController2.java:60-62），
-       这一版打开总开关后它们会【第一次真的每次连接都换 MAC】。没做自动迁移：存储里分不出"用户选的 ALWAYS"和
-       "默认的 ALWAYS"（randomizedMacLastModifiedTimeMs 不落盘，XmlUtil 里没有这个标签）。要写进发版说明。
+    ⚠️ 只管新加的网络。老用户已保存的网络存的是 ALWAYS，会继续每次连接都换 MAC。没做自动迁移：存储里分不出
+       "用户选的 ALWAYS"和"默认的 ALWAYS"（randomizedMacLastModifiedTimeMs 不落盘，XmlUtil 里没有这个标签）。
+    ⚠️ 17.0 新出的显示问题（上游的，本条不修）：Settings 只把 PRIVACY_RANDOMIZED_MAC 映射成"随机 MAC"
+       （WifiPrivacyPreferenceController2.translateWifiEntryPrivacyToPrefValue:109-112），ALWAYS 的网络会被显示成
+       "使用设备 MAC"，实际却每次连接都换；用户在详情里改选一次"随机 MAC"就会存成 PERSISTENT（StandardWifiEntry:630-631）。
     上机判据：新连一个 WPA2 网络 → 详情里隐私显示"使用随机 MAC"（按网络）；断开重连 / 重启两次，
       `ip link show wlan0` 的地址不变且与出厂 MAC 不同；`cmd wifi list-networks` 后 dumpsys 里该网络
       macRandomizationSetting = 3（AUTO）。
@@ -670,12 +907,7 @@ def patch_wifi_mac_randomization_default(tree: pathlib.Path) -> str:
          re.compile(r"(\}\s*else\s*\{\s*)return PRIVACY_RANDOMIZATION_ALWAYS;(\s*\})"),
          lambda m: (m.group(1) + "return PRIVACY_RANDOMIZED_MAC;  // MARK: AOSP default (was ALWAYS)"
                     + m.group(2))),
-        ("packages/apps/Settings/src/com/android/settings/wifi/WifiConfigController2.java",
-         re.compile(r"(\n(\s*)mPrivacySettingsSpinner\.setAdapter\(getSpinnerAdapter\(R\.array\.wifi_privacy_entries_ext\)\);\n)"),
-         lambda m: (m.group(1) + m.group(2)
-                    + "// MARK: new networks default to per-network randomized MAC; saved ones are set below\n"
-                    + m.group(2) + "mPrivacySettingsSpinner.setSelection(WifiPrivacyPreferenceController2\n"
-                    + m.group(2) + "        .translateWifiEntryPrivacyToPrefValue(WifiEntry.PRIVACY_RANDOMIZED_MAC));\n")),
+        # 16.0 的第四处（Settings WifiConfigController2 给新网络预选"按网络随机"）17.0 上不需要了，见上面 docstring
     ]
     marker = "gaokun3 tree-fix [20]"
     todo = []
@@ -687,7 +919,7 @@ def patch_wifi_mac_randomization_default(tree: pathlib.Path) -> str:
         if marker in s:
             continue
         if len(pat.findall(s)) != 1:
-            return f"⚠️ {p.name} 的锚点出现 {len(pat.findall(s))} 次（应为 1），上游可能改了写法；四处都没动"
+            return f"⚠️ {p.name} 的锚点出现 {len(pat.findall(s))} 次（应为 1），上游可能改了写法；三处都没动"
         todo.append((p, pat.sub(lambda m: rep(m).replace("MARK", marker), s, count=1)))
     if not todo:
         return "已改（幂等，无需改动）"
@@ -698,18 +930,18 @@ def patch_wifi_mac_randomization_default(tree: pathlib.Path) -> str:
 
 
 def patch_build_fingerprint_variant_user(tree: pathlib.Path) -> str:
-    """—— 修补 23：BUILD_FINGERPRINT / BUILD_THUMBPRINT 的变体段改写成 user ——
+    """—— 修补 23：BUILD_FINGERPRINT / BUILD_THUMBPRINT / BUILD_SYSTEM_FINGERPRINT 的变体段改写成 user ——
 
     游戏环境如实修正（Duck Detector 体检 2026-10-10）：把自相矛盾的身份字段改一致，
     不是伪造硬件证明。同一天的运行时手段（scripts/game-mode.sh identity）已实测
     只能改属性、改不掉 android.os.Build.FINGERPRINT 常量（zygote 预加载时定死），
     那三条 Type/property 漂移在运行时消不掉，只有 ROM 级能齐。
 
-    现状（dev.11 实机 /system/build.prop 与构建机 out/ 一致）：
+    现状（16.0 dev.11 实机 /system/build.prop 与构建机 out/ 一致）：
       ro.build.type=user              ← soong gen_build_prop.get_build_variant()：
-      ro.system.build.type=user         非 eng 一律按 user 处理（lineage_gaokun3.mk
-      ro.build.flavor=gaokun3-user      注释引 gen_build_prop.py:28；#117 §16）
-      ro.build.fingerprint=…:userdebug/release-keys   ← build/make/core/config.mk:1308（refs）/ :1371（crDroid 16）
+      ro.system.build.type=user         非 eng 一律按 user 处理（A17 build/soong/scripts/
+      ro.build.flavor=gaokun3-user      gen_build_prop.py:28-32 原样；lineage_gaokun3.mk 注释、#117 §16）
+      ro.build.fingerprint=…:userdebug/release-keys   ← build/make/core/config.mk 的 BUILD_FINGERPRINT
       ro.system.build.fingerprint=…:userdebug/release-keys
                                         用 $(TARGET_BUILD_VARIANT)=userdebug 拼尾部
     ⇒ 半截身份：type 一侧已是 user，fingerprint 一侧还写着 userdebug。Duck Detector
@@ -722,9 +954,14 @@ def patch_build_fingerprint_variant_user(tree: pathlib.Path) -> str:
       system_properties 的 3 条 danger 全是这个漂移 —— 属性被 resetprop 成 :user/，
       常量还是 :userdebug/，反而多出一条 "ro.build.fingerprint <> Build.FINGERPRINT"。
 
-    改法：config.mk 里两处 `:$(TARGET_BUILD_VARIANT)/$(BUILD_VERSION_TAGS)` 改成
-      `:user/$(BUILD_VERSION_TAGS)`（BUILD_FINGERPRINT 与 BUILD_THUMBPRINT 各一处；
-      全文件 TARGET_BUILD_VARIANT 只出现在这两行，改完 type 与 fingerprint 尾部齐）。
+    改法：config.mk 里每一处 `:$(TARGET_BUILD_VARIANT)/$(BUILD_VERSION_TAGS)` 改成 `:user/$(BUILD_VERSION_TAGS)`。
+      ★ A17 是【三处】（16.0 是两处）：BUILD_FINGERPRINT（config.mk:1433）、BUILD_THUMBPRINT（:1453），
+        外加 A17 新增的 BUILD_SYSTEM_FINGERPRINT（:1472）。第三处不能漏：A17 的 ro.system.build.fingerprint
+        改由它来 —— gen_build_prop.py:91 读 build_system_fingerprint 文件、:194-195 对 system 分区输出
+        ro.system.build.fingerprint?=BuildSystemFingerprint；system 镜像的 AVB 属性
+        com.android.build.system.fingerprint 也用它（build/make/core/Makefile:4905）。
+        全文件 TARGET_BUILD_VARIANT 只出现在这三行，改完 type 与各 fingerprint 尾部齐。
+      注释锚点：A17 上游把 "is used used to" 的错别字修掉了（config.mk:1430），按新原文找。
     ⓘ 为什么不改 gen_build_prop 让 type 跟着变 userdebug：那会让 ro.build.type
       直接撞 SystemPropertiesCatalog 的 dangerousValues=["eng","userdebug"]，
       更糟；产品身份本来就是 type=user（crDroid 的 gen_build_prop 身份），只是
@@ -734,11 +971,9 @@ def patch_build_fingerprint_variant_user(tree: pathlib.Path) -> str:
       CheckAbSpecificMetadata 对空 pre-build 直接跳过指纹比对
       （lineage-bootable-recovery install/install.cpp:171-176）；post-build 只比
       最后一段 tags=release-keys（:203-204），与变体段无关。in-system 走
-      update_engine 的 payload_properties 也不带 pre-build。
-    ⚠️ 锚点按 refs/aosp-build（build/make）写的；构建机 crDroid 树若与 AOSP 16
-      的 config.mk 有出入会报 ⚠️ 并被 step() 记为失败，不会悄悄跳过。
-      （10-18 核过：crDroid 16 原文两处锚点俱在，[23] 已在构建机工作区生效。）
-    上机判据：`getprop ro.build.fingerprint` 与新装后的 Build.FINGERPRINT 都是
+      update_engine 的 payload_properties 也不带 pre-build。（这一段是 16.0 时核的，A17 未复核。）
+    ⚠️ 锚点按 crDroid 17.0 的 build/make（lineage-24.0）写的；对不上会报 ⚠️ 并被 step() 记为失败，不会悄悄跳过。
+    上机判据：`getprop ro.build.fingerprint` / `ro.system.build.fingerprint` 与新装后的 Build.FINGERPRINT 都是
       …:user/release-keys，且不再与 Build.TYPE 漂移；Duck Detector 的
       system_properties 3 条 danger / "Suspicious fingerprint pattern 'userdebug'" 消失。
     """
@@ -751,23 +986,26 @@ def patch_build_fingerprint_variant_user(tree: pathlib.Path) -> str:
         return "已改（幂等，无需改动）"
     old = ":$(TARGET_BUILD_VARIANT)/$(BUILD_VERSION_TAGS)"
     new = ":user/$(BUILD_VERSION_TAGS)"
-    if s.count(new) == 2 and s.count(old) == 0:
-        return "已是 user（幂等，无需改动）"
-    if s.count(old) != 2:
+    want = 3   # BUILD_FINGERPRINT、BUILD_THUMBPRINT、BUILD_SYSTEM_FINGERPRINT
+    if s.count(old) != want:
         return (f"⚠️ 锚点 {old} 出现 {s.count(old)} 次"
-                f"（应为 2：BUILD_FINGERPRINT 与 BUILD_THUMBPRINT），上游可能改了写法")
+                f"（应为 {want}：BUILD_FINGERPRINT / BUILD_THUMBPRINT / BUILD_SYSTEM_FINGERPRINT），上游可能改了写法")
+    # 三处必须都在各自的赋值行上，别误改到别的变量
+    for var in ("BUILD_FINGERPRINT", "BUILD_THUMBPRINT", "BUILD_SYSTEM_FINGERPRINT"):
+        if not re.search(r"^\s*" + var + r" := .*" + re.escape(old) + r"$", s, re.M):
+            return f"⚠️ {var} 的赋值行里找不到 {old}，上游可能改了写法；什么都没动"
     # 注释锚点先核对，别改了变体段却插不进标记（下次幂等判断就瞎了）
-    anchor = "# BUILD_FINGERPRINT is used used to uniquely identify the combined build and"
-    if anchor not in s:
-        return "⚠️ 找不到 BUILD_FINGERPRINT 注释锚点，上游可能改了写法"
-    comment = ("# " + marker + ": fingerprint/thumbprint variant segment forced to 'user',\n"
-               "# not $(TARGET_BUILD_VARIANT). ro.build.type already comes out 'user' via\n"
-               "# soong gen_build_prop.get_build_variant() (no userdebug tier), so the\n"
+    anchor = "# BUILD_FINGERPRINT is used to uniquely identify the combined build and product;"
+    if s.count(anchor) != 1:
+        return "⚠️ 找不到 BUILD_FINGERPRINT 注释锚点（或不唯一），上游可能改了写法"
+    comment = ("# " + marker + ": fingerprint/thumbprint/system-fingerprint variant segment\n"
+               "# forced to 'user', not $(TARGET_BUILD_VARIANT). ro.build.type already comes out\n"
+               "# 'user' via soong gen_build_prop.get_build_variant() (no userdebug tier), so the\n"
                "# fingerprint tail saying userdebug is a half-done identity that drifts\n"
                "# against Build.TYPE. See gaokun-android scripts/crdroid-tree-fixes.py.\n")
     s = s.replace(old, new).replace(anchor, comment + anchor, 1)
     io.open(p, "w", encoding="utf-8", newline="").write(s)
-    return "已把指纹/拇指纹的变体段改成 user（2 处）"
+    return f"已把指纹/拇指纹/系统指纹的变体段改成 user（{want} 处）"
 
 
 def main():
@@ -783,7 +1021,8 @@ def main():
         # 找不到锚点（上游改了写法）。都不能悄悄过去 —— 2026-09-28 PR #10 审查：以后 repo sync 让 [13]/[14] 打不上时，
         # 空录音 / 整块静音会悄悄回来；[2] 失效就是传感器全没，[3][5][7] 失效就是硬解悄悄回落软解。
         # 原先这里只打印、退出码照样是 0；现在与 kernel-apply-patches.sh 的"有失败就 exit 1"一致。
-        # "跳过（找不到 …）"不算失败：那是树里没有这个项目或文件（例如不装 GApps 时的 [4]），照常打印
+        # A17 起是严格模式：17.0 树里一定有的项目缺文件 / 缺锚点也返回 ✗ / ⚠️（以前是"跳过（找不到 …）"、不算失败）。
+        # 还会打印"跳过"的只剩 [4] 没同步 vendor/gapps；"已废弃（A17）"是上游已经不需要这条，也不算失败。
         if result.startswith(("✗", "⚠️")):
             failed.append(label.strip())
     step("  [1] SPOOF_SAFETYNET: ", patch_spoof_safetynet(tree))
@@ -796,12 +1035,15 @@ def main():
     step("  [8] v4l2_codec2 HEVC CSD 合并: ", apply_patch_file(
         tree, "external/v4l2_codec2",
         "0019-v4l2-codec2-merge-hevc-csd-into-first-frame.patch"))
-    step("  [9] glslang host 端 glslangValidator: ", apply_patch_file(
-        tree, "external/deqp-deps/glslang",
-        "0003-aosp-glslang-add-host-glslangValidator-binary.patch"))
+    # [9] glslang host 端 glslangValidator（patches/0003）—— A17 上废弃，不再打：
+    #   上游 external/deqp-deps/glslang 自己带了 cc_binary_host "glslangValidator"（Android.bp:263-292，
+    #   提交 9442208b "Build rule for Mesa's glslangValidator"；deqp_glslang_defaults 也加了 host_supported: true，
+    #   :83），模块名与 0003 加的完全相同，再打就是重名模块（而且 0003 的上下文本来也对不上了）。
+    #   mesa 侧照旧用 tools: ["glslangValidator"]，名字对得上上游。patches/0003 文件留着备查，不再有消费者。
     step(" [10] tinyalsa sw_params 取自 refined hw_params: ", apply_patch_file(
         tree, "external/tinyalsa_new",
         "0008-tinyalsa-derive-sw-params-from-refined-hw-params.patch"))
+    # A17 上游已删掉这个 flag ⇒ 通常打印"已废弃（A17）"；声明回来了才沿 TARGET_RELEASE 继承链去改值文件
     step(" [11] 关掉 connected-displays flag: ", patch_connected_displays_flag(tree))
     step(" [12] audio AIDL primary 接受外部设备连接: ", apply_patch_file(
         tree, "hardware/interfaces",
@@ -845,7 +1087,7 @@ def main():
         "0083-audio-aidl-primary-low-latency-playback-block.patch"))
     # 游戏环境如实修正：fingerprint 尾部 userdebug→user，与 ro.build.type=user 对齐
     # （Duck Detector system_properties 3 条 danger 的根；运行时改不掉 Build.FINGERPRINT 常量）
-    step(" [23] BUILD_FINGERPRINT/THUMBPRINT 变体段改写成 user（与 ro.build.type 对齐）: ",
+    step(" [23] BUILD_FINGERPRINT/THUMBPRINT/SYSTEM_FINGERPRINT 变体段改写成 user（与 ro.build.type 对齐）: ",
          patch_build_fingerprint_variant_user(tree))
     if failed:
         print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))

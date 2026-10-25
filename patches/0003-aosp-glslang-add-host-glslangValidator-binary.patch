@@ -1,6 +1,13 @@
 From: gaokun-Android project
 Subject: [PATCH] external/deqp-deps/glslang: add self-contained host glslangValidator
 
+⚠️★ A17（crDroid 17.0，2026-10-25 起）上**废弃、不再打**，文件只留着备查：
+  上游 external/deqp-deps/glslang 自己带了 cc_binary_host "glslangValidator"
+  （Android.bp:263-292，提交 9442208b "Build rule for Mesa's glslangValidator"；
+  deqp_glslang_defaults 也加了 host_supported: true，:83）。模块名与本补丁完全相同，
+  再打就是重名模块（本补丁的上下文在 A17 上也对不上了）。
+  scripts/crdroid-tree-fixes.py 已把 [9] 从 main() 里拿掉；下面是 A16 时期的原文。
+
 mesa 的 turnip（freedreno Vulkan 驱动）在构建期需要 glslangValidator
 把 BVH / ASTC 的 GLSL 计算着色器编成 SPIR-V。AOSP 树里 glslang 只以
 静态库形式存在（deqp_glslang_*，供 deqp 用），没有可执行模块，而 Soong
