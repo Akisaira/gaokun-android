@@ -6,6 +6,10 @@
 #   bash scripts/data-snapshot-live.sh <live 的 IP> backup  [标签]     # 默认标签 a16
 #   bash scripts/data-snapshot-live.sh <live 的 IP> restore <快照名> --yes
 #
+# ★ 10-26 起首选在 Android 里备份（scripts/data-snapshot-android.sh，不用重启、不靠 live 连 Wi-Fi），
+#   本脚本主要负责 restore。restore 的 tar 带 --selinux：toybox 把标签存成 PAX 的 RHT.security.selinux，
+#   GNU tar 只有 --selinux 才认（--xattrs 认的是 SCHILY.xattr.*，本脚本自己 backup 的归档用那个）。
+#
 # 为什么要有它（2026-10-26，A17 首次上机前）：
 #   · 大版本升级会把 /data 上的东西升上去（包管理、数据库、ART、apex 数据）。A17 起不来时回落到 A16 槽，
 #     A16 能不能在被 A17 动过的 /data 上开机没验证过；/data 又没有 checkpoint（fstab 没写 checkpoint=）。
@@ -126,10 +130,10 @@ restore)
     echo "── 清空 userdata（保留 media / ota_package / gk3-snap / lost+found —— 都不在快照里，原样留着）"
     find "$MNT" -mindepth 1 -maxdepth 1 ! -name media ! -name ota_package ! -name gk3-snap ! -name lost+found -exec rm -rf {} +
     echo "── 解包"
-    zstd -dcq "$OUT/userdata.tar.zst" | ( cd "$MNT" && tar --xattrs --xattrs-include='*' --acls --numeric-owner -xpf - )
+    zstd -dcq "$OUT/userdata.tar.zst" | ( cd "$MNT" && tar --selinux --xattrs --xattrs-include='*' --acls --numeric-owner -xpf - )
     echo "── metadata"
     find "$MMNT" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +
-    zstd -dcq "$OUT/metadata.tar.zst" | ( cd "$MMNT" && tar --xattrs --xattrs-include='*' --acls --numeric-owner -xpf - )
+    zstd -dcq "$OUT/metadata.tar.zst" | ( cd "$MMNT" && tar --selinux --xattrs --xattrs-include='*' --acls --numeric-owner -xpf - )
     echo "── misc"
     dd if="$OUT/misc.img" of="$BD" bs=512 conv=fsync status=none
     sync

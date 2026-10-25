@@ -136,15 +136,18 @@
 1. ✅（10-26 已做，不重启）A17 payload 从 R2 `staging/a17-1792943610/` 下到本机 `out/a17-1792943610/`（sha256 核过），
    推进开发机 `/data/ota_package/`（`ota_package_file` 标签，sha256 核过；这个目录不进快照）；`install-ota-local.sh --check` 全过。
    **先不装**：装完 `_a` 就是 active，万一意外重启进了 A17（10-18 出过 active 与实际启动槽不一致），快照之前 /data 就被动了。
-2. `scripts/boot-oneshot.sh gaokun3-live.conf`（内置 live），**用户同意后**重启。
-3. live 自己连 Wi-Fi、起 ssh（凭据在 p3 的 `gaokun3/`：10-26 已追加当前网络〔SAE + WPA-PSK〕与本机 Mac 的公钥，旧文件留了 `.bak-20261026`）。
-   扫网段找它的 IP（live 用的是网卡真 MAC，未必拿到路由器给 Android 保留的 `.239`），然后
-   `bash scripts/data-snapshot-live.sh <IP> backup a16`：GNU tar 带 xattr / ACL 打成 zstd，放在 userdata 自己的 `gk3-snap/` 下
-   （不含 `media/` 42 GB 与 `ota_package/`；其余约 40 GB 源数据），附 metadata 分区 tar 与 misc 的 dd；
-   脚本自己核条目数、抽查 SELinux 标签、写 SHA256SUMS。
-4. 在 live 里重启 ⇒ 回到 default（`_b` 的直连条目）。`install-ota-local.sh --go` 装进 `_a`（它会把 ESP default 留在 `_b`、OneShot 指向 `_a` 的直连条目），重启进 A17。
-5. A17 不行：重启即回 `_b`；`_b` 在被 A17 动过的 /data 上也不行 ⇒ oneshot 进 live，`data-snapshot-live.sh <IP> restore <快照名> --yes`。
+2. （A16 `_b`，不重启）`bash scripts/data-snapshot-android.sh backup a16`：`stop` 停掉 framework（system_server 与全部 App 退出、
+   数据库不再被写；USB adb 不受影响）→ toybox `tar --selinux` + `zstd --single-thread` 打包 userdata（不含 `media/` 42 GB 与
+   `ota_package/`；约 40 GB 源数据）、metadata、misc → 核条目数（socket 除外）与 zstd 完整性、写 SHA256SUMS → `start`。
+   快照在 `/data/gk3-snap/<名字>/`。（10-26 用户问"不能直接在 Android 里备份吗"后改成这样；原先的 live 里备份
+   `data-snapshot-live.sh backup` 留作备选。）
+3. `install-ota-local.sh --go` 装进 `_a`（ESP default 留在 `_b`、OneShot 指向 `_a` 的直连条目），**用户同意后**重启进 A17。
+5. A17 不行：重启即回 `_b`；`_b` 在被 A17 动过的 /data 上也不行 ⇒ oneshot 进 live（`gaokun3-live.conf`；live 自己连 Wi-Fi、起 ssh，
+   凭据在 p3 的 `gaokun3/`：10-26 已追加当前网络〔SAE + WPA-PSK，未实测能连〕与本机 Mac 的公钥，旧文件留了 `.bak-20261026`；
+   live 用网卡真 MAC，IP 要扫网段找），`data-snapshot-live.sh <IP> restore <快照名> --yes`（GNU tar `--selinux` 认 toybox 存的标签）。
 
+toybox 打包 → GNU tar 恢复这条链在设备 + 容器里核过（`data-snapshot-android.sh selftest`：权限含 setgid、属主、硬链接、
+带 MLS 类别的标签、内容逐项一致；toybox 的 `--sparse` 不生效，空洞按零存，/data 上没有 > 50 MiB 的稀疏文件）。
 `data-snapshot-live.sh` 的 backup / restore 在特权容器里整轮验证过（`scripts/test-data-snapshot.sh`：同 PARTUUID 的 GPT 盘，
 比对标签 / 属主 / 权限 / 硬链接 / 符号链接 / 稀疏文件，media 与 ota_package 不受影响，misc / metadata 回滚）；**还没在真机的 live 里跑过**。
 脚本要求每个 PARTUUID 只对上一个设备（插着克隆盘时拒绝工作）。
