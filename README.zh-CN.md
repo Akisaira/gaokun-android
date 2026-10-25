@@ -155,14 +155,14 @@ Secure Boot。安装器有两个：
 [`docs/build-machine.md`](docs/build-machine.md)），约 400 GB 磁盘。
 
 ```sh
-repo init -u https://github.com/crdroidandroid/android.git -b 16.0 --git-lfs
+repo init -u https://github.com/crdroidandroid/android.git -b 17.0 --git-lfs
 cp <本仓库>/manifests/local_manifest_gaokun3.xml .repo/local_manifests/
 repo sync -c -j"$(nproc)"
 
 cp -a <本仓库>/device/huawei/gaokun3 device/huawei/gaokun3
 python3 <本仓库>/scripts/crdroid-tree-fixes.py .   # 为什么要改，脚本里写了
 source build/envsetup.sh
-lunch lineage_gaokun3-bp4a-userdebug
+lunch lineage_gaokun3-cp2a-userdebug
 m bacon superimage
 ```
 

@@ -38,7 +38,7 @@
 > * 构建机的树**不等于**本仓 checkout（咬过五次）：编内核前 `bash scripts/kernel-apply-patches.sh <树> --verify` 绿了再 make；同步设备树**只用 `bash scripts/sync-device-tree.sh <IP>`**
 >   （手写 `rsync --delete` 删过四样不入库但必需的输入 adb_keys / firmware / hexagonrpcd-root / prebuilt-boot，md5 核对照样通过；脚本会断言它们在）。
 > * 发版一律 **`release.sh --no-build`** —— 重跑构建发出去的不是硬件上验过的那一版。
-> * ⚠️★★ **ROM 变体只用 `lineage_gaokun3-bp4a-userdebug`**：`-user` 的 init 强制 enforcing（`selinux.cpp:112-116`），装上去起不来（#117 §15）。
+> * ⚠️★★ **ROM 变体只用 `lineage_gaokun3-cp2a-userdebug`（A17 起；A16 时是 `-bp4a-`）**：`-user` 的 init 强制 enforcing（`selinux.cpp:112-116`），装上去起不来（#117 §15）。
 > * **推仓库、发版要用户点头**；其余（本地提交、构建、staging、设备实验）直接做。
 > * ★ **分支（用户 2026-10-18 定，有协作者了）：所有修改都在开发分支 `dev` 上改、提交、推 `dev`，不直接提交 / 推 `main`。**
 >   `main` 只在发版时从 `dev` 合并（什么时候合由用户定）；协作者的 PR 也提到 `dev`。开工先 `git switch dev && git pull`。

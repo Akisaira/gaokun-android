@@ -1,6 +1,7 @@
 #
 # Product definition for Huawei MateBook E Go (sc8280xp / gaokun3)
-# —— crDroid 16.0（= LineageOS 23.2 布局，AOSP 基线 android-16.0.0_r4）
+# —— crDroid 17.0 / crDroid 13（= LineageOS 24.0 布局，AOSP 基线 android-17.0.0_r1）
+#    2026-10-25 起；此前是 crDroid 16.0（lineage-23.2，android-16.0.0_r4）
 #
 # 取代 Stage 2–5 时期的 aosp_gaokun3.mk（在 git 历史里）。
 # 换轨理由见 docs/stage4-findings.md #36：手搓最小 AOSP 缺产品级配置
@@ -9,7 +10,7 @@
 # ⚠️ 产品名必须是 lineage_<codename>：vendor/lineage/build/envsetup.sh 的
 #    breakfast/brunch 拼的就是
 #        lunch lineage_$target-$aosp_target_release-$variant
-#    而 vendor/lineage/vars/aosp_target_release = bp4a。
+#    而 vendor/lineage/vars/aosp_target_release = cp2a（17.0；16.0 时是 bp4a）。
 #    （vendor/lineage 这个路径由 crdroidandroid/android_vendor_crdroid 提供，
 #      不是 LineageOS 那个仓库 —— repo manifest 实名核实。）
 #

@@ -190,14 +190,14 @@ build with less — [`docs/build-machine.md`](docs/build-machine.md)) and about
 400 GB of disk.
 
 ```sh
-repo init -u https://github.com/crdroidandroid/android.git -b 16.0 --git-lfs
+repo init -u https://github.com/crdroidandroid/android.git -b 17.0 --git-lfs
 cp <this repo>/manifests/local_manifest_gaokun3.xml .repo/local_manifests/
 repo sync -c -j"$(nproc)"
 
 cp -a <this repo>/device/huawei/gaokun3 device/huawei/gaokun3
 python3 <this repo>/scripts/crdroid-tree-fixes.py .   # read the script for why
 source build/envsetup.sh
-lunch lineage_gaokun3-bp4a-userdebug
+lunch lineage_gaokun3-cp2a-userdebug
 m bacon superimage
 ```
 

@@ -147,7 +147,7 @@ CLAUDE.md「环境」一节有简版；本文是细则与依据。
 
 `GAOKUN3_DEV_BUILD` 与 `GK3_VERSION` 都是靠**环境变量**传进产品配置（`lineage_gaokun3.mk` / `device.mk`）的。
 本地参考树里查不到 crDroid 16 的 soong_ui 是否把任意环境变量透传给 Kati 的产品配置阶段，**没在构建机上验过**。
-下次开机（`light` 档就够，不跑 `m`）在 `source build/envsetup.sh && lunch lineage_gaokun3-bp4a-userdebug` 之后带与不带变量各跑一次对照：
+下次开机（`light` 档就够，不跑 `m`）在 `source build/envsetup.sh && lunch lineage_gaokun3-cp2a-userdebug` 之后带与不带变量各跑一次对照：
 
 ```bash
 get_build_var PRODUCT_ADB_KEYS                                   # 应为空
