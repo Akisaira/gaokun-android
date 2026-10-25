@@ -113,3 +113,16 @@
 | M5 | 游戏环境：BakaSU、0084 / 0085 复审、Duck、PIF / TrickyStore | 设备 | gaming.md 的检测项 |
 | M6 | mesa 路线 B（26.1 重新生成）、内核 ACK 模拟补丁复核 | 构建机 | turnip CTS 子集 / game-perf |
 | M7 | 发版：单独的 OTA 清单、安装器、发版说明 | — | 用户点头 |
+
+## 7. 进度
+
+| 步 | 状态（2026-10-25） |
+|---|---|
+| M0 | ✅ 分支 `a17-migration`：cp2a lunch 项、manifest（cinnamonbun）、tree-fixes 严格模式、`sync-device-tree.sh` 不再删 fcitx5 APK |
+| M1 | ✅ 没加盘，`~/crdroid` 就地 `repo init -b 17.0 --git-lfs` + sync（A16 不入库的输入先备份到 `~/keep`）；`lunch lineage_gaokun3-cp2a-userdebug` 过 |
+| M2 | ✅ tree-fix [1]–[25] 在真树上全打上；[9] 废弃；新增 [24]（adb_root 只随 WITH_SU）、[25]（KeyGestureController 包 LineageSettings 读取，补 10-11 救砖时没入库的那一处） |
+| M3 | ⏳ 音频补丁按 A17 的 StreamAlsa 拆分重写、effects 改用 `libaudioeffectaidlcommon`；sepolicy 静态编译过；libcamera 树准备入库为 `scripts/camera/setup-libcamera-tree.sh`；第一次冷编卡在 `libcamera_gk3` 未定义，修后第二次冷编进行中 |
+| M6 | ✅ 提前做了：mesa 26.1 用 meson2hermetic 重新生成（`scripts/mesa-a17/`，check-output 全过，490 个模块），0004 改成 v3、0005 不用 |
+| M4 / M5 / M7 | ⬜ 要等 M3 出镜像；M4 首次上机要用户在场（0085 的 6.6.30 版本串会让 A17 netd 走 BPF 模拟的 L4S 路径，自检失败就会进 netd1shot 重启循环） |
+
+`prebuilts/build-tools` 下 A16 树删过 `date` / `tar` 两个预编译件，A17 没有编码这一步，冷编要看会不会因此报错。
