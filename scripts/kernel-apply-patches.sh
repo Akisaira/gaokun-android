@@ -296,6 +296,10 @@ KPATCHES=(
     #    模式也没人重写，只开MTP/PTP时接电脑枚举不到（#41评审）。只去掉match_existing_only不行，见补丁说明。
     #    0111留给#46评审里拆出去的NVMe挂起下电（实验性，另提）。
     0112-usb-gadget-configfs-take-none-as-unbind-and-wait-for-an-absent-UDC.patch
+    # ★ 0116：触摸跟踪的配对范围默认420²（约44毫米）→ 115²（约12毫米）。手指刚抬起、跟踪还留着的3帧里，
+    #    附近落下的手指会被接到旧跟踪上，Android收不到按下（音游吞点击，指纹见scripts/touch/merge-check.py）。
+    #    0113–0115留给扬声器那组。
+    0116-Input-himax-spi-narrow-the-track-match-radius.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
