@@ -66,8 +66,14 @@ rsync -a --delete \
       --exclude 'prebuilt-gk3boot/**' \
       --exclude 'effects/prebuilt/**' \
       --exclude '/gk3core/' \
+      --exclude 'prebuilt-apps/fcitx5/*.apk' \
       -e "$SSH" "$SRC/" "$DST/"
-ok "device/ 已同步（不动 adb_keys / firmware / hexagonrpcd-root / prebuilt-boot / prebuilt-gk3boot / effects/prebuilt / gk3core）"
+ok "device/ 已同步（不动 adb_keys / firmware / hexagonrpcd-root / prebuilt-boot / prebuilt-gk3boot / effects/prebuilt / gk3core / fcitx5 APK）"
+# fcitx5 APK 不入库（.gitignore）。2026-10-25 踩到：从一个新 worktree 同步时，本机没有这个 APK，
+#   上面的 --delete 把构建机上那份删了（第 3b2 步才发现）。所以它也排除在 --delete 之外，本机有就单独补过去。
+if [ -f "$SRC/prebuilt-apps/fcitx5/fcitx5-android-arm64-v8a.apk" ]; then
+    rsync -a -e "$SSH" "$SRC/prebuilt-apps/fcitx5/fcitx5-android-arm64-v8a.apk" "$DST/prebuilt-apps/fcitx5/"
+fi
 
 echo "═══ 2. prebuilt-boot 单独同步，【不带 --delete】═══"
 if [ -f "$SRC/prebuilt-boot/vmlinuz.efi" ]; then
