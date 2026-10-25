@@ -128,3 +128,21 @@
 **盘**：冷编两次在打包阶段写满 504 GB 盘（siso 写日志失败后 abort，不是代码错误）。用户 10-25 定删 A16 旧载荷：`~/v1-work` 里 payload*/rc1-out/rc2–rc2d 的大文件、`~/rel2`、`~/stage` 的 08-20 包，`repo gc` 删掉 A17 清单里没有的 90 个项目（6.4 GB），再删 ThinLTO 缓存。完整构建后剩约 20 GB，打包时最低 8 GB —— 下一次冷编（如 QPR1 跟版）还会紧，届时要么扩盘、要么再清。
 
 **M4 的一个没核实的风险**：A17 首次开机会升级 /data 上的数据（包管理、数据库、ART 产物等）。A17 起不来时回落到 A16 槽，A16 能否在被 A17 动过的 /data 上正常开机没验证过，可能要清数据；/data 又没有 checkpoint。上机前要先决定要不要备份 /data。
+
+## 8. M4 上机流程（2026-10-26 定；/data 的办法用户交给我定）
+
+/data 是不加密的 ext4，A17 首次开机会把上面的东西升上去，回落到 A16 时能不能用没验证过 ⇒ **装之前做一次离线快照，能整盘回滚**：
+
+1. （A16 `_b`，不重启）push A17 payload（R2 `staging/a17-1792943610/`），`scripts/install-ota-local.sh --check` → `--go` 装进 `_a`；脚本会把 ESP 的 `default` 掰回 `_b`。
+2. `scripts/boot-oneshot.sh` 指向内置 live（`gaokun3 installer`），**用户同意后**重启。
+3. live 自己连 Wi-Fi、起 ssh（凭据在 p3 的 `gaokun3/`：10-26 已追加当前网络〔SAE + WPA-PSK〕与本机 Mac 的公钥，旧文件留了 `.bak-20261026`）。
+   扫网段找它的 IP（live 用的是网卡真 MAC，未必拿到路由器给 Android 保留的 `.239`），然后
+   `bash scripts/data-snapshot-live.sh <IP> backup a16`：GNU tar 带 xattr / ACL 打成 zstd，放在 userdata 自己的 `gk3-snap/` 下
+   （不含 `media/` 42 GB 与 `ota_package/`；其余约 40 GB 源数据），附 metadata 分区 tar 与 misc 的 dd；
+   脚本自己核条目数、抽查 SELinux 标签、写 SHA256SUMS。
+4. 重启回 `_b`（default），再 `boot-oneshot.sh` 指向 `_a` 的直连条目，重启进 A17。
+5. A17 不行：重启即回 `_b`；`_b` 在被 A17 动过的 /data 上也不行 ⇒ oneshot 进 live，`data-snapshot-live.sh <IP> restore <快照名> --yes`。
+
+`data-snapshot-live.sh` 的 backup / restore 在特权容器里整轮验证过（`scripts/test-data-snapshot.sh`：同 PARTUUID 的 GPT 盘，
+比对标签 / 属主 / 权限 / 硬链接 / 符号链接 / 稀疏文件，media 与 ota_package 不受影响，misc / metadata 回滚）；**还没在真机的 live 里跑过**。
+脚本要求每个 PARTUUID 只对上一个设备（插着克隆盘时拒绝工作）。
