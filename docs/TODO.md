@@ -357,7 +357,7 @@ B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 
 * ⬜ 手掌碎成多触点（`max_contacts` 打满 10）：三个阈值假设全被实测否决、不影响点击 ⇒ 下一版驱动做跨帧形态判据（DISP-7，1.0 之后）。
 * ⬜ T1b 三道形同虚设的噪声闸门：`patches/0039` 已做成旋钮 `iso_nbr_ratio_q8` / `edge_min_area`、默认值不变 —— 没有证据说幽灵走这两条路，留作边缘幽灵复现时的工具。
 * ⬜ 触摸 IDC（`dumpsys input` 里 `ConfigurationFile: <none>`）：面积轴已有，可以写 `touch.size.calibration`（DISP-6，polish）。
-* ⬜ Parts 里没有触摸手感开关（`persist.sys.gaokun3.*`，enforcing 下普通 adb shell 设不了；原记在 B1 的"非阻塞"）。
+* ◐ Parts 里的触摸手感开关（2026-10-25 用户要求，有人反馈 game 预设手感差）：「设置 → 系统 → 触摸手感」+ 控制中心「游戏触摸」磁贴，改 `persist.sys.gaokun3.touch_mode`（开 = game、关 = daily）。⬜ 构建、上机：两个入口互相同步、切换后 `algo/track_smoothing` / `hand_enabled` 跟着变、enforcing 零 avc。
 
 ### T2. ⬜ Google 未认证（"设备未经 Play 保护机制认证"）
 修法是把本机的 Android ID 登记一次：工具 `bash scripts/google/gsf-android-id.sh`（新版 GMS 的 ID 在 `shared_prefs/Checkin.xml`，不在 `gservices.db`）、
