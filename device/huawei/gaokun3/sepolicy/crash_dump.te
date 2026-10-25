@@ -10,4 +10,16 @@
 # （/sys/fs/selinux/policy_capabilities/memfd_class = 0），crash_dump 又不是 tmpfs_domain ⇒ memfd 落在通用 tmpfs 上。
 # ⚠️ 2026-10-08 写，【未编译、未上机】：dev.11 上用 kill -SEGV 一个普通 App，判据 = /data/tombstones 出新文件、零 crash_dump avc。
 #    上 dev.11 之前先在构建机 crDroid 树里 grep axion，看上游有没有配套策略（有就用上游的，删掉这里）。
+#
+# ★ A17（crDroid 17.0，2026-10-25 构建机只读核对）：这条仍然要。
+#   · 机制还在，只是改了名：bionic/libc/bionic/custom_rom_hide.cpp:37-39 `HIDE_MEMFD_TAG "mf"` ⇒ 现在是
+#     /memfd:mf:<路径>；只对 App 进程生效（:290-294 is_app_process，uid%100000 ≥ 10000）—— App 崩溃时
+#     crash_dump 以 App 的 uid 跑，正好落在里面。
+#   · 上游仍没有配套策略：system/sepolicy、device/lineage/sepolicy、vendor/lineage 里 grep axion 零命中，
+#     A17 的 private/crash_dump.te 也没有任何 tmpfs 规则。
+#   · A17 的 private/policy_capabilities 只声明了 network_peer_controls / open_perms / extended_socket_class /
+#     nnp_nosuid_transition / functionfs_seclabel / netlink_xperm，【没有 memfd_class】⇒ 7.2 内核上 memfd 仍按
+#     tmpfs:file 打标签（A17 新加的 memfd_file 类与 private/domain.te:98 那组规则在本机不生效）。
+#     哪天策略里开了 memfd_class，这条要改写成 crash_dump 对 memfd_file 的规则。
+#   · 2026-10-25 在构建机树外用 checkpolicy 编过整套 A17 策略（userdebug / user 两种变体），没撞 neverallow。⬜ 未上机。
 allow crash_dump tmpfs:file { read write getattr map };

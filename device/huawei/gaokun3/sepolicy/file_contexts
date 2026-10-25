@@ -3,6 +3,29 @@
 # ⚠️ 全系统仍是 permissive（TODO B1）。这里只放【标签】——
 #    标签写对了，AOSP 核心策略里现成的 allow 规则就会生效，
 #    不必自己写 allow。要新增 allow 规则的条目一律先想清楚再动。
+#    （ⓘ "仍是 permissive"是 2026-08 的状态：dev.10 起发布构建默认 enforcing（D5）。"只放标签"的原则不变。）
+#
+# ── A17（crDroid 17.0 / lineage-24.0 / cp2a）迁移核对，2026-10-25 ─────────────────────────
+# 这个目录里的注释大多是对着 lineage-23.0（refs/lineage-sepolicy）或 crDroid 16.0 树写的，行号都是那时的。
+# 本次对着 refs/a17/system/sepolicy 与构建机 ~/crdroid（17.0，system/sepolicy 7b39d96）复核：
+#   · 本目录引用的类型 / 属性 / 类 / 权限 / 宏在 A17 里都还在，而且都在 public/ 或 vendor/（vendor 策略引用得到）。
+#   · file_contexts / genfs_contexts / property_contexts / service_contexts 没有和 A17 平台新增条目重名的
+#     （A17 新加的 genfscon sysfs /class/block、binder /binder_logs/state_hashed 等都碰不到我们的路径）。
+#   · 在构建机树外编了 checkpolicy（external/selinux），按 policy.go 的顺序把 plat + lineage common（public / private /
+#     dynamic / vendor）+ 本目录 + dragonboard minigbm 拼成整套 policy.conf（cp2a 的 RELEASE_* 取值、board API 202604），
+#     userdebug 与 user 两种变体都过了全部 neverallow（同法故意加一条违规能报出来，说明检查是真跑了）。
+#     ⚠️ 这不等于 `m selinux_policy`：没跑 treble 拆分、compat mapping、checkfc / property_info_checker。
+#   · 常被引用的几条 neverallow 在 A17 的新位置（旧注释里的行号别再信）：
+#       block_device 打不开            private/domain.te:757（lineage-23.0 是 :705）
+#       vendor 域执行 system 文件       private/domain.te:1229-1252、:1303-1340（豁免属性仍是 vendor_executes_system_violators）
+#       debugfs 无构建变体豁免          private/domain.te:1546
+#       sys_rawio（userdebug 豁免）     private/domain.te:2120-2133
+#       sys_ptrace                      private/domain.te:1722-1735
+#       binderfs_logs（userdebug 豁免） private/domain.te:734-740
+#       vendor_default_prop 只许 init 设 private/domain.te:854
+#       coredomain 读 / 设 vendor 属性  private/property.te:196-207；coredomain 设 vendor 属性（兼容属性模式）:496-507
+#   · policycap：A17 比 A16 多开了 netlink_xperm（见 hal_wifi_default.te）；functionfs_seclabel 在 crDroid 16.0 就已开着；
+#     memfd_class 两边都没开（见 crash_dump.te）。
 
 /vendor/etc/init/hw/init\.gaokun3\.rc       u:object_r:vendor_configs_file:s0
 /vendor/etc/init/hw/init\.gaokun3\.usb\.rc  u:object_r:vendor_configs_file:s0
@@ -43,6 +66,10 @@
 #     app.te:394 → allow { appdomain -isolated_app_all } gpu_device:dir r_dir_perms;
 #                  （system_app / platform_app(launcher3) 都在 appdomain 里）
 # 所以把目录也标成 gpu_device 就够了，和上面标 card1/renderD128 是同一类胜利。
+# ⓘ A17：上面那批逐域规则被收成了一个属性 —— private/gpu_sphal_domain.te:3-4 给 gpu_sphal_domain
+#   gpu_device 的 chr_file rw / dir r_dir_perms；surfaceflinger / bootanim / system_server / mediaswcodec /
+#   mediaserver / vendor 的 mediacodec / hal_camera_default 用 gpu_sphal_use() 挂上，appdomain（除 isolated_app）、
+#   hal_graphics_allocator、hal_graphics_composer 由 private/technical_debt.cil:67-78 挂上。结论不变：标签对了就够。
 # ★ /dev 下的【目录】确实吃 file_contexts —— AOSP 自己就这么干：
 #   system/sepolicy/private/file_contexts:157 `/dev/socket(/.*)?  u:object_r:socket_device:s0`
 #   （那条的 `(/.*)?` 覆盖的就包括目录本身）。

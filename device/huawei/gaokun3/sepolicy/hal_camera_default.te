@@ -26,6 +26,8 @@ allow hal_camera_default sysfs_leds:file rw_file_perms;
 # （public/te_macros:76；hal_graphics_composer_default 也是这样：vendor/hal_graphics_composer_default.te）。
 # ⚠️ 运行期 enforcing 试跑里相机照样全过，是因为 memfd 早在开机时就建好并映射了 ——
 #    enforcing 下 HAL 一旦重启，这里就会失败，软件 ISP 出不了帧。
+# ⓘ A17 仍然适用：A17 的 private/policy_capabilities 没有声明 memfd_class（只有 functionfs_seclabel 与
+#    netlink_xperm 是相对 lineage-23.0 新增的），memfd 仍走 tmpfs 的 type_transition。理由与核对见 crash_dump.te 末尾。
 type gaokun3_camera_tmpfs, file_type;
 type_transition hal_camera_default tmpfs:file gaokun3_camera_tmpfs;
 allow hal_camera_default gaokun3_camera_tmpfs:file { read write getattr map };

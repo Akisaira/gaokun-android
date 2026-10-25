@@ -3,7 +3,7 @@
 # 域从哪来：effect 库被 android.hardware.audio.effect.service-aidl.example dlopen，
 #   那个服务在 APEX com.android.hardware.audio 里，APEX 的 file_contexts 把它标成
 #   hal_audio_default_exec（hardware/interfaces/audio/aidl/default/apex/
-#   com.android.hardware.audio/file_contexts:4，crDroid 16.0）⇒ 域是 hal_audio_default。
+#   com.android.hardware.audio/file_contexts:4，crDroid 16.0；17.0 同一行未变，2026-10-25 核对）⇒ 域是 hal_audio_default。
 #
 # 读的是两样，都在 vendor_gaokun3_prop 下（property_contexts）：
 #   * vendor.gaokun3.histen.on          总开关的镜像（etc/histen.rc 从 persist.sys.gaokun3.histen 抄过来）

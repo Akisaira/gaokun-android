@@ -182,6 +182,15 @@ allow gaokun3_audioroute audio_device:chr_file rw_file_perms;
 # ⬜ 如果哪天给 tinyalsa 投了那个 vendor 变体的补丁并进了构建配方，
 #    这三行就可以一起删掉 —— 判据：/vendor/bin/tinymix 存在（脚本第 33 行已经
 #    在找它了，一存在就自动切过去）。
+# ⓘ A17（2026-10-25 核对）：上面"AOSP 没有 vendor 变体"的前提变了 —— crDroid 17.0 清单里
+#    external/tinyalsa 换成了 LineageOS/android_external_tinyalsa@lineage-24.0（28a6a6b "Mark tiny-tools
+#    vendor_available"），它的 Android.bp:68-74 给 tinymix 写了 vendor_available: true。也就是说不用树外补丁
+#    就能装 /vendor/bin/tinymix 了。但这三行【现在还不能删】：
+#      ① device.mk 还没装 vendor 变体（PRODUCT_PACKAGES 里列的是 tinymix，装的是 /system/bin 那个；
+#         vendor 变体的模块名按 Soong 惯例应是 tinymix.vendor ——⬜ 未在构建里验证）；
+#      ② 更正上面那句：audio-route.sh:32-33 是【先】找 /system/bin/tinymix、找不到才用 /vendor/bin 的，
+#         两个都在时不会"自动切过去"，要把顺序对调。
+#    两件事做完、上机确认 ps -AZ 里 audioroute 没有 system_file 的 execute_no_trans 之后，删这三行和这一整段。
 typeattribute gaokun3_audioroute vendor_executes_system_violators;
 allow gaokun3_audioroute system_file:file rx_file_perms;
 allow gaokun3_audioroute system_file:file execute_no_trans;
@@ -198,8 +207,9 @@ allow gaokun3_audioroute system_file:file execute_no_trans;
 #   `ro.build.type=user` / `ro.debuggable=0` 是 build.prop 被硬写成那样的
 #   （`build/soong/scripts/gen_build_prop.py:28` 的 get_build_variant() 没有
 #    userdebug 这一档，非 eng 一律按 user 写），**与真实构建变体无关**。
-#   本仓一直编的是 `lineage_gaokun3-bp4a-userdebug`（`AndroidProducts.mk:8`），
-#   所以 userdebug 豁免【是生效的】—— 原话"写得进去，但那意味着 enforcing 与否
+#   本仓一直编的是 userdebug（A16 时 `lineage_gaokun3-bp4a-userdebug`；A17 起
+#   `lineage_gaokun3-cp2a-userdebug`，`AndroidProducts.mk:8`），
+#   所以 userdebug 豁免【是生效的】（A17 的 private/domain.te:2120-2133 仍带 `userdebug_or_eng(\`-domain')`）—— 原话"写得进去，但那意味着 enforcing 与否
 #   取决于构建变体"仍然成立。
 #   ★ 正解是把 [TODO B6] 做掉（DT 中断映射修对），这个轮询脚本整个消失。
 #   在那之前，宁可让它在 enforcing 下明确失效，也不要写一条只在

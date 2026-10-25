@@ -62,6 +62,11 @@ allow postinstall boot_block_device:blk_file r_file_perms;
 #     private/postinstall.te:22-25（shell_exec / system_file / toolbox_exec）
 #     与 :17-19（postinstall_file 的 rx / r_dir_perms）。
 #   * 往 update_engine 的管道打日志：同文件 :12-13。
+#   （A17 的 private/postinstall.te 行号：执行 :21-23、postinstall_file :16-18、管道 :11-12；规则本身没变，
+#    相对 crDroid 16.0（f2ea821）只多了 sysfs_fs_f2fs 两行（:35-36）；相对 refs/lineage-sepolicy（23.0）还少了
+#    otapreopt_chroot / otadexopt 那几行，crDroid 16.0 本来就没有，与本文件无关。update_engine_common.te 的 :14 / :47 在 A17 里还是那两行。）
+#   ⓘ A16 → A17 的那一次 OTA：跑的是 A17 vendor 里的脚本、用的是 A16 槽的策略（本文件顶上那条约束）。
+#     A17 迁移【没有】给本文件加任何规则，所以只要脚本也没加新动作，这一次不受影响。
 #   * `df` 看 ESP 剩余空间（statfs）：domain.te:276 `allow domain fs_type:filesystem getattr;`
 #     是全局的，不用为 vfat 单独写 getattr。
 #   * getprop persist.vendor.gaokun3.recovery_entry：⚠️ 2026-09-18 改名之后
