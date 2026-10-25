@@ -4,7 +4,9 @@
      与 1.0.0-dev.1 实机 /vendor/etc/permissions/tablet_core_hardware.xml 逐字节相同），只删了 compass 一行。
      ⚠️ 不能整份不要：AppWidgetService 等系统服务靠这里的 android.software.* 才启动（device.mk 的注释）。
      ⚠️ 构建机上核对：diff <(grep -v sensor.compass frameworks/native/data/etc/tablet_core_hardware.xml) 本文件
-        除这两段注释外应当一致 —— 上游以后加了 feature 要同步过来。 -->
+        除这两段注释外应当一致 —— 上游以后加了 feature 要同步过来。
+     ✅ 2026-10-25 A17：crDroid 17.0 的上游那份与 16.0 逐字相同（构建机 frameworks/native `git diff crdroid/16.0 HEAD` 为空），
+        与 refs/a17/frameworks/native/data/etc/tablet_core_hardware.xml 比对也只差 compass 一行。 -->
 <!-- Copyright (C) 2010 The Android Open Source Project
 
      Licensed under the Apache License, Version 2.0 (the "License");

@@ -10,6 +10,16 @@
     system/libvintf/include/vintf/Level.h        B = 202504   （B = Baklava = Android 16）
     out/soong/soong.<product>.variables          "RELEASE_BOARD_API_LEVEL": "202504"
 
+  ★ A17（crDroid 17.0，2026-10-25）起【仍写 202504】，与 PRODUCT_SHIPPING_API_LEVEL := 36 配套（用户定不提到 37，
+    理由见 lineage_gaokun3.mk）。cp2a 的 RELEASE_BOARD_API_LEVEL 是 202604（Level.h:47 C = 202604），但 target-level
+    是"出厂 FCM"，不跟着平台走：
+    · 框架仍装 202504 的矩阵（hardware/interfaces/compatibility_matrices/Android.bp:39、:51）；
+    · 合并框架矩阵时，比 target-level 高的矩阵按 optional 并进来（system/libvintf CompatibilityMatrix.cpp:366-376），
+      所以 A17 默认实现里升了版本的 HAL —— health 5、power 7、composer3 5、allocator 3（都只在 202604 矩阵的范围里）
+      —— 在 target-level 202504 下照样合法。health.storage 从 202604 矩阵里删了，本机本来就不装它。
+    · 这里列的 audio.core IModule/usb 在 202604 矩阵里也有（版本范围 1-4），APEX 那份仍是版本 4、usb 仍被注释掉
+      （hardware/interfaces/audio/aidl/default/android.hardware.audio.service-aidl.xml:22-33）。
+
   ─────────────────────────────────────────────────────────────────────
   ⚠️ 这里曾经声明过 android.hardware.media.c2 IComponentStore/software，
      是追查"解码器一个都没有"（docs/stage4-findings.md #36）时的一次尝试。

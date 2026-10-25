@@ -79,13 +79,13 @@ on property:persist.sys.gaokun3.allow_suspend=0
 # ✅ SELinux：这个节点已由 sepolicy/genfs_contexts 标成 sysfs_leds（设备 ls -LZ 实查），
 #    vendor_init 对它的 chown/chmod（setattr）核心策略现成。
 on boot
-    # LIVE-8：内核默认 DEFAULT_HUNG_TASK_TIMEOUT=120（kernel-config-android.sh），但 AOSP 的 init.rc:322（on init）
+    # LIVE-8：内核默认 DEFAULT_HUNG_TASK_TIMEOUT=120（kernel-config-android.sh），但 AOSP 的 init.rc:322（on init；A17 在 :336）
     #   无条件写 0 把 khungtaskd 关了。这里（on boot，晚于 on init）写回 120：只告警不 panic（hung_task_panic 保持 0）。
     #   不走 AOSP 的 ro.khungtask.enable：llkd.rc 那条路会顺带写 hung_task_panic 1 —— 一次误判就整机重启。
     #   1.0.0-dev.3 实测：没有这一行时 /proc/sys/kernel/hung_task_timeout_secs = 0。
     write /proc/sys/kernel/hung_task_timeout_secs 120
     # PERF-6 第一步：background / system-background 两个 cpuset 限到 cpu0-3。
-    #   AOSP init.rc:364-398（on init）只是把每个 cpuset 都 copy 成 /dev/cpuset/cpus（= 0-7），注释原话
+    #   AOSP init.rc:364-398（on init；A17 在 :377-403，foreground_window 挪到了最后（:400-403，A16 也有它），同样 copy 成 0-7、这里不碰）只是把每个 cpuset 都 copy 成 /dev/cpuset/cpus（= 0-7），注释原话
     #   "the device's init.rc must actually set the correct cpus" —— 本机从没设过，实机所有 cpuset 都是 0-7
     #   （docs/stage6-crdroid.md:1414、:1426）⇒ 后台任务和游戏抢同一批核。
     #   cpu0-3 是 A78C（capacity-dmips-mhz 981，policy0 max 2438.4 MHz）、cpu4-7 是 X1C（1024，policy4 max 2688 MHz）：
@@ -104,7 +104,7 @@ on boot
     chown system system /sys/class/backlight/ae96000.dsi.0/brightness
     chmod 0664 /sys/class/backlight/ae96000.dsi.0/brightness
 
-# ⚠️ 这里绝不能自己挂 binderfs —— AOSP 16 的 init.rc 已原生处理
+# ⚠️ 这里绝不能自己挂 binderfs —— AOSP 16 的 init.rc 已原生处理（A17 照旧：system/core/rootdir/init.rc:280-294）
 # （挂 /dev/binderfs + 建 /dev/binder 等符号链接）。
 # 再挂一次会创建【第二个】binderfs 实例盖在上面：每个 binderfs 挂载是
 # 独立的 binder context，servicemanager 注册在旧实例上，之后的客户端
@@ -120,8 +120,8 @@ on boot
 # gadget 永不绑 UDC。见 docs/stage2-findings.md 第 8.3quater 节。
 import /vendor/etc/init/hw/init.gaokun3.usb.rc
 
-# ⚠️ mount_all 必须由设备 rc 调用 —— AOSP 16 的 init.rc 自己不调
-# （init.rc:511-520 注释明说 "Mount fstab in init.{$device}.rc by
+# ⚠️ mount_all 必须由设备 rc 调用 —— AOSP 16 的 init.rc 自己不调（A17 照旧）
+# （init.rc:511-520，A17 在 :570-578，注释明说 "Mount fstab in init.{$device}.rc by
 #   mount_all command"）。缺了它 /data 永远不挂载：post-fs-data 的
 #   mkdir 全打在只读 system 根的 /data 空目录上报 EROFS，
 #   keystore2 因 /data/misc/keystore 不存在而崩溃循环。实测见

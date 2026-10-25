@@ -74,7 +74,7 @@
         <!-- 扬声器增强（试验功能，PR #7）。注入到「设置 → 声音」页：
              category ia.sound = CategoryKey.CATEGORY_SOUND（frameworks/base
              SettingsLib CategoryKey.java:37，lineage-23.0），SoundSettings 按它取注入条目
-             （Settings DashboardFragmentRegistry.java:92-93，crDroid 16.0）。
+             （Settings DashboardFragmentRegistry.java:92-93，crDroid 16.0；17.0 在 :98-99，CategoryKey 常量不变 :37）。
              ⬜ 「系统」页的注入实测过（#65），「声音」页还没在实机上看过。
              不加 LAUNCHER 入口：应用抽屉里已经有键盘那一个退路了，再加一个只会多一个同名图标。 -->
         <activity
@@ -101,8 +101,8 @@
 
         <!-- 待机开关（v1.0 PWR-16，并入 SEC-4）：替代文档里的 adb setprop。注入到「设置 → 电池」页：
              category ia.battery = CategoryKey.CATEGORY_BATTERY（frameworks/base/packages/SettingsLib/src/
-             com/android/settingslib/drawer/CategoryKey.java:35，crDroid 16.0），电池页 PowerUsageSummary
-             按它取注入条目（Settings DashboardFragmentRegistry.java:86-87；PowerUsageSummary → PowerUsageBase
+             com/android/settingslib/drawer/CategoryKey.java:35，crDroid 16.0 / 17.0 相同），电池页 PowerUsageSummary
+             按它取注入条目（Settings DashboardFragmentRegistry.java:86-87，17.0 在 :92-93；PowerUsageSummary → PowerUsageBase
              extends DashboardFragment，fuelgauge/batteryusage/PowerUsageBase.java:40）。
              ⬜ 「电池」页的注入还没在实机上看过（同「声音」页那条）。不加 LAUNCHER 入口，理由同上。 -->
         <activity

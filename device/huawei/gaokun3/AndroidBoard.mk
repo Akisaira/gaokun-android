@@ -17,6 +17,11 @@ LOCAL_PATH := $(call my-dir)
 #   INSTALLED_RECOVERYIMAGE_TARGET：那个变量在 core/Makefile 里才定义，
 #   而本文件被更早地包含进来，引用它会拿到空值。Make 解析【依赖】不看定义顺序，
 #   所以写字面路径是对的。
+# ✅ A17（crDroid 17.0）核对：本文件仍被 build/make/target/board/android-info.mk:7 include；
+#   recovery.img 的产物路径仍是 $(PRODUCT_OUT)/recovery.img（refs/a17/build/make/core/Makefile:286）；
+#   device/huawei 不在 Soong 的 Android.mk 禁用名单里（build/soong/ui/build/androidmk_denylist.go:23-60），
+#   本产品也没设 PRODUCT_IGNORE_ALL_ANDROIDMK（设了 core/main.mk:254-260 才过滤 Android.mk）或 PRODUCT_SOONG_ONLY（product.mk:516-518，设了整个 Kati 不跑）。
+#   RELEASE_SRC_DIR_IS_READ_ONLY（cp1a 起 true）只限制写源码树，这里只写 $(TARGET_OUT_VENDOR)，不受影响。
 GAOKUN3_REC_RAMDISK := $(TARGET_OUT_VENDOR)/boot/recovery-ramdisk.img
 GAOKUN3_REC_EXTRACT := $(HOST_OUT_EXECUTABLES)/gaokun3-bootimg-extract
 

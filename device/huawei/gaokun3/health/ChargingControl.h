@@ -1,6 +1,7 @@
 /*
  * vendor.lineage.health IChargingControl for gaokun3（v1.0 PWR-14）。说明见 ChargingControl.cpp 顶部。
  * 接口签名照 hardware/lineage/interfaces/health/aidl/default/ChargingControl.h（crDroid 16.0 构建树）。
+ * A17：V2 是冻结版本，接口不会变（refs/a17/hardware/lineage/interfaces/health/aidl/aidl_api/vendor.lineage.health/2）。
  */
 #pragma once
 

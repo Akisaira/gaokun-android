@@ -63,8 +63,10 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base.mk)
 # ★ init 能不能 permissive 由 Soong 的 Debuggable 决定（只看变体：
 #   refs/aosp-build/core/soong_config.mk:58 → refs/lineage-system-core/init/Android.bp:126-134
 #   的 ALLOW_PERMISSIVE_SELINUX），与 ro.debuggable 无关 ⇒ 发布构建仍是 userdebug 变体、
-#   cmdline 的 androidboot.selinux=permissive 照样生效（2026-10-06 D5 起 cmdline 默认是 enforcing，见 BoardConfig.mk）。⚠️ 待构建机核实：
-#   `grep -rn ProductNotDebuggableInUserdebug build/soong` 没有去改 Debuggable 的消费者。
+#   cmdline 的 androidboot.selinux=permissive 照样生效（2026-10-06 D5 起 cmdline 默认是 enforcing，见 BoardConfig.mk）。
+#   ✅ A17 核过：ProductNotDebuggableInUserdebug 只有 build/soong/scripts/gen_build_prop.py:350、:387-389 一个消费者
+#   （refs/a17/build/make/core/soong_extra_config.mk:88 传进去），不改 Debuggable（soong_config.mk:60 只看变体）。
+#   反过来这也意味着 adbd / adb_root 在发布构建里仍按"可调试"编译 —— A17 因此多出一条 adb root 的路，见 device.mk 开头。
 #
 # ⚠️ 开发机装发布构建（候选版就是发布构建 —— release.sh --no-build 发的必须是验过的那一版）
 #   之前要先在开发机上把这几样持久化进 /data，否则装上后 adb 全断：
@@ -193,15 +195,37 @@ ifeq ($(GAOKUN3_DEV_BUILD),1)
 PRODUCT_ADB_KEYS := device/huawei/gaokun3/adb_keys
 endif
 
+# ★ A17（crDroid 17.0）：不要 Lineage 新加的「默认构建 fastbootd」。
+#   refs/a17/vendor/lineage/config/common.mk:187-191：
+#       ifneq ($(TARGET_DISABLE_FASTBOOTD),true)  PRODUCT_PACKAGES += fastbootd
+#   （Lineage 提交 a438593b "Build fastbootd by default"，16.0 没有这一段）。fastbootd 是 recovery: true 的模块
+#   （构建机 system/core/fastboot/Android.bp:142-146），会进 recovery ramdisk —— 而本机的 recovery ramdisk 随 vendor
+#   走 OTA（AndroidBoard.mk）。A16 那份 recovery 里没有 fastbootd（docs/fastboot-design.md:85 解包核对），
+#   recovery 内 fastbootd 是 fastboot 设计稿里否掉的方案 A（#39 复位循环未解；上游 fastbootd 对 by-name 下任何节点
+#   都放行 flash / erase，见同文 :93）。1.0 的 fastboot 由 gk3boot 执行端承担（docs/boot-entry-design.md）。
+#   ⇒ 关掉，recovery 的内容保持与 A16 验过的那份一致。
+#   不是产品变量（不在 build/make/core/product.mk 的列表里），是普通全局变量：放在本文件里，就在 common.mk 被
+#   import 之前已经有值（inherit-product 只登记、之后才按序 include，product.mk:543-557）。
+TARGET_DISABLE_FASTBOOTD := true
+
 # crDroid 的「平板 + 无 modem」组合（叠在 AOSP 基座之上）：
 #   common_full_tablet_wifionly.mk = common_mobile_full + tablet + wifionly
 # Lineage 侧用 LOCAL_OVERRIDES_PACKAGES 顶掉 AOSP 的同类应用，不会真的撞包。
+# ⓘ A17 变化（构建机 vendor/lineage `git diff crdroid/16.0 HEAD -- config/`，2026-10-25）：
+#   · freeform_window_management 特性从 tablet.mk 挪到 common_mobile.mk —— 仍然装，结果不变；
+#   · crdroid.mk 不再设 ro.surface_flinger.supports_background_blur=1 ⇒ 默认不开窗口模糊（A16 是开的）；
+#   · crdroid.mk 的人脸解锁从「没设成 false 就装」改成「设成 true 才装」（refs/a17/vendor/lineage/config/crdroid.mk:68-77：
+#     FaceUnlock + system_ext 的 android.hardware.biometrics.face.xml）。本树从没设 TARGET_FACE_UNLOCK_SUPPORTED ⇒
+#     A16 装了 ParanoidSense，A17 默认【不装】。这等于替 v1.0-plan D23 / HW-10（人脸解锁保留与否，测完再定）做了「去掉」
+#     的决定 —— 要保留就在这里加 TARGET_FACE_UNLOCK_SUPPORTED := true（同 TARGET_DISABLE_FASTBOOTD，普通全局变量）。⬜ 待用户定；
+#   · common.mk 删掉了 debug.graphics.game_default_frame_rate.disabled=true —— 由 device.mk 补回，理由见那里；
+#   · common.mk:243-246 起 userdebug 无条件装 adb_root（16.0 只在 WITH_SU=true 时装）—— 见 device.mk 同一节的说明。
 $(call inherit-product, vendor/lineage/config/common_full_tablet_wifionly.mk)
 
 # 设备配置（固件、init rc、HAL、图形、WiFi、音频 —— Stage 2–5 的全部成果）
 # ★ 强制生成 OTA 包（M6）。
 #
-# build/make/core/Makefile:5793-5806 会在三种情况下把 build_ota_package 关掉，
+# build/make/core/Makefile:5793-5806（A17：refs/a17/build/make/core/Makefile:5864-5896）会在三种情况下把 build_ota_package 关掉，
 # 我们中了两条：
 #   1. INSTALLED_BOOTIMAGE_TARGET 为空 且 TARGET_NO_KERNEL=true
 #      —— 本机内核在树外编，不产 boot.img；
@@ -294,8 +318,28 @@ PRODUCT_MANUFACTURER := Huawei
 #   构建后用 `grep ro.build.characteristics out/target/product/gaokun3/system/build.prop` 验。
 PRODUCT_CHARACTERISTICS := tablet
 
-# API 等级：不声明 vendor 冻结，按当前平台走（Android 16 = 36）
+# API 等级：36（= Android 16）。★ 2026-10-25 定：换到 A17（SDK 37）后【不提】到 37（docs/a17-migration-plan.md §2.5）。
+#   · 它决定 VSR_VENDOR_API_LEVEL（refs/a17/build/make/core/product_config.mk:660-663，sdk-to-vendor-api-level(36)
+#     = 202504；本树不设 BOARD_SHIPPING_API_LEVEL，:664-675 那支不走）。
+#   · 202604 起的新要求都按 VSR 判：例如 config.mk:469-485 只有 VSR >= 202604 才 TARGET_RESTRICTS_ASHMEM_USAGE
+#     （要内核 memfd_class）；保持 36 就不触发。VINTF 的 target-level 也跟着留在 202504（manifest.xml）。
+#   · 但有一样【不】看它：PRODUCT_ENFORCE_SELINUX_TREBLE_LABELING 按 RELEASE_BOARD_API_LEVEL（cp2a = 202604）
+#     默认打开（product_config.mk:762-766），见下面 tracking list 那一段。
 PRODUCT_SHIPPING_API_LEVEL := 36
+
+# ─── SELinux Treble 标签检查（A17 新增，cp2a 默认强制）───
+# Makefile:3675-3677（PLATFORM_SEPOLICY_VERSION >= 202604 时 droidcore 依赖 check-selinux-treble-labeling）+
+# product_config.mk:762-766（RELEASE_BOARD_API_LEVEL >= 202604 且没设时置 true）⇒ 违例直接让 `m` 失败。
+# 规则见构建机 system/sepolicy/tests/treble_labeling_tests.md：vendor 的 file_contexts 不许标 /system、/system_ext、
+# /product 下的文件，等五条。
+# 已知的一条违例不是我们写的：BoardConfig.mk 引入的 dragonboard minigbm_msm 策略
+#   refs/a17/device/linaro/dragonboard/shared/graphics/minigbm_msm/sepolicy/file_contexts:8
+#   /(system|vendor)/lib(64)?/libdrm.so  → same_process_hal_file
+# 用官方的 tracking list 豁免这一条（只豁免列出的路径，其余照常强制），而不是整个关掉
+# （PRODUCT_ENFORCE_SELINUX_TREBLE_LABELING := false 会把所有违例都降成警告）。
+# 本树自己的 sepolicy/ 里没有标平台路径的行（2026-10-25 grep），也没有 seapp_contexts、没有 coredomain 类型。
+# ⬜ 未编译。若 `m` 报出别的违例，先看是不是该改策略，确实要豁免再加进这个文件。
+PRODUCT_SELINUX_TREBLE_LABELING_TRACKING_LIST_FILE := device/huawei/gaokun3/selinux_treble_labeling_tracking.yaml
 
 # ─── 关掉 VINTF 的内核兼容性检查 ───
 #

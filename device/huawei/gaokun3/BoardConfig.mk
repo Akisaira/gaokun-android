@@ -40,7 +40,7 @@ TARGET_NO_BOOTLOADER := true
 #   就把 BUILDING_BOOT_IMAGE 关掉，那会直接推翻我们的 boot.img（A/B 的常规做法
 #   是 recovery 合进 boot，但那条路和本机"独立 boot 镜像"的方案互斥）。
 #   所以走"独立 recovery.img"这条老路：BUILDING_RECOVERY_IMAGE 的四个入口里
-#   （board_config.mk:502-518）我们用的是
+#   （board_config.mk:502-518；A17 refs/a17/build/make/core/board_config.mk:513-528，四个入口不变）我们用的是
 #   「定义 BOARD_RECOVERYIMAGE_PARTITION_SIZE 且 TARGET_NO_KERNEL/TARGET_NO_RECOVERY
 #    都不为 true」这一个。产物 = $(PRODUCT_OUT)/recovery.img（Makefile:285-298）。
 #   已核实 AB_OTA_UPDATER=true 与独立 recovery 之间没有冲突检查。
@@ -75,11 +75,12 @@ BOARD_USES_GENERIC_KERNEL_IMAGE := false
 TARGET_NO_KERNEL := false
 
 # ★ 告诉 Lineage 的 kernel.mk 用预置内核，不要去找内核源码树。
-#   （vendor/lineage/build/tasks/kernel.mk:159-163、166-204）
+#   （vendor/lineage/build/tasks/kernel.mk:159-163、166-204；crDroid 17.0：refs/a17/vendor/lineage/build/tasks/kernel.mk
+#    :157-160、164-202，逻辑不变 —— 本树 TARGET_KERNEL_SOURCE 为空 ⇒ :164 的 wildcard 为空 ⇒ :165-167 走预置内核）
 # ⚠️ 必须用这个变量。kernel.mk 里另有一条"扫 PRODUCT_COPY_FILES 里 dest=kernel
 #   的项来识别预置内核"的分支，但那段写的是 `$(ifeq kernel,$(_dest), ...)`
 #   —— ifeq 不是 make 函数，整个 $(ifeq ...) 展开成空字符串，所以那条路
-#   【根本不生效】（kernel.mk:171-176，Lineage 自己的 bug）。
+#   【根本不生效】（kernel.mk:171-176，Lineage 自己的 bug；17.0 里原样还在，:172）。
 #   只靠 PRODUCT_COPY_FILES 的结果是 "BOARD_KERNEL_IMAGE_NAME not defined"。
 # 设了它之后 kernel.mk 会把这个文件拷成 $(PRODUCT_OUT)/kernel
 #   （NEEDS_KERNEL_COPY），boot 镜像就用它。
@@ -285,6 +286,9 @@ AB_OTA_POSTINSTALL_CONFIG +=     RUN_POSTINSTALL_vendor=true     POSTINSTALL_PAT
 # permissive 起步（cmdline 里也带了），但 policy 仍要能编过
 BOARD_VENDOR_SEPOLICY_DIRS += device/huawei/gaokun3/sepolicy
 # minigbm 的 sepolicy 复用 dragonboard 的（同一套 HAL）
+# ⚠️ A17：这份的 file_contexts:8 把 /(system|vendor)/lib(64)?/libdrm.so 标成 same_process_hal_file，
+#   撞 A17 默认强制的 SELinux Treble 标签检查（vendor 策略不许标 /system 下的文件）——
+#   已在 selinux_treble_labeling_tracking.yaml 里豁免这一条，接线见 lineage_gaokun3.mk。
 BOARD_VENDOR_SEPOLICY_DIRS += device/linaro/dragonboard/shared/graphics/minigbm_msm/sepolicy
 # swangle/sepolicy 只有 sw_execmem.te（SwiftShader 的 4 条 allow execmem）。
 # 已切 freedreno/turnip，不走软渲染 ⇒ 不再需要。
@@ -301,12 +305,14 @@ DEVICE_MANIFEST_FILE := device/huawei/gaokun3/manifest.xml
 DEVICE_MATRIX_FILE += device/huawei/gaokun3/compatibility_matrix.xml
 
 #
-# 刻意【不】设置的项 —— 都已对 AOSP 16 源码核实：
+# 刻意【不】设置的项 —— 都已对 AOSP 16 源码核实（2026-10-25 又对 A17 refs/a17/build/make 核了一遍）：
 #
 #   BOARD_VNDK_VERSION       build/make/core/config.mk:1268-1270 会强制清空，
-#                            VNDK 在 Android 16 已移除
+#                            VNDK 在 Android 16 已移除（A17：config.mk:1397-1398，照旧清空）
 #   PRODUCT_FULL_TREBLE      config.mk:773-782 已强制为 true 且 .KATI_READONLY，
-#                            再设一次会报错
+#                            再设一次会报错。A17 更进一步：main.mk:117 把它标成 KATI_obsolete_var，
+#                            设或读都直接报错（PRODUCT_TREBLE_LINKER_NAMESPACES / PRODUCT_ENFORCE_VINTF_MANIFEST
+#                            同样成了 obsolete，config.mk:799-800）
 #   TARGET_USES_HWC2         构建系统里已无任何引用
 #   WITH_DEXPREOPT_PIC       同上
 #   BOARD_USES_DRM_HWCOMPOSER 同上 —— Stage 3 改用 minigbm + drm_hwcomposer_hwc3，
@@ -342,13 +348,17 @@ WIFI_HAL_INTERFACE_COMBINATIONS := {{{STA}, 1}, {{AP}, 1}}, {{{STA}, 1}, {{P2P},
 # 而 AOSP 会拒绝 PRODUCT_COPY_FILES 里目标路径含 bin/lib/lib64 的 ELF 文件。
 # ramdisk 副本必须落在 /lib/firmware（内核的固件回落搜索路径），只能开这个
 # 官方逃生开关。vendor 路径（/vendor/firmware/...）不含 lib 组件，本来就豁免。
+# ✅ A17 仍认它：refs/a17/build/make/core/Makefile:125-128（check_elf_prebuilt_product_copy_files），
+#   board_config.mk:189 在 BUILD_BROKEN 变量表里；不在 config.mk 的 KATI_obsolete_var 名单里。
 BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
 
 # ══════════════════════════════ crDroid / LineageOS ══════════════════════════
-# Stage 6：转 crDroid 16.0（= LineageOS 23.2 布局）。
+# Stage 6：转 crDroid 16.0（= LineageOS 23.2 布局）；2026-10-25 起 crDroid 17.0（= LineageOS 24.0，
+# android-17.0.0_r1，release config cp2a）。BoardConfigLineage.mk 17.0 只多了第一行
+# BUILD_BROKEN_SRC_DIR_RW_ALLOWLIST（refs/a17/vendor/lineage/config/BoardConfigLineage.mk:4-5），下面两项照旧。
 #
 # ⚠️ 必须在 include BoardConfigLineage.mk 【之前】关掉 recovery：
-#    vendor/lineage/config/BoardConfigLineage.mk 第一行是
+#    vendor/lineage/config/BoardConfigLineage.mk 里有（16.0 是第一行，17.0 在 :8）
 #        BOARD_USES_FULL_RECOVERY_IMAGE ?= true
 #    `?=` 意味着我们先赋值就能覆盖它。本机是 UEFI + systemd-boot，
 #    没有 recovery 分区也没有 fastboot，recovery 镜像既造不出也用不上。

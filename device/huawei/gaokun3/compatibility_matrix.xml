@@ -21,8 +21,8 @@
   样板与接线方式来自树内实名核实：
       device/google/trout/compatibility_matrix.xml       （格式）
       device/google/trout/aosp_trout_x86_64.mk:37        （DEVICE_MATRIX_FILE +=）
-      build/make/core/soong_config.mk:681                （转成 soong 的 DeviceMatrixFile）
-      build/soong/android/vintf_data.go:85               （消费者）
+      build/make/core/soong_config.mk:681                （转成 soong 的 DeviceMatrixFile；A17 在 :703）
+      build/soong/android/vintf_data.go:85               （消费者；A17 仍是 :85）
 -->
 <compatibility-matrix version="1.0" type="device">
 </compatibility-matrix>

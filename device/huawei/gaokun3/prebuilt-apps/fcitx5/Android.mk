@@ -22,7 +22,11 @@
 # ★ 为什么用 Android.mk + wildcard 而不是 Android.bp 的 android_app_import：
 #   Soong 遇到不存在的 apk 源文件会在分析期直接让整个构建失败，而 APK 不入库（本目录 .gitignore）；
 #   Android.mk 可以"文件在才定义模块"。device/huawei 不在 Soong 的 Android.mk 禁用名单里
-#   （build/soong/ui/build/androidmk_denylist.go）。
+#   （build/soong/ui/build/androidmk_denylist.go；A17 复核：refs/a17/build/soong/ui/build/androidmk_denylist.go:23-60
+#   仍只禁 device/common、device/generic、device/google… 这些前缀）。BUILD_PREBUILT 在 A17 仍属可用类型
+#   （build/make/core/deprecation.mk:14 的 AVAILABLE_BUILD_MODULE_TYPES；不在 :29-50 的 ERROR / OBSOLETE 两张表里），
+#   下面用到的 LOCAL_REPLACE_PREBUILT_APK_INSTALLED（app_prebuilt_internal.mk:169-172）、PRESIGNED 解压分支
+#   （:200-229）、LOCAL_OPTIONAL_USES_LIBRARIES（clear_vars.mk:186）在 A17 里位置与写法都没变。
 # ★ 写法照 vendor/gapps 的 android_app_import（presigned / 不 dexpreopt / product 分区），换成 Android.mk 的对应变量。
 
 LOCAL_PATH := $(call my-dir)

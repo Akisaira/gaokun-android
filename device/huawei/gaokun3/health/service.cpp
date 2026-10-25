@@ -1,6 +1,7 @@
 /*
  * vendor.lineage.health-service.gaokun3 —— 只注册 IChargingControl/default（v1.0 PWR-14）。
- * 写法照 hardware/lineage/interfaces/health/aidl/default/service.cpp（crDroid 16.0 构建树），
+ * 写法照 hardware/lineage/interfaces/health/aidl/default/service.cpp（crDroid 16.0 构建树；17.0 的 vendor.lineage.health 仍冻结在版本 1、2，
+ * refs/a17/hardware/lineage/interfaces/health/aidl/Android.bp:22-30），
  * 去掉了 IFastCharge：本机没有快充档位节点，不声明就不会被框架当成"支持"（FastChargeController
  * 用 waitForDeclaredService，没声明直接拿到 null）。
  */

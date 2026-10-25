@@ -53,6 +53,16 @@ PRODUCT_SYSTEM_EXT_PROPERTIES += \
     persist.adb.tcp.port=5555
 endif
 
+# ⚠️★ A17 新情况（设备树没处理，等用户定）：crDroid 17.0 的
+#   vendor/lineage/config/common.mk:243-246 对所有非 user 变体【无条件】装 adb_root（16.0 只在 WITH_SU=true 时装，
+#   本树从没设过 WITH_SU）。adb_root 与 adbd 都按 Soong 的 Debuggable（= 变体是 userdebug，与 ro.debuggable 无关，
+#   refs/a17/build/make/core/soong_config.mk:60）编进 ANDROID_DEBUGGABLE=1（refs/a17/packages/modules/adb/Android.bp:47-55、
+#   :932-942）⇒ 发布构建（userdebug + ro.debuggable=0）上，只要在开发者选项里打开 adb root 开关（restart_service.cpp:63-64 的提示语就指向那里；Settings 里的确切名称未核），
+#   `adb root` 就能成（daemon/restart_service.cpp:42-72：拿到 adbroot_service 且已启用即放行）。A16 发布构建里没有
+#   adbroot_service，那条路在 :46-49 就返回了 —— 也就是 B1 / D1「发布构建没有 adb root」这条在 A17 上被悄悄打开了。
+#   PRODUCT_PACKAGES 只能加不能减（lineage_gaokun3.mk 里 SetupWizard 那段的实测），设备树这边没有干净的去法：
+#   要么由 crdroid-tree-fixes.py 改 common.mk（例如恢复成 WITH_SU 门控），要么接受（反正设备上已有 KSU）。
+
 # 屏幕密度
 # [measured] 1600x2560，物理 266x166 mm -> 对角 12.34"，约 245 dpi
 # 取 240（hdpi 桶），1dp=1.5px -> 1067dp 宽，平板比例合理。
@@ -78,7 +88,7 @@ PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.hardware.usb.host.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.usb.host.xml
 
 # MIDI：SystemServer 只在声明了 android.software.midi 时才起 MidiService（frameworks/base android-16.0.0_r4
-#   services/java/com/android/server/SystemServer.java:2488），Settings 的 USB 页也只在有这个特性时列出 MIDI
+#   services/java/com/android/server/SystemServer.java:2488；crDroid 17.0 同一判断在 :2573，USB host 那条在 :2589-2591），Settings 的 USB 页也只在有这个特性时列出 MIDI
 #   （packages/apps/Settings connecteddevice/usb/UsbBackend.java:77、:100）。没有它，"USB 用途"里没有 MIDI，
 #   插上 USB MIDI 键盘 App 也看不到。gadget 侧要内核的 USB_CONFIGFS_F_MIDI（scripts/kernel-config-android.sh）
 #   和 functions/midi.gs5（init.gaokun3.usb.rc）。
@@ -153,7 +163,7 @@ PRODUCT_PACKAGES += \
 
 # effects HAL 启动即退（"config file audio_effects_config.xml not found"，
 # 实测）。默认配置的 prebuilt_etc 被 soong config 门控着
-# （hardware/interfaces/audio/aidl/default/Android.bp:372-378）：
+# （hardware/interfaces/audio/aidl/default/Android.bp:372-378；A17 在 :463-471，变量名与语义不变）：
 #
 # ★ 2026-09-25：开关改为 false —— 改由我们自己那份配置接管。
 #   已读该 Android.bp 原文确认：这个 soong config **只门控那一个
@@ -162,7 +172,7 @@ PRODUCT_PACKAGES += \
 #     HAL 会因找不到配置文件启动即退（正是当初设 true 的原因）。
 #   ⚠ 我们那份是 crDroid 16.0 原版的【拷贝】+ 增量（2026-09-26 核对：删除行 0）。
 #     crDroid 以后改原版（上游 lineage-23.0 已把 eraser 改名 erasersw），这里不会跟着变
-#     —— 同步源码树后要重新比对一次。
+#     —— 同步源码树后要重新比对一次。（A17 的比对归 effects/ 那条线，见 effects/README.md。）
 $(call soong_config_set_bool,hardware_interfaces_audio,use_default_audio_effects_config,false)
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/effects/audio_effects_config.xml:$(TARGET_COPY_OUT_VENDOR)/etc/audio_effects_config.xml
@@ -194,6 +204,12 @@ endif
 # audio_policy_configuration.xml 解析结果（main.cpp:93-99 实名核实），
 # 没有它 HAL 只注册 IConfig，audioserver 等 IModule/default 永阻塞。
 # xml 抄 cuttlefish（同款 HAL），XInclude 相对路径要求全家同目录：
+# ⓘ A17：下面四份 frameworks/av 的文件路径都还在（refs/a17/frameworks/av/services/audiopolicy/config/）。
+#   内容上 r_submix / bluetooth_with_le 两份与 16.0 相同；audio_policy_volumes.xml 与 default_volume_tables.xml
+#   改了一处，而且是成对改的（构建机 `git diff crdroid/16.0 HEAD`，上游 2fe00dfda0 / f94288519b "[Assistant Stream]"）：
+#   AUDIO_STREAM_ASSISTANT 在 HEADSET / SPEAKER / EARPIECE / EXT_MEDIA 上改用新加的 DEFAULT_ASSISTANT_VOLUME_CURVE /
+#   DEFAULT_DEVICE_CATEGORY_HEADSET_ASSISTANT_VOLUME_CURVE。只影响「助理」音频流的音量曲线，媒体 / 通话 / 铃声不变。
+#   两份一起从同一棵树拷，引用的曲线名对得上；只拷其中一份才会出问题。
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/audio/audio_policy_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/audio_policy_configuration.xml \
     $(LOCAL_PATH)/audio/primary_audio_policy_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/primary_audio_policy_configuration.xml \
@@ -269,10 +285,11 @@ PRODUCT_PACKAGES += \
 #   上机判据：`pm list features` 里 reqGlEsVersion=0x30002。
 PRODUCT_PROPERTY_OVERRIDES += \
     ro.opengles.version=196610
-# ⚠️ ANGLE 库在 /system/lib64/ 根（AOSP 16 默认自带，不在 egl/ 子目录），本机没有别的 GLES 驱动。
+# ⚠️ ANGLE 库在 /system/lib64/ 根（AOSP 16 / 17 默认自带，不在 egl/ 子目录），本机没有别的 GLES 驱动。
 # EGL 加载器按 persist.graphics.egl、ro.hardware.egl、ro.board.platform 的顺序取第一个非空值；值为 angle 时
 # 从 /system/lib64 加载 ANGLE，不管它来自哪个属性（frameworks/native opengl/libs/EGL/Loader.cpp，
-# android-16.0.0_r4：:72-76、:299-311、:505、:523）。两个都设：
+# android-16.0.0_r4：:72-76、:299-311、:505、:523；crDroid 17.0：:67-76、:316-338、:530、:728 —— A17 对这个文件
+# 只加了 ANGLE feature override 与 driverInUpdatableApkLoaded 两处，选驱动的顺序没变，构建机 git diff 核过）。两个都设：
 #   · persist.graphics.egl=angle：设置里"把 ANGLE 用作系统 GLES 驱动"的开关读它。
 #   · ro.hardware.egl=angle：兜底。设置每次走"关闭开发者选项"的流程（主开关关掉；开发者选项页面开着时被
 #     adb / 脚本关掉；开发者选项已关时打开这个页面）都会把 persist.graphics.egl 写成空值、存进 /data
@@ -288,10 +305,29 @@ PRODUCT_VENDOR_PROPERTIES += \
 # GLES 应用的着色器 / 管线磁盘缓存（EGL_ANDROID_blob_cache，ANGLE 的程序与 VkPipelineCache 都存这里）。
 #   默认单文件：总量 2 MiB、单条 64 KiB（frameworks/native egl_cache.cpp:33-35，android16-release），
 #   大型 UE 游戏放不下 ⇒ 每次启动重编、加载材质时掉帧（issue #34 鸣潮）。多文件模式单条 8 MiB、
-#   总量默认 32 MiB（:41-43；ro 开关在 :237）。2026-10-09 rc.1 实机：debug.egl.blobcache.multifile=true
+#   总量默认 32 MiB（:41-43；ro 开关在 :237）。crDroid 17.0：常量在 :35-46、ro 开关在 :239，值不变。
+#   2026-10-09 rc.1 实机：debug.egl.blobcache.multifile=true
 #   后 App 的 cache/ 下出现 com.android.opengl.shaders_cache.multifile/，发布构建上也生效。
 PRODUCT_VENDOR_PROPERTIES += \
     ro.egl.blobcache.multifile=true
+
+# ★ A17：不让 GameManagerService 把游戏默认压到 60 帧（保持 A16 上的实际行为）。
+#   crDroid 16.0 的 vendor/lineage/config/common.mk 设过 debug.graphics.game_default_frame_rate.disabled=true，
+#   17.0 那份没有了（构建机 vendor/lineage `git diff crdroid/16.0 HEAD -- config/common.mk`）；同时
+#   frameworks/base 去掉了 aconfig 开关 gameDefaultFrameRate() 的门控（GameManagerService.java `git diff` 同上）。
+#   于是 A17 上：游戏切到前台时 GameManagerService 读这个属性（crDroid 17.0 构建树 GameManagerService.java:2352-2356，
+#   缺省 false = 不禁用），没禁用就给该 uid 下 ro.surface_flinger.game_default_frame_rate_override 的帧率覆盖，
+#   而那个属性没设时缺省 60（:1611-1612）—— 本机面板跑 120 Hz（overlay 的 config_defaultRefreshRate），
+#   没自己调 setFrameRate 的游戏会被压到 60。A16 上 common.mk 设了 disabled=true，不管当时 aconfig 开关开没开
+#   （bp4a 的取值没核），结果都是不下发覆盖 —— 这里就是把那个结果搬回来。
+#   · 落 system_ext：16.0 是 crDroid 写在 product（PRODUCT_PRODUCT_PROPERTIES）的平台侧默认值，这里留在平台侧分区。
+#     写进 vendor 其实也行（vendor_init 有 set_prop(vendor_init, debug_prop)，refs/a17/system/sepolicy/private/vendor_init.te:289；
+#     本文件的 debug.stagefright.* 就在 vendor），不是权限问题。
+#   · 开发者选项里「停用游戏默认帧率」之类的开关调 toggleGameDefaultFrameRate() 会在运行时改写它（:2283-2294），不冲突。
+#   ⬜ 未编译、未上机。判据：`getprop debug.graphics.game_default_frame_rate.disabled` = true；开一个不设帧率的游戏，
+#   `dumpsys SurfaceFlinger | grep -i "frame rate override"` 里没有该 uid 的 60 Hz 覆盖。
+PRODUCT_SYSTEM_EXT_PROPERTIES += \
+    debug.graphics.game_default_frame_rate.disabled=true
 
 # ⚠️ 软渲染（SwiftShader）导入不了 UBWC 压缩 buffer —— SF 崩于
 # "Failed to create a valid texture"（GaneshBackendTexture 导入
@@ -305,6 +341,13 @@ PRODUCT_VENDOR_PROPERTIES += \
 # drm_hwcomposer 默认扫 card0 会进无头模式（"No pipelines available"）。
 # 活体实测：设此属性 + 重启 hwc 后 SF 立即拿到 Primary display
 # 1600x2560@120Hz。属性名从 hwc3 二进制 strings 核实。
+# ✅ A17 源码核对（refs/a17/external/drm_hwcomposer）：属性名没变（utils/properties.cpp:163，
+#   ResourceManager.cpp:57-60 不设时回落 /dev/dri/card%）。A17 新加的 SdmBackend 只认驱动名 msm_drm（下游内核；
+#   backend/SdmBackend.cpp:289，且要 soong config drm_hwcomposer backend=sdm 才编进去，Android.bp:400-403），
+#   主线驱动名是 msm ⇒ BackendManager.cpp:156-158 照旧落到 generic。APEX 名不变（Android.bp:286），HWC3 升到 V5
+#   （hwc3/hwc3-drm.xml:4；202604 矩阵 4-5，target-level 202504 下高一级矩阵按 optional 合并，libvintf
+#   CompatibilityMatrix.cpp:366-376）。minigbm：模块名与 platform=msm 都在（cros_gralloc/aidl/Android.bp:27，
+#   Android.bp:102-106），allocator 升到 V3（allocator.xml）。
 PRODUCT_VENDOR_PROPERTIES += \
     vendor.hwc.drm.device=/dev/dri/card1
 
@@ -317,7 +360,8 @@ PRODUCT_VENDOR_PROPERTIES += \
 #   这个倍数放大的东西（读源码，不是凭记忆）：
 #     · system_server 看门狗：Watchdog.java:881-882 `watchdogTimeoutMillis * Build.HW_TIMEOUT_MULTIPLIER`
 #       （DEFAULT_TIMEOUT 60 s，:101）⇒ ×5 = 300 s，×2 = 120 s；Build.java:1715-1716 读本属性、默认 1
-#       （LineageOS frameworks_base lineage-23.2 的上游副本，⚠️ 待构建机核对 crDroid 那份行号）；
+#       （LineageOS frameworks_base lineage-23.2 的上游副本；crDroid 17.0 构建树：Watchdog.java:880、Build.java:1767-1768，
+#       DEFAULT_TIMEOUT 仍在 :101）；
 #     · 输入分发超时（应用 ANR）5 s × 倍数 —— 实机 25000ms 印证了这一条，常量出处在 frameworks/native，本地没有，待构建机核实；
 #     · debuggerd / tombstoned 的握手与取证超时：refs/lineage-system-core/debuggerd/crash_dump.cpp:178/185/624、
 #       tombstoned/tombstoned.cpp:322/342、tombstoned/intercept_manager.cpp:150/161；llkd：libllkd.cpp:965。
@@ -357,7 +401,9 @@ endif
 #   android.hardware.sensor.compass；有陀螺仪（SH3001 6 轴）却没声明 android.hardware.sensor.gyroscope ——
 #   Play 会把标了 required 陀螺仪的游戏判成不兼容（实机 pm list features 只有 accelerometer + compass）。
 #   陀螺仪那份文件名取自上游 tablet_core_hardware.xml:83-84 的注释与 frameworks/native/data/etc/
-#   （LineageOS frameworks_native lineage-23.2 里实有 android.hardware.sensor.gyroscope.xml）；⚠️ 构建机上 ls 再核一次。
+#   （LineageOS frameworks_native lineage-23.2 里实有 android.hardware.sensor.gyroscope.xml）。
+#   ✅ A17：refs/a17/frameworks/native/data/etc/ 里两份都在；上游 tablet_core_hardware.xml 与 16.0 逐字相同
+#   （构建机 `git diff crdroid/16.0 HEAD` 为空），我们那份只差 compass 一行，不用重新同步。
 #   上机判据：`pm list features` 有 sensor.gyroscope、没有 sensor.compass，其余 feature 一条不少。
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/permissions/tablet_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/tablet_core_hardware.xml \
@@ -394,7 +440,7 @@ PRODUCT_COPY_FILES += \
 # ★ wpa_cli：诊断用的控制台客户端。之前没装，于是 WPA3（issue #2）
 #   最直接的那条验证路——问 supplicant 自己 sae_pwe / 支持哪些 key_mgmt
 #   ——在设备上根本跑不了，而 wpa_supplicant.rc 明明开着控制接口。
-#   模块名已核：external/wpa_supplicant_8/wpa_supplicant/Android.bp:1272
+#   模块名已核：external/wpa_supplicant_8/wpa_supplicant/Android.bp:1272（crDroid 17.0 构建树在 :1511）
 #   是 cc_binary + proprietary:true ⇒ 装到 /vendor/bin/wpa_cli，
 #   依赖只有 libcutils/liblog（Soong 自己拉 vendor 变体，
 #   不会重演 tinymix 那个 "放进 /vendor/bin 但 .so 在 /system" 的坑）。
@@ -405,6 +451,27 @@ PRODUCT_PACKAGES += \
     com.android.hardware.wifi \
     wpa_supplicant \
     wpa_cli
+
+# ⚠️★ A17（cp2a）Wi-Fi 的两个 release flag —— 设备树这边【不用改】，但运行时换了一条代码路径，上机先测 Wi-Fi：
+#   ① RELEASE_DISABLE_WIFICOND=true（refs/a17/build/release/flag_values/cp2a/RELEASE_DISABLE_WIFICOND.textproto）
+#      ⇒ build/make/target/product/base_system_ext.mk:40-46：只有 PRODUCT_SHIPPING_API_LEVEL <= 33 才装 wificond，
+#      本机 36 ⇒ 【不再有 wificond】。框架走 wifi mainline 模块自带的 Java nl80211 实现
+#      （packages/modules/Wifi/service/java/com/android/server/wifi/WifiInjector.java:381-396 → nl80211/Nl80211Native.java），
+#      扫描、信号轮询、国家码事件（NL80211_CMD_REG_CHANGE，Nl80211Native.java:1141）都由 system_server 直接发通用 netlink。
+#      ⚠️ 这条路在 A17 上本来就是默认，不只是"因为没有 wificond 才被迫走"：:381-383 三个条件全满足 ——
+#        SDK 37（isSdkAtLeastC）、aconfig wificond_to_nl80211_migration 在 cp2a 是 ENABLED（构建机
+#        build/release/aconfig/cp2a/com.android.wifi.flags/wificond_to_nl80211_migration_flag_values.textproto）、
+#        资源 config_wificondMigrationEnabled 缺省 true（构建机 packages/modules/Wifi/service/ServiceWifiResources/res/values/config.xml:1475）；
+#        :385-389 那个 init.svc.wificond 为空的强制分支只是兜底。
+#      策略侧现成：system/sepolicy private/system_server.te:175 给了 netlink_generic_socket。A16 上验过的是 wificond 那条路。
+#      ⓘ 上机若扫描 / 连接 / 热点异常，退路要【两样一起】：PRODUCT_PACKAGES += wificond（模块与 wificond.te 都还在），
+#        并在 rro/Gaokun3WifiOverlay 里把 config_wificondMigrationEnabled 设成 false（可覆盖，构建机 ServiceWifiResources
+#        res/values/overlayable.xml:368）。只加 wificond 不改资源，框架照样走 nl80211（useWificond = false，:396）。⬜ 两条路都没上过机。
+#   ② RELEASE_WIFI_MAINLINE_SUPPLICANT_BINARY=true ⇒ Wi-Fi APEX 多带一个 wpa_supplicant_mainline
+#      （packages/modules/Wifi/apex/Android.bp:40-43）。它是给 NAN / USD 用的独立实例（IMainlineSupplicant，
+#      aidl/mainline_supplicant/），不替换上面这个 vendor 的 wpa_supplicant（ISupplicant 仍由它提供）。本机没有 NAN，影响应当为零。
+#   ③ hostapd 仍是 vendor 模块（external/wpa_supplicant_8/hostapd/Android.bp:685-692，proprietary），不受影响；
+#      VINTF：supplicant 在 202604 矩阵是 4-5、hostapd 2-3（hardware/interfaces/compatibility_matrices/compatibility_matrix.202604.xml）。
 
 # ★ 热点（issue #11）：从没打包过 hostapd ⇒ SoftApManager 连不上 IHostapd，热点开关一开就弹回。
 #   模块已核：external/wpa_supplicant_8/hostapd/Android.bp:685-709 —— proprietary、装到 /vendor/bin/hw/，
@@ -501,7 +568,7 @@ PRODUCT_COPY_FILES += \
 #    这是本轮第三个同类漏网（前两个：拓扑固件名、audio-route.sh）。
 #
 # 为什么原装 HAL 就够（无需改一行代码）：
-#   hardware/interfaces/bluetooth/aidl/default/BluetoothHci.cpp:172
+#   hardware/interfaces/bluetooth/aidl/default/BluetoothHci.cpp:172（A17：:162-163，逻辑不变）
 #   先试 NetBluetoothMgmt::openHci()（BT 管理 socket + HCI_CHANNEL_USER），
 #   失败才退回串口路径 —— 正好对上主线内核的 hci0。
 # 模块自带 init_rc 与 vintf_fragments；android.hardware.bluetooth-V1-ndk
@@ -529,7 +596,7 @@ PRODUCT_COPY_FILES += \
 #   在跑 —— 配对是 adapter 的活所以配得上，放音是 profile 的活所以没有。
 #
 # ★ 属性名取自 system/libsysprop/srcs/android/sysprop/BluetoothProperties.sysprop
-#   （android-16.0.0_r4），不是凭记忆写的。
+#   （android-16.0.0_r4），不是凭记忆写的。A17：下面 13 个 prop_name 在 crDroid 17.0 构建树的同一文件里逐个 grep 都在。
 # ★ 集合参照 LineageOS android_device_essential_mata/vendor.prop，两处不同：
 #   · 去掉 sap.server —— SIM 卡访问，本机无 modem 无 SIM，开了没有意义
 #   · LE Audio 全家（bap/ccp/csip/hap/mcp/vcp/bass）暂不开 —— 半开的 LE Audio
@@ -608,9 +675,11 @@ PRODUCT_COPY_FILES += \
 # ⚠️ GPU 需要 zap shader 固件 qcdxkmsuc8280.mbn（见上面的固件双路安装），
 #    缺了它 GPU 停在安全模式，adreno probe 会失败。
 # Stage 6 M3（2026-08-19）：管线已在 crDroid 树上跑通并打开。
-# crDroid 的 external/mesa3d 与 Stage 5 打补丁那棵是【同一个 commit】
-# （d4b6f1eba289… @ android-16.0.0_r4，mesa 25.3.0-devel），
-# 所以 Stage 5 的补丁树逐字可套，不需要重新对齐生成管线。
+# （A16 时 crDroid 的 external/mesa3d 与 Stage 5 打补丁那棵是同一个 commit d4b6f1eba289… @ android-16.0.0_r4。）
+# ★ A17（2026-10-25 用户定，docs/a17-migration-plan.md 路线 B）：external/mesa3d 是 26.1.0-devel，上游的
+#   meson_to_hermetic 换成了 meson2hermetic，上面 1、2 两步作废，改为在 26.1 上重新生成（mesa/ 目录与
+#   scripts/ 里的生成脚本归 mesa 那条线）。生成结果直接出 cc_library_shared "vulkan.freedreno"
+#   （mesa/turnip-shared.bp.in 顶部注释），所以这里的包名不变。
 PRODUCT_PACKAGES += \
     vulkan.freedreno
 

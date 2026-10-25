@@ -64,7 +64,9 @@
       relnotes/INSTALL.md, served as text/plain; charset=utf-8.
       The release notes' Files table already lists the R2 download links (INST-5),
       so "downloads" lands on the same page.
-      Where each one is used (crdroidandroid/android_packages_apps_Updater, 16.0):
+      Where each one is used (crdroidandroid/android_packages_apps_Updater, 16.0;
+      re-checked on 17.0 (refs/a17/packages/apps/Updater) - same files and lines, and
+      UpdatesNetworkDataSource.kt still has require(https) at :21 and followRedirects(false) at :30):
         menu_changelog_url      DeviceInfoActionButtons.kt:55 (getString(…, device))
         menu_downloads_url      UpdateActionHandler.kt:197-203 (VIEW_DOWNLOADS)
         blocked_update_info_url UpdateActionHandler.kt:141-145, 187-195

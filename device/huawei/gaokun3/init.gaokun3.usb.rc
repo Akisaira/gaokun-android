@@ -1,6 +1,7 @@
 # init.gaokun3.usb.rc -- USB gadget for Huawei MateBook E Go
 #
-# 分工（依据 AOSP 16 源码，不是猜的）：
+# 分工（依据 AOSP 16 源码，不是猜的；2026-10-25 对 A17 refs/a17/system/core/rootdir/ 复核：init.rc:276 挂 configfs、
+#   :10-11 先 import init.${ro.hardware}.rc 再 import init.usb.configfs.rc，顺序与 A16 相同）：
 #   system/core/rootdir/init.rc              已挂 configfs 到 /config
 #   system/etc/init/hw/init.usb.configfs.rc  属性触发：adbd 起、ffs.ready 后写 UDC
 #   本文件                                    gadget 骨架 + ffs 挂载（adb、MTP、PTP）+ 角色 + configfs=1
@@ -54,7 +55,7 @@ on post-fs-data
     #    靠 adbd 每秒重开 ffs → sys.usb.ffs.ready → init.usb.configfs.rc 重写 UDC；前提是切回 device 后
     #    sys.usb.adb.disabled 回到 0。源码结论（10-18），上机待 V11 / PWR-5 验收。
     exec_start gaokun3_role_device
-    # configfs=1 必须在 post-fs-data 就设好：system 的 init.usb.rc:109 在 boot
+    # configfs=1 必须在 post-fs-data 就设好：system 的 init.usb.rc:109（A17 在 :104）在 boot
     # 触发时就会把 config 设成 adb，届时 configfs 若还是 0 就走 legacy 死路。
     setprop sys.usb.configfs 1
 
@@ -62,7 +63,7 @@ on boot
     exec_start gaokun3_role_device
     # ★ B1（2026-10-04）：这里原先无条件 setprop sys.usb.config adb —— 开机必开 adb，
     #   用户在开发者选项里关掉「USB 调试」，重启又回来了。现在交给 system 的
-    #   init.usb.rc:109-110（refs/lineage-system-core/rootdir/）：
+    #   init.usb.rc:109-110（refs/lineage-system-core/rootdir/；A17 refs/a17/system/core/rootdir/init.usb.rc:104-105，内容相同）：
     #       on boot && property:persist.sys.usb.config=*
     #           setprop sys.usb.config ${persist.sys.usb.config}
     #   （`=*` 要求属性非空，init/action.cpp:199-205）。

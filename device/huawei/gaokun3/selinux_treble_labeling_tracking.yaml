@@ -1,0 +1,20 @@
+# SELinux Treble 标签检查的豁免清单（A17 / cp2a 起强制，接线在 lineage_gaokun3.mk 的
+# PRODUCT_SELINUX_TREBLE_LABELING_TRACKING_LIST_FILE）。
+#
+# 格式照构建机 system/sepolicy/tests/treble_labeling_tests.md「The Tracking List File」一节：
+# 顶层键是违例类别，值是列表；path 要与 file_contexts 里那一行的正则原文逐字相同
+# （treble_labeling_tests.py TestNoPlatformFilesInVendorFileContexts 拿 entry.path 精确比对）。
+# 上游示例每条带 bug: <数字>，脚本不读它（只取 path / domain / apk / name），这里不写。
+#
+# 只放【不是本仓写的、改不了源头】的违例；本树 sepolicy/ 自己的违例应当改策略，不进这里。
+
+platform_file_in_vendor_file_contexts:
+  # device/linaro/dragonboard/shared/graphics/minigbm_msm/sepolicy/file_contexts:8（android-17.0.0_r1，
+  # BoardConfig.mk 的 BOARD_VENDOR_SEPOLICY_DIRS 引入）：把 /system 的 libdrm.so 也标成 same_process_hal_file。
+  # A16 上同一行一直在，没有出过问题；去掉它要另做一份本地的 minigbm 策略（sepolicy 那边的活）。
+  - path: /(system|vendor)/lib(64)?/libdrm.so
+
+coredomain_in_vendor: []
+platform_apps_in_vendor_seapp_contexts: []
+non_coredomain_for_platform_apps: []
+coredomain_for_vendor_apps: []
