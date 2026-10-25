@@ -142,7 +142,7 @@
    快照在 `/data/gk3-snap/<名字>/`。（10-26 用户问"不能直接在 Android 里备份吗"后改成这样；原先的 live 里备份
    `data-snapshot-live.sh backup` 留作备选。）
 3. `install-ota-local.sh --go` 装进 `_a`（ESP default 留在 `_b`、OneShot 指向 `_a` 的直连条目），**用户同意后**重启进 A17。
-5. A17 不行：重启即回 `_b`；`_b` 在被 A17 动过的 /data 上也不行 ⇒ oneshot 进 live（`gaokun3-live.conf`；live 自己连 Wi-Fi、起 ssh，
+4. A17 不行：重启即回 `_b`；`_b` 在被 A17 动过的 /data 上也不行 ⇒ oneshot 进 live（`gaokun3-live.conf`；live 自己连 Wi-Fi、起 ssh，
    凭据在 p3 的 `gaokun3/`：10-26 已追加当前网络〔SAE + WPA-PSK，未实测能连〕与本机 Mac 的公钥，旧文件留了 `.bak-20261026`；
    live 用网卡真 MAC，IP 要扫网段找），`data-snapshot-live.sh <IP> restore <快照名> --yes`（GNU tar `--selinux` 认 toybox 存的标签）。
 
