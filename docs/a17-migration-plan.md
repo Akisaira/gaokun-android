@@ -133,14 +133,16 @@
 
 /data 是不加密的 ext4，A17 首次开机会把上面的东西升上去，回落到 A16 时能不能用没验证过 ⇒ **装之前做一次离线快照，能整盘回滚**：
 
-1. （A16 `_b`，不重启）push A17 payload（R2 `staging/a17-1792943610/`），`scripts/install-ota-local.sh --check` → `--go` 装进 `_a`；脚本会把 ESP 的 `default` 掰回 `_b`。
-2. `scripts/boot-oneshot.sh` 指向内置 live（`gaokun3 installer`），**用户同意后**重启。
+1. ✅（10-26 已做，不重启）A17 payload 从 R2 `staging/a17-1792943610/` 下到本机 `out/a17-1792943610/`（sha256 核过），
+   推进开发机 `/data/ota_package/`（`ota_package_file` 标签，sha256 核过；这个目录不进快照）；`install-ota-local.sh --check` 全过。
+   **先不装**：装完 `_a` 就是 active，万一意外重启进了 A17（10-18 出过 active 与实际启动槽不一致），快照之前 /data 就被动了。
+2. `scripts/boot-oneshot.sh gaokun3-live.conf`（内置 live），**用户同意后**重启。
 3. live 自己连 Wi-Fi、起 ssh（凭据在 p3 的 `gaokun3/`：10-26 已追加当前网络〔SAE + WPA-PSK〕与本机 Mac 的公钥，旧文件留了 `.bak-20261026`）。
    扫网段找它的 IP（live 用的是网卡真 MAC，未必拿到路由器给 Android 保留的 `.239`），然后
    `bash scripts/data-snapshot-live.sh <IP> backup a16`：GNU tar 带 xattr / ACL 打成 zstd，放在 userdata 自己的 `gk3-snap/` 下
    （不含 `media/` 42 GB 与 `ota_package/`；其余约 40 GB 源数据），附 metadata 分区 tar 与 misc 的 dd；
    脚本自己核条目数、抽查 SELinux 标签、写 SHA256SUMS。
-4. 重启回 `_b`（default），再 `boot-oneshot.sh` 指向 `_a` 的直连条目，重启进 A17。
+4. 在 live 里重启 ⇒ 回到 default（`_b` 的直连条目）。`install-ota-local.sh --go` 装进 `_a`（它会把 ESP default 留在 `_b`、OneShot 指向 `_a` 的直连条目），重启进 A17。
 5. A17 不行：重启即回 `_b`；`_b` 在被 A17 动过的 /data 上也不行 ⇒ oneshot 进 live，`data-snapshot-live.sh <IP> restore <快照名> --yes`。
 
 `data-snapshot-live.sh` 的 backup / restore 在特权容器里整轮验证过（`scripts/test-data-snapshot.sh`：同 PARTUUID 的 GPT 盘，
