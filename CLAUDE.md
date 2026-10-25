@@ -2,9 +2,9 @@
 
 在华为 MateBook E Go 上跑原生 AOSP（现基于 crDroid 16），目标是稳定运行 arm64 手游。本文件每个会话都整份读入 —— **只放"现在"和规矩**，历史进 `docs/project-log.md`。
 
-## 现在（2026-10-18；每次开工更新，旧内容搬进 project-log）
+## 现在（2026-10-25；每次开工更新，旧内容搬进 project-log）
 
-* **阶段：1.0 发版前。** 最新发布 v0.7.1-alpha（2026-10-04）。**`1.0.0-rc.1`（戳 `1791285623`）2026-10-06 已作为候选版发布**（GitHub pre-release + R2 staging / installer，**没进 OTA 清单**），装在开发机 `_b`、验收零 FAIL。最新正式版仍是 v0.7.1-alpha。**`1.0.0-rc.2`：用户 10-18 定"先不发，能做完的都做完再发"。** 现行候选是**第四次构建 rc2d，戳 `1792421010`**（2026-10-19，dev `61c2c7c`：rc2c + #41 USB 传文件〔内核 0096 / 0112〕+ #48 `fw_devlink.sync_state=timeout` + #49 `ro.hardware.egl=angle`；内核 `7636022f`、boot.img `f60c65d2`），已传 R2 staging（开发机 payload `staging/rc2-1792421010/`，sha256 `641d4c1e…`），带系统的安装器 `0.2.0-rc.2` 本机已造（留档 `out/rc2-1792421010/`），**⬜ 未上机、未验收、未发 pre-release**。上一版 `1792312407`（rc2c，10-18 装在开发机 `_a`、A 档零 FAIL）被取代，它的 R2 staging ROM 目录已被 prune 删掉（开发机 payload `staging/rc2-1792312407/` 还在）。剩下 4 个 PR 10-19 都已合入 `origin/dev`（#46 早在 dev，GitHub 上关闭）。剩什么看 `docs/TODO.md` 顶部「▶ 1.0」；发版标准 / 阻断项 / 待定决定看 `docs/v1.0-plan.md`。
+* **阶段：1.0 发版前。** **`1.0.0-rc.2` 2026-10-25 已发布并进 OTA 清单**（用户定：v0.7.1-alpha / rc.1 用户在「系统更新」里都会收到；**0.7.x → 1.0 升级（G6 / E11）没演练就发了**，发版说明里写了先备份）。发的是第五次构建 **rc2e，戳 `1792913333`**（dev `827ed7b` = rc2d + Parts 触摸手感 game / daily 开关；内核 `7636022f`、boot.img `f60c65d2` 与 rc2d 同），tag `v1.0.0-rc.2` = `6464492`（= origin/main = origin/dev）。R2：`builds/` + `install/crDroidAndroid-16.0-20261025-gaokun3-v12.11/` + `installer/0.2.0-rc.2/`（U 盘镜像带 rc2e 系统）；GitHub pre-release（不标 Latest，Latest 仍是 v0.7.1-alpha），13 个附件字节数核过。开发机 `_b` = rc2e、active = `_b`，A 档 47 / 0（`out/accept/1792913333-20261025-165335/`）。留档 `out/rc2-1792913333/`。⬜ 盯 issue / 群里 0.7.x → rc.2 的升级反馈。剩什么看 `docs/TODO.md` 顶部「▶ 1.0」；发版标准 / 阻断项 / 待定决定看 `docs/v1.0-plan.md`。
 * 内核 v7.2.9 stable + `patches/0076`（撤回 stable 撤掉的双 DSI 绑定 PLL 修复，否则黑屏）；dev.9 起发布内核不带指纹的 0050（D21，只进实验内核）。
 * 统一启动入口 `gk3boot.efi` + fastboot 执行端：E3–E8（含 OTA 自动回滚）、E6、E7 真机过；镜像默认动作模式 + BCB 分派开；E10 恢复出厂用户定不测（`docs/boot-entry-design.md`）。
 * 发布构建（dev.1 起）= 关免授权 adb、`ro.debuggable=0`，变体仍是 userdebug。SELinux 默认 enforcing（用户 10-06 定 D5，dev.10 起）。
