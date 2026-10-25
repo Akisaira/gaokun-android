@@ -21,8 +21,8 @@
          与 compressed_offload（AUDIO_FORMAT_APE 的 COMPRESS_OFFLOAD 直通口）。本机没有 modem、没有 FM，
          HAL 也没有任何压缩解码：
            * 这几个设备在 HAL 里本来就只走桩：StreamPrimary::useStubStream() 把 IN_TELEPHONY_RX /
-             IN_FM_TUNER / OUT_TELEPHONY_TX 一律交给 DriverStubImpl（primary/StreamPrimary.cpp:245-258，
-             crDroid 16.0 原文），不碰 ALSA，留着只会让 dumpsys 里多出几个"已连接"的假设备。
+             IN_FM_TUNER / OUT_TELEPHONY_TX 一律交给 DriverStubImpl（primary/StreamPrimary.cpp:196-210，
+             crDroid 17.0 未打补丁的原文；A16 时在 :245-258），不碰 ALSA，留着只会让 dumpsys 里多出几个"已连接"的假设备。
            * 仓库里别处没有引用这些端口名（2026-10-05 grep 整个仓库，命中只有本文件和案卷里的历史记录）；
              Telephony 接口（ModulePrimary::getTelephony()）不依赖策略里的端口，不受影响。
            * 放音、录音、游戏都走 primary output / primary input，不经过被删的口。
@@ -49,13 +49,13 @@
              HAL 侧优先级不是原因：writer/out_0 都是 nice=-19，且有 CAP_SYS_NICE。
              不声明 MMAP 后 AAudio 会回落到普通共享路径：延迟变高，但不会断。
              ★ 输入侧 mmap_no_irq_in 也已删除（2026-09-28，PR #10 审查）：原先说"故意保留、无证据说明它有问题"，
-             但 HAL 对 MMAP 输入一律建 StreamInMmapStub（ModulePrimary.cpp:107-110，注释写着
+             但 HAL 对 MMAP 输入一律建 StreamInMmapStub（A17 ModulePrimary.cpp:76-80，注释写着
              "no support for MMAP audio I/O on CVD"），根本不打开 ALSA —— 走 AAudio 低延迟独占输入的
              App 录不到真麦克风。删掉后 AAudio 回落到普通共享路径（docs/stage4-findings.md #127）。 -->
         <!-- ★★★ 输入剖面【只声明 48000】（2026-09-27）。这是修复，不是砍功能。
              本机全部 PCM 都定频 48 kHz（tinypcminfo d0/d1 输出、d2/d3 采集一律
              Rate: min=48000Hz max=48000Hz），没有任何硬件重采样。而 HAL 把上层给的
-             采样率【原样】塞进 ALSA（alsa/Utils.cpp: config.rate = context.getSampleRate()），
+             采样率【原样】塞进 ALSA（A17 alsa/UtilsAlsa.cpp:388 config.rate = context.getSampleRate()；A16 时文件叫 alsa/Utils.cpp），
              tinyalsa 又不会自动协商 ⇒ 真的按 44100 去开 hw:0,3，hw_params 直接被拒：
                  proxy_open() pcm_is_ready() failed: cannot set hw params: Invalid argument
              症状：录音产物恒为 44 字节空 WAV（只有 WAV 头）。
@@ -69,8 +69,8 @@
              所以上层仍可请求任意低采样率，只是物理层统一在 48 kHz 上工作。
 
              ⚠️ 采样率这一项只靠本文件就够（HAL 的 patches/0051 修的是"打开哪个 PCM"，
-             是另一个根因）。这里列的值会被 HAL 原样交给 ALSA（alsa/Utils.cpp:349），开不了
-             要到开始录音（StreamAlsa::start()）才失败 —— 那时策略早已放行，结果是悄悄录出空文件；
+             是另一个根因）。这里列的值会被 HAL 原样交给 ALSA（alsa/UtilsAlsa.cpp:388），开不了
+             要到开始录音（StreamAlsaMonoPipe::start() → StreamAlsaBase::openDeviceProxies()）才失败 —— 那时策略早已放行，结果是悄悄录出空文件；
              而 getInputForDevice() 在 open 之后的比对又不允许 HAL 自己换成别的配置 ——
              所以只能在本文件里只列硬件真能开的值（维护者 2026-09-28 按源码核对后改写）。
 
@@ -79,7 +79,7 @@
         <!-- ★ 声道同理【只声明 STEREO】（维护者 2026-09-28，从代码推断、未上机实测）：
              两个采集 PCM 都是 channels min=2 max=2（docs/stage4-findings.md #40，
              tinycap -c 1 实测 cannot set hw params），而 HAL 把声道数也原样交给 ALSA
-             （alsa/Utils.cpp:339）。列着 MONO 时单声道请求是精确匹配、原样下发，
+             （alsa/UtilsAlsa.cpp:378）。列着 MONO 时单声道请求是精确匹配、原样下发，
              推断同样会被 hw_params 拒掉；只列 STEREO 时策略（getInputProfile →
              checkCompatibleChannelMask，录音 mixPort 走近似匹配，score 1000）把 MONO
              配到 STEREO，由 AudioFlinger 下混。 -->

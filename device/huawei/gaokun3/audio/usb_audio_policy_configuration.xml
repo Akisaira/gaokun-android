@@ -16,7 +16,7 @@
 
 <!-- USB 音频（v1.0 AV-4，2026-10-05，⬜ 未编译、未上机）。
 
-     ★ 改自 frameworks/av/services/audiopolicy/config/usb_audio_policy_configuration.xml（crDroid 16.0），
+     ★ 改自 frameworks/av/services/audiopolicy/config/usb_audio_policy_configuration.xml（crDroid 17.0 与 16.0 内容相同，2026-10-25 diff 过），
        只删了 USB_ACCESSORY 那一对（"usb_accessory output" / "USB Host Out"）：那是"本机当 USB 配件、
        由对端主机放音"的 AOA 音频，本机用不上；AIDL 示例 HAL 自己的 USB 配置
        （hardware/interfaces/audio/aidl/default/Configuration.cpp:409-468 getUsbConfiguration()）也只有下面这四个设备口、两个混音口。
@@ -24,12 +24,12 @@
        那里只是拿来对照"AIDL 年代的 USB 模块长什么样"。
 
      怎么接起来的（构建机 ~/crdroid 只读核实）：
-       * 模块名 "usb" → Module::Type::USB → ModuleUsb（audio/aidl/default/Module.cpp:121-122、136-137），
-         服务名 IModule/usb（main.cpp:54）。VINTF 声明在 device/huawei/gaokun3/manifest.xml ——
+       * 模块名 "usb" → Module::Type::USB → ModuleUsb（audio/aidl/default/Module.cpp:122-123、137-138），
+         服务名 IModule/usb（main.cpp:54-55）。VINTF 声明在 device/huawei/gaokun3/manifest.xml ——
          APEX 自带的 android.hardware.audio.service-aidl.xml 把 usb 那段注释掉了（:22 "Uncomment when these modules present in the configuration"）。
        * 设备口与混音口都【不写 profile】= 动态：插上之后 ModuleUsb::populateConnectedDevicePort()
          （usb/ModuleUsb.cpp:90-97 → ModuleAlsa）按 ALSA 实际能力填，混音口再按设备口填
-         （Module.cpp:740-791 注释里的"情形 1，USB / HDMI"）。
+         （Module.cpp:743-791 注释里的"情形 1，USB / HDMI"）。
        * 谁来报插拔：system_server 的 UsbAlsaManager（frameworks/base/services/usb/…/UsbAlsaManager.java:300 usbDeviceAdded()）
          扫 /proc/asound/cards 找到卡号，以 "card=<n>;device=<m>" 为地址调 setWiredDeviceConnectionState
          （UsbAlsaDevice.java:309-312）。要 UsbService 在跑 —— issue #13 起声明了 android.hardware.usb.host。

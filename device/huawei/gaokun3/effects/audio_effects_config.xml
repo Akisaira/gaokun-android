@@ -116,7 +116,7 @@
                       → type UUID 被强制成那一个标准值，我们说不上话；
                    ② 否则，只要 library 带了 type="…" 属性 → 就用我们的 type UUID。
                  "gaokun_histen" 不在任何内置表里 ⇒ 走路径②。
-             两个 UUID 必须与库 descriptor 完全一致（gaokun_effect.cpp:468 getDescriptor()）：
+             两个 UUID 必须与库 descriptor 完全一致（gaokun_effect.cpp:428 buildDescriptor()，getDescriptor() 在 :571）：
                    id.type = kTypeUuidText = 9a1c7f30-4a51-4d9b-8f6e-67616f6b756e
                    id.uuid = implUuid()   = 工厂请求时带进来的那个值（即下面 uuid="…"）
              ⇒ 所以这一行的 uuid 可以自由选（库只是回显），但 type 必须与库里字面量一致。 -->

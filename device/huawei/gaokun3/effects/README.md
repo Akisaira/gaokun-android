@@ -30,7 +30,7 @@ Android 上一直没有对应物。
 | `measurement/` | 作者（PR #8） | 与 Windows 的对照测量：离线扫 Histen 引擎（`eqscan`，不出声）、WASAPI loopback、比较与 EQ 求解脚本 + 2026-09-24 的数据。⚠️ 它的 README §四第 4 条是**候选参数**，不是部署默认（理由写在那里） |
 | `histen_scenes.h` | 生成 | 15 个 `SWS_SPK_*` 场景的参数表，由 `gen_histen_scenes.py` 从华为的 `sws_config.xml` 生成 |
 | `gen_histen_scenes.py` | 自研 | 上述生成器（换固件版本时重跑） |
-| `audio_effects_config.xml` | 配置 | effects HAL 读取的**唯一**配置 = crDroid 16.0 原版 + 我们的 `gaokun_histen` 条目 |
+| `audio_effects_config.xml` | 配置 | effects HAL 读取的**唯一**配置 = 上游原版（`hardware/interfaces/audio/aidl/default/audio_effects_config.xml`，crDroid 17.0 与 16.0 逐字相同，2026-10-25 diff 过）+ 我们的 `gaokun_histen` 条目 |
 | `prebuilt/` | **不入库** | Histen 引擎放这里；只有 README 受版本控制 |
 
 ---
@@ -100,13 +100,15 @@ endif
 `Android.bp` 的关键三点：
 
 * `defaults: ["aidlaudioeffectservice_defaults"]` —— 这个 default 已带齐
-  FMQ / libutils / libcutils / libbinder_ndk 与 AIDL effect 的 NDK 绑定。
+  FMQ / libutils / libcutils / libbinder_ndk 与 AIDL effect 的 NDK 绑定，
+  A17 起连 effect 框架本身也由它带进来（见下一条）。
   **不要改用 NDK 直接编**：NDK 根本不提供 `libfmq`。
-* `srcs` 里的 `":effectCommonFile"` **不是可选项** —— 它是
-  `hardware/interfaces/audio/aidl/default/` 下持有 `EffectContext.cpp` /
-  `EffectThread.cpp` / `EffectImpl.cpp` 的 filegroup，也就是整个 effect 框架。
-  AOSP 里每个 effect 库都各自编一份；`destroyEffect` 这个导出符号**只可能**
-  来自 `EffectImpl.cpp`（这也是校验产物时最可靠的标志）。
+* effect 框架（`EffectContext.cpp` / `EffectThread.cpp` / `EffectImpl.cpp`）**不是可选项**，只是 A17 起不用再写进 `srcs`：
+  A16 时它是 `hardware/interfaces/audio/aidl/default/` 下的 filegroup `":effectCommonFile"`，每个 effect 库各自编一份；
+  A17（crDroid 17.0 / lineage-24.0）把它改成了静态库 `libaudioeffectaidlcommon`（该目录 `Android.bp:394-426`），
+  `aidlaudioeffectservice_defaults` 的 `static_libs` 里就有它（同文件 `:357-392`），上游的 bassboost 等也只列自己的源文件。
+  我们继承了 `EffectImpl`，链接时会把 `EffectImpl.o` 从静态库里拉进来，`destroyEffect` 这个导出符号**只可能**
+  来自它（`EffectImpl.cpp:36`；这也是校验产物时最可靠的标志）。
 * `relative_install_path: "soundfx"` + `installable: true` ⇒ 落到 `/vendor/lib64/soundfx/`，
   即 effects HAL 在 APEX 之外查找库的目录之一（`EffectConfig.h` 的 `kEffectLibPath`）。
 

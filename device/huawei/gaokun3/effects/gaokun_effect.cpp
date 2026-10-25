@@ -81,10 +81,12 @@
  *     createContext / releaseContext / getEffectName / effectProcessImpl
  *
  * The three links that make it work:
- *   - EffectContext.cpp, EffectThread.cpp and EffectImpl.cpp are compiled
- *     *into this library* (Android.bp `":effectCommonFile"`).  EffectImpl.cpp
- *     therefore also supplies `destroyEffect` -- this file deliberately does NOT
- *     define one, or the linker would report two.
+ *   - EffectContext.cpp, EffectThread.cpp and EffectImpl.cpp are linked
+ *     *into this library* (A17: static library `libaudioeffectaidlcommon`,
+ *     brought in by `aidlaudioeffectservice_defaults`; up to A16 the filegroup
+ *     `":effectCommonFile"` -- see Android.bp).  EffectImpl.cpp therefore also
+ *     supplies `destroyEffect` -- this file deliberately does NOT define one,
+ *     or the linker would report two.
  *   - EffectImpl::process() is the pump: it waits on the status-FMQ event flag,
  *     takes min(inputMQ->availableToRead(), outputMQ->availableToWrite()), reads
  *     into EffectContext::getWorkBuffer(), calls our effectProcessImpl(), then
@@ -1000,8 +1002,8 @@ binder_exception_t factoryQueryEffect(const AudioUuid* in_impl_uuid, Descriptor*
  * The three symbols EffectFactory.cpp dlsym()s.  C linkage and exact names.
  *
  * Only two are defined here: `destroyEffect` comes from EffectImpl.cpp, which
- * Android.bp compiles into this library via ":effectCommonFile".  Defining it
- * again would be a duplicate symbol at link time.
+ * is linked into this library from libaudioeffectaidlcommon (see Android.bp).
+ * Defining it again would be a duplicate symbol at link time.
  * ------------------------------------------------------------------------- */
 
 using aidl::android::hardware::audio::effect::Descriptor;
