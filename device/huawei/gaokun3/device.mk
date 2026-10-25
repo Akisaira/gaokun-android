@@ -676,10 +676,11 @@ PRODUCT_COPY_FILES += \
 #    缺了它 GPU 停在安全模式，adreno probe 会失败。
 # Stage 6 M3（2026-08-19）：管线已在 crDroid 树上跑通并打开。
 # （A16 时 crDroid 的 external/mesa3d 与 Stage 5 打补丁那棵是同一个 commit d4b6f1eba289… @ android-16.0.0_r4。）
-# ★ A17（2026-10-25 用户定，docs/a17-migration-plan.md 路线 B）：external/mesa3d 是 26.1.0-devel，上游的
-#   meson_to_hermetic 换成了 meson2hermetic，上面 1、2 两步作废，改为在 26.1 上重新生成（mesa/ 目录与
-#   scripts/ 里的生成脚本归 mesa 那条线）。生成结果直接出 cc_library_shared "vulkan.freedreno"
-#   （mesa/turnip-shared.bp.in 顶部注释），所以这里的包名不变。
+# ★ A17（2026-10-25 用户定，docs/a17-migration-plan.md 路线 B）：上面 1–3 步只适用于 A16，全部作废。
+#   external/mesa3d 是 26.1.0-devel，上游的 meson_to_hermetic 换成了 meson2hermetic；现在用
+#   scripts/mesa-a17/regen.sh 在 26.1 上整树重新生成（配置 mesa/hermetic/，步骤见 docs/mesa-a17.md），
+#   生成结果直接出 cc_library_shared "vulkan.freedreno"，所以这里的包名不变。
+#   ⚠️ regen.sh 目前要在 tree-fixes 之后手动跑（repo sync 会碰这棵脏树，与 A16 铺归档时一样）。
 PRODUCT_PACKAGES += \
     vulkan.freedreno
 
