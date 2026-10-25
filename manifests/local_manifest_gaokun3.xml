@@ -1,16 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  gaokun3 在 crDroid 16.0 树里的额外项目。
+  gaokun3 在 crDroid 17.0（crDroid 13 / Android 17）树里的额外项目。
+  2026-10-25 起换到 17.0：default revision lineage-24.0，aosp remote = refs/tags/android-17.0.0_r1。
+  A16 版本（16.0 / lineage-23.2 / android-16.0.0_r4 / baklava）见 git 历史。
 
   用法（构建机上）：
       cp manifests/local_manifest_gaokun3.xml ~/crdroid/.repo/local_manifests/
       repo sync
 
-  crDroid 16.0 的 manifest（1180 个项目）里【已经有】的，这里不重复列：
+  crDroid 16.0 的 manifest（1180 个项目）里【已经有】的，这里不重复列
+  （⬜ 以下清单是 16.0 时核的，17.0 上要用 `repo manifest -o -` 重新核一遍）：
       device/generic/goldfish        LineageOS/android_device_generic_goldfish
                                     （WiFi HAL 用它的 libwifi-hal-emu）
-      external/mesa3d               platform/external/mesa3d @ android-16.0.0_r4
-                                    （= mesa 26.0.3，与我们打过补丁的快照同一版）
+      external/mesa3d               platform/external/mesa3d @ android-17.0.0_r1
+                                    （VERSION = 26.1.0-devel；A17 起在它上面重新生成 turnip，
+                                     不再铺 26.0.3 归档，见 docs/a17-migration-plan.md）
       external/minigbm              platform/external/minigbm
       external/drm_hwcomposer       platform/external/drm_hwcomposer
       external/deqp-deps/glslang    platform/external/deqp-deps/glslang
@@ -32,8 +36,9 @@
         shared/graphics/swangle/sepolicy
     crDroid/LineageOS 的 manifest 不带它（Lineage 不支持这类开发板）。
 
-    remote="aosp" 继承 aosp remote 的 revision refs/tags/android-16.0.0_r4，
-    已用 git ls-remote 验证该 tag 存在（685cd7ce06fd）。
+    remote="aosp" 继承 aosp remote 的 revision（17.0 上是 refs/tags/android-17.0.0_r1）。
+    2026-10-25 核过：该 tag 下 shared/graphics 的 tree id 与 android-16.0.0_r4 相同（426f619a），
+    两个 sepolicy 目录原样都在。
   -->
   <project path="device/linaro/dragonboard" name="device/linaro/dragonboard"
            remote="aosp" />
@@ -76,7 +81,8 @@
     Google 的 APK 不属于 GPL/Apache 的范畴，把它们打进【公开发布】的 ROM
     等于替 Google 分发它的闭源应用。自用构建没问题，**对外发版前想清楚**。
 
-    分支 baklava = Android 16（Google 的甜点代号；vic=15、cinnamonbun=17）。
+    分支 cinnamonbun = Android 17（Google 的甜点代号；vic=15、baklava=16）。
+    2026-10-25 核过：cinnamonbun 最新提交 "17_202606"（提取自 CP2A.260605.012），有 arm64 目录。
     ⚠️ 不能走 Lineage 的 `WITH_GMS := true` —— 那条路要的是
     `vendor/partner_gms/products/gms.mk` 布局（Lineage 私有仓库），
     而 MindTheGapps 是 `arm64/arm64-vendor.mk` 布局。所以我们在
@@ -86,5 +92,5 @@
     体积：arm64/proprietary 1.1 GiB。super 12 GiB、每槽现用约 2.5 GiB，放得下。
   -->
   <project path="vendor/gapps" name="MindTheGapps/vendor_gapps"
-           remote="mindthegapps" revision="baklava" />
+           remote="mindthegapps" revision="cinnamonbun" />
 </manifest>
