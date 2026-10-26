@@ -1098,6 +1098,39 @@ def patch_keygesture_lineagesettings_guard(tree: pathlib.Path) -> str:
     return "两处 LineageSettings 读取包上 try/catch"
 
 
+def patch_codec2_blob_linear_map(tree: pathlib.Path) -> str:
+    """—— 修补 26：BLOB（gralloc 支撑）的线性块在没有 ION 的机器上照样能 map ——
+
+    A17 上游 frameworks/av 提交 3a5dff64c9（"Reapply codec2: add support for custom mappers"）把
+    C2ConstLinearBlock::map() / C2LinearBlock::map() 改成走 _C2Block1DImpl::mapReadView / mapWriteView
+    （vndk/C2Buffer.cpp）：没有 /dev/ion（C2HandleIon::IsUsed() = using_ion() = false，C2Store.cpp:116、:1446）
+    时一律交给 C2DmaBufAllocator::Map，而它先 CheckHandle —— 句柄不是 C2HandleBuf 就直接 C2_BAD_VALUE
+    （C2DmaBufAllocator.cpp:470-476）。A16 是直接调 allocation->map()，哪种分配都行。
+    本机没有 ION，device.mk 的 debug.stagefright.c2-poolmask=0xfc0000 让默认线性分配器是 BLOB
+    （C2Store.cpp:526 GetPreferredLinearAllocatorId）⇒ v4l2 解码 HAL 里 map 客户端送来的输入块报 err=22，
+    patches/0019 的 HEVC CSD 合并退回"单独下发 CSD"，venus 死锁、HEVC 硬解一帧不出
+    （2026-10-26 A17 首个候选版 1792975257 上 A21 iris 回归 11/15，挂的正是 4 项 HEVC）。
+    修法：句柄不是 DMABUF 时退回 A16 的 allocation->map()；DMABUF 句柄照旧走上游新路径（custom mapper）。
+    上机判据：out/iris-rc/rc-accept.sh 15/15；logcat 有 "HEVC: stashed … bytes of CSD"、没有 "cannot map CSD"。
+    """
+    p = tree / "frameworks/av/media/codec2/vndk/C2Buffer.cpp"
+    if not p.exists():
+        return f"⚠️ 找不到 C2Buffer.cpp（{p}）"
+    s = io.open(p, encoding="utf-8").read()
+    marker = "gaokun3 tree-fix [26]"
+    if marker in s:
+        return "已改（幂等，无需改动）"
+    old = "    if (android::C2HandleIon::IsUsed()) {\n"
+    if s.count(old) != 2 or "android::C2DmaBufAllocator::Map(" not in s:
+        return "⚠️ C2Buffer.cpp 里 mapReadView / mapWriteView 的 IsUsed() 分支不是正好两处，上游可能改了写法；什么都没动"
+    new = ("    // " + marker + ": BLOB (gralloc-backed) linear blocks are not DMABUF handles;\n"
+           "    // C2DmaBufAllocator::Map rejects them with C2_BAD_VALUE on ION-less devices.\n"
+           "    if (android::C2HandleIon::IsUsed() ||\n"
+           "            !android::C2DmaBufAllocator::CheckHandle(mAllocation->handle())) {\n")
+    io.open(p, "w", encoding="utf-8", newline="").write(s.replace(old, new))
+    return "mapReadView / mapWriteView：非 DMABUF 句柄退回 allocation->map()"
+
+
 def main():
     tree = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else pathlib.Path.home() / "crdroid").expanduser()
     if not (tree / "build/envsetup.sh").exists():
@@ -1181,6 +1214,7 @@ def main():
          patch_build_fingerprint_variant_user(tree))
     step(" [24] adb_root 只在 WITH_SU=true 时装（发布构建没有 adb root）: ", patch_adb_root_only_with_su(tree))
     step(" [25] KeyGestureController 读 LineageSettings 失败不致命（10-11 救砖兜底）: ", patch_keygesture_lineagesettings_guard(tree))
+    step(" [26] codec2 BLOB 线性块在没有 ION 时也能 map（HEVC CSD 合并 / 硬解）: ", patch_codec2_blob_linear_map(tree))
     if failed:
         print(f"✗ {len(failed)} 条没做成：" + "；".join(failed))
         sys.exit(1)
