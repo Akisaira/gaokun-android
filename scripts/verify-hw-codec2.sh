@@ -60,7 +60,7 @@ $A shell 'service list 2>/dev/null | grep -q "IComponentStore/default"' \
     && ok "IComponentStore/default 已注册" || bad "IComponentStore/default 不在"
 $A shell 'ps -A -o name 2>/dev/null | grep -q "c2-service-v4l2"' \
     && ok "服务进程在跑" || bad "服务进程不在"
-S=$($A shell 'logcat -b all -d 2>/dev/null | grep -c "received SIGSYS"' | tr -d '\r')
+S=$($A shell 'logcat -b all -d 2>/dev/null | grep -v "adbd service requested" | grep -c "received SIGSYS"' | tr -d '\r')
 [ "${S:-0}" = 0 ] && ok "没有 SIGSYS（seccomp 没打死它）" || bad "有 $S 次 SIGSYS —— 看 blocked syscall"
 
 echo; echo "═══ 4. MediaCodecList 里的硬件组件 ═══"
@@ -85,7 +85,7 @@ else
         *)                      bad "解码失败（上面是输出）" ;;
     esac
     echo "  --- 内核侧同期日志 ---"
-    $A shell 'logcat -b all -d 2>/dev/null | grep -iE "V4L2Device|DecodeComponent|blocked syscall" | tail -6' | sed 's/^/  /'
+    $A shell 'logcat -b all -d 2>/dev/null | grep -v "adbd service requested" | grep -iE "V4L2Device|DecodeComponent|blocked syscall" | tail -6' | sed 's/^/  /'
 fi
 
 echo; echo "═══ 6. 内核侧有没有报错 ═══"

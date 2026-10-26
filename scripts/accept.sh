@@ -205,7 +205,9 @@ else
         *) fail A13 "${r:-没有 RESULT 行}（见 mic-smoke.txt）" ;;
     esac
     grep -a -E '开头|TIMING:' "$OUT/mic-smoke.txt" | head -6 | sed 's/^/         /' | tee -a "$REPORT"
-    LG=$(R "logcat -b all -d -T '$T0' 2>/dev/null | grep -E 'first capture block ready|incomplete data received'")
+    # A17 的 adbd 会把每条 shell 命令原样打进 logcat（"adbd service requested '…raw:<命令>'"），
+    # 设备上 grep 关键字会先匹配到这条命令自己 ⇒ 一律先滤掉（10-26 首跑因此误判 A11 / A13）
+    LG=$(R "logcat -b all -d -T '$T0' 2>/dev/null | grep -v 'adbd service requested' | grep -E 'first capture block ready|incomplete data received'")
     echo "$LG" | grep -q "first capture block ready" && pass A13 "logcat：$(echo "$LG" | grep -m1 -o 'first capture block ready.*')" || warn A13 "logcat 里没看到 first capture block ready"
     echo "$LG" | grep -q "incomplete data received" && fail A13 "logcat 有 incomplete data received（Issue #9 那种丢块）" || true
 fi
@@ -221,7 +223,7 @@ fi
 # 只数 effect 相关的行（原始报错的形状见 device/huawei/gaokun3/effects/README.md:265-267：soundfx 路径 + effect HAL 进程）；
 # App / 游戏自己的 linker 命名空间报错不归这一项，只记一笔
 NSRE='soundfx|histen|audio\.effect'
-NSL=$(R 'logcat -b all -d 2>/dev/null | grep "not accessible for the namespace"')
+NSL=$(R 'logcat -b all -d 2>/dev/null | grep -v "adbd service requested" | grep "not accessible for the namespace"')
 NA=$(printf '%s\n' "$NSL" | grep -ciE "$NSRE"); NO=$(printf '%s\n' "$NSL" | grep -c .)
 [ "$NA" = 0 ] && pass A14 "logcat 没有 effect 相关的 not accessible for the namespace" \
     || fail A14 "logcat 有 $NA 行 effect 相关的 not accessible for the namespace（0068 的放行失效？）"
