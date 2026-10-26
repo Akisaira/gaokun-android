@@ -232,6 +232,14 @@
 #   只有它 —— 已按 /proc/<pid>/maps 把 SF / systemui / launcher / hwc 映射的 /vendor 文件
 #   全列了一遍：27 个里 26 个已是 same_process_hal_file，只剩这一个。
 /vendor/lib(64)?/libui\.so                                           u:object_r:same_process_hal_file:s0
+# ★ 2026-10-26 A17 首次上机（戳 1792943610）：A17 的 vendor libui.so 新增 NEEDED libaconfig_storage_read_api_cc.so，
+#   它挂的是 vendor_file ⇒ surfaceflinger 在 sphal 命名空间 dlopen turnip 时读不了它
+#   （avc denied { read } … name="libaconfig_storage_read_api_cc.so" scontext=surfaceflinger tcontext=vendor_file），
+#   链接器报 "library … not found: needed by /vendor/lib64/libui.so in namespace sphal" ⇒ ANGLE 起不来 Vulkan
+#   ⇒ "no suitable EGLConfig found" ⇒ SF 每 5 秒崩一次、system_server 跟着循环，永远开不完机。
+#   在设备上把 vulkan.freedreno.so 的 /vendor 依赖闭包走了一遍：25 个里只有它不是 same_process_hal_file；
+#   它自己只依赖 libc++ / libc / libm / libdl。设备上 bind mount 一份改了标签的副本、重启 SF 后 16 秒开机完成（热验证）。
+/vendor/lib(64)?/libaconfig_storage_read_api_cc\.so                  u:object_r:same_process_hal_file:s0
 
 # libcamera 的日志文件（gaokun3-camera.rc 的 LIBCAMERA_LOG_FILE）
 /data/vendor/camera(/.*)?   u:object_r:gaokun3_camera_vendor_data_file:s0
