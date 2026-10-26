@@ -202,6 +202,14 @@ allow gaokun3_audioroute system_file:file execute_no_trans;
 #   在新内核上就是大音量总线冲突，所以这条不能漏。⬜ 未编译、未经 enforcing 普查。
 allow gaokun3_audioroute sysfs:file getattr;
 
+# 扬声器低音处理的数字音量余量（audio-route.sh 开头 spk_boost 那一节，开机那一遍）：
+#   读 persist.vendor.gaokun3.histen.engine，写 vendor.gaokun3.histen.boost，都是 vendor_gaokun3_prop。
+#   set_prop 已包含 get_prop。gaokun3_audioroute 不是 coredomain，拦 coredomain 写 vendor 属性的
+#   那条 neverallow 管不到它（同 gaokun3_usbrole）。
+#   写被拒时脚本回读不一致就不借余量。脚本还要 stat /vendor/lib64/soundfx/libgaokunspeakerfx.so，
+#   stat 不了时按"没装"处理、同样不借。⬜ 未编译、未上机。
+set_prop(gaokun3_audioroute, vendor_gaokun3_prop)
+
 # ── ⚠️ 故意【不写】的两个域（2026-09-18）—— ★ 2026-09-27 起两个都写了，见本文件末尾（#126）──
 #
 # gaokun3_smmustall：实测要 `self:capability sys_rawio` +

@@ -267,6 +267,18 @@ bool engineEnabled() {
     return !(buf[0] == '0' && buf[1] == 0);
 }
 
+/* engine=bass: the speaker processing runs in the audio HAL instead
+ * (speakerfx/README.md), on everything the speakers play.  This effect must
+ * then be a bit-exact wire, or music would be processed twice.  Re-read with
+ * the master switch (every 16 buffers; speakerfx checks every 100 ms), so a
+ * change of engine mid-stream overlaps, or leaves a gap, for well under a
+ * second -- the HAL chain's limiter holds the ceiling either way. */
+bool engineInHal() {
+    char buf[PROP_VALUE_MAX] = {0};
+    if (__system_property_get(GAOKUN_HISTEN_PROP("engine"), buf) <= 0) return false;
+    return std::strcmp(buf, "bass") == 0;
+}
+
 /* Which entry of the scene table HistenChain::init() loads.  Read when the
  * chain is armed: the algorithm takes its profile at Init/SetParams time. */
 int readSceneProperty() {
@@ -564,6 +576,7 @@ class GaokunHisten final : public EffectImpl {
     bool mMaster GUARDED_BY(mImplMutex) = false;     /* last read of kMasterProp */
     bool mOnSpeaker GUARDED_BY(mImplMutex) = false;  /* from deviceDescription */
     bool mActive GUARDED_BY(mImplMutex) = false;     /* previous buffer's verdict */
+    bool mInHal GUARDED_BY(mImplMutex) = false;      /* engine=bass, last read */
 };
 
 const std::string GaokunHisten::kEffectName = "Gaokun Histen";
@@ -706,6 +719,7 @@ RetCode GaokunHisten::releaseContext() {
  * music silent, UI sounds seconds late), now as the default state. */
 void GaokunHisten::arm(const char* why, bool logOff) {
     mMaster = masterOn();
+    mInHal = engineInHal();
     if (mArmed) return;
     if (!mMaster) {
         if (logOff) logi("%s: %s is off -- bit-exact passthrough, nothing loaded", why, kMasterProp);
@@ -725,7 +739,12 @@ void GaokunHisten::arm(const char* why, bool logOff) {
 
     /* Independent of the speaker chain on purpose: turning Histen off must not
      * also turn off excursion protection. */
-    if (!engineEnabled()) {
+    if (mInHal) {
+        /* Armed all the same (cheap with Histen not loaded), so that a switch
+         * back from bass mid-stream still finds the speaker chain ready. */
+        logi("%s: %s=bass -- the audio HAL processes the speaker, this effect stays a wire", why,
+             GAOKUN_HISTEN_PROP("engine"));
+    } else if (!engineEnabled()) {
         logi("%s: Histen engine disabled by %s=0 -- speaker chain only", why,
              GAOKUN_HISTEN_PROP("engine"));
     } else if (mSampleRate != 48000) {
@@ -747,6 +766,7 @@ void GaokunHisten::arm(const char* why, bool logOff) {
 const char* GaokunHisten::gateReason() const {
     if (!mStereo) return "stream is not stereo";
     if (!mMaster) return "master switch off";
+    if (mInHal) return "engine=bass: processed in the audio HAL";
     if (!mArmed) return "switched on mid-stream, takes effect on the next playback";
     if (!mOnSpeaker) return "output is not the built-in speaker";
     return mHisten.ready() ? "built-in speaker, Histen + speaker chain"
@@ -809,6 +829,7 @@ IEffect::Status GaokunHisten::effectProcessImpl(float* in, float* out, int sampl
      * cost is a handful of property reads and comparisons. */
     if ((mCalls++ & 0x0F) == 0) {
         mMaster = masterOn();
+        mInHal = engineInHal();
         if (mArmed && mMaster) refreshSpeakerKnobs();
     }
 
@@ -817,7 +838,7 @@ IEffect::Status GaokunHisten::effectProcessImpl(float* in, float* out, int sampl
      * buffer at all.  No metering either -- this is the path every default
      * install takes on every music stream, and it must stay silent in the log
      * apart from the one line per state change. */
-    const bool active = mArmed && mMaster && mOnSpeaker && mStereo;
+    const bool active = mArmed && mMaster && mOnSpeaker && mStereo && !mInHal;
     if (active != mActive || mFirstBuffer) {
         logi("%s: %s (buffer=%d samples)", active ? "processing" : "bypass", gateReason(),
              samples);

@@ -134,6 +134,11 @@ SELinux：`sepolicy/hal_audio_default.te` 让音频 HAL 读 `vendor_gaokun3_prop
 ✅ 作者 2026-09-27 实测（PR #8 的评论；欢乐斗地主，只测了这一款）：本机两个输出线程都是 `type 0 (MIXER)`、
 `No FastMixer`，游戏的 BGM / 音效照常出 `meter:` ⇒ 这条路径在本机**目前不会触发**（不是"挂上了"，是没有 FastMixer 可撞）。
 ⬜ 我们没复核；换了输出配置后复查：`dumpsys media.audio_flinger | grep -E 'Output thread|FastMixer'`。
+⚠️ 2026-10-27：上面"目前不会触发"已经过时。rc.2 起（`patches/0083` + `device.mk` 的 `ro.vendor.audio.primary.out_latency_ms`）
+AudioOut_D 有 FastMixer 了。实机 Project SEKAI：音乐和打击音都在 FAST 轨上，挂 effect 被拒
+（`checkEffectCompatibility_l: non HW effect Gaokun Histen on playback thread in fast mode`、
+`addOutputSessionEffects(): failed to create Fx  Gaokun Histen on session …`）；它另开的一路普通音轨挂上了，
+但在菜单和打歌时都只送静音 ⇒ 这个游戏的声音完全不经过本 effect。要覆盖游戏得在 HAL 里做，见 `speakerfx/README.md`。
 
 ---
 
@@ -144,8 +149,8 @@ SELinux：`sepolicy/hal_audio_default.te` 让音频 HAL 读 `vendor_gaokun3_prop
 
 | 属性 | 取值 | 作用 | 何时生效 |
 |---|---|---|---|
-| `…engine` | `0` / `1`（默认 1） | `0` = 不让 Histen 进链、**只跑扬声器链**（A/B 对照用；不是逐比特直通，直通请关总开关） | 下一次播放 |
-| `…scene` | `0`–`14` | 选 `SWS_SPK_*` 场景（索引同 `histen_scenes.h` 顺序） | 下一次播放 |
+| `…engine` | `0` / `1` / `bass`（默认 1） | `0` = 不让 Histen 进链、**只跑扬声器链**（A/B 对照用；不是逐比特直通，直通请关总开关）；`bass` = 改由音频 HAL 里的低音处理负责扬声器（`speakerfx/README.md`），本 effect 逐比特直通 | `0`/`1`：下一次播放；`bass`：约 1 秒 |
+| `…scene` | `0`–`14` | 选 `SWS_SPK_*` 场景（索引同 `histen_scenes.h` 顺序）。⚠️ 场景 0（默认）和其他扬声器场景只差 p3[96..111] —— EQ 各段的中心频率 —— 而它那一段是一张通用倍频程表（31、62、125…16000 Hz，后半段还错了位），不是调过的频点：同样的增益落在错的频率上，左右还不对称（4 kHz 左比右高约 9 dB，按键音、语音刺耳）。场景 3/6/9/12 的参数表与实测曲线完全相同、左右对称（2026-10-27，离线跑引擎、粉红噪声）。⬜ 默认场景要不要改成 3，留给维护者定 | 下一次播放 |
 | `…eq.N` | `N`=0–10，值 0…203（**无符号**） | **绝对覆盖**场景表的第 N 个 EQ 槽（Histen 里的）。约 0.08 dB/单位；槽 1..8 有效，0/9/10 改不动；≥204 引擎 Init 失败，effect 钳到 203（PR #8 的 eqscan 在场景 3 上标定，见下）。⚠️ 空 = 回落场景基线，所以**切场景前先清空 `eq.*`** | 约 1 秒 |
 | `…ben.{on,thr,gain,freq,a,b}` | 原样透传 | Histen 低音增强（BEN）分字段覆盖，便于逐项扫描 | 约 1 秒 |
 | `…vol.{ana,dig}` | 原样透传 | Histen 的模拟/数字音量字段 | 约 1 秒 |

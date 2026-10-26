@@ -235,6 +235,15 @@ PRODUCT_VENDOR_PROPERTIES += \
 PRODUCT_VENDOR_PROPERTIES += \
     ro.vendor.audio.primary.out_latency_ms=10
 
+# 扬声器低音处理（speakerfx/README.md）：音频 HAL 把每块播放数据写进 ALSA 之前交给这个库
+# （补丁 0117，tree-fix [27]），所以游戏的 FAST 轨也在内 —— 会话音效挂不上 FAST 会话。
+# 只在扬声器增强打开、且 persist.vendor.gaokun3.histen.engine=bass 时处理（会话音效那时是直通），其余原样放过。
+# 装在 /vendor/lib64/soundfx：HAL 跑在 APEX 里，隔离的链接器命名空间只放行这一个 vendor 目录（补丁 0068）。
+PRODUCT_PACKAGES += \
+    libgaokunspeakerfx
+PRODUCT_VENDOR_PROPERTIES += \
+    ro.vendor.audio.primary.playback_hook=/vendor/lib64/soundfx/libgaokunspeakerfx.so
+
 # ------------------------------------------------------------------ 固件
 # [measured] 全部来自 Stage 0 的 dmesg 固件加载路径。
 # 配合 cmdline 里的 firmware_class.path=/vendor/firmware/，
