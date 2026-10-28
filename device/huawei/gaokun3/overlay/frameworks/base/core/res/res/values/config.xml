@@ -197,4 +197,45 @@
     -->
     <integer name="config_ntpRetry">-1</integer>
 
+    <!-- Automatic brightness, from the tcs3701 ambient light sensor the sensors
+         HAL offers (sensors-hal/README.md). No nits mapping is configured, so
+         the framework uses its simple strategy: the lux points below (0 is
+         implied first) to the backlight values that follow, interpolated in
+         between. About 140 of 255 in an indoor room of about 115 lux; the
+         slider in automatic mode shifts the curve per user. -->
+    <bool name="config_automatic_brightness_available">true</bool>
+    <integer-array name="config_autoBrightnessLevels">
+        <item>2</item>
+        <item>5</item>
+        <item>10</item>
+        <item>20</item>
+        <item>40</item>
+        <item>70</item>
+        <item>120</item>
+        <item>200</item>
+        <item>350</item>
+        <item>600</item>
+        <item>1000</item>
+        <item>2000</item>
+        <item>4000</item>
+        <item>8000</item>
+    </integer-array>
+    <integer-array name="config_autoBrightnessLcdBacklightValues">
+        <item>30</item>
+        <item>40</item>
+        <item>50</item>
+        <item>62</item>
+        <item>76</item>
+        <item>92</item>
+        <item>112</item>
+        <item>140</item>
+        <item>160</item>
+        <item>180</item>
+        <item>200</item>
+        <item>218</item>
+        <item>235</item>
+        <item>248</item>
+        <item>255</item>
+    </integer-array>
+
 </resources>
