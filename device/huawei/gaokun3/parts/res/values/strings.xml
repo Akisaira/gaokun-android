@@ -42,11 +42,11 @@
     <string name="standby_note">Turning this off applies right away; turning it on applies from the next time the screen turns off. No restart is needed and the setting survives restarts.\n\nWhile asleep, Wi-Fi is powered off, so new messages arrive only when the screen comes back on, and USB debugging over the cable pauses until the screen is on. Turn standby off if you need messages in real time, or while troubleshooting a tablet that does not wake up.</string>
     <!-- Touch feel switch (2026-10-25, TouchModeSettingsActivity / TouchModeTileService), injected into Settings > System. -->
     <string name="touch_mode_title">Touch feel</string>
-    <string name="touch_mode_summary">Game mode (more responsive) or everyday mode (steadier)</string>
+    <string name="touch_mode_summary">Game mode (no palm rejection) or everyday mode (palm rejection)</string>
     <string name="touch_mode_switch_title">Game touch mode</string>
-    <string name="touch_mode_switch_summary_on">More responsive: no coordinate smoothing, no palm rejection</string>
-    <string name="touch_mode_switch_summary_off">Everyday: smoother lines and palm rejection, slightly more lag</string>
-    <string name="touch_mode_note">Game mode follows your finger with about 25 ms less lag, but lines can look a little shakier, and a palm or the base of the thumb resting on the screen may register as a touch. Everyday mode smooths the reported position and ignores a resting palm, which suits browsing, reading and handwriting.
+    <string name="touch_mode_switch_summary_on">No palm rejection, so a thumb along the edge is never taken for a palm</string>
+    <string name="touch_mode_switch_summary_off">Everyday: palm rejection, a resting hand is ignored</string>
+    <string name="touch_mode_note">Both modes follow your finger equally closely; they differ only in palm rejection. In game mode a palm or the base of the thumb resting on the screen may register as a touch. Everyday mode ignores a resting palm, which suits browsing, reading and handwriting, but a thumb lying flat along the edge of the screen is occasionally taken for a palm, and taps around it are ignored too.
 
 Changes apply right away, no restart needed, and survive restarts. A quick settings tile is also available: edit quick settings and add "Game touch".</string>
     <string name="touch_mode_tile_label">Game touch</string>

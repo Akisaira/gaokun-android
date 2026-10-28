@@ -17,8 +17,8 @@ Subject: [PATCH] Input: himax-spi: 默认采用与EGoTouchRev-rebuild一致的�
 macro门限从800降到280后，第3条掌压规则（面积≥20、平均信号<palm_density_low）
 开始生效，在写字的录制里只在手掌上触发；打歌的录制里四条规则都没有触发。
 
-触摸模式脚本不变，它管的track_smoothing、按下防抖和手掌识别仍按模式设置。日常
-模式打开track_smoothing时，一欧滤波作用在它的输出上。
+track_smoothing、按下防抖和手掌识别仍由触摸模式脚本按模式设置；有了一欧滤波，
+脚本在两种模式下都关掉track_smoothing。
 ---
  drivers/input/touchscreen/hx-algo.c | 31 +++++++++++++++--------------
  1 file changed, 16 insertions(+), 15 deletions(-)

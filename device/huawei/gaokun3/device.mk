@@ -1159,10 +1159,11 @@ PRODUCT_COPY_FILES += \
 #   实测一次甩动被切成 87 条轨迹（详见 bin/gaokun3-touch-mode.sh 顶部）。
 #   ★ 教训：照搬上游预设时，"另外两项是关掉东西，所以第三项也无害"是一次
 #   **没做的功课**，不是一个结论。逐项问"它打开了什么"。
-#   两版预设现在都把 JUMP 清 0，game 与 daily 只差 track_smoothing。
+#   两版预设现在都把 JUMP 清 0；坐标平滑交给驱动的一欧滤波（patches/0120），两版都关
+#   track_smoothing，game 与 daily 只差 hand_enabled（手掌识别）。
 #
-# 默认仍设 game：本机目标是跑手游，game 关掉坐标平滑（省约 25 ms 稳态滞后），
-# 保留按下防抖（2 帧确认，约 8 ms，换噪声不易变成"按下"）。切回来：
+# 默认仍设 game：本机目标是跑手游，game 不做手掌识别，贴着屏幕边缘平放的拇指不会被当成手掌、
+# 连带丢掉周围的点按。切到日常：
 #   setprop persist.sys.gaokun3.touch_mode daily
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/gaokun3-touch-mode.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-touch-mode.sh \
