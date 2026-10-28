@@ -46,7 +46,6 @@ SH3001 Accelerometer: last 50 events
    必须重启 `hexagonrpcd` 才恢复。**干净的 A/B**：停掉 HAL、重建会话，
    独立客户端立刻又能读到 Z≈9.88。
    > 根因是每次重建都在 SSC 上留下一个**被丢弃的客户端**。
-   > 这与"使能光感会污染会话"是同一类现象。
 
 所以现在的逻辑是：**在同一个 client 上重试 `FindSensor`**，绝不为此重建会话。
 —— ★ 这也解释了一个必知的时序事实：**`registry` 服务比物理传感器【先】注册**，
@@ -82,7 +81,7 @@ SLPI 自愈后 SEE 要 hexagonrpcd **在 SLPI 起来之后再重启一次**才�
   开机完成之后）—— 后者不依赖 HAL，息屏没有订阅者时 SLPI 崩了也会收拾。
   每次开机最多 5 次、两次至少隔 120 秒；做 SLPI 实验时 `setprop persist.vendor.gaokun3.sscrecover 0` 关掉。
 * **不报旧值**：缓存样本 2 秒没刷新就当作没有，报 `UNRELIABLE`（原来流断了以后一直报断流前的最后一个值）。
-* 绝不碰 `ambient_light`（#37 / #121）——收拾脚本不开任何 SSC 会话。
+* 收拾脚本不开任何 SSC 会话。
 
 ## 本机能提供什么
 
@@ -90,10 +89,36 @@ SLPI 自愈后 SEE 要 hexagonrpcd **在 SLPI 起来之后再重启一次**才�
 |---|---|
 | `TYPE_ACCELEROMETER` | SSC `accel`（sh3001 六轴）|
 | `TYPE_GYROSCOPE` | SSC `gyro`（同一颗）|
+| `TYPE_LIGHT` | SSC `ambient_light`（tcs3701），**只用连续上报的那个提供者**（见下一节），5 Hz、按订阅启停；SSC 给 {lux, 色温}，只报 lux |
 | Game Rotation Vector / Gravity / Linear Acceleration | ★**框架自动融合出来的**，有 accel+gyro 就有 |
 
 没有的：磁力计（本机无硬件 → 没有指南针、没有 9 轴融合）、
-环境光（一使能就污染 SSC 会话）、接近（同一颗 tcs3701，没试，理由同上）。
+接近（同一颗 tcs3701，但 SSC 里没有注册出 `proximity`）。
+
+## 环境光：只用连续上报的那个提供者
+
+tcs3701 驱动（华为版，在 SLPI 固件里）给 `ambient_light` 注册了**两个** SUID：
+
+| SUID | 流类型（属性 16） | 能不能用 |
+|---|---|---|
+| `57069a9c48dd76bdef49dfb91c177728` | 1，变化时上报（DRI） | ❌ 驱动内部的主传感器（读 registry、探测芯片），不受理客户端请求 |
+| `57069a9c48dd768def497fb916377829` | 0，连续上报，1 / 2 / 5 / 10 Hz | ✅ |
+
+* 给第一个发使能请求：驱动的 `set_client_request` 把请求连同实例一起删掉，SEE 框架随即
+  `SNS_ASSERT(req_found)`（`sns_stream_service.c:436`，"Request %x not found on Instance %x"），
+  `sensor_process` 崩溃、SLPI 整个重启。以前记录的"使能光感污染会话 / 只回一条 msg_id=130"都是这个崩溃
+  （130 里的 4 是 `SNS_STD_ERROR_INVALID_STATE`）。
+* 而**默认的偏偏是它**：registry `default_sensors.ambient_light` 按流类型 = 1 选默认，SUID 查询的
+  `only_default_values` 在 SEE 一侧默认为 true —— 只按默认去查的客户端拿到的都是会崩的那个。
+* 所以 `SscHub` 用 `FindSensors`（显式 `only_default_values=false`）拿到全部提供者，按属性 16 挑流类型
+  为 0 的那个（`FindStreamingLight`），**从不使能默认的那个**；找不到就不开光感（框架里光线传感器
+  没有读数，自动亮度退回手动亮度）。
+* 命令行核对：`gaokun3-ssc-test ambient_light 5 10`（连续上报，工具同样按流类型挑提供者，
+  并拒绝 `onchange`）。
+
+自动亮度的曲线在 `overlay/frameworks/base/core/res/res/values/config.xml`
+（`config_autoBrightnessLevels` / `config_autoBrightnessLcdBacklightValues`，没有 nits 映射，框架走
+`SimpleMappingStrategy`）。
 
 ## 还欠的
 
