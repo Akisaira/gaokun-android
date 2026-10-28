@@ -171,7 +171,7 @@ NET-10 开机探测打到 hicloud 与 miui 两个端点都 204；fcitx5 在输�
 
 ### ④ 1.0 之后（v1.0-plan §7 + 本文件的长期项）
 
-指纹 T6（③ client driver、④ Android HAL；APP-18 支付指纹）· 自动亮度 A3 · 硬件视频编码 A2 · MTP / USB 用途 · BT SCO 通话 · WoW 待机联网 ·
+指纹 T6（③ client driver、④ Android HAL；APP-18 支付指纹）· 硬件视频编码 A2 · MTP / USB 用途 · BT SCO 通话 · WoW 待机联网 ·
 A6 根因（dwc3 / QMP 的 resume 路径）与 B14 息屏 USB adb 原生化 · GPU SMMU 中断根治 B6 · 手掌碎块 T1 · 手写笔 · 相机 30 fps / 变焦 / EV / 画质（T3、A7 余项）·
 游戏音频基础延迟（B25 尾巴 / AV-7）· NET-4 按网络的随机 MAC（连同一次性迁移）· Power HAL 真实现与 RT uclamp · 120 Hz 无缝降频 ·
 quota / projid / casefold · FUSE passthrough · zram · Wi-Fi Direct · 海外 regdomain · B0 构建机的树换成本仓 checkout ·
@@ -362,7 +362,7 @@ B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 
 * ⬜ 手掌碎成多触点（`max_contacts` 打满 10）：三个阈值假设全被实测否决、不影响点击 ⇒ 下一版驱动做跨帧形态判据（DISP-7，1.0 之后）。
 * ⬜ T1b 三道形同虚设的噪声闸门：`patches/0039` 已做成旋钮 `iso_nbr_ratio_q8` / `edge_min_area`、默认值不变 —— 没有证据说幽灵走这两条路，留作边缘幽灵复现时的工具。
 * ⬜ 触摸 IDC（`dumpsys input` 里 `ConfigurationFile: <none>`）：面积轴已有，可以写 `touch.size.calibration`（DISP-6，polish）。
-* ◐ Parts 里的触摸手感开关（2026-10-25 用户要求，有人反馈 game 预设手感差）：「设置 → 系统 → 触摸手感」+ 控制中心「游戏触摸」磁贴，改 `persist.sys.gaokun3.touch_mode`（开 = game、关 = daily）。⬜ 构建、上机：两个入口互相同步、切换后 `algo/track_smoothing` / `hand_enabled` 跟着变、enforcing 零 avc。
+* ◐ Parts 里的触摸手感开关（2026-10-25 用户要求，有人反馈 game 预设手感差）：「设置 → 系统 → 触摸手感」+ 控制中心「游戏触摸」磁贴，改 `persist.sys.gaokun3.touch_mode`（开 = game、关 = daily）。⬜ 构建、上机：两个入口互相同步、切换后 `algo/hand_enabled` 跟着变（`track_smoothing` 两种模式都是 0）、enforcing 零 avc。
 
 ### T2. ⬜ Google 未认证（"设备未经 Play 保护机制认证"）
 修法是把本机的 Android ID 登记一次：工具 `bash scripts/google/gsf-android-id.sh`（新版 GMS 的 ID 在 `shared_prefs/Checkin.xml`，不在 `gservices.db`）、
@@ -396,9 +396,9 @@ B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 
 结论：`v4l2_codec2` 的 `EncodeComponent` 不做 RGBX → NV12 转换，开着比关着更糟（rank 压过软编、应用直接失败），所以编码属性故意注释掉、`verify-hw-codec2.sh` 断言"必须没有编码组件"；录屏 / 录像走软编。
 1.0 只在 AV-1 出片后做一次测量（AV-13）。过程记录见 [archive/TODO-history-2026-10.md#a2](archive/TODO-history-2026-10.md#a2)。
 
-### A3. 自动亮度（环境光）—— 1.0 之后
-现状：`tcs3701` 注册出来、芯片应答（#118 §5），但一使能光感 SLPI 的 sensor_process 就整个崩溃（[#121](stage4-findings.md)，`sns_stream_service.c:436`）；Windows 在本机用的也是 QRD 那套 JSON ⇒ 差别只剩 DSP 自己写的 registry。
-⬜ 下一步：让 hexagonrpcd 可写（FadyAckad `sp11-sensors` 分支；psacal 称加写入桩后 ~408 lux，未复现）。⚠️ 激活光感会让 SLPI 崩（B21 的恢复服务能收拾）。
+### A3. 自动亮度（环境光）—— ✅ #54
+tcs3701 的驱动给 `ambient_light` 注册了两个 SUID，默认的那个（变化时上报）是驱动内部的主传感器，一使能 SLPI 就崩溃（`sns_stream_service.c:436` 的 `req_found` 断言）；连续上报的那个可用。传感器 HAL 只用后者（`SscHub::FindStreamingLight`），overlay 打开自动亮度。细节见 [`device/huawei/gaokun3/sensors-hal/README.md`](../device/huawei/gaokun3/sensors-hal/README.md) 的"环境光"一节。
+⬜ A17 构建上机看一眼光线传感器和自动亮度（#54 只在 A16 rc.2 上实测过）。
 2026-09-23 之前"芯片不应答"的定性与 `scripts/ssc/` 实验记录见 [archive/TODO-history-2026-10.md#a3](archive/TODO-history-2026-10.md#a3)。
 
 ### A5. 恢复出厂设置不起作用 —— ◐ 已交给统一启动入口

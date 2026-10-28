@@ -62,13 +62,24 @@ class SscClient {
     bool WaitForService(int timeout_ms, std::string* err);
 
     // 查某个 data_type 对应的真实传感器 UID（多个时取第一个）。
+    // Asks for the default provider only (the SUID sensor's own default for the
+    // request), which is what registry default_sensors.<data_type> selects.
     bool FindSensor(const std::string& data_type, SscUid* out, std::string* err);
     // 同上，但返回全部 UID（一个 data_type 可能有多个提供者，比如物理芯片 + 虚拟传感器）。
+    // Sends only_default_values = false: SEE defaults that field to true, and
+    // without it only the default provider comes back.
     bool FindSensors(const std::string& data_type, std::vector<SscUid>* out,
                      std::string* err);
 
     // 发属性请求（msg_id=1）；应答是 msg_id=128 的 SscAttrResponse，由 ReadReports 收。
     bool RequestAttributes(const SscUid& uid, std::string* err);
+
+    // Request the attributes of uid and return the first integer value of
+    // attribute attr_id (for example 16, SNS_STD_SENSOR_ATTRID_STREAM_TYPE).
+    // Reports for other sensors that arrive meanwhile are dropped, so call it
+    // before enabling anything on this client.
+    bool GetIntAttribute(const SscUid& uid, int32_t attr_id, int64_t* value,
+                         std::string* err);
 
     // 变化时上报（msg_id=514）。环境光、接近这类 on-change 传感器要用这个，不是 513。
     bool EnableOnChange(const SscUid& uid, float rate_hz, std::string* err);
@@ -86,6 +97,8 @@ class SscClient {
     uint32_t service_port() const { return port_; }
 
   private:
+    bool Lookup(const std::string& data_type, bool default_only,
+                std::vector<SscUid>* out, std::string* err);
     bool SendRequest(uint64_t uid_low, uint64_t uid_high, uint32_t msg_id,
                      const std::string& sub_msg, std::string* err);
     bool RecvSdu(std::vector<uint8_t>* sdu, int timeout_ms);

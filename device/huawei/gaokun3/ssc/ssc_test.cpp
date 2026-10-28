@@ -13,7 +13,7 @@
  *   gaokun3-ssc-test                     读加速度计 10 Hz 10 秒
  *   gaokun3-ssc-test accel 20 5          指定 data_type / 采样率 / 秒数
  *   gaokun3-ssc-test gyro
- *   gaokun3-ssc-test ambient_light 1 10 onchange   用 514（变化时上报）使能
+ *   gaokun3-ssc-test ambient_light 5 10            the streaming light provider
  *   gaokun3-ssc-test accel 50 20 toggle  同会话循环开关：50 Hz、循环 20 轮
  *                                        ★ toggle 模式下第 3 个参数是【轮数】，不是秒数
  * 非 toggle 模式每次都会列出该 data_type 的【全部】UID 并打印其属性（名字、厂商等
@@ -32,10 +32,13 @@
  * data_type 可用值见 docs/sensors-ssc-protocol.md（accel / gyro / mag /
  * ambient_light / proximity / rotv）。
  *
- * ⚠️ ambient_light：2026-09-23 起 tcs3701 能注册出来（#118），但使能后只回一条
- *    msg_id=130（载荷 08 04）、没有读数，而且仍会污染整个 SSC 会话 —— 之后连加速度计
- *    也读不到，必须重启 hexagonrpcd（#37）。测完它就按 scripts/ssc/README 收工。
- *    ★ toggle 模式绝对不要用它（会话一被污染，后面每一轮都是假阴性）—— 程序也会拒绝。
+ * ambient_light: tcs3701 registers two providers. The default one is
+ *    on-change and is the driver's internal sensor: enabling it makes the SLPI's
+ *    sensor_process assert (sns_stream_service.c:436) and the SLPI restarts.
+ *    The streaming one works:
+ *      gaokun3-ssc-test ambient_light 5 10      (513, picks the streaming provider)
+ *    The tool picks the provider whose stream type fits the request and refuses
+ *    ambient_light with onchange; toggle mode takes accel / gyro only.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -290,10 +293,11 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (mode == "toggle") {
-        // ambient_light 会污染整个 SSC 会话（文件头的警告）；HAL 也只开这两路
+        // Toggle mode enables the default provider (FindSensor), which for
+        // ambient_light is the one that crashes the SLPI (see the file header).
         if (data_type != "accel" && data_type != "gyro") {
             fprintf(stderr, "toggle 模式只接受 accel / gyro（收到 %s）。"
-                            "ambient_light 尤其不行：它会污染整个 SSC 会话\n",
+                            "ambient_light 尤其不行：默认的那个光感一使能 SLPI 就崩溃\n",
                     data_type.c_str());
             return 1;
         }
@@ -334,12 +338,27 @@ int main(int argc, char** argv) {
                static_cast<unsigned long long>(uids[k].low()));
         if (client.RequestAttributes(uids[k], &err)) PrintAttributes(&client, uids[k]);
     }
-    const SscUid uid = uids[0];
+    const bool on_change = (mode == "onchange");
+    if (on_change && data_type == "ambient_light") {
+        fprintf(stderr, "ambient_light 不能用 onchange：变化时上报的那个光感一使能 SLPI 就崩溃，"
+                        "用连续上报（去掉 onchange）\n");
+        return 1;
+    }
+    // Several providers can share a data_type (ambient_light has two); use the
+    // first whose stream type (attribute 16) fits the request: 0 (streaming)
+    // for 513, 1 (on-change) for 514.
+    SscUid uid = uids[0];
+    for (const SscUid& u : uids) {
+        int64_t type = -1;
+        std::string e;
+        if (client.GetIntAttribute(u, 16, &type, &e) && type == (on_change ? 1 : 0)) {
+            uid = u;
+            break;
+        }
+    }
     printf("传感器 %s 的 UID = %016llx%016llx\n", data_type.c_str(),
            static_cast<unsigned long long>(uid.high()),
            static_cast<unsigned long long>(uid.low()));
-
-    const bool on_change = (mode == "onchange");
     const bool ok = on_change ? client.EnableOnChange(uid, rate_hz, &err)
                               : client.EnableContinuous(uid, rate_hz, &err);
     if (!ok) {

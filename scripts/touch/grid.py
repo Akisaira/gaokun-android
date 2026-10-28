@@ -21,7 +21,7 @@
 import struct, sys
 
 ROWS, COLS = 40, 60
-MACRO_DEFAULT = 800          # hx_algo_init_defaults() 的 macro_threshold
+MACRO_DEFAULT = 280          # hx_algo_init_defaults() 的 macro_threshold（patches/0122 前是 800）
 RAMP = ' .:-=+*#%@'
 
 def load(path):

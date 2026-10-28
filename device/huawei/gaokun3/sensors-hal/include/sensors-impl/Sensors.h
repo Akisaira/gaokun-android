@@ -47,16 +47,19 @@ class Sensors : public BnSensors, public ISensorsEventCallback {
           mReadWakeLockQueueRun(false),
           mAutoReleaseWakeLockTime(0),
           mHasWakeLock(false) {
-        // ★ 本机实际存在且可用的只有这两个（SSC 亲口回答，见
+        // ★ 本机实际存在且可用的只有这三个（SSC 亲口回答，见
         //   docs/stage4-findings.md #37）：
         //     accel / gyro     ✅ 同一颗 sh3001 六轴
         //     mag              ❌ 本机没有磁力计硬件 → 没有指南针
         //     rotv             ❌ 未注册（融合旋转矢量多半需要磁力计）
-        //     ambient_light    ❌ 一使能就污染整个 SSC 会话，坚决不暴露
+        //     ambient_light    ✅ only the streaming provider: enabling the
+        //                        default (on-change) one crashes the SLPI
+        //                        (see SscHub.cpp, FindStreamingLight)
         //   AOSP 默认实现里那 7 个是【假数据】示例，报上去会让框架以为
         //   本机有气压计/湿度计，所以必须删掉，不能留着。
         AddSensor<AccelSensor>();
         AddSensor<GyroSensor>();
+        AddSensor<LightSensor>();
     }
 
     virtual ~Sensors() {

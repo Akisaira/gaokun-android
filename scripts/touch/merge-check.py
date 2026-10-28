@@ -3,7 +3,7 @@
 
 hx_track_contacts() 里，没匹配上的轨迹不立刻释放，而是保留 track_lost_frames 帧、照常按"按着"上报
 （位置停在最后一帧，himax-spi-core.c himax_report_tracked_state()）。这期间在预测位置
-track_dist2_max 以内（出厂 420 单位 ≈ 44 mm）冒出来的新触点会被接到这条旧轨迹上 ——
+track_dist2_max 以内（出厂 420 单位 ≈ 44 mm；patches/0116 起默认 115 单位 ≈ 12 mm）冒出来的新触点会被接到这条旧轨迹上 ——
 对系统来说没有新的"按下"，旧手指"滑"了过去：新的那一下点击丢了。
 
 指纹：同一条轨迹里位置【一动不动】停 ≥1 帧，下一帧【瞬移】≥ JUMP_MM。
@@ -18,6 +18,9 @@ _spec = importlib.util.spec_from_file_location("evdev_strokes", os.path.join(_he
 es = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(es)
 
 JUMP_MM = 6.0
+# 冻结只可能持续 track_lost_frames（3）帧，再留 1 帧余量。patches/0119/0120 起，按住不动的手指
+# 一直报同一个点，长时间的"冻结"后接一次快速滑动不是并轨。
+MAX_FROZEN = 4
 
 
 def merges(pts):
@@ -36,7 +39,7 @@ def merges(pts):
         gap_frames = round((pts[k][0] - pts[k - 1][0]) / 0.00833) - 1
         f = frozen + max(0, gap_frames)
         d = math.hypot(dx, dy) * es.MM_PER_UNIT
-        if f >= 1 and d >= JUMP_MM:
+        if 1 <= f <= MAX_FROZEN and d >= JUMP_MM:
             out.append((f, d, (pts[k][0] - pts[k - 1 - frozen][0]) * 1000))
         frozen = 0
     return out

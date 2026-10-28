@@ -263,15 +263,21 @@ bool SscClient::WaitForService(int timeout_ms, std::string* err) {
 bool SscClient::FindSensor(const std::string& data_type, SscUid* out,
                            std::string* err) {
     std::vector<SscUid> all;
-    if (!FindSensors(data_type, &all, err)) return false;
+    if (!Lookup(data_type, true, &all, err)) return false;
     *out = all[0];
     return true;
 }
 
 bool SscClient::FindSensors(const std::string& data_type,
                             std::vector<SscUid>* out, std::string* err) {
+    return Lookup(data_type, false, out, err);
+}
+
+bool SscClient::Lookup(const std::string& data_type, bool default_only,
+                       std::vector<SscUid>* out, std::string* err) {
     SscSuidRequest suid;
     suid.set_data_type(data_type);
+    suid.set_only_default_values(default_only);
     std::string sub;
     suid.SerializeToString(&sub);
     if (!SendRequest(kSuidSentinel, kSuidSentinel, kMsgRequestSuid, sub, err))
@@ -330,6 +336,38 @@ bool SscClient::RequestAttributes(const SscUid& uid, std::string* err) {
     req.SerializeToString(&sub);
     return SendRequest(uid.low(), uid.high(), kMsgRequestGetAttributes, sub,
                        err);
+}
+
+bool SscClient::GetIntAttribute(const SscUid& uid, int32_t attr_id,
+                                int64_t* value, std::string* err) {
+    if (!RequestAttributes(uid, err)) return false;
+    for (int t = 0; t < 3; t++) {
+        std::vector<SscReport> reports;
+        std::string ignore;
+        if (!ReadReports(&reports, 1000, &ignore)) continue;
+        for (const SscReport& r : reports) {
+            if (r.msg_id != kMsgResponseGetAttributes) continue;
+            if (r.uid_low != uid.low() || r.uid_high != uid.high()) continue;
+            SscAttrResponse resp;
+            if (!resp.ParseFromString(r.payload)) {
+                *err = "attribute response does not parse";
+                return false;
+            }
+            for (int a = 0; a < resp.attr_size(); a++) {
+                const SscAttr& at = resp.attr(a);
+                if (at.id() != attr_id) continue;
+                for (int v = 0; v < at.value_array().v_size(); v++) {
+                    if (!at.value_array().v(v).has_i()) continue;
+                    *value = static_cast<int64_t>(at.value_array().v(v).i());
+                    return true;
+                }
+            }
+            *err = "no integer attribute " + std::to_string(attr_id);
+            return false;
+        }
+    }
+    *err = "no attribute response within 3 s";
+    return false;
 }
 
 bool SscClient::Disable(const SscUid& uid, std::string* err) {
