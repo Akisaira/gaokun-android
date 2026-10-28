@@ -5,9 +5,12 @@
 #   hal_audio_default_exec（hardware/interfaces/audio/aidl/default/apex/
 #   com.android.hardware.audio/file_contexts:4，crDroid 16.0；17.0 同一行未变，2026-10-25 核对）⇒ 域是 hal_audio_default。
 #
-# 读的是两样，都在 vendor_gaokun3_prop 下（property_contexts）：
+# 读的是这几样，都在 vendor_gaokun3_prop 下（property_contexts）：
 #   * vendor.gaokun3.histen.on          总开关的镜像（etc/histen.rc 从 persist.sys.gaokun3.histen 抄过来）
+#   * vendor.gaokun3.speakerfx.engine   处理方式的镜像（同一个 rc 从 persist.sys.gaokun3.speakerfx.engine 抄）
 #   * persist.vendor.gaokun3.histen.*   调参旋钮（root setprop）
+#   * persist.vendor.gaokun3.speakerfx.* 低音处理的旋钮。speakerfx（speakerfx/）由核心音频 HAL dlopen，
+#     同一个 APEX、同一个域，读的也是这一条 get_prop
 #   PR 原版的旋钮叫 persist.gaokun3.histen.*，落在 default_prop（system_internal_prop，
 #   public/property.te:279）⇒ private/property.te:179-184 让 vendor 域【永远】读不到。
 get_prop(hal_audio_default, vendor_gaokun3_prop)

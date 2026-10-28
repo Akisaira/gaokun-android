@@ -4,9 +4,11 @@
 不让低音把人声和高频压下去。它跑在**音频 HAL 里**，处理的是 AudioFlinger 混好、马上要写进 ALSA
 的那一块数据，所以扬声器放出来的所有声音都经过它：音乐、游戏的低延迟（FAST）音轨、铃声、通知、系统音。
 
-> ★ **默认不开。** 打开方式：「设置 → 声音 → 扬声器增强」打开（`persist.sys.gaokun3.histen`），
-> 再用 root 设 `persist.vendor.gaokun3.histen.engine=bass`。这时会话音效（effects/）变成逐比特直通，
-> 不会处理两遍。只认内置扬声器的 PCM（card 0 / device 1），耳机、蓝牙、USB 不经过它。
+> ★ **默认不开。** 打开方式：「设置 → 声音 → 扬声器增强」打开（`persist.sys.gaokun3.histen`）。
+> 同一页的「处理方式」默认就是「低音增强」（`persist.sys.gaokun3.speakerfx.engine`，没设过 = `bass`）；
+> 选「华为 Histen」时改由会话音效（effects/）处理，这个库直通。两边由 `etc/histen.rc` 的同一个镜像
+> `vendor.gaokun3.speakerfx.engine` 决定谁动手，不会处理两遍。只认内置扬声器的 PCM（card 0 / device 1），
+> 耳机、蓝牙、USB 不经过它。
 
 ---
 
@@ -33,7 +35,8 @@ HAL 拿到的是 FAST 轨也已经混进去的最终结果。在这里处理还�
 | `speakerfx/bass_chain.h` | 低音处理本体（DSP），做法与每一部分的理由写在文件头 |
 | `speakerfx/bass_chain_coeffs.h` / `gen_bass_coeffs.py` | 谐波生成用的 90 度移相网络系数及其生成器（numpy + scipy；输出确定性，重跑后 diff 应为空） |
 | `device.mk` | `PRODUCT_PACKAGES += libgaokunspeakerfx`，`ro.vendor.audio.primary.playback_hook=/vendor/lib64/soundfx/libgaokunspeakerfx.so` |
-| `effects/gaokun_effect.cpp` | `engine=bass` 时会话音效保持逐比特直通。它每 16 块重读一次引擎，speakerfx 每 100 ms 重读一次开关和引擎：播放中途换引擎时，两边可能同时处理（或都不处理）不到一秒，响度仍受 speakerfx 的限幅器约束 |
+| `parts/`（`SpeakerFxSettingsActivity`）、`etc/histen.rc` | 「处理方式」：Parts 写 `persist.sys.gaokun3.speakerfx.engine`，init 镜像成 `vendor.gaokun3.speakerfx.engine`（HAL 读不了 `persist.sys.*`，理由同总开关） |
+| `effects/gaokun_effect.cpp` | 处理方式不是 Histen 时会话音效保持逐比特直通。它每 16 块重读一次处理方式，speakerfx 每 100 ms 重读一次开关和处理方式：播放中途切换时，两边可能同时处理（或都不处理）不到一秒，响度仍受 speakerfx 的限幅器约束 |
 | `bin/audio-route.sh`、`etc/audioroute.rc`、`sepolicy/gaokun3_scripts.te` | 数字音量余量（第三节） |
 
 处理链（48 kHz 立体声）：
@@ -66,7 +69,7 @@ HAL 拿到的是 FAST 轨也已经混进去的最终结果。在这里处理还�
 
 ## 四、旋钮
 
-都在 `persist.vendor.gaokun3.histen.bass.*` 下（`vendor_gaokun3_prop`，要 root），约 1 秒内生效；没设 = 默认值。
+都在 `persist.vendor.gaokun3.speakerfx.bass.*` 下（`vendor_gaokun3_prop`，要 root），约 1 秒内生效；没设 = 默认值。
 
 | 属性 | 默认（范围） | 作用 |
 |---|---|---|
@@ -82,7 +85,7 @@ HAL 拿到的是 FAST 轨也已经混进去的最终结果。在这里处理还�
 | `…bass.xtcdist` | 30 cm（15–200） | 听音距离 |
 | `…bass.xtclo` | 250 Hz（100–2000） | 串扰消除的下限。听到的"变宽"大多来自 300–600 Hz 的侧信号提升，那里也是左右分轨吉他的主体：调高（450–700 Hz）吉他更干净，变宽也就几乎听不出来 |
 | `…bass.makeup` | +4 dB（−20–12） | 链内补偿增益（实际用的是它减去 `boost`） |
-| `vendor.gaokun3.histen.bass.ref` | 空 | `1` = A/B 参考：按低音处理的人声电平原样输出，同样经过限幅器、同样的延迟。不持久 |
+| `vendor.gaokun3.speakerfx.ref` | 空 | `1` = A/B 参考：按低音处理的人声电平原样输出，同样经过限幅器、同样的延迟。不持久 |
 | `vendor.gaokun3.histen.boost` | 开机时由脚本写 | 混音器借了多少 dB。**不要手动改** |
 
 ## 五、验证
@@ -96,7 +99,7 @@ adb shell su -c 'tinymix "WSA_RX0 Digital Volume"'
 |---|---|
 | `playback hook: using /vendor/lib64/soundfx/libgaokunspeakerfx.so`（AHAL_StreamPrimary） | HAL 加载了钩子库（第一次播放时） |
 | `speaker stream open: format 0` | 扬声器流开了，库接管了它 |
-| `processing (boost 6 dB)` 及其后的 `knobs: …` | 开始处理；`passthrough` = 开关关或引擎不是 bass |
+| `processing (boost 6 dB)` 及其后的 `knobs: …` | 开始处理；`passthrough` = 开关关或处理方式是 Histen |
 | `meter: peak in … out …, lc …, bass-gr …, gr …, boost …, ref …, … us/block …` | 每 ~2 秒一行：峰值、响度补偿、低音组 / 全频的最大衰减、借的音量、每块耗时 |
 | `扬声器数字音量 84（低音链余量 6 dB）`（tag `audioroute`） | 借到了余量；关掉开关后回到 78、余量 0 |
 

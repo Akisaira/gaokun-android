@@ -10,11 +10,22 @@
     <string name="tile_on">On</string>
     <string name="tile_off">Off</string>
     <string name="speaker_fx_title">Speaker enhancement (experimental)</string>
-    <string name="speaker_fx_summary">Huawei Histen processing for the built-in speakers</string>
+    <string name="speaker_fx_summary">Bass enhancement or Huawei Histen for the built-in speakers</string>
     <string name="speaker_fx_switch_title">Enable speaker enhancement</string>
-    <string name="speaker_fx_switch_summary_on">Media played on the built-in speakers is processed</string>
+    <string name="speaker_fx_switch_summary_on">Sound from the built-in speakers is processed</string>
     <string name="speaker_fx_switch_summary_off">Audio is passed through unchanged</string>
-    <string name="speaker_fx_note">Experimental. Only media audio (music, video, games) on the built-in speakers is processed; headphones, Bluetooth and USB audio are never touched. Turning it on applies from the next playback; turning it off applies within about a second. If the sound is distorted or cuts out, turn it off.</string>
+    <string name="speaker_fx_engine_title">Processing</string>
+    <string name="speaker_fx_engine_bass">Bass enhancement</string>
+    <string name="speaker_fx_engine_histen">Huawei Histen</string>
+    <string-array name="speaker_fx_engine_entries">
+        <item>@string/speaker_fx_engine_bass</item>
+        <item>@string/speaker_fx_engine_histen</item>
+    </string-array>
+    <string-array name="speaker_fx_engine_values" translatable="false">
+        <item>bass</item>
+        <item>histen</item>
+    </string-array>
+    <string name="speaker_fx_note">Experimental. Only the built-in speakers are processed; headphones, Bluetooth and USB audio are never touched. Bass enhancement processes everything the speakers play, games included. Huawei Histen processes media (music, video) only, and games that use low-latency audio bypass it. Changes apply within about a second, except that Histen takes effect from the next playback. If the sound is distorted or cuts out, turn it off.</string>
     <!-- USB-C port notices (v1.0 PWR-4 / USB-1, UsbPortNotifier). port0 = the port next to the power button. -->
     <string name="usb_port_channel">USB-C port</string>
     <string name="usb_port_channel_desc">Problems with the USB-C port next to the power button</string>

@@ -22,3 +22,18 @@ on property:persist.sys.gaokun3.histen=0
 # 只补"开"：关着的时候镜像不存在，本来就等于关。
 on boot && property:persist.sys.gaokun3.histen=1
     setprop vendor.gaokun3.histen.on 1
+
+# 处理方式（Parts 写 persist.sys.gaokun3.speakerfx.engine）：同样镜像成 vendor.gaokun3.speakerfx.engine，
+# speakerfx 与会话音效都读镜像。只有 "histen" 交给会话音效里的 Histen；没设过 / "bass" = 低音增强（speakerfx），
+# 两边判据相同（speakerfx.cpp 的 wanted()、gaokun_effect.cpp 的 engineInHal()）。
+# 和总开关同一种写法：按值逐条写触发器（触发条件由 init 自己求值），不用 ${…} 把 system_prop 的值展开进动作。
+
+on property:persist.sys.gaokun3.speakerfx.engine=histen
+    setprop vendor.gaokun3.speakerfx.engine histen
+
+on property:persist.sys.gaokun3.speakerfx.engine=bass
+    setprop vendor.gaokun3.speakerfx.engine bass
+
+# 开机补一次，只补 histen：镜像不存在本来就是低音增强。
+on boot && property:persist.sys.gaokun3.speakerfx.engine=histen
+    setprop vendor.gaokun3.speakerfx.engine histen

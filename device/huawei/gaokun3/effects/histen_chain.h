@@ -149,7 +149,13 @@ constexpr size_t kApplyBufSize = 82024;
 /* How much memory to actually give both p2 and the work buffer: 1 MB, matching
  * both verified call sequences.  Never shrink this to kApplyBufSize. */
 constexpr size_t kScratchSize = 0x100000;
-constexpr int kDefScene = 0;          /* SWS_SPK_LANDSCAPE_ONE                  */
+/* Scene 3 = SWS_SPK_LANDSCAPE_TWO.  Scene 0 (LANDSCAPE_ONE) differs from the
+ * other speaker scenes only in p3[96..111], the EQ band centres, and has a
+ * generic octave table there, misaligned in its upper half: its gains land
+ * on the wrong frequencies and the channels come out unbalanced (about 9 dB
+ * more at 4 kHz on the left).  Scenes 3/6/9/12 are identical and symmetric;
+ * 3 is also the one eqscan calibrated (below). */
+constexpr int kDefScene = 3;
 constexpr size_t kP3Bytes = 510;      /* scene p3 payload                       */
 constexpr size_t kExtBytes = 32;      /* scene ext payload                      */
 
@@ -264,7 +270,7 @@ inline uint16_t extU16(long v) {
  * The last point is why buildP3() clamps to 0..203: an out-of-range knob would
  * otherwise fail Init, and a failed Init silently drops the whole Histen stage
  * for that stream (init() returns false and only the speaker chain runs).
- * Only scene 3 was swept; the default scene 0 has different idx96.. values.
+ * Only scene 3 (the default) was swept; scene 0 has different idx96.. values.
  * ------------------------------------------------------------------------- */
 constexpr int kEqBase = 60;    /* idx60                                      */
 constexpr int kEqLen = 11;     /* idx60..70                                  */

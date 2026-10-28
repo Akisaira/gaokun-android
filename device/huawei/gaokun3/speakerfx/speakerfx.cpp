@@ -26,13 +26,16 @@
  *
  * WHEN IT PROCESSES
  * Only while the speaker enhancement is on (vendor.gaokun3.histen.on = 1,
- * init's mirror of the Parts switch) with persist.vendor.gaokun3.histen.engine
- * = bass; the session effect is a wire then (gaokun_effect.cpp), so nothing
- * is processed twice.  Otherwise the buffer is left alone -- except for the
- * mixer boost below.  The switch, the engine and the boost are re-read every
- * 100 ms; the effect re-reads the engine every 16 buffers, so changing the
- * engine mid-stream can process a stream twice (or not at all) for well
- * under a second, with this chain's limiter still holding the ceiling.
+ * init's mirror of the Parts switch) and the processing mode next to it is
+ * not Histen (vendor.gaokun3.speakerfx.engine, init's mirror of
+ * persist.sys.gaokun3.speakerfx.engine: unset or "bass" -- the default --
+ * means this chain).  The session effect applies the same rule
+ * (gaokun_effect.cpp), so nothing is processed twice.  Otherwise the buffer
+ * is left alone -- except for the mixer boost below.  The switch, the mode
+ * and the boost are re-read every 100 ms; the effect re-reads the mode every
+ * 16 buffers, so changing it mid-stream can process a stream twice (or not
+ * at all) for well under a second, with this chain's limiter still holding
+ * the ceiling.
  *
  * MIXER BOOST
  * With engine = bass, audio-route.sh sets the WSA digital volume 6 dB higher
@@ -45,22 +48,22 @@
  * the normal mixer setting.
  *
  * KNOBS (re-read about once a second; vendor_gaokun3_prop, root to set)
- *   persist.vendor.gaokun3.histen.bass.lowboost  dB, 0..24        (14)
- *   persist.vendor.gaokun3.histen.bass.lowhp     Hz, 0 or 20..120 (50)
- *   persist.vendor.gaokun3.histen.bass.lowsub    dB, -99..12      (10; <= -60 removes it)
- *   persist.vendor.gaokun3.histen.bass.trim      dB, -12..0       (-3)
- *   persist.vendor.gaokun3.histen.bass.harm      dB, -99..0       (-9; <= -60 off)
- *   persist.vendor.gaokun3.histen.bass.lc        dB/dB, 0..1      (0.15)
- *   persist.vendor.gaokun3.histen.bass.lcmax     dB, 0..18        (12)
- *   persist.vendor.gaokun3.histen.bass.mbc       0 / 1            (1)
- *   persist.vendor.gaokun3.histen.bass.xtc       0..0.9           (0.55; 0 off)
- *   persist.vendor.gaokun3.histen.bass.xtcdist   cm, 15..200      (30)
- *   persist.vendor.gaokun3.histen.bass.xtclo     Hz, 100..2000    (250)
- *   persist.vendor.gaokun3.histen.bass.makeup    dB, -20..12      (4, before the boost)
- *   vendor.gaokun3.histen.bass.ref               1 = A/B reference (not persistent)
+ *   persist.vendor.gaokun3.speakerfx.bass.lowboost  dB, 0..24        (14)
+ *   persist.vendor.gaokun3.speakerfx.bass.lowhp     Hz, 0 or 20..120 (50)
+ *   persist.vendor.gaokun3.speakerfx.bass.lowsub    dB, -99..12      (10; <= -60 removes it)
+ *   persist.vendor.gaokun3.speakerfx.bass.trim      dB, -12..0       (-3)
+ *   persist.vendor.gaokun3.speakerfx.bass.harm      dB, -99..0       (-9; <= -60 off)
+ *   persist.vendor.gaokun3.speakerfx.bass.lc        dB/dB, 0..1      (0.15)
+ *   persist.vendor.gaokun3.speakerfx.bass.lcmax     dB, 0..18        (12)
+ *   persist.vendor.gaokun3.speakerfx.bass.mbc       0 / 1            (1)
+ *   persist.vendor.gaokun3.speakerfx.bass.xtc       0..0.9           (0.55; 0 off)
+ *   persist.vendor.gaokun3.speakerfx.bass.xtcdist   cm, 15..200      (30)
+ *   persist.vendor.gaokun3.speakerfx.bass.xtclo     Hz, 100..2000    (250)
+ *   persist.vendor.gaokun3.speakerfx.bass.makeup    dB, -20..12      (4, before the boost)
+ *   vendor.gaokun3.speakerfx.ref                    1 = A/B reference (not persistent)
  *
  * Built standalone with GAOKUN_SPKFX_MASTER_ONLY (the KernelSU test module
- * for 1.0.0-rc.2, whose effect does not know engine=bass) the engine property
+ * for 1.0.0-rc.2, whose effect does not know the processing mode) the mode
  * is not checked.
  *
  * Log tag gaokun_spkfx: one line per open / state change / knob change, and
@@ -90,15 +93,15 @@ constexpr int kSpeakerDevice = 1;
 constexpr int kFormatS16 = 0;   /* tinyalsa PCM_FORMAT_S16_LE */
 constexpr int kFormatS32 = 1;   /* tinyalsa PCM_FORMAT_S32_LE */
 
-constexpr unsigned kGateFrames = 4800;       /* switch, engine and boost every 100 ms */
+constexpr unsigned kGateFrames = 4800;       /* switch, mode and boost every 100 ms */
 constexpr unsigned kRefreshFrames = 48000;   /* all knobs about once a second */
 constexpr unsigned kStatFrames = 96000;      /* a log line every ~2 s */
 
 constexpr char kMasterProp[] = "vendor.gaokun3.histen.on";
-constexpr char kEngineProp[] = "persist.vendor.gaokun3.histen.engine";
+constexpr char kEngineProp[] = "vendor.gaokun3.speakerfx.engine";
 constexpr char kBoostProp[] = "vendor.gaokun3.histen.boost";
-constexpr char kRefProp[] = "vendor.gaokun3.histen.bass.ref";
-#define BASS_PROP(name) "persist.vendor.gaokun3.histen.bass." name
+constexpr char kRefProp[] = "vendor.gaokun3.speakerfx.ref";
+#define BASS_PROP(name) "persist.vendor.gaokun3.speakerfx.bass." name
 
 void logi(const char *fmt, ...) {
     va_list ap;
@@ -129,7 +132,7 @@ bool wanted() {
     (void)kEngineProp;
     return propIs(kMasterProp, "1");
 #else
-    return propIs(kMasterProp, "1") && propIs(kEngineProp, "bass");
+    return propIs(kMasterProp, "1") && !propIs(kEngineProp, "histen");
 #endif
 }
 

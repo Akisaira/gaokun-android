@@ -8,6 +8,16 @@
         android:summaryOn="@string/speaker_fx_switch_summary_on"
         android:summaryOff="@string/speaker_fx_switch_summary_off"
         android:defaultValue="false" />
+    <!-- 处理方式：低音增强（音频 HAL 里的 speakerfx）或华为 Histen（会话音效）。
+         真值也在属性里，见 SpeakerFxSettingsActivity；开关关着时变灰。 -->
+    <ListPreference
+        android:key="speaker_fx_engine"
+        android:title="@string/speaker_fx_engine_title"
+        android:dialogTitle="@string/speaker_fx_engine_title"
+        android:entries="@array/speaker_fx_engine_entries"
+        android:entryValues="@array/speaker_fx_engine_values"
+        android:dependency="speaker_fx_enabled"
+        android:persistent="false" />
     <com.android.settingslib.widget.FooterPreference
         android:key="speaker_fx_note"
         android:title="@string/speaker_fx_note"
