@@ -33,45 +33,6 @@ M=/system/bin/tinymix
 [ -x $M ] || M=/vendor/bin/tinymix
 [ -x $M ] || { log -t audioroute "找不到 tinymix，放弃"; exit 1; }
 
-# 右功放有没有 qcom,port-mapping（patches/0115），决定 VISENSE 与数字音量的基准，见扬声器段开头。
-SPK_MAP=/sys/firmware/devicetree/base/soc@0/soundwire@3250000/wsa8830-right@0,2/qcom,port-mapping
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 扬声器低音处理（persist.vendor.gaokun3.histen.engine=bass，speakerfx/README.md）的数字音量余量。
-#
-# 引擎是 bass、内核带 0113–0115（数字音量基准 78）、装了 speakerfx 时，开机这一遍把 WSA 数字音量
-# 设成 84（单位增益），多出来的 6 写进 vendor.gaokun3.histen.boost。音频 HAL 里的 speakerfx 一直按它
-# 补偿：处理时从 makeup 里减掉，开关关着时把直通的声音衰减 6 dB。所以开关开不开，响度都和基准一样；
-# 开着时，低音处理 -1 dBFS 的天花板离功放的上限近了 6 dB，这段余量给低音。处理是在 HAL 里对扬声器的
-# 全部声音做的（游戏的 FAST 轨、铃声、通知都在内），没有哪一路声音会因此变响。其他情况 boost 是 0、
-# 数字音量就是基准。
-#
-# 只在开机这一遍按当时的引擎决定，不跟开关走。开机后改引擎：speakerfx 立刻跟着开始 / 停止处理，
-# 余量等下次开机才变；两个方向都不会偏响（boost 还在，它就一直衰减；boost 是 0，就是基准）。
-# ⚠️ 混音器是 84、speakerfx 却没加载上（logcat 里没有 HAL 的 "playback hook: using …"）时，所有声音
-#    会响 6 dB、也没有限幅。脚本只能确认库文件在，确认不了 HAL 加载成功了；库不在、或者 boost 属性
-#    写不进去时不借。
-SPEAKERFX=/vendor/lib64/soundfx/libgaokunspeakerfx.so   # device.mk 里 ro.vendor.audio.primary.playback_hook 的值
-spk_base() { if [ -e "$SPK_MAP" ]; then echo 78; else echo 84; fi; }
-spk_boost() {
-    if [ -e "$SPK_MAP" ] && [ -e "$SPEAKERFX" ] &&
-       [ "$(getprop persist.vendor.gaokun3.histen.engine)" = bass ]; then
-        echo 6
-    else
-        echo 0
-    fi
-}
-# 写 boost 属性并回读；写不进去时输出 0（调用方据此不借）。
-spk_set_boost() {
-    setprop vendor.gaokun3.histen.boost "$1"
-    if [ "$(getprop vendor.gaokun3.histen.boost)" = "$1" ]; then
-        echo "$1"
-    else
-        log -t audioroute "写不进 vendor.gaokun3.histen.boost=$1"
-        echo 0
-    fi
-}
-
 n=0
 while [ ! -e /dev/snd/controlC0 ] && [ $n -lt 60 ]; do sleep 1; n=$((n+1)); done
 [ -e /dev/snd/controlC0 ] || { log -t audioroute "等不到声卡（60s）"; exit 1; }
@@ -105,20 +66,14 @@ while [ ! -e /dev/snd/controlC0 ] && [ $n -lt 60 ]; do sleep 1; n=$((n+1)); done
 #      右 DAC 落到 3 号端口、右喇叭不响。
 #    ⚠️ 判断要能 stat 这个 sysfs 文件（gaokun3_scripts.te 里 audioroute 的 sysfs 规则）；
 #       读不到时按"没有"处理，等于旧行为。
-# ★ 引擎是 bass 时数字音量再加 6 dB 的余量，见脚本开头 spk_boost 那一节。
+# ★ 这里设的是基准。扬声器低音处理（音频 HAL 里的 speakerfx）在它处理的那段播放期间自己把数字音量
+#   抬到 84、结束时放回基准，并按抬高的量补偿 —— 见 speakerfx/README.md 第三节。
+SPK_MAP=/sys/firmware/devicetree/base/soc@0/soundwire@3250000/wsa8830-right@0,2/qcom,port-mapping
 if [ -e "$SPK_MAP" ]; then
-    VISENSE=0
+    VISENSE=0; WSA_DIG=78
 else
-    VISENSE=1
+    VISENSE=1; WSA_DIG=84
 fi
-# 借余量时先写 boost、等 speakerfx 读到（它每 100 ms 读一次）再设混音器；不借时先设混音器、
-# 再把 boost 清零。这一遍可能重跑（那时 boost 可能已经是 6），两种次序都只会先偏小声。
-SPK_BOOST=$(spk_boost)
-if [ "$SPK_BOOST" -gt 0 ]; then
-    SPK_BOOST=$(spk_set_boost "$SPK_BOOST")
-    [ "$SPK_BOOST" -gt 0 ] && sleep 1
-fi
-WSA_DIG=$(( $(spk_base) + SPK_BOOST ))
 set -- \
     "WSA_CODEC_DMA_RX_0 Audio Mixer MultiMedia2" 1 \
     "WSA RX0 MUX" AIF1_PB \
@@ -147,7 +102,10 @@ apply() {
     done
 }
 apply "$@"
-[ "$SPK_BOOST" -gt 0 ] || spk_set_boost 0 >/dev/null
+# 把基准告诉 speakerfx：它补偿的是混音器高出这个值的部分，播放结束时也放回这个值。
+# 混音器设好之后才写；没有这个属性时 speakerfx 不碰混音器。
+setprop vendor.gaokun3.audioroute.spkdig "$WSA_DIG" ||
+    log -t audioroute "写不进 vendor.gaokun3.audioroute.spkdig（低音处理不会借数字音量余量）"
 
 # ★ PA 音量分两步写，好让**同一份 ROM 在新旧内核上都正确** ——
 #   本项目内核与 ROM 是分开发布的，不能假设两边同步。
@@ -170,7 +128,7 @@ else
     PA_NOW=17
 fi
 
-log -t audioroute "扬声器路由已应用（PCM1 / WSA / 数字=$WSA_DIG，其中低音链余量 $SPK_BOOST / PA=$PA_NOW / BOOST=off 防爆音 / VISENSE=$VISENSE）"
+log -t audioroute "扬声器路由已应用（PCM1 / WSA / 数字=$WSA_DIG / PA=$PA_NOW / BOOST=off 防爆音 / VISENSE=$VISENSE）"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 耳机（PCM 0 / RX_CODEC_DMA_RX_0 ← MultiMedia1）
@@ -257,7 +215,7 @@ log -t audioroute "内置麦路由已应用（PCM3 / VA / DMIC0+1）"
 #     ★ 它**不是**功放升压器开关（这个叫法本仓沿用了很久，是错的），而是
 #     SoundWire 端口使能；对稳态电平的影响实测为 ±0.3 dB 以内，即零。
 #   * `SpkrLeft/Right VISENSE Switch`：带 patches/0115 的内核上是 0（与上游一致），
-#     旧内核上仍是 1；`WSA_RXn Digital Volume` 相应是 78 / 84（低音链的余量另加，见脚本开头）。
+#     旧内核上仍是 1；`WSA_RXn Digital Volume` 相应是 78 / 84（低音处理播放时由 speakerfx 临时抬到 84）。
 #   另两处查过是【已经一致】的，不用设：`WSA MODE` 默认就是上游的 0；
 #   ⚠️★ `WSA_RXn Digital Volume` 的上限是【内核机器驱动故意设的】——
 #   sound/soc/qcom/sc8280xp.c 里 snd_soc_limit_volume()，上游写 81，注释是

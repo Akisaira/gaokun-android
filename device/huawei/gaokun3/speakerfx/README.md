@@ -23,7 +23,7 @@ E AudioPolicyEffects: addOutputSessionEffects(): failed to create Fx  Gaokun His
 ```
 
 HAL 拿到的是 FAST 轨也已经混进去的最终结果。在这里处理还有一个好处：
-低音处理有自己的 -1 dBFS 天花板，把 WSA 数字音量借高 6 dB（见第三节）之后，扬声器放出的每一个声音都受它约束。
+低音处理有自己的 -1 dBFS 天花板，借高 WSA 数字音量 6 dB（见第三节）期间，扬声器放出的每一个声音都受它约束。
 如果只有会话音效经过限幅，游戏、铃声这些就会直接响 6 dB。
 
 ## 二、组成
@@ -37,7 +37,7 @@ HAL 拿到的是 FAST 轨也已经混进去的最终结果。在这里处理还�
 | `device.mk` | `PRODUCT_PACKAGES += libgaokunspeakerfx`，`ro.vendor.audio.primary.playback_hook=/vendor/lib64/soundfx/libgaokunspeakerfx.so` |
 | `parts/`（`SpeakerFxSettingsActivity`）、`etc/histen.rc` | 「处理方式」：Parts 写 `persist.sys.gaokun3.speakerfx.engine`，init 镜像成 `vendor.gaokun3.speakerfx.engine`（HAL 读不了 `persist.sys.*`，理由同总开关） |
 | `effects/gaokun_effect.cpp` | 处理方式不是 Histen 时会话音效保持逐比特直通。它每 16 块重读一次处理方式，speakerfx 每 100 ms 重读一次开关和处理方式：播放中途切换时，两边可能同时处理（或都不处理）不到一秒，响度仍受 speakerfx 的限幅器约束 |
-| `bin/audio-route.sh`、`etc/audioroute.rc`、`sepolicy/gaokun3_scripts.te` | 数字音量余量（第三节） |
+| `bin/audio-route.sh`、`sepolicy/gaokun3_scripts.te` | 设好数字音量基准后写 `vendor.gaokun3.audioroute.spkdig`，speakerfx 借余量以它为准（第三节） |
 
 处理链（48 kHz 立体声）：
 
@@ -55,17 +55,22 @@ HAL 拿到的是 FAST 轨也已经混进去的最终结果。在这里处理还�
 
 ## 三、数字音量余量
 
-低音处理的天花板是数字满幅（-1 dBFS），而带 0113–0115 的内核上 WSA 数字音量是 78（-6 dB）。
-引擎是 `bass`、装了 speakerfx 时，`audio-route.sh` 开机那一遍把它设成 84（单位增益），把 6 写进
-`vendor.gaokun3.histen.boost`。speakerfx 一直按它补偿：处理时从 makeup 里减掉，开关关着时把直通的声音
-衰减 6 dB。所以开关开不开，响度都和基准一样；开着时天花板离功放上限近了 6 dB，这段余量给低音。
+低音处理的天花板是数字满幅（-1 dBFS），而带 0113–0115 的内核上 WSA 数字音量的基准是 78（-6 dB），
+天花板离功放的上限还差 6 dB。所以 speakerfx 处理时自己把混音器借高到 84（单位增益），并在自己这边补偿：
 
-* 只在开机时按引擎决定，不跟开关走。开机后改引擎，speakerfx 立刻跟着开始 / 停止处理，余量等下次开机才变；
-  两个方向都不会偏响。
-* 借余量时先写属性、等 1 秒再设混音器；不借时先设混音器、再把属性清零 —— 重跑这一遍时也只会先偏小声。
-* 混音器是 84、speakerfx 却没加载上（logcat 里没有 `playback hook: using …`）时，所有声音会响 6 dB、
-  没有限幅。脚本只能确认库文件在，确认不了 HAL 加载成功了。
-* 旧内核（没有端口映射，基准本来就是 84）不借。
+* **什么时候借**：扬声器流打开时，如果低音处理是开着的（开关开、处理方式是低音增强），就把
+  `WSA_RX0/RX1 Digital Volume` 设成 84；最后一个借了的流关闭（待机、关闭、换设备）时放回基准。
+  开流时、关流时都还没有声音在放，混音器变化听不出来。
+* **怎么补偿**：每 100 ms 回读一次混音器，高出基准多少就补偿多少 —— 处理时从 makeup 里减掉，
+  不处理的块（播放中途关了开关、或换成 Histen）整体衰减这么多。任何时候响度都和基准一样，
+  只是处理时天花板离功放上限近了 6 dB，这段余量给低音。回读失败时沿用上一次的值。
+* **播放中途切换**：只改处理，不动混音器，混音器到下一次播放才跟着变。
+* **开流时低音处理没开**：混音器留在基准，直通逐比特不变。
+* **基准从哪来**：`audio-route.sh` 设好混音器后把基准写进 `vendor.gaokun3.audioroute.spkdig`。
+  没有这个属性（脚本还没跑）时 speakerfx 不碰混音器、也不补偿。基准已经是 84 的旧内核（没有端口映射）不借。
+* speakerfx 没加载上时，没有谁会去抬混音器。音频 HAL 在借着的时候崩溃，混音器会停在 84，
+  下一次开流时 speakerfx 按当时的状态改回来；这期间不播放，所以没有哪个声音因此变响。
+* 直接用 `tinyplay` 往扬声器 PCM 写（不经过 HAL）时，如果混音器正借着，会响 6 dB —— 测量请走 HAL。
 
 ## 四、旋钮
 
@@ -84,9 +89,9 @@ HAL 拿到的是 FAST 轨也已经混进去的最终结果。在这里处理还�
 | `…bass.xtc` | 0.55（0–0.9，`0` = 关） | 串扰消除强度，只处理侧信号（L−R） |
 | `…bass.xtcdist` | 30 cm（15–200） | 听音距离 |
 | `…bass.xtclo` | 250 Hz（100–2000） | 串扰消除的下限。听到的"变宽"大多来自 300–600 Hz 的侧信号提升，那里也是左右分轨吉他的主体：调高（450–700 Hz）吉他更干净，变宽也就几乎听不出来 |
-| `…bass.makeup` | +4 dB（−20–12） | 链内补偿增益（实际用的是它减去 `boost`） |
+| `…bass.makeup` | +4 dB（−20–12） | 链内补偿增益（实际用的是它减去借的数字音量） |
 | `vendor.gaokun3.speakerfx.ref` | 空 | `1` = A/B 参考：按低音处理的人声电平原样输出，同样经过限幅器、同样的延迟。不持久 |
-| `vendor.gaokun3.histen.boost` | 开机时由脚本写 | 混音器借了多少 dB。**不要手动改** |
+| `vendor.gaokun3.audioroute.spkdig` | 开机时由 `audio-route.sh` 写 | 数字音量的基准（第三节）。**不要手动改** |
 
 ## 五、验证
 
@@ -99,9 +104,10 @@ adb shell su -c 'tinymix "WSA_RX0 Digital Volume"'
 |---|---|
 | `playback hook: using /vendor/lib64/soundfx/libgaokunspeakerfx.so`（AHAL_StreamPrimary） | HAL 加载了钩子库（第一次播放时） |
 | `speaker stream open: format 0` | 扬声器流开了，库接管了它 |
+| `mixer: WSA digital 78 -> 84 (base 78)` / `mixer: WSA digital back to 78` | 开流时借了余量 / 最后一个借了的流关闭、放回基准 |
 | `processing (boost 6 dB)` 及其后的 `knobs: …` | 开始处理；`passthrough` = 开关关或处理方式是 Histen |
 | `meter: peak in … out …, lc …, bass-gr …, gr …, boost …, ref …, … us/block …` | 每 ~2 秒一行：峰值、响度补偿、低音组 / 全频的最大衰减、借的音量、每块耗时 |
-| `扬声器数字音量 84（低音链余量 6 dB）`（tag `audioroute`） | 借到了余量；关掉开关后回到 78、余量 0 |
+| `tinymix "WSA_RX0 Digital Volume"` | 低音处理正在播放时 84，其余时候 78（基准） |
 
 运算量：电脑上约 160 ns/帧；平板空闲（CPU 低频）时每 10 ms 一块平均 0.54 ms、最多 0.66 ms，约占实时的 5.4%。
 

@@ -20,9 +20,11 @@
  *       bin/audio-route.sh), 48 kHz stereo, S16_LE or S32_LE (tinyalsa's
  *       enum pcm_format: 0 and 1).
  *   void playback_hook_process(void *handle, void *buffer, size_t frames);
- *       In place.  No allocation, no lock, bounded time.
+ *       In place.  No allocation, no lock, bounded time (one mixer read
+ *       every 100 ms).
  *   void playback_hook_close(void *handle);
  *       Called on standby / shutdown / device change.
+ * Open and close also move the mixer (MIXER BOOST below).
  *
  * WHEN IT PROCESSES
  * Only while the speaker enhancement is on (vendor.gaokun3.histen.on = 1,
@@ -38,14 +40,26 @@
  * the ceiling.
  *
  * MIXER BOOST
- * With engine = bass, audio-route.sh sets the WSA digital volume 6 dB higher
- * at boot (78 -> 84) and publishes that in vendor.gaokun3.histen.boost; it
- * stays there whatever the switch does.  While the chain runs, its makeup
- * gives the 6 dB back, so the loudness does not change and the chain's
- * -1 dBFS ceiling sits 6 dB closer to what the amplifiers can do.  While it
- * does not (switch off, or the engine changed after boot), the buffer is
- * attenuated by the boost instead.  Either way no sound is louder than at
- * the normal mixer setting.
+ * The chain's -1 dBFS ceiling is digital full scale, but with patches
+ * 0113-0115 bin/audio-route.sh sets the WSA digital volume to 78 (-6 dB), so
+ * the chain would stop 6 dB short of what the amplifiers can do.  This library
+ * therefore raises the mixer itself: when a speaker stream opens while the
+ * chain is wanted, it sets both "WSA_RXn Digital Volume" controls to 84
+ * (unity gain), and when the last such stream closes it puts back the base
+ * audio-route.sh published in vendor.gaokun3.audioroute.spkdig.  Every block
+ * is compensated by what the mixer actually stands above that base (read
+ * back with the switch, every 100 ms): the chain takes it off its makeup, a
+ * passthrough block (switched off or to Histen mid-stream) is attenuated by
+ * it.  So no sound is louder than at the base, and
+ *   - the mixer moves only at open and close, with nothing playing; a switch
+ *     mid-stream changes the processing, the mixer follows at the next
+ *     playback;
+ *   - a stream opened with the chain not wanted leaves the mixer at the base
+ *     and passes through bit-exact;
+ *   - if this library is not loaded, nothing raises the mixer.
+ * Without the published base (audio-route.sh has not run yet) the mixer is
+ * left alone and nothing is compensated.  The HAL opens the same control
+ * device for its own mixer (alsa/Mixer.cpp).
  *
  * KNOBS (re-read about once a second; vendor_gaokun3_prop, root to set)
  *   persist.vendor.gaokun3.speakerfx.bass.lowboost  dB, 0..24        (14)
@@ -71,8 +85,13 @@
  * reduction, boost, cost).
  */
 #include <android/log.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sound/asound.h>
+#include <sys/ioctl.h>
 #include <sys/system_properties.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <cmath>
 #include <cstdarg>
@@ -80,6 +99,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <new>
 
 #include "bass_chain.h"
@@ -99,9 +119,17 @@ constexpr unsigned kStatFrames = 96000;      /* a log line every ~2 s */
 
 constexpr char kMasterProp[] = "vendor.gaokun3.histen.on";
 constexpr char kEngineProp[] = "vendor.gaokun3.speakerfx.engine";
-constexpr char kBoostProp[] = "vendor.gaokun3.histen.boost";
+constexpr char kBaseProp[] = "vendor.gaokun3.audioroute.spkdig";
 constexpr char kRefProp[] = "vendor.gaokun3.speakerfx.ref";
 #define BASS_PROP(name) "persist.vendor.gaokun3.speakerfx.bass." name
+
+constexpr char kCtlDevice[] = "/dev/snd/controlC0";   /* kSpeakerCard */
+constexpr const char *kDigCtls[] = {"WSA_RX0 Digital Volume", "WSA_RX1 Digital Volume"};
+constexpr int kUnityDig = 84;   /* 0 dB at 1 dB a step, and the kernel's cap (audio-route.sh) */
+
+/* Open speaker streams that raised the mixer; the last one out puts it back. */
+std::mutex gDigLock;
+int gDigRaised = 0;
 
 void logi(const char *fmt, ...) {
     va_list ap;
@@ -125,6 +153,41 @@ double prop(const char *name, double lo, double hi, double fallback) {
     const double v = std::strtod(buf, &end);
     if (end == buf || !(v == v) || v < lo || v > hi) return fallback;
     return v;
+}
+
+/* One WSA digital volume control, through the ALSA control device by name --
+ * what tinymix does, minus the enumeration: with numid 0 the kernel looks the
+ * control up by interface and name.  Both controls hold one integer. */
+bool digCtl(int fd, unsigned req, const char *name, long *value) {
+    snd_ctl_elem_value v;
+    std::memset(&v, 0, sizeof(v));
+    v.id.iface = SNDRV_CTL_ELEM_IFACE_MIXER;
+    std::strncpy(reinterpret_cast<char *>(v.id.name), name, sizeof(v.id.name) - 1);
+    if (req == SNDRV_CTL_IOCTL_ELEM_WRITE) v.value.integer.value[0] = *value;
+    if (ioctl(fd, req, &v) < 0) return false;
+    if (req == SNDRV_CTL_IOCTL_ELEM_READ) *value = v.value.integer.value[0];
+    return true;
+}
+
+/* The higher of the two (compensating by it keeps both channels at or under
+ * the base), or -1 if either cannot be read. */
+int readDig(int fd) {
+    long hi = -1;
+    for (const char *name : kDigCtls) {
+        long v = 0;
+        if (!digCtl(fd, SNDRV_CTL_IOCTL_ELEM_READ, name, &v)) return -1;
+        if (v > hi) hi = v;
+    }
+    return static_cast<int>(hi);
+}
+
+bool writeDig(int fd, int value) {
+    bool ok = true;
+    for (const char *name : kDigCtls) {
+        long v = value;
+        ok = digCtl(fd, SNDRV_CTL_IOCTL_ELEM_WRITE, name, &v) && ok;
+    }
+    return ok;
 }
 
 bool wanted() {
@@ -182,8 +245,11 @@ struct Stream {
     int format = kFormatS16;
     double scale = 32768.0;          /* full scale of the sample format */
     bool active = false;             /* the chain runs */
-    double boostDb = 0.0;
+    double boostDb = 0.0;            /* mixer above the base */
     double boostGain = 1.0;          /* attenuation while inactive and boosted */
+    int ctlFd = -1;                  /* control device; -1 = the mixer is not ours */
+    int digBase = -1;
+    bool digRaised = false;          /* counted in gDigRaised */
     unsigned sinceRefresh = 0;
     unsigned sinceGate = 0;
     gaokun::BassChain chain;
@@ -193,8 +259,59 @@ struct Stream {
     unsigned statFrames = 0, statCalls = 0;
     double statPeakIn = 0.0, statPeakOut = 0.0, statUs = 0.0, statMaxUs = 0.0;
 
+    /* At open nothing is playing yet, so the mixer can move without a jump. */
+    void attachMixer() {
+        digBase = static_cast<int>(prop(kBaseProp, 0.0, kUnityDig, -1.0));
+        if (digBase < 0 || digBase == kUnityDig) return;   /* unknown, or nothing to borrow */
+        ctlFd = open(kCtlDevice, O_RDWR | O_CLOEXEC);
+        if (ctlFd < 0) {
+            logi("mixer: %s: %s -- not borrowing", kCtlDevice, std::strerror(errno));
+            return;
+        }
+        std::lock_guard<std::mutex> lock(gDigLock);
+        if (wanted()) {
+            digRaised = true;
+            gDigRaised++;
+        }
+        const int want = gDigRaised > 0 ? kUnityDig : digBase;
+        const int now = readDig(ctlFd);
+        if (now != want) {
+            if (writeDig(ctlFd, want)) {
+                logi("mixer: WSA digital %d -> %d (base %d)", now, want, digBase);
+            } else {
+                logi("mixer: setting WSA digital %d failed: %s", want, std::strerror(errno));
+            }
+        }
+    }
+
+    void detachMixer() {
+        if (ctlFd < 0) return;
+        {
+            std::lock_guard<std::mutex> lock(gDigLock);
+            if (digRaised && --gDigRaised == 0) {
+                if (writeDig(ctlFd, digBase)) {
+                    logi("mixer: WSA digital back to %d", digBase);
+                } else {
+                    logi("mixer: restoring WSA digital %d failed: %s", digBase,
+                         std::strerror(errno));
+                }
+            }
+        }
+        close(ctlFd);
+        ctlFd = -1;
+    }
+
+    /* What the mixer stands above the base, read back.  A failed read keeps
+     * the last value: guessing 0 could make the speakers louder. */
+    double mixerBoostDb() const {
+        if (ctlFd < 0) return 0.0;
+        const int dig = readDig(ctlFd);
+        if (dig < 0) return boostDb;
+        return dig > digBase ? dig - digBase : 0.0;
+    }
+
     void refresh(bool log) {
-        boostDb = prop(kBoostProp, 0.0, 24.0, 0.0);
+        boostDb = mixerBoostDb();
         boostGain = std::pow(10.0, -boostDb / 20.0);
         const bool want = wanted();
         const gaokun::BassParams p = readParams(boostDb);
@@ -234,7 +351,7 @@ struct Stream {
         if (sinceRefresh == 0) {
             refresh(false);
         } else if (sinceGate == 0 && (wanted() != active ||
-                                      prop(kBoostProp, 0.0, 24.0, 0.0) != boostDb)) {
+                                      mixerBoostDb() != boostDb)) {
             refresh(false);
         }
         sinceRefresh += static_cast<unsigned>(frames);
@@ -299,6 +416,7 @@ extern "C" __attribute__((visibility("default"))) void *playback_hook_open(
     s->format = pcmFormat;
     s->scale = pcmFormat == kFormatS16 ? 32768.0 : 2147483648.0;
     logi("speaker stream open: format %d", pcmFormat);
+    s->attachMixer();
     s->refresh(true);
     s->sinceRefresh = 1;   /* just refreshed */
     return s;
@@ -314,5 +432,7 @@ extern "C" __attribute__((visibility("default"))) void playback_hook_process(voi
 extern "C" __attribute__((visibility("default"))) void playback_hook_close(void *handle) {
     if (handle == nullptr) return;
     logi("speaker stream close");
-    delete static_cast<Stream *>(handle);
+    Stream *s = static_cast<Stream *>(handle);
+    s->detachMixer();
+    delete s;
 }

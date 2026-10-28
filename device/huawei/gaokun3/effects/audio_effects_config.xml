@@ -149,7 +149,8 @@
          （b7e4c9a2-…，不是 type UUID）createEffect，成功后才 setEnabled(true)。
          ★ 2026-09-26 维护者：这条链是**试验功能、默认关**。挂在 music 上的只是一个
            逐比特直通的槽位；Parts 里的开关（persist.sys.gaokun3.histen=1）打开、
-           且输出是内置扬声器时才真的处理。耳机 / 蓝牙 / USB 一律直通 —— 这个
+           「处理方式」选华为 Histen（persist.sys.gaokun3.speakerfx.engine=histen；默认的
+           低音增强在音频 HAL 里做，见 speakerfx/）、且输出是内置扬声器时才真的处理。耳机 / 蓝牙 / USB 一律直通 —— 这个
            postprocess 是按【流】挂的，不按设备，判断在 gaokun_effect.cpp 里。
          ⚠ 验证顺序：先 persist.vendor.gaokun3.histen.engine=0（只留扬声器链）打开开关，
            确认外放时出现 `meter: in=… out=…`（= 音频真的流过我们）且整机有声，再放开引擎。
