@@ -300,6 +300,9 @@ KPATCHES=(
     #    附近落下的手指会被接到旧跟踪上，Android收不到按下（音游吞点击，指纹见scripts/touch/merge-check.py）。
     #    0113–0115留给扬声器那组。
     0116-Input-himax-spi-narrow-the-track-match-radius.patch
+    # ★ 0118：边缘补偿的上限从网格外收回到网格内最后一个位置。原来最后一列/行被推到2560/1600，比轴最大值多1
+    #    （inverted-x后是-1），Android丢掉起点越界的整笔触摸：从这两条边滑入、返回手势、角落点击。0117在#52（音频HAL）。
+    0118-Input-himax-spi-keep-edge-compensated-positions-on-the-panel.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
