@@ -18,6 +18,15 @@ namespace gaokun3 {
 namespace {
 // 50 Hz 足够自动旋转与体感；SSC 会给出它实际采用的速率。
 constexpr float kRateHz = 50.0f;
+// The streaming ambient light sensor offers 1, 2, 5 and 10 Hz; 5 Hz is as fast
+// as the framework's 200 ms minimum for the light sensor asks for.
+constexpr float kLightRateHz = 5.0f;
+// SNS_STD_SENSOR_ATTRID_STREAM_TYPE and its STREAMING value.
+constexpr int32_t kAttrStreamType = 16;
+constexpr int64_t kStreamTypeStreaming = 0;
+// Once accel and gyro are found, how many more lookup rounds to give the
+// ambient light sensor before going on without it.
+constexpr int kLightExtraRounds = 5;
 // hexagonrpcd 刚起来时 SSC 约需 20 秒沉降，给足余量（实测 6 秒读不到）。
 constexpr int kServiceWaitMs = 60000;
 // 全部停用后，先把 socket 里已在途的上报读掉再睡，免得下次使能时先读到
@@ -65,6 +74,12 @@ Sample SscHub::Gyro() {
     return Fresh(gyro_, gyro_at_);
 }
 
+Sample SscHub::Light() {
+    EnsureStarted();
+    std::lock_guard<std::mutex> lk(m_);
+    return Fresh(light_, light_at_);
+}
+
 void SscHub::RequestRecovery(const char* why) {
     // 只设属性、不等结果：收拾的第一步就是停掉本进程（init 的 stop），之后起来的是新进程。
     // 限频（每次开机最多 5 次、间隔 ≥120 秒）与"做实验时关掉"都在脚本里，这里不重复。
@@ -93,6 +108,39 @@ void SscHub::SetGyroWanted(bool on) {
     cv_.notify_all();
 }
 
+void SscHub::SetLightWanted(bool on) {
+    EnsureStarted();
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        want_light_ = on;
+    }
+    cv_.notify_all();
+}
+
+// The tcs3701 driver registers two ambient_light sensors. The default one
+// (on-change, the one registry default_sensors.ambient_light selects) is the
+// driver's internal sensor: its set_client_request drops the request and the
+// SEE framework then asserts (sns_stream_service.c:436 req_found), so
+// sensor_process crashes and the whole SLPI restarts. The streaming one is the
+// sensor that serves clients. Use only a provider that says it streams, and
+// never enable the default one.
+static bool FindStreamingLight(SscClient* client, SscUid* out, std::string* err) {
+    std::vector<SscUid> all;
+    if (!client->FindSensors("ambient_light", &all, err)) return false;
+    for (const SscUid& uid : all) {
+        int64_t type = -1;
+        std::string e;
+        if (client->GetIntAttribute(uid, kAttrStreamType, &type, &e) &&
+            type == kStreamTypeStreaming) {
+            *out = uid;
+            return true;
+        }
+    }
+    *err = "none of the " + std::to_string(all.size()) +
+           " ambient_light providers streams";
+    return false;
+}
+
 void SscHub::ReaderLoop() {
     while (!stop_) {
         SscClient client;
@@ -118,21 +166,27 @@ void SscHub::ReaderLoop() {
         //    命令行客户端都找不到 accel，必须重启 hexagonrpcd 才恢复。
         //    这是 2026-08-20 实测定位到的真实故障，不是防御性编程。
         //
-        //    本机只有这两个可用：mag 没有硬件、rotv 未注册，
-        //    ambient_light 一使能就污染会话（#37），所以坚决不碰。
+        //    mag 没有硬件、rotv 未注册。
+        //    The ambient light sensor is looked for here too, as the streaming
+        //    provider only (FindStreamingLight); accel and gyro do not wait
+        //    more than kLightExtraRounds rounds for it.
         //
         //    ★ v1.0 DISP-14 / HW-1（B21）：60 秒仍一个都没有时，以前是睡 30 秒、整条重建会话 ——
         //      那是上面警告的 churn 本身，而且救不了 B21（SLPI 自愈后 SEE 要 hexagonrpcd【再重启一次】
         //      才注册传感器，#118 §4 / #121 §3，进程里怎么重建都没用）。现在改成请 init 收拾
         //      （RequestRecovery：停本 HAL → 重启 hexagonrpcd → 起本 HAL），自己在同一个 client 上
         //      放慢节奏接着查 —— 收拾被限频挡住、或被 persist.vendor.gaokun3.sscrecover=0 关掉时也不会抖。
-        SscUid accel_uid, gyro_uid;
-        bool has_accel = false, has_gyro = false;
+        SscUid accel_uid, gyro_uid, light_uid;
+        bool has_accel = false, has_gyro = false, has_light = false;
         bool asked = false;
+        int light_rounds = 0;
         for (int round = 0; !stop_; round++) {
             if (!has_accel) has_accel = client.FindSensor("accel", &accel_uid, &err);
             if (!has_gyro) has_gyro = client.FindSensor("gyro", &gyro_uid, &err);
-            if (has_accel && has_gyro) break;
+            if (!has_light) has_light = FindStreamingLight(&client, &light_uid, &err);
+            if (has_accel && has_gyro &&
+                (has_light || ++light_rounds > kLightExtraRounds))
+                break;
             // 只要有一个就先用着（与原来一样）；一个都没有才接着等
             if ((has_accel || has_gyro) && round + 1 >= kFindFastRounds) break;
             if (round + 1 == kFindFastRounds && !asked) {
@@ -143,7 +197,8 @@ void SscHub::ReaderLoop() {
                     std::chrono::seconds(round + 1 < kFindFastRounds ? 2 : 10));
         }
         if (stop_) break;
-        LOG(INFO) << "SscHub: accel=" << has_accel << " gyro=" << has_gyro;
+        LOG(INFO) << "SscHub: accel=" << has_accel << " gyro=" << has_gyro
+                  << " light=" << has_light;
 
         // ★ 按订阅启停（PWR-3）：此前会话一建好就 EnableContinuous、之后再不停，
         //   框架没有任何订阅者时 SLPI 也 50 Hz 常开、几乎不睡。现在只开"有人要"的
@@ -151,7 +206,7 @@ void SscHub::ReaderLoop() {
         //   ⚠️ 启停一律在【这个 client】上做，绝不为此重建会话（理由见上）。
         //   on_* = 此刻在 SSC 上实际开着的，只有本线程读写；会话刚建好时全是
         //   false，下面按 want_* 补开 —— 重建会话后原有订阅也就自动恢复。
-        bool on_accel = false, on_gyro = false;
+        bool on_accel = false, on_gyro = false, on_light = false;
         auto drain = [&client]() {
             const auto until = std::chrono::steady_clock::now() +
                                std::chrono::milliseconds(kDrainMs);
@@ -162,7 +217,7 @@ void SscHub::ReaderLoop() {
             }
         };
 
-        // 收数。连续空转说明会话坏了（例如别的进程去碰了光感 —— #121：那会让 SLPI 整个崩溃）。
+        // 收数。连续空转说明会话坏了（例如别的进程使能了默认的那个光感 —— #121：那会让 SLPI 整个崩溃）。
         // 先在同一个 client 上重新使能一次（15 秒）；60 秒还不行就请 init 收拾整条链
         // （RequestRecovery），本线程留在这个 client 上接着收 —— 【不再】自己重建会话（B21，见上）。
         // ★ 看门狗只在"有人要、流该开着"时计时（PWR-3，4db08bc）：都停用时读数本来就是 0，照算的话
@@ -173,17 +228,19 @@ void SscHub::ReaderLoop() {
         bool re_enabled = false;
         bool asked_recovery = false;
         while (!stop_) {
-            bool want_accel, want_gyro;
+            bool want_accel, want_gyro, want_light;
             {
                 std::lock_guard<std::mutex> lk(m_);
                 want_accel = want_accel_ && has_accel;
                 want_gyro = want_gyro_ && has_gyro;
+                want_light = want_light_ && has_light;
                 // 要停用的那一路缓存作废：下次使能、新数据到之前报 UNRELIABLE，
                 // 而不是拿停用前的旧值当真值（旧的角速度会让游戏视角一直漂）
                 if (on_accel && !want_accel) accel_ = Sample();
                 if (on_gyro && !want_gyro) gyro_ = Sample();
+                if (on_light && !want_light) light_ = Sample();
             }
-            const bool was_on = on_accel || on_gyro;
+            const bool was_on = on_accel || on_gyro || on_light;
             if (want_accel != on_accel) {
                 const bool ok = want_accel
                         ? client.EnableContinuous(accel_uid, kRateHz, &err)
@@ -206,9 +263,20 @@ void SscHub::ReaderLoop() {
                 re_enabled = false;
                 asked_recovery = false;
             }
+            if (want_light != on_light) {
+                const bool ok = want_light
+                        ? client.EnableContinuous(light_uid, kLightRateHz, &err)
+                        : client.Disable(light_uid, &err);
+                LOG(INFO) << "SscHub: light " << (want_light ? "使能" : "停用")
+                          << (ok ? "" : " 失败: " + err);
+                on_light = want_light;
+                idle = 0;
+                re_enabled = false;
+                asked_recovery = false;
+            }
 
             // 都没人要：读掉在途的上报，然后不收数、不计空转，睡到有人 activate
-            if (!on_accel && !on_gyro) {
+            if (!on_accel && !on_gyro && !on_light) {
                 if (was_on) drain();
                 idle = 0;
                 re_enabled = false;
@@ -216,7 +284,7 @@ void SscHub::ReaderLoop() {
                 std::unique_lock<std::mutex> lk(m_);
                 cv_.wait(lk, [&]() {
                     return stop_ || (want_accel_ && has_accel) ||
-                           (want_gyro_ && has_gyro);
+                           (want_gyro_ && has_gyro) || (want_light_ && has_light);
                 });
                 continue;
             }
@@ -228,6 +296,7 @@ void SscHub::ReaderLoop() {
                     LOG(WARNING) << "SscHub: 15 秒无读数，在同一会话上重新使能";
                     if (on_accel) client.EnableContinuous(accel_uid, kRateHz, &err);
                     if (on_gyro) client.EnableContinuous(gyro_uid, kRateHz, &err);
+                    if (on_light) client.EnableContinuous(light_uid, kLightRateHz, &err);
                     re_enabled = true;
                     continue;
                 }
@@ -244,14 +313,17 @@ void SscHub::ReaderLoop() {
             for (size_t i = 0; i < reports.size(); i++) {
                 const SscReport& r = reports[i];
                 if (r.msg_id != kMsgReportMeasurement) continue;
+                // sns_std_sensor_event: the motion sensors carry x, y, z;
+                // the light sensor carries lux and colour temperature.
                 SscAccelerometerResponse m;
                 if (!m.ParseFromString(r.payload)) continue;
-                if (m.acceleration_size() < 3) continue;
+                const bool is_light = on_light && r.uid_low == light_uid.low() &&
+                                      r.uid_high == light_uid.high();
+                if (m.acceleration_size() < (is_light ? 1 : 3)) continue;
 
                 Sample s;
-                s.v[0] = m.acceleration(0);
-                s.v[1] = m.acceleration(1);
-                s.v[2] = m.acceleration(2);
+                for (int k = 0; k < m.acceleration_size() && k < 3; k++)
+                    s.v[k] = m.acceleration(k);
                 s.accuracy = m.accuracy();
                 s.valid = true;
 
@@ -265,12 +337,16 @@ void SscHub::ReaderLoop() {
                            r.uid_high == gyro_uid.high()) {
                     gyro_ = s;
                     gyro_at_ = std::chrono::steady_clock::now();
+                } else if (is_light) {
+                    light_ = s;
+                    light_at_ = std::chrono::steady_clock::now();
                 }
             }
         }
         // 只有 stop_ 才走到这里（收数循环里不再 break 去重建会话）
         if (on_accel) client.Disable(accel_uid, &err);
         if (on_gyro) client.Disable(gyro_uid, &err);
+        if (on_light) client.Disable(light_uid, &err);
     }
 }
 

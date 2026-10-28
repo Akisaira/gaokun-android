@@ -48,7 +48,7 @@ UEFI。这不是一次常规移植 —— 它是 **AOSP on mainline**，每一�
 | **游戏** | ✅ | 原神画质极高流畅。GPU 空闲 270 MHz、峰值 690 MHz、最高 50 °C。v0.7.1 冒烟测试：明日方舟、三角洲行动、卡拉彼丘、Phigros、Arcaea 都能跑。⚠️ 英雄联盟手游启动后马上退出（有人报告，还没有日志） |
 | CPU 温控降频 | ✅ | 主线 DTS **根本没有** CPU 的 cooling map —— 已由 [`patches/0009`](patches/) 在设备树里根治 |
 | **待机 / 挂起** | ✅ | **2026-08-22 修复 —— 而且真凶是我们自己，不是内核**（[#52](docs/stage4-findings.md#52)、[#57](docs/stage4-findings.md#57)）。真实挂起/唤醒，零复位。v0.7.1 修掉了长时间开机后唤醒卡死（[#16](https://github.com/vahiru/gaokun-android/issues/16)、[#131](docs/stage4-findings.md#131)）。插着电脑的 USB 时，息屏但不睡，所以 USB adb 一直在。还没量过：整夜待机掉多少电 |
-| 传感器（加速度计+陀螺仪）| ✅ | **自动旋转可用，用户实机确认方向正确。** 为本机写的 sensors HAL 把真实的加速度计、陀螺仪读数喂给 SensorService，框架据此融合出 Game Rotation Vector / Gravity / Linear Acceleration。出厂安装矩阵全零（校准数据随 Windows 一起没了），但传感器坐标系与面板方向本来就一致，不需要纠正。本机**没有磁力计**（所以没有指南针）。光感在总线上有应答，但一激活就让传感器 DSP 崩溃，所以一直关着 —— 没有自动亮度（[#121](docs/stage4-findings.md#121)）。⚠️ 那颗 DSP 一旦崩溃重启，传感器就全丢了，要重启才回来（[#121](docs/stage4-findings.md#121)） |
+| 传感器（加速度计+陀螺仪+光感）| ✅ | **自动旋转、自动亮度可用，实机确认。** 为本机写的 sensors HAL 把真实的加速度计、陀螺仪读数喂给 SensorService，框架据此融合出 Game Rotation Vector / Gravity / Linear Acceleration。出厂安装矩阵全零（校准数据随 Windows 一起没了），但传感器坐标系与面板方向本来就一致，不需要纠正。本机**没有磁力计**（所以没有指南针）。环境光传感器驱动自动亮度；它的驱动注册了两个光感，只能用连续上报的那个，默认的那个一激活就让传感器 DSP 崩溃（[sensors-hal/README](device/huawei/gaokun3/sensors-hal/README.md)）。据我们所知，加速度计、陀螺仪、光感这一套是 SC8280XP 上头一次跑通，ThinkPad X13s 也没有 —— 协议整理在 [`docs/sensors-ssc-protocol.md`](docs/sensors-ssc-protocol.md)，想在自己机器上做可以直接拿。⚠️ 那颗 DSP 一旦崩溃重启，传感器就全丢了，要重启才回来（[#121](docs/stage4-findings.md#121)） |
 | 硬件视频解码 | ✅ | **v0.7.0 起是 `qcom-iris`**（原来是 `qcom-venus`）：H.264、HEVC、VP9 走 `c2.v4l2.*.decoder`，中途停止、拖动、重播、中途变分辨率都过了，为此修了上游驱动几处（[#128](docs/stage4-findings.md#128)）。VP8 走软解。最早打通解码时修的两个 `external/v4l2_codec2` 可移植性 bug 见 [#41](docs/stage4-findings.md#41) |
 | 硬件视频编码 | ❌ | 故意关着：`v4l2_codec2` 的编码组件不会把交给它的 RGBX 帧转成硬件要的 NV12，开着的话应用会直接失败而不是回退。应用用的是软件编码器 |
 | 摄像头 | ✅ | **前后摄都能用**（v0.6.1 起）。前摄 Hynix hi846，后摄 **OmniVision OV13B10** —— 是从华为 Windows 驱动包里解出上电序列才认出来的（[#106](docs/stage4-findings.md#106)）。链路：主线 `camss` → libcamera simple 流水线 + 软件 ISP → libyuv → 为本机写的 AIDL HAL。闪光灯可用；后摄有**自动对焦**（v0.7.0，感谢 @mashen11）；照片按应用要求的方向旋转。"每隔一次就拍不了"的电源域缺陷已根治（[`patches/0031`](patches/)、[#105](docs/stage4-findings.md#105)）。⚠️ 最高 15 fps，没有变焦、没有曝光补偿。画质没调：没有色彩矫正矩阵、暗处噪点多、闪光片过曝；暗处对焦慢。**录像没在实机上验证过** |
@@ -139,7 +139,7 @@ Secure Boot。安装器有两个：
   Play Integrity 过不了。没有 Widevine，Netflix 这类付费流媒体放不了。没有 GPS，
   网络定位靠 Google 服务。没有预装中文输入法。
 * **不支持：** 指纹（进行中）、手写笔、TPM、U 盘、USB 音频、
-  硬件视频编码、蓝牙耳机麦克风、有线耳机麦克风、自动亮度。
+  硬件视频编码、蓝牙耳机麦克风、有线耳机麦克风。
 * **已知缺陷：** 长期运行后音频与蓝牙可能死锁（看门狗会把证据存到
   `/data/vendor/gaokun3/hangdump-*`，请附上）；插电脑时平板可能反过来给电脑供电、
   两边互相看不到（重插一次）；回插后 USB-C 口可能坏掉、要重启；
@@ -229,12 +229,7 @@ DTB 怎么编、放哪里，见
    复测时要改的三处。
 4. **SELinux 转 enforcing。** 已经做了七轮，enforcing 试跑能用；剩下的是 enforcing
    下的真实待机、enforcing → enforcing 的 OTA、enforcing 下的全新安装（[#129](docs/stage4-findings.md#129)）。
-5. **环境光传感器。** 一激活 SLPI 的 sensor_process 就整个崩溃；Windows 用的是同一套
-   配置，所以差别在 DSP 自己写的注册表里（[#121](docs/stage4-findings.md#121)）。
-   加速度计与陀螺仪那一套已经跑通 —— 据我们所知是 SC8280XP 上头一次，ThinkPad X13s
-   也没有 —— 协议整理在 [`docs/sensors-ssc-protocol.md`](docs/sensors-ssc-protocol.md)，
-   想在自己机器上做可以直接拿。
-6. **相机画质。** 剩下的是画质，不是链路：没有色彩矫正矩阵（要色卡）、软件 ISP
+5. **相机画质。** 剩下的是画质，不是链路：没有色彩矫正矩阵（要色卡）、软件 ISP
    自己没有降噪、闪光片高光过曝。具体下一步见 [`docs/TODO.md`](docs/TODO.md) T3。
 
 恢复出厂和 `fastboot` 现在走统一启动入口（设计 [`docs/boot-entry-design.md`](docs/boot-entry-design.md)，

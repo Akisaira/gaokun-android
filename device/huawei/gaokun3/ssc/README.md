@@ -37,10 +37,9 @@ SSC 服务 400 在 node 9 port 13
 | `gyro` | ✅ 静止时各轴 ≈0 rad/s，accuracy=3。★Linux 侧从未验证过（那边的 `ssccli` 不支持）|
 | `mag` | ❌ SSC 明确回答"没有传感器提供" —— **本机没有磁力计**，所以没有指南针 |
 | `rotv` | ❌ 未注册（配置里有 `sns_rotv.json`，但融合旋转矢量多半需要磁力计）|
-| `ambient_light` | ❌ **别碰**：使能后从不返回读数，且会污染整个 SSC 会话 —— 之后连加速度计也读不到，必须重启 hexagonrpcd |
+| `ambient_light` | ✅ 两个提供者，只能用**连续上报**的那个：`gaokun3-ssc-test ambient_light 5 10`，室内约 115 lux / 3900 K。变化时上报的那个（默认的）一使能 SLPI 就崩溃，工具拒绝 `onchange`；原因见 [`../sensors-hal/README.md`](../sensors-hal/README.md) 的"环境光"一节 |
 
-⚠️ `mag`/`rotv` 那两次"找不到"**不会**污染会话（回读 accel 正常），
-与 `ambient_light` 的行为不同。
+⚠️ `mag`/`rotv` 那两次"找不到"**不会**污染会话（回读 accel 正常）。
 
 ## 用法
 
@@ -72,7 +71,8 @@ gaokun3-ssc-test gyro  50 20 toggle
 调用序列照 [`../sensors-hal/SscHub.cpp`](../sensors-hal/SscHub.cpp) 的 PWR-3 启停路径做
 （会话开始时查一次 UID、重开时**不**重查、停用发 msg_id=10、停用后只读 500 ms），
 逐条出处行号写在 `ssc_test.cpp` 的 `RunToggle` 上方。只接受 `accel` / `gyro`；
-**`ambient_light` 绝对不要用**（会污染整个 SSC 会话，见上面的表），程序也会拒绝。
+`ambient_light` 不行（toggle 用 `FindSensor` 拿默认的提供者，光感默认的那个一使能 SLPI 就崩溃），
+程序也会拒绝。
 
 | 退出码 | 含义 |
 |---|---|

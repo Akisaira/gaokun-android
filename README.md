@@ -58,7 +58,7 @@ numbers (#NN) are in [`docs/stage4-findings.md`](docs/stage4-findings.md).
 | **Gaming** | ✅ | Genshin Impact at max graphics, smooth. GPU idles at 270 MHz, peaks 690 MHz, 50 °C. v0.7.1 smoke test: Arknights, Delta Force, Strinova, Phigros, Arcaea run. ⚠️ *League of Legends: Wild Rift* closes right after launch (reported, no log yet) |
 | CPU thermal throttling | ✅ | Mainline DTS has **no** CPU cooling maps at all — fixed in [`patches/0009`](patches/) |
 | **Suspend / standby** | ✅ | **Fixed 2026-08-22 — and the cause was ours, not the kernel's** ([#52](docs/stage4-findings.md#52), [#57](docs/stage4-findings.md#57)). Real suspend and resume, no resets. v0.7.1 fixed a hang on waking after a long uptime ([#16](https://github.com/vahiru/gaokun-android/issues/16), [#131](docs/stage4-findings.md#131)). With a computer attached over USB the screen turns off but the machine stays awake, so USB adb keeps working. Not measured yet: battery drain over a night of standby |
-| Sensors (accel + gyro) | ✅ | **Auto-rotate works, confirmed on device.** A sensors HAL written for this port feeds real accelerometer and gyroscope data to SensorService; the framework derives Game Rotation Vector / Gravity / Linear Acceleration from them. The factory mount matrix is all zeros (that calibration data died with Windows), but the sensor frame matches the panel, so no correction was needed. **No magnetometer** (so no compass). The light sensor answers on the bus, but activating it crashes the sensor DSP, so it stays off — no auto-brightness ([#121](docs/stage4-findings.md#121)). ⚠️ If that DSP ever crashes and restarts, the sensors are gone until a reboot ([#121](docs/stage4-findings.md#121)) |
+| Sensors (accel + gyro + light) | ✅ | **Auto-rotate and auto-brightness work, confirmed on device.** A sensors HAL written for this port feeds real accelerometer and gyroscope data to SensorService; the framework derives Game Rotation Vector / Gravity / Linear Acceleration from them. The factory mount matrix is all zeros (that calibration data died with Windows), but the sensor frame matches the panel, so no correction was needed. **No magnetometer** (so no compass). The ambient light sensor feeds auto-brightness; its driver registers two light sensors and only the streaming one can be used, because activating the default one crashes the sensor DSP ([sensors-hal/README](device/huawei/gaokun3/sensors-hal/README.md)). As far as we know this is the first working accelerometer / gyroscope / light stack on SC8280XP, the ThinkPad X13s included; the protocol is written up in [`docs/sensors-ssc-protocol.md`](docs/sensors-ssc-protocol.md) if you want it for your machine. ⚠️ If that DSP ever crashes and restarts, the sensors are gone until a reboot ([#121](docs/stage4-findings.md#121)) |
 | Hardware video decode | ✅ | **`qcom-iris` since v0.7.0** (was `qcom-venus`): H.264, HEVC and VP9 through `c2.v4l2.*.decoder`, including stop, seek, replay and mid-stream resolution changes, after fixes to the upstream driver ([#128](docs/stage4-findings.md#128)). VP8 is decoded in software. The two `external/v4l2_codec2` portability bugs found when decode was first brought up are in [#41](docs/stage4-findings.md#41) |
 | Hardware video encode | ❌ | Deliberately off: `v4l2_codec2`'s encoder does not convert the RGBX frames it is handed into the NV12 the hardware takes, and if enabled it would make apps fail instead of falling back. Apps use the software encoders |
 | Camera | ✅ | **Both cameras work** (since v0.6.1). Front is a Hynix hi846, rear an **OmniVision OV13B10** — identified by recovering the power sequence from Huawei’s Windows driver package ([#106](docs/stage4-findings.md#106)). Path: mainline `camss` → libcamera *simple* pipeline with the software ISP → libyuv → an AIDL HAL written for this port. Flash works; the rear camera has **autofocus** (v0.7.0, thanks @mashen11); photos are rotated the way the app asks. The power-domain defect that made every second capture fail is fixed ([`patches/0031`](patches/), [#105](docs/stage4-findings.md#105)). ⚠️ At most 15 fps, no zoom, no exposure compensation. Image quality is not tuned: no colour matrix, dim scenes are noisy, flash shots overexpose; autofocus in the dark is slow. **Video recording has not been verified** on hardware |
@@ -169,7 +169,7 @@ notes ([v0.7.1-alpha](docs/relnotes/v0.7.1-alpha.md)) list what changed. In shor
   Chinese input method is preinstalled.
 * **Not supported:** fingerprint (in progress), stylus, TPM, USB flash drives,
   USB audio, hardware video encoding, the Bluetooth headset microphone, the
-  wired headset microphone, auto-brightness.
+  wired headset microphone.
 * **Known bugs:** audio and Bluetooth can deadlock after long uptime (a watchdog
   saves evidence under `/data/vendor/gaokun3/hangdump-*` — please attach it);
   plugged into a computer, the tablet may end up powering the computer and
@@ -283,14 +283,7 @@ first:
 4. **SELinux enforcing.** Seven rounds are done and an enforcing trial run
    works; what remains is real standby, an enforcing-to-enforcing OTA and a
    fresh install under enforcing ([#129](docs/stage4-findings.md#129)).
-5. **The ambient light sensor.** Activating it crashes the SLPI's
-   sensor process; Windows uses the same configuration, so the difference is in
-   the DSP's own registry ([#121](docs/stage4-findings.md#121)). The
-   accelerometer / gyroscope stack works — as far as we know a first on
-   SC8280XP, the ThinkPad X13s included — and the protocol is written up in
-   [`docs/sensors-ssc-protocol.md`](docs/sensors-ssc-protocol.md) if you want
-   it for your machine.
-6. **Camera image quality.** What is left is quality, not plumbing: no
+5. **Camera image quality.** What is left is quality, not plumbing: no
    colour-correction matrix (that needs a colour chart), the software ISP has
    no denoise of its own, and flash-lit shots blow out the highlights.
    Concrete next steps are in [`docs/TODO.md`](docs/TODO.md) T3.

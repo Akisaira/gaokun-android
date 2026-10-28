@@ -94,6 +94,8 @@ void Sensor::activate(bool enable) {
             gaokun3::SscHub::Get().SetAccelWanted(enable);
         } else if (mSensorInfo.type == SensorType::GYROSCOPE) {
             gaokun3::SscHub::Get().SetGyroWanted(enable);
+        } else if (mSensorInfo.type == SensorType::LIGHT) {
+            gaokun3::SscHub::Get().SetLightWanted(enable);
         }
         mWaitCV.notify_all();
     }
@@ -325,15 +327,16 @@ void MagnetometerSensor::readEventPayload(EventPayload& payload) {
 LightSensor::LightSensor(int32_t sensorHandle, ISensorsEventCallback* callback)
     : OnChangeSensor(callback) {
     mSensorInfo.sensorHandle = sensorHandle;
-    mSensorInfo.name = "Light Sensor";
-    mSensorInfo.vendor = "Vendor String";
+    // The streaming tcs3701 ambient light sensor on the SLPI (see SscHub).
+    mSensorInfo.name = "TCS3701 Ambient Light";
+    mSensorInfo.vendor = "ams (via Qualcomm SSC)";
     mSensorInfo.version = 1;
     mSensorInfo.type = SensorType::LIGHT;
     mSensorInfo.typeAsString = "";
-    mSensorInfo.maxRange = 43000.0f;
-    mSensorInfo.resolution = 10.0f;
-    mSensorInfo.power = 0.001f;           // mA
-    mSensorInfo.minDelayUs = 200 * 1000;  // microseconds
+    mSensorInfo.maxRange = 60000.0f;      // lux
+    mSensorInfo.resolution = 0.036f;      // SSC attribute 7 (resolutions)
+    mSensorInfo.power = 0.09f;            // mA, SSC attribute 9 (active current, uA)
+    mSensorInfo.minDelayUs = 200 * 1000;  // microseconds, SSC streams it at 5 Hz
     mSensorInfo.maxDelayUs = kDefaultMaxDelayUs;
     mSensorInfo.fifoReservedEventCount = 0;
     mSensorInfo.fifoMaxEventCount = 0;
@@ -342,7 +345,14 @@ LightSensor::LightSensor(int32_t sensorHandle, ISensorsEventCallback* callback)
 };
 
 void LightSensor::readEventPayload(EventPayload& payload) {
-    payload.set<EventPayload::Tag::scalar>(80.0f);
+    payload.set<EventPayload::Tag::scalar>(gaokun3::SscHub::Get().Light().v[0]);
+}
+
+std::vector<Event> LightSensor::readEvents() {
+    // Report nothing until the SSC has delivered a sample: an on-change sensor
+    // has no UNRELIABLE value to send, and a made-up 0 lux would dim the screen.
+    if (!gaokun3::SscHub::Get().Light().valid) return {};
+    return OnChangeSensor::readEvents();
 }
 
 ProximitySensor::ProximitySensor(int32_t sensorHandle, ISensorsEventCallback* callback)
