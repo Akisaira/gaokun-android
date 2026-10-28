@@ -1147,6 +1147,7 @@ PRODUCT_COPY_FILES += \
 #   （github.com/chiyuki0325/EGoTouchRev-Linux）。逐项比对过：14 个算法函数
 #   逐字相同，20 项默认值只差一项，上游最新提交与 buildbot 那个补丁是同一天的。
 #   ⇒ 「换成 EGoTouchRev」换不来任何东西，我们已经在跑它了。
+#   （2026-10 起检测部分按作者重写的 EGoTouchRev-rebuild 改过并设为默认，见 patches/0121、0122。）
 #
 # 真正的差距在【参数】：驱动跑的是日用默认值，而它的调参工具里另有一套
 # game_preset。差三项，见 bin/gaokun3-touch-mode.sh。
@@ -1159,10 +1160,11 @@ PRODUCT_COPY_FILES += \
 #   实测一次甩动被切成 87 条轨迹（详见 bin/gaokun3-touch-mode.sh 顶部）。
 #   ★ 教训：照搬上游预设时，"另外两项是关掉东西，所以第三项也无害"是一次
 #   **没做的功课**，不是一个结论。逐项问"它打开了什么"。
-#   两版预设现在都把 JUMP 清 0，game 与 daily 只差 track_smoothing。
+#   两版预设现在都把 JUMP 清 0；坐标平滑交给驱动的一欧滤波（patches/0120，0122 起默认打开），两版都关
+#   track_smoothing，game 与 daily 只差 hand_enabled（手掌识别）。
 #
-# 默认仍设 game：本机目标是跑手游，game 关掉坐标平滑（省约 25 ms 稳态滞后），
-# 保留按下防抖（2 帧确认，约 8 ms，换噪声不易变成"按下"）。切回来：
+# 默认仍设 game：本机目标是跑手游，game 不做手掌识别，拇指贴着屏幕边缘平放时不会连带丢掉
+# 周围的点按（拇指本身照样按掌压规则不出触点）。切到日常：
 #   setprop persist.sys.gaokun3.touch_mode daily
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/gaokun3-touch-mode.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-touch-mode.sh \

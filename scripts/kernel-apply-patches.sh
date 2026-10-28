@@ -303,6 +303,21 @@ KPATCHES=(
     0113-soundwire-qcom-let-the-last-data-port-be-allocated.patch
     0114-ASoC-codecs-wsa883x-hand-the-PA-gain-over-to-DRE-after-unmute.patch
     0115-arm64-dts-gaokun3-map-the-speaker-ports-statically.patch
+    # ★ 0116：触摸跟踪的配对范围默认420²（约44毫米）→ 115²（约12毫米）。手指刚抬起、跟踪还留着的3帧里，
+    #    附近落下的手指会被接到旧跟踪上，Android收不到按下（音游吞点击，指纹见scripts/touch/merge-check.py）。
+    0116-Input-himax-spi-narrow-the-track-match-radius.patch
+    # ★ 0118：边缘补偿的上限从网格外收回到网格内最后一个位置。原来最后一列/行被推到2560/1600，比轴最大值多1
+    #    （inverted-x后是-1），坐标回到范围内之前Android收不到这次触摸：贴边的角落点击整个丢失，从这两条边滑入（含返回手势）
+    #    晚开始。0117在#52（音频HAL）。
+    0118-Input-himax-spi-keep-edge-compensated-positions-on-the-panel.patch
+    # ★ 0119–0122：触摸驱动优化。0119点击锁定（track_tap_radius）：手指移动超过半径前停在按下的位置，
+    #    点击不再因为抬起时中心漂移被当成拖动。0120一欧滤波（track_filter_*）：慢速滑动不抖，快速滑动不拖。
+    #    0121与EGoTouchRev-rebuild一致的检测（自适应基线+固件手指标志、峰合并、区域拆分、强触点第一帧上报等），
+    #    参数默认保持原行为；0122把实测过的组合设为默认。回放工具scripts/touch/hxsim同步新参数。
+    0119-Input-himax-spi-hold-a-touch-s-down-position-until-it-moves.patch
+    0120-Input-himax-spi-filter-the-reported-position-by-speed.patch
+    0121-Input-himax-spi-optional-EGoTouchRev-rebuild-style-detection.patch
+    0122-Input-himax-spi-default-to-the-EGoTouchRev-rebuild-style-detection.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，

@@ -42,13 +42,11 @@
     <string name="standby_note">关闭立刻生效；打开从下一次息屏起生效。不需要重启，重启后设置仍然保留。\n\n睡眠期间 Wi-Fi 整个断电，新消息要等点亮屏幕后才到；USB 线上的调试连接也会暂停，亮屏后恢复。需要实时收消息，或者排查平板唤醒不了的问题时，可以关掉待机。</string>
     <!-- 触摸手感开关（2026-10-25，TouchModeSettingsActivity / TouchModeTileService），注入到「设置 → 系统」。 -->
     <string name="touch_mode_title">触摸手感</string>
-    <string name="touch_mode_summary">游戏模式（更跟手）或日常模式（更稳）</string>
+    <string name="touch_mode_summary">游戏模式（不识别手掌）或日常模式（识别手掌）</string>
     <string name="touch_mode_switch_title">游戏触摸模式</string>
-    <string name="touch_mode_switch_summary_on">更跟手：不做坐标平滑，不做手掌识别</string>
-    <string name="touch_mode_switch_summary_off">日常：线条更平滑、识别手掌，跟手略慢</string>
-    <string name="touch_mode_note">游戏模式少约 25 ms 跟手延迟，但划出的线会略抖，手掌或拇指根部搭在屏幕上时可能被当成触摸。日常模式会平滑坐标、忽略搭在屏幕上的手掌，适合浏览、阅读和手写。
-
-切换立刻生效，不需要重启，重启后仍然保留。控制中心里也有开关：编辑快捷设置，把「游戏触摸」拖上去。</string>
+    <string name="touch_mode_switch_summary_on">游戏：不做手掌识别，拇指贴边平放时不会连带丢掉周围的点按</string>
+    <string name="touch_mode_switch_summary_off">日常：识别手掌，忽略搭在屏幕上的手</string>
+    <string name="touch_mode_note">两种模式跟手程度相同，只差手掌识别。游戏模式不做手掌识别，手掌或拇指根部搭在屏幕上时可能被当成触摸。日常模式会忽略搭在屏幕上的手掌，适合浏览、阅读和手写；但拇指贴着屏幕边缘平放时，它周围的点按也可能被一起忽略。\n\n切换立刻生效，不需要重启，重启后仍然保留。控制中心里也有开关：编辑快捷设置，把「游戏触摸」拖上去。</string>
     <string name="touch_mode_tile_label">游戏触摸</string>
     <string name="touch_mode_game">游戏</string>
     <string name="touch_mode_daily">日常</string>

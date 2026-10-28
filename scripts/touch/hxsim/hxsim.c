@@ -14,6 +14,8 @@
  *   -p  apply name=value tunables, e.g. a dump of the files in
  *       /sys/bus/spi/devices/spi0.0/algo/
  *   -s  apply one tunable (after -p)
+ *   baseline_fw_finger is always replayed as 0: recordings do not carry the
+ *   firmware's finger flag.
  *
  * Output, one block per frame:
  *   F t_ns idx stable report_on mism
@@ -90,6 +92,15 @@ static struct param params[] = {
 	P(track_dist2_max, K_S32), P(track_lost_frames, K_U8), P(debounce_base, K_U8),
 	P(track_smoothing, K_BOOL), P(track_active_guard, K_BOOL),
 	P(track_start_debounce, K_U8), P(track_jump_dist2, K_S32),
+	P(track_tap_radius, K_S32), P(track_filter_mincutoff, K_S32),
+	P(track_filter_beta, K_S32), P(track_filter_dcutoff, K_S32),
+	PM(baseline_mode, K_U8, 2), P(baseline_fw_finger, K_BOOL),
+	P(baseline_gate, K_S16), PM(cmf_mode, K_U8, 3),
+	P(peak_edge_threshold, K_S16), P(peak_drift_limit, K_S16),
+	PM(peak_merge_radius, K_U8, 5), P(min_area, K_U8),
+	PM(edge_comp_mode, K_U8, 1), PM(edge_peak_mode, K_U8, 1),
+	P(zone_split, K_BOOL), P(ghost_row_filter, K_BOOL),
+	P(debounce_strong, K_S32), P(track_min_signal, K_S32),
 };
 
 static int set_param(const char *assign)
@@ -148,6 +159,7 @@ static void run_frame(long long t_ns, long idx, int mism, bool quiet)
 	struct input_mt_pos pos[HIMAX_MAX_TOUCH];
 	bool report_on = true;
 	int cnt, stable, i;
+	s32 rx, ry;
 
 	hx_detect_macro_zones(&algo);
 	hx_reject_palms(&algo);
@@ -207,8 +219,9 @@ static void run_frame(long long t_ns, long idx, int mism, bool quiet)
 		if (!t->active)
 			continue;
 		/* touchscreen_report_pos(): invert x, then swap x and y */
+		hx_track_report_pos(&algo, t, &rx, &ry);
 		printf("T %d %d %d %d %d %d %d %u %u %u %d\n", i, on ? slot_tid[i] : -1,
-		       on, t->y, TS_MAX_X - t->x, t->x, t->y, t->debounce,
+		       on, ry, TS_MAX_X - rx, t->x, t->y, t->debounce,
 		       t->missed, t->age, t->palm ? 2 : 0);
 	}
 }
@@ -274,6 +287,15 @@ int main(int argc, char **argv)
 	for (i = 0; i < nsets; i++)
 		if (set_param(sets[i]))
 			return 1;
+	/*
+	 * Recordings carry no firmware finger flag: fw_finger stays false,
+	 * and with baseline_fw_finger every frame would read as untouched
+	 * and come out empty.  Replay the baseline without the flag.
+	 */
+	if (algo.baseline_fw_finger) {
+		fprintf(stderr, "hxsim: no finger flag in recordings, replaying with baseline_fw_finger 0\n");
+		algo.baseline_fw_finger = false;
+	}
 	for (i = 0; i < HIMAX_MAX_TOUCH; i++)
 		slot_tid[i] = -1;
 
