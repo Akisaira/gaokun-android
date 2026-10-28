@@ -20,12 +20,13 @@
  * turns that into TOOL_TYPE_STYLUS / TOOL_TYPE_ERASER with pressure, and
  * HOVER_* while BTN_TOUCH is 0.
  *
- * Coordinates are the touchscreen's raw space so Android treats both alike:
- * X 0..1599 from the slave's row, Y 0..2559 from its column, 10 units/mm.
- * That is hx-algo.c's mapping (x = col_q8 / 6, y = 5 * row_q8 / 32) followed
- * by the DT's touchscreen-swapped-x-y.  The slave numbers its columns the
- * other way round from the master (seen on the device: left/right came out
- * mirrored), so the column is flipped by default; -fx/-fy toggle each axis.
+ * Coordinates are the touchscreen's raw space in 1/16 steps (SUBPX):
+ * X 0..1599 px from the slave's row, Y 0..2559 px from its column, reported
+ * as 0..25599 and 0..40959.  The pixel mapping is hx-algo.c's
+ * (x = col_q8 / 6, y = 5 * row_q8 / 32) followed by the DT's
+ * touchscreen-swapped-x-y.  The slave numbers its columns the other way
+ * round from the master (seen on the device: left/right came out mirrored),
+ * so the column is flipped by default; -fx/-fy toggle each axis.
  *
  * Position and pressure: EGoTouchRev's HPP3 steps (solver.h).  Pressure
  * slots are played back the factory way by default (-pm incell): the gaokun
@@ -83,6 +84,14 @@
 #define RELEASE_DELAY	30	/* ms without a valid frame before leaving range */
 #define STALE_MS	150	/* no frame at all for this long: leave range too */
 
+/*
+ * ABS_X/Y count 1/SUBPX display pixels.  Android scales the raw range to the
+ * display in floating point, so the sub-pixel part reaches the app; in whole
+ * pixels a slow stroke (1-2 px a frame) came out as a staircase.
+ */
+#define SUBPX		16
+#define PX_MM		0.104	/* display pixel pitch: 2560 px over 266 mm */
+
 #define MCU_EP_OUT	0x02
 #define MCU_EP_IN	0x85
 #define MCU_IFNUM	1
@@ -130,14 +139,59 @@ static int col_map;	/* the column pitch in solver.h: BOE panel only */
 #define EDGE_ZONE_X	40	/* one cell: 1600 / 40 */
 #define EDGE_ZONE_Y	43	/* 2560 / 60 */
 
-static int edge_smooth(double *s, int v, int zone, int max, int reset)
+static double edge_smooth(double *s, double v, int zone, int max, int reset)
 {
 	if (reset || (v > zone && v < max - zone)) {
 		*s = v;
 		return v;
 	}
 	*s += (v - *s) * 0.25;
-	return (int)(*s + 0.5);
+	return *s;
+}
+
+/*
+ * Position filter.  The solved position jitters by a few tenths of a pixel
+ * per frame, and a slow stroke moves only 1-2 px a frame, so a zoomed-in
+ * line zigzags.  One Euro filter (Casiez et al., CHI 2012) on both axes with
+ * one cutoff from the 2-D speed: mincutoff + beta x speed (mm/s), the speed
+ * low-passed at dcutoff.  It restarts when the pen enters range and at every
+ * touch-down, so a stroke starts where the tip lands.  -pf MIN,BETA,DCUT in
+ * mHz, mHz per mm/s and mHz (as himax-spi's track_filter_*); -pf 0 is off.
+ */
+static int pf_mincutoff = 1000, pf_beta = 500, pf_dcutoff = 5000;
+
+struct euro {
+	double x, y;		/* filtered position, px */
+	double vx, vy;		/* filtered speed, px/s */
+	unsigned long long t_ns;
+};
+
+static double euro_alpha(double dt, int mhz)
+{
+	return 1.0 / (1.0 + 1000.0 / (2 * 3.141592653589793 * mhz * dt));
+}
+
+static void euro_filter(struct euro *e, double *x, double *y, unsigned long long t_ns, int restart)
+{
+	double dt = (double)(t_ns - e->t_ns) / 1e9, a, fc;
+
+	if (restart || pf_mincutoff <= 0 || dt <= 0 || dt > 0.1) {
+		e->x = *x;
+		e->y = *y;
+		e->vx = e->vy = 0;
+		e->t_ns = t_ns;
+		return;
+	}
+	e->t_ns = t_ns;
+	a = euro_alpha(dt, pf_dcutoff);
+	e->vx += a * ((*x - e->x) / dt - e->vx);
+	e->vy += a * ((*y - e->y) / dt - e->vy);
+	fc = pf_mincutoff + pf_beta * __builtin_sqrt(e->vx * e->vx + e->vy * e->vy) * PX_MM;
+	a = euro_alpha(dt, (int)fc);
+	e->x += a * (*x - e->x);
+	e->y += a * (*y - e->y);
+	*x = e->x;
+	*y = e->y;
 }
 
 static long long clock_ms(int clock)
@@ -224,8 +278,8 @@ static int uinput_create(void)
 		ioctl(fd, UI_SET_ABSBIT, ABS_TILT_Y);
 	}
 	ioctl(fd, UI_SET_PROPBIT, INPUT_PROP_DIRECT);
-	abs_setup(fd, ABS_X, 1599, 10);
-	abs_setup(fd, ABS_Y, 2559, 10);
+	abs_setup(fd, ABS_X, 1600 * SUBPX - 1, (int)(SUBPX / PX_MM));
+	abs_setup(fd, ABS_Y, 2560 * SUBPX - 1, (int)(SUBPX / PX_MM));
 	abs_setup(fd, ABS_PRESSURE, 4095, 0);
 	if (tilt_on) {
 		struct uinput_abs_setup a;
@@ -491,7 +545,7 @@ int main(int argc, char **argv)
 	long tsum_x = 0, tsum_y = 0, tn = 0;	/* -v: mean tilt of a stroke */
 	unsigned char rep[64];
 	int pen, hid, ui;
-	int pressure = 0, in_range = 0, touching = 0, x = 0, y = 0;
+	int pressure = 0, in_range = 0, touching = 0, x = 0, y = 0;	/* x, y in 1/SUBPX px */
 	int slots[4] = { 0 }, play = 4;	/* newest packet, next slot to play */
 	int eraser = 0, tool = BTN_TOOL_PEN;
 	int bat[2] = { -1, -1 }, bat_sent[2] = { -1, -1 };	/* level %, charging */
@@ -499,6 +553,7 @@ int main(int argc, char **argv)
 	long long slept = suspended_ms();
 	double press_out = 0;	/* smoothed, mapped pressure */
 	double edge_x = 0, edge_y = 0;	/* edge_smooth state */
+	struct euro euro = { 0 };
 	unsigned long frames = 0, reports = 0;
 
 #ifndef NOLIBC
@@ -514,6 +569,16 @@ int main(int argc, char **argv)
 			flip_y = !flip_y;
 		else if (!strcmp(argv[i], "-pt") && i + 1 < argc)
 			press_tau_ms = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "-pf") && i + 1 < argc) {
+			const char *s = argv[++i];
+
+			pf_mincutoff = atoi(s);
+			if ((s = strchr(s, ',')) != NULL) {
+				pf_beta = atoi(++s);
+				if ((s = strchr(s, ',')) != NULL)
+					pf_dcutoff = atoi(++s);
+			}
+		}
 		else if (!strcmp(argv[i], "-rec") && i + 1 < argc)
 			rec_fd = open(argv[++i], O_WRONLY | O_CREAT | O_APPEND, 0644);
 		else if (!strcmp(argv[i], "-nt"))
@@ -549,8 +614,10 @@ int main(int argc, char **argv)
 	}
 	if (side_mode != SIDE_NONE)
 		mcu_open(&mcu, now_ms());
-	printf("gk3pend: running, flip x %d y %d, column pitch %s, pressure %s tau %d ms, tilt %s, side %s, mcu %s\n",
-	       flip_x, flip_y, col_map ? "boe" : "even", press_incell ? "incell" : "direct", press_tau_ms,
+	printf("gk3pend: running, flip x %d y %d, column pitch %s, filter %d,%d,%d, pressure %s tau %d ms, "
+	       "tilt %s, side %s, mcu %s\n",
+	       flip_x, flip_y, col_map ? "boe" : "even", pf_mincutoff, pf_beta, pf_dcutoff,
+	       press_incell ? "incell" : "direct", press_tau_ms,
 	       !tilt_on ? "off" : tilt_sx * tilt_sy > 0 ? (tilt_sx > 0 ? "on" : "on -tx -ty") :
 	       tilt_sx > 0 ? "on -ty" : "on -tx",
 	       side_mode == SIDE_ERASER ? "eraser" : side_mode == SIDE_BUTTON ? "button" : "none",
@@ -710,6 +777,7 @@ int main(int argc, char **argv)
 				      !(ar == 0xff && ac == 0xff) && peak >= PEAK_MIN;
 			if (frame_valid) {
 				int g[81], g2[81], lc, lr, col, row, k, c2, r2, s2;
+				double fx, fy;
 				int a2r = word(rec.d, 83) & 0xff, a2c = word(rec.d, 84) & 0xff;
 				int press = pressure > 0 && t - press_t <= PRESS_MAX_AGE;
 
@@ -744,14 +812,18 @@ int main(int argc, char **argv)
 					row = 40 * UNIT - row;
 				if (flip_y)
 					col = 60 * UNIT - col;
-				x = row * 5 / 128;	/* 40 cells -> 1600 */
-				y = col / 24;		/* 60 cells -> 2560 */
-				if (x < 0) x = 0;
-				if (x > 1599) x = 1599;
-				if (y < 0) y = 0;
-				if (y > 2559) y = 2559;
-				x = edge_smooth(&edge_x, x, EDGE_ZONE_X, 1599, t - valid_t > 20);
-				y = edge_smooth(&edge_y, y, EDGE_ZONE_Y, 2559, t - valid_t > 20);
+				fx = row * 5.0 / 128;	/* 40 cells -> 1600 px */
+				fy = col / 24.0;	/* 60 cells -> 2560 px */
+				euro_filter(&euro, &fx, &fy, rec.t_ns,
+					    !in_range || t - valid_t > 20 || (press && !touching));
+				if (fx < 0) fx = 0;
+				if (fx > 1599) fx = 1599;
+				if (fy < 0) fy = 0;
+				if (fy > 2559) fy = 2559;
+				fx = edge_smooth(&edge_x, fx, EDGE_ZONE_X, 1599, t - valid_t > 20);
+				fy = edge_smooth(&edge_y, fy, EDGE_ZONE_Y, 2559, t - valid_t > 20);
+				x = (int)(fx * SUBPX + 0.5);
+				y = (int)(fy * SUBPX + 0.5);
 			}
 		}
 
@@ -806,7 +878,8 @@ int main(int argc, char **argv)
 				emit(ui, EV_KEY, BTN_TOUCH, touch);
 				touching = touch;
 				if (verbose) {
-					printf("%lld %s at %d,%d p=%d", t, touch ? "down" : "up", x, y, pressure);
+					printf("%lld %s at %d,%d p=%d", t, touch ? "down" : "up", x / SUBPX, y / SUBPX,
+					       pressure);
 					if (!touch && tn)
 						printf(" tilt x %ld y %ld (%ld frames)",
 						       tsum_x / tn, tsum_y / tn, tn);
