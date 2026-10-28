@@ -37,6 +37,8 @@ class SscHub {
     // 而不是拿 0 当真值。SSC 侧停用期间同样是 valid=false。
     Sample Accel();
     Sample Gyro();
+    // Ambient light: v[0] = lux, v[1] = colour temperature (K).
+    Sample Light();
 
     // 框架 activate(true/false) 时由 Sensor::activate 调用。
     // ★ 只记下"想要"，真正的 EnableContinuous / Disable 由读线程在【同一个
@@ -44,6 +46,7 @@ class SscHub {
     //   （v1.0 计划 PWR-3 / LIVE-2 / HW-3：此前一被读过就 50 Hz 常开到重启）。
     void SetAccelWanted(bool on);
     void SetGyroWanted(bool on);
+    void SetLightWanted(bool on);
 
   private:
     SscHub() = default;
@@ -64,10 +67,13 @@ class SscHub {
     std::condition_variable cv_;   // want_* 变了就叫醒空闲中的读线程
     bool want_accel_ = false;      // 以下六个都由 m_ 保护
     bool want_gyro_ = false;
+    bool want_light_ = false;
     Sample accel_;
     Sample gyro_;
+    Sample light_;
     std::chrono::steady_clock::time_point accel_at_;   // 上一次写进 accel_ / gyro_ 的时刻
     std::chrono::steady_clock::time_point gyro_at_;
+    std::chrono::steady_clock::time_point light_at_;
 };
 
 }  // namespace gaokun3

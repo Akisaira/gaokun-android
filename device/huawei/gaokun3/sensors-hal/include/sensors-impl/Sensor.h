@@ -135,6 +135,7 @@ class LightSensor : public OnChangeSensor {
     LightSensor(int32_t sensorHandle, ISensorsEventCallback* callback);
 
   protected:
+    virtual std::vector<Event> readEvents() override;
     virtual void readEventPayload(EventPayload& payload) override;
 };
 
