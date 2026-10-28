@@ -1208,6 +1208,12 @@ def main():
     step(" [22] audio AIDL HAL 播放块大小可配（10 ms，开 FastMixer）: ", apply_patch_file(
         tree, "hardware/interfaces",
         "0083-audio-aidl-primary-low-latency-playback-block.patch"))
+    # 扬声器低音处理（device/huawei/gaokun3/speakerfx）：播放块写进 ALSA 之前交给 ro.vendor.audio.primary.playback_hook 的库。
+    # 只动 StreamPrimary.{h,cpp}；transfer() 的上下文依赖 [17]（0069 的播放直写），所以排在 [22] 之后。
+    # 在 lineage-24.0 + 0010/0051/0052/0063/0068/0069/0077/0083 上核过：正向 --check 干净、打上后反向 --check 通过。
+    step(" [27] audio AIDL HAL 播放方向的厂商钩子（扬声器低音处理，覆盖 FAST 轨）: ", apply_patch_file(
+        tree, "hardware/interfaces",
+        "0117-audio-aidl-primary-playback-hook.patch"))
     # 游戏环境如实修正：fingerprint 尾部 userdebug→user，与 ro.build.type=user 对齐
     # （Duck Detector system_properties 3 条 danger 的根；运行时改不掉 Build.FINGERPRINT 常量）
     step(" [23] BUILD_FINGERPRINT/THUMBPRINT/SYSTEM_FINGERPRINT 变体段改写成 user（与 ro.build.type 对齐）: ",

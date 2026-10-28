@@ -121,9 +121,9 @@ python analysis/win_vs_android.py --win data/win-digital-response.csv \
 - `analysis/win_vs_android.py` 尾部打印的下发命令引用的是我们工作区的临时脚本路径
   （`tools/_tmp/histen-ab.sh`），仅作示例，不在本目录。
 - 声学域数据是**这台机器**的 WSA 双单元 + 内置麦，不具备跨机型通用性。
-- **（维护者补）场景号**：全部数据与 EQ 槽标定都是**场景 3**（`SWS_SPK_LANDSCAPE_TWO`）。部署默认是**场景 0**
-  （`histen_chain.h` 的 `kDefScene`）。按 eqscan 在场景 3 上验证的对应关系（槽 n 的中心 = 场景表 idx(96+n)），
-  两个场景的槽中心不同（ONE 的 idx96.. 是标准倍频程 31/62/125/…，TWO 是 65/120/560/…；场景 0 上没扫过），
+- **（维护者补）场景号**：全部数据与 EQ 槽标定都是**场景 3**（`SWS_SPK_LANDSCAPE_TWO`），部署默认也是场景 3
+  （`histen_chain.h` 的 `kDefScene`；以前是场景 0）。按 eqscan 在场景 3 上验证的对应关系（槽 n 的中心 = 场景表 idx(96+n)），
+  场景 0 的槽中心不同（ONE 的 idx96.. 是标准倍频程 31/62/125/…，TWO 是 65/120/560/…；场景 0 上没扫过），
   预设值不能跨场景套用。第七节打印的命令会先切场景。
 - **（维护者补）评分下限**：`win_vs_android.py` 在 `--grid-lo`（默认 90 Hz）以下不计分、也没有失真项，
   所以它不会因为"90 Hz 以下进来太多"而罚任何解 —— 动 HPF 一律要看 §九（`--low-lift`）。

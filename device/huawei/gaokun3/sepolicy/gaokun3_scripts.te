@@ -202,6 +202,12 @@ allow gaokun3_audioroute system_file:file execute_no_trans;
 #   在新内核上就是大音量总线冲突，所以这条不能漏。⬜ 未编译、未经 enforcing 普查。
 allow gaokun3_audioroute sysfs:file getattr;
 
+# 扬声器的数字音量基准（audio-route.sh 设完混音器后写 vendor.gaokun3.audioroute.spkdig，
+#   vendor_gaokun3_prop）：音频 HAL 里的 speakerfx 借余量、补偿、放回都以它为准，没有它就不碰混音器。
+#   gaokun3_audioroute 不是 coredomain，拦 coredomain 写 vendor 属性的那条 neverallow 管不到它
+#   （同 gaokun3_usbrole）。⬜ 未编译、未上机。
+set_prop(gaokun3_audioroute, vendor_gaokun3_prop)
+
 # ── ⚠️ 故意【不写】的两个域（2026-09-18）—— ★ 2026-09-27 起两个都写了，见本文件末尾（#126）──
 #
 # gaokun3_smmustall：实测要 `self:capability sys_rawio` +

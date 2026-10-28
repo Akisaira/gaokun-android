@@ -13,6 +13,8 @@ Android 上一直没有对应物。
 > ★ **试验功能，默认关。** 开关在「设置 → 声音 → 扬声器增强（实验性）」
 > （Parts 应用，写 `persist.sys.gaokun3.histen`）。关着的时候 effect 只是 music 流上
 > 一个逐比特直通的槽位，不加载任何库。打开后**只处理内置扬声器**，耳机 / 蓝牙 / USB 一律直通。
+> 同一页的「处理方式」默认是「低音增强」，由音频 HAL 里的 speakerfx 处理（`../speakerfx/README.md`），
+> 这时本 effect 也是直通；选「华为 Histen」才轮到本 effect。
 >
 > ⚠️ **Histen 引擎（`libhw_histen_processing.so`）是华为专有二进制，不在版本库里**，
 > 放在 `prebuilt/`（整目录忽略），见 [`prebuilt/README.md`](prebuilt/README.md)。
@@ -118,11 +120,12 @@ SELinux：`sepolicy/hal_audio_default.te` 让音频 HAL 读 `vendor_gaokun3_prop
 
 ## 四、什么时候真的处理
 
-每个 music 流上都有这个 effect 的实例，但只有**同时满足**下面四条时才处理，其余一律逐比特直通：
+每个 music 流上都有这个 effect 的实例，但只有**同时满足**下面五条时才处理，其余一律逐比特直通：
 
 | 条件 | 来源 | 变了以后 |
 |---|---|---|
 | 总开关 = `1` | Parts 写 `persist.sys.gaokun3.histen`，`etc/histen.rc` 镜像成 `vendor.gaokun3.histen.on`，effect 读镜像；没设过 = 关 | **关**：约 1 秒内生效。**开**：从下一次开始播放起生效（这一路流之前开过的话立刻恢复） |
+| 处理方式 = 华为 Histen | Parts 写 `persist.sys.gaokun3.speakerfx.engine`，`etc/histen.rc` 镜像成 `vendor.gaokun3.speakerfx.engine`，只有 `histen` 算；没设过 = 低音增强（speakerfx 处理，本 effect 直通） | 约 1 秒。从低音增强切过来时，这一路流装链时没加载 Histen，要到下一次播放才有，之前只跑扬声器链 |
 | 这一路流已经"装好"（armed） | 开流时或 START 时开关是开的 | 装链会 dlopen 引擎，不能在音频线程上做，所以只在开流 / START 时做 |
 | 输出是**内置扬声器** | 框架推来的设备（descriptor 设了 `deviceIndication`） | 插拔耳机、连蓝牙立刻切换。蓝牙音箱也是 `OUT_SPEAKER` 但带 `bt-a2dp` 连接，不算 |
 | 立体声 | 开流时的格式 | 另外 Histen 只在 48 kHz 下进链；别的采样率只跑扬声器链 |
@@ -134,6 +137,11 @@ SELinux：`sepolicy/hal_audio_default.te` 让音频 HAL 读 `vendor_gaokun3_prop
 ✅ 作者 2026-09-27 实测（PR #8 的评论；欢乐斗地主，只测了这一款）：本机两个输出线程都是 `type 0 (MIXER)`、
 `No FastMixer`，游戏的 BGM / 音效照常出 `meter:` ⇒ 这条路径在本机**目前不会触发**（不是"挂上了"，是没有 FastMixer 可撞）。
 ⬜ 我们没复核；换了输出配置后复查：`dumpsys media.audio_flinger | grep -E 'Output thread|FastMixer'`。
+⚠️ 2026-10-27：上面"目前不会触发"已经过时。rc.2 起（`patches/0083` + `device.mk` 的 `ro.vendor.audio.primary.out_latency_ms`）
+AudioOut_D 有 FastMixer 了。实机 Project SEKAI：音乐和打击音都在 FAST 轨上，挂 effect 被拒
+（`checkEffectCompatibility_l: non HW effect Gaokun Histen on playback thread in fast mode`、
+`addOutputSessionEffects(): failed to create Fx  Gaokun Histen on session …`）；它另开的一路普通音轨挂上了，
+但在菜单和打歌时都只送静音 ⇒ 这个游戏的声音完全不经过本 effect。要覆盖游戏得在 HAL 里做，见 `speakerfx/README.md`。
 
 ---
 
@@ -144,8 +152,8 @@ SELinux：`sepolicy/hal_audio_default.te` 让音频 HAL 读 `vendor_gaokun3_prop
 
 | 属性 | 取值 | 作用 | 何时生效 |
 |---|---|---|---|
-| `…engine` | `0` / `1`（默认 1） | `0` = 不让 Histen 进链、**只跑扬声器链**（A/B 对照用；不是逐比特直通，直通请关总开关） | 下一次播放 |
-| `…scene` | `0`–`14` | 选 `SWS_SPK_*` 场景（索引同 `histen_scenes.h` 顺序） | 下一次播放 |
+| `…engine` | `0` / `1`（默认 1） | `0` = 不让 Histen 进链、**只跑扬声器链**（A/B 对照用；不是逐比特直通，直通请关总开关）。和"处理方式"不是一回事：处理方式选低音增强时本 effect 整个是直通，这个旋钮不起作用 | 下一次播放 |
+| `…scene` | `0`–`14`（默认 3） | 选 `SWS_SPK_*` 场景（索引同 `histen_scenes.h` 顺序）。默认 3 = `SWS_SPK_LANDSCAPE_TWO`。⚠️ 别用场景 0：它和其他扬声器场景只差 p3[96..111] —— EQ 各段的中心频率 —— 而它那一段是一张通用倍频程表（31、62、125…16000 Hz，后半段还错了位），不是调过的频点：同样的增益落在错的频率上，左右还不对称（4 kHz 左比右高约 9 dB，按键音、语音刺耳）。场景 3/6/9/12 的参数表与实测曲线完全相同、左右对称（2026-10-27，离线跑引擎、粉红噪声） | 下一次播放 |
 | `…eq.N` | `N`=0–10，值 0…203（**无符号**） | **绝对覆盖**场景表的第 N 个 EQ 槽（Histen 里的）。约 0.08 dB/单位；槽 1..8 有效，0/9/10 改不动；≥204 引擎 Init 失败，effect 钳到 203（PR #8 的 eqscan 在场景 3 上标定，见下）。⚠️ 空 = 回落场景基线，所以**切场景前先清空 `eq.*`** | 约 1 秒 |
 | `…ben.{on,thr,gain,freq,a,b}` | 原样透传 | Histen 低音增强（BEN）分字段覆盖，便于逐项扫描 | 约 1 秒 |
 | `…vol.{ana,dig}` | 原样透传 | Histen 的模拟/数字音量字段 | 约 1 秒 |
@@ -168,7 +176,7 @@ SELinux：`sepolicy/hal_audio_default.te` 让音频 HAL 读 `vendor_gaokun3_prop
 > **EQ 槽的语义**（PR #8 的 `measurement/android/eqscan.c`，场景 3 = `SWS_SPK_LANDSCAPE_TWO`，R² ≥ 0.999）：
 > 值按无符号读（−128 存进去就是 128），约 0.0801 dB/单位；槽 1..8 的中心依次是
 > 120 / 560 / 2200 / 3700 / 4600 / 1100 / 220 / 14000 Hz（= 场景表 idx(96+n)），槽 0/9/10 改不动；值 ≥204 时 Init 返回 −145。
-> ⚠️ 部署默认是**场景 0**，它的 idx96.. 是另一组频率、没扫过 —— 预设值别跨场景套用。
+> 部署默认就是场景 3。场景 0 的 idx96.. 是另一组频率、没扫过 —— 预设值别跨场景套用。
 
 > 旧名字 `persist.gaokun3.histen.*`（PR 原版）已**全部作废**：那是 `default_prop`，
 > vendor 进程在 enforcing 下永远读不到。设备上残留的旧值无害，但也不再起作用。
@@ -233,8 +241,8 @@ adb shell su -c 'logcat -d -s gaokun_effect' | tail -40
   > ② 数值上**唯一**的差异就是 ONE 的 p3 索引 96–111（两行）。
   >
   > ⇒ **本目录提交的是未经改动的原始值**（ONE = `0x1f…`）。用生成器重跑时请用
-  > **未改动过的** `sws_config.xml`，否则 ONE 会被换成 TWO 的参数 —— 而 ONE 恰好是
-  > 默认场景（`kDefScene = 0`），这个错误不会报错、只会听感变样。检查办法（本表上实测输出 `13,14c13,14`）：
+  > **未改动过的** `sws_config.xml`，否则 ONE（场景 0）会被换成 TWO 的参数 ——
+  > 这个错误不会报错、只会让场景 0 听感变样。检查办法（本表上实测输出 `13,14c13,14`）：
   >
   > ```bash
   > one() { sed -n "/spk_landscape_${1}_p3\[255\]/,/^};/p" histen_scenes.h | sed '1d;$d'; }

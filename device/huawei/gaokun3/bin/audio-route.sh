@@ -66,6 +66,8 @@ while [ ! -e /dev/snd/controlC0 ] && [ $n -lt 60 ]; do sleep 1; n=$((n+1)); done
 #      右 DAC 落到 3 号端口、右喇叭不响。
 #    ⚠️ 判断要能 stat 这个 sysfs 文件（gaokun3_scripts.te 里 audioroute 的 sysfs 规则）；
 #       读不到时按"没有"处理，等于旧行为。
+# ★ 这里设的是基准。扬声器低音处理（音频 HAL 里的 speakerfx）在它处理的那段播放期间自己把数字音量
+#   抬到 84、结束时放回基准，并按抬高的量补偿 —— 见 speakerfx/README.md 第三节。
 SPK_MAP=/sys/firmware/devicetree/base/soc@0/soundwire@3250000/wsa8830-right@0,2/qcom,port-mapping
 if [ -e "$SPK_MAP" ]; then
     VISENSE=0; WSA_DIG=78
@@ -100,6 +102,10 @@ apply() {
     done
 }
 apply "$@"
+# 把基准告诉 speakerfx：它补偿的是混音器高出这个值的部分，播放结束时也放回这个值。
+# 混音器设好之后才写；没有这个属性时 speakerfx 不碰混音器。
+setprop vendor.gaokun3.audioroute.spkdig "$WSA_DIG" ||
+    log -t audioroute "写不进 vendor.gaokun3.audioroute.spkdig（低音处理不会借数字音量余量）"
 
 # ★ PA 音量分两步写，好让**同一份 ROM 在新旧内核上都正确** ——
 #   本项目内核与 ROM 是分开发布的，不能假设两边同步。
@@ -209,7 +215,7 @@ log -t audioroute "内置麦路由已应用（PCM3 / VA / DMIC0+1）"
 #     ★ 它**不是**功放升压器开关（这个叫法本仓沿用了很久，是错的），而是
 #     SoundWire 端口使能；对稳态电平的影响实测为 ±0.3 dB 以内，即零。
 #   * `SpkrLeft/Right VISENSE Switch`：带 patches/0115 的内核上是 0（与上游一致），
-#     旧内核上仍是 1；`WSA_RXn Digital Volume` 相应是 78 / 84。见扬声器段开头。
+#     旧内核上仍是 1；`WSA_RXn Digital Volume` 相应是 78 / 84（低音处理播放时由 speakerfx 临时抬到 84）。
 #   另两处查过是【已经一致】的，不用设：`WSA MODE` 默认就是上游的 0；
 #   ⚠️★ `WSA_RXn Digital Volume` 的上限是【内核机器驱动故意设的】——
 #   sound/soc/qcom/sc8280xp.c 里 snd_soc_limit_volume()，上游写 81，注释是
