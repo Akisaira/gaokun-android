@@ -296,6 +296,13 @@ KPATCHES=(
     #    模式也没人重写，只开MTP/PTP时接电脑枚举不到（#41评审）。只去掉match_existing_only不行，见补丁说明。
     #    0111留给#46评审里拆出去的NVMe挂起下电（实验性，另提）。
     0112-usb-gadget-configfs-take-none-as-unbind-and-wait-for-an-absent-UDC.patch
+    # ★ 0113–0115：扬声器压缩与总线冲突。0113修qcom.c分不出最后一个端口（主线6ccec91c3535引入）；0114让
+    #    wsa883x播放时切到动态DRE（主线一直停在固定增益，压扩器的提升没人抵消）；0115给两颗功放加
+    #    qcom,port-mapping（不加时端口按顺序分配，audio-route.sh的BOOST 0 / VISENSE 1错位），右VI在8号端口、要0113。
+    #    ⚠️ 与audio-route.sh的数字音量78配套（脚本按DT里有没有映射来判断），要一起发。
+    0113-soundwire-qcom-let-the-last-data-port-be-allocated.patch
+    0114-ASoC-codecs-wsa883x-hand-the-PA-gain-over-to-DRE-after-unmute.patch
+    0115-arm64-dts-gaokun3-map-the-speaker-ports-statically.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
