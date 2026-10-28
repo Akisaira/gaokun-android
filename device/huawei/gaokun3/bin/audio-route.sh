@@ -45,12 +45,33 @@ while [ ! -e /dev/snd/controlC0 ] && [ $n -lt 60 ]; do sleep 1; n=$((n+1)); done
 #    所以关掉它**不换来任何响度损失**，纯赚。详见 docs #78。
 #
 # ★★ 增益分配（2026-09-08 实测重排，docs #78）：
-#    数字级走**单位增益 84**，响度由 **PA** 出。
+#    数字级走**单位增益 84**，响度由 **PA** 出（带 patches/0114 的内核上改为 78，见下）。
 #    此前是反过来的（数字 90 = +6 dB、PA 12 = -3 dB），那个组合在 -6 dBFS
 #    素材上实测 THD **-20 dB（约 10% 失真）** —— 数字级 +6 dB 把 -6 dBFS
 #    的内容顶到 0 dBFS，是**削波**，不是压缩器吃掉了增益
 #    （-20 dBFS 素材下同样两档给出满额 +9.07 dB 且 THD -52 dB，这是判据）。
 #    改成 84 之后没有任何混音器设置能削爆数字通路。
+#
+# ★★ 2026-10-26：扬声器有两项设置要跟着内核走（patches/0113–0115）。
+#    以 DT 里右功放有没有 qcom,port-mapping（0115 加的）为准；0113–0115 同属一组、
+#    一起发，所以用这一个属性代表三者。
+#    * 有：VISENSE 0、数字 78。
+#      - VISENSE 关掉是因为 VI 数据目前没有任何地方用（没有扬声器保护），与上游 UCM
+#        一致。开着也能用：右功放的 VI 输入在控制器 8 号端口，0113 之后才分得出来，
+#        没有 0113 时流会起不来（"All ports busy"）。
+#      - 0114 让播放时功放切到动态 DRE，增益跟着压扩器走，满幅比固定增益高约 6 dB；
+#        数字 78（-6 dB）把最大音量拉回原来附近（内置麦实测仍高约 2 dB）。
+#    * 没有（旧内核）：照旧 VISENSE 1、数字 84。没有映射时端口按顺序分配：
+#      VISENSE 1 + BOOST 0 大音量时总线冲突，但两边都响；VISENSE 0 + BOOST 0 会让
+#      右 DAC 落到 3 号端口、右喇叭不响。
+#    ⚠️ 判断要能 stat 这个 sysfs 文件（gaokun3_scripts.te 里 audioroute 的 sysfs 规则）；
+#       读不到时按"没有"处理，等于旧行为。
+SPK_MAP=/sys/firmware/devicetree/base/soc@0/soundwire@3250000/wsa8830-right@0,2/qcom,port-mapping
+if [ -e "$SPK_MAP" ]; then
+    VISENSE=0; WSA_DIG=78
+else
+    VISENSE=1; WSA_DIG=84
+fi
 set -- \
     "WSA_CODEC_DMA_RX_0 Audio Mixer MultiMedia2" 1 \
     "WSA RX0 MUX" AIF1_PB \
@@ -61,16 +82,16 @@ set -- \
     "WSA_COMP2 Switch" 1 \
     "SpkrLeft COMP Switch" 1 \
     "SpkrLeft BOOST Switch" 0 \
-    "SpkrLeft VISENSE Switch" 1 \
+    "SpkrLeft VISENSE Switch" $VISENSE \
     "SpkrLeft DAC Switch" 1 \
     "SpkrRight COMP Switch" 1 \
     "SpkrRight BOOST Switch" 0 \
-    "SpkrRight VISENSE Switch" 1 \
+    "SpkrRight VISENSE Switch" $VISENSE \
     "SpkrRight DAC Switch" 1 \
     "SpkrLeft PA Volume" 17 \
     "SpkrRight PA Volume" 17 \
-    "WSA_RX0 Digital Volume" 84 \
-    "WSA_RX1 Digital Volume" 84
+    "WSA_RX0 Digital Volume" $WSA_DIG \
+    "WSA_RX1 Digital Volume" $WSA_DIG
 
 apply() {
     while [ $# -ge 2 ]; do
@@ -101,7 +122,7 @@ else
     PA_NOW=17
 fi
 
-log -t audioroute "扬声器路由已应用（PCM1 / WSA / 数字=84 单位增益 / PA=$PA_NOW / BOOST=off 防爆音）"
+log -t audioroute "扬声器路由已应用（PCM1 / WSA / 数字=$WSA_DIG / PA=$PA_NOW / BOOST=off 防爆音 / VISENSE=$VISENSE）"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 耳机（PCM 0 / RX_CODEC_DMA_RX_0 ← MultiMedia1）
@@ -187,9 +208,8 @@ log -t audioroute "内置麦路由已应用（PCM3 / VA / DMIC0+1）"
 #     一使能，每次流起停都有明显爆音（2026-08-19 A/B 盲听定案）。
 #     ★ 它**不是**功放升压器开关（这个叫法本仓沿用了很久，是错的），而是
 #     SoundWire 端口使能；对稳态电平的影响实测为 ±0.3 dB 以内，即零。
-#   * `SpkrLeft/Right VISENSE Switch` 我们是 1，上游是 0 ——
-#     现状实测出声正常、dmesg 无抱怨，故未动；但这是个未验证的偏离，
-#     若将来查扬声器功耗或保护逻辑，先看这里。
+#   * `SpkrLeft/Right VISENSE Switch`：带 patches/0115 的内核上是 0（与上游一致），
+#     旧内核上仍是 1；`WSA_RXn Digital Volume` 相应是 78 / 84。见扬声器段开头。
 #   另两处查过是【已经一致】的，不用设：`WSA MODE` 默认就是上游的 0；
 #   ⚠️★ `WSA_RXn Digital Volume` 的上限是【内核机器驱动故意设的】——
 #   sound/soc/qcom/sc8280xp.c 里 snd_soc_limit_volume()，上游写 81，注释是
