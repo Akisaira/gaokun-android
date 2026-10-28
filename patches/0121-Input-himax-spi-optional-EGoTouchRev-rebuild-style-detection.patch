@@ -20,9 +20,10 @@ Subject: [PATCH] Input: himax-spi: 可选的、与EGoTouchRev-rebuild一致的�
   峰，各自算中心；原来是较弱的峰拿走整块、较强的只算3×3的中心。
 - edge_peak_mode 1：外侧两列的弱峰按它们最强的格子判断；edge_comp_mode 1：
   按服务的做法拉伸最外一格（半格以内贴边，到1.005格之间线性展开）。
-- debounce_strong：信号不低于它的新触点第一帧就上报；track_min_signal：更弱的不
-  起跟踪。第一帧就上报的跟踪避开同一帧释放的槽位（否则槽位会沿用原来的tracking id），
-  并从第二帧起量点击锁定的位移，那时触点已经落稳。
+- debounce_strong：信号不低于它的新触点第一帧就上报，但离已在屏上的手指不到两倍
+  配对范围的照常防抖（那多半是那根手指这一帧分出的碎片；同一帧一起落下的手指不算）；
+  track_min_signal：更弱的不起跟踪。第一帧就上报的跟踪避开同一帧释放的槽位（否则
+  槽位会沿用原来的tracking id），并从第二帧起量点击锁定的位移，那时触点已经落稳。
 - ghost_row_filter：服务的同行幽灵点规则。
 
 算法状态增大到约95 KB，改用kvzalloc分配。
@@ -30,9 +31,9 @@ Subject: [PATCH] Input: himax-spi: 可选的、与EGoTouchRev-rebuild一致的�
 默认设置下，三段PJSK录制和一段刻意静止按住的录制的回放与改动前逐字节相同。
 ---
  drivers/input/touchscreen/himax-spi-core.c |  64 +-
- drivers/input/touchscreen/hx-algo.c        | 903 +++++++++++++++++++--
+ drivers/input/touchscreen/hx-algo.c        | 922 +++++++++++++++++++--
  drivers/input/touchscreen/hx-algo.h        |  93 ++-
- 3 files changed, 998 insertions(+), 62 deletions(-)
+ 3 files changed, 1017 insertions(+), 62 deletions(-)
 
 diff --git a/drivers/input/touchscreen/himax-spi-core.c b/drivers/input/touchscreen/himax-spi-core.c
 index 7599e68..17f8ad0 100644
@@ -201,7 +202,7 @@ index 7599e68..17f8ad0 100644
  	/*
  	 * With the TOUCH_MAJOR/PRESSURE axes registered, reporting the constants
 diff --git a/drivers/input/touchscreen/hx-algo.c b/drivers/input/touchscreen/hx-algo.c
-index f44cfb2..c9f8222 100644
+index 5946609..ffdeff5 100644
 --- a/drivers/input/touchscreen/hx-algo.c
 +++ b/drivers/input/touchscreen/hx-algo.c
 @@ -41,7 +41,11 @@
@@ -1157,7 +1158,7 @@ index f44cfb2..c9f8222 100644
  	/* Convert Q8.8 grid coordinates to output space matching rxtx2xy:
  	 *   x = ct->x / 6       (maps to [~21, ~2539])
  	 *   y = 5 * ct->y / 32  (maps to [~20, ~1580])
-@@ -1484,12 +2188,43 @@ static void hx_filter_update(const struct hx_algo *algo, struct hx_track *trk)
+@@ -1484,12 +2188,44 @@ static void hx_filter_update(const struct hx_algo *algo, struct hx_track *trk)
  	trk->fy += ((s64)a * ey + (1 << 15)) >> 16;
  }
  
@@ -1198,10 +1199,11 @@ index f44cfb2..c9f8222 100644
  	bool track_matched[HIMAX_MAX_TOUCH] = { false };
  	u16  jump_released = 0;  /* bitmask: slots freed by jump detection */
 +	u16  freed = 0;          /* bitmask: slots freed this frame         */
++	u16  born = 0;           /* bitmask: slots started this frame       */
  	struct hx_match_candidate cand[HIMAX_MAX_TOUCH * HIMAX_MAX_TOUCH];
  	int cand_cnt = 0;
  	int i, j, k;
-@@ -1502,9 +2237,10 @@ void hx_track_contacts(struct hx_algo *algo,
+@@ -1502,9 +2238,10 @@ void hx_track_contacts(struct hx_algo *algo,
  	for (i = 0; i < HIMAX_MAX_TOUCH; i++) {
  		struct hx_track *trk = &algo->tracks[i];
  
@@ -1214,7 +1216,7 @@ index f44cfb2..c9f8222 100644
  			track_matched[i] = true;
  	}
  
-@@ -1608,15 +2344,37 @@ void hx_track_contacts(struct hx_algo *algo,
+@@ -1608,15 +2345,38 @@ void hx_track_contacts(struct hx_algo *algo,
  			trk->debounce--;
  			/* Reported from now on: this is the down position. */
  			if (trk->debounce == 0) {
@@ -1228,7 +1230,8 @@ index f44cfb2..c9f8222 100644
 +			   algo->track_tap_radius > 0) {
 +			s64 ax = trk->x - trk->ref_x;
 +			s64 ay = trk->y - trk->ref_y;
-+			s64 r2 = 2 * (s64)algo->track_tap_radius;
++			/* Positions span fewer than 4096 units: cap it there. */
++			s64 r2 = 2 * (s64)min_t(s32, algo->track_tap_radius, 4096);
 +
 +			/*
 +			 * Reported in the frame it was born: the contact was
@@ -1257,7 +1260,7 @@ index f44cfb2..c9f8222 100644
  
  				/* Released for good once it moves; also when the lock is off. */
  				if (r <= 0 || ax * ax + ay * ay > r * r)
-@@ -1643,6 +2401,7 @@ void hx_track_contacts(struct hx_algo *algo,
+@@ -1643,6 +2403,7 @@ void hx_track_contacts(struct hx_algo *algo,
  		if (algo->track_active_guard && !algo->touch_active) {
  			algo->stats.tracks_guard_kill++;
  			hx_reset_track(trk);
@@ -1265,7 +1268,7 @@ index f44cfb2..c9f8222 100644
  			continue;
  		}
  
-@@ -1650,19 +2409,47 @@ void hx_track_contacts(struct hx_algo *algo,
+@@ -1650,19 +2411,63 @@ void hx_track_contacts(struct hx_algo *algo,
  		if (trk->missed > algo->track_lost_frames) {
  			algo->stats.tracks_lost++;
  			hx_reset_track(trk);
@@ -1297,8 +1300,24 @@ index f44cfb2..c9f8222 100644
 +			algo->stats.rej_weak_start++;
 +			continue;
 +		}
-+		if (algo->debounce_strong && sig >= algo->debounce_strong)
++		if (algo->debounce_strong && sig >= algo->debounce_strong) {
 +			debounce = 0;
++			/*
++			 * Right next to a finger already on the panel a strong
++			 * new contact is more often a piece of that finger
++			 * split off for a frame than a landing: debounce it as
++			 * usual.  Fingers landing together are not held back.
++			 */
++			for (k = 0; k < HIMAX_MAX_TOUCH; k++) {
++				if (algo->tracks[k].active && !(born & (1u << k)) &&
++				    !algo->tracks[k].palm &&
++				    hx_dist2_predicted(&det[j], &algo->tracks[k]) <
++				    4 * (s64)algo->track_dist2_max) {
++					debounce = algo->debounce_base;
++					break;
++				}
++			}
++		}
 +
 +		/*
 +		 * A slot keeps its tracking id for as long as it is reported in
@@ -1316,7 +1335,11 @@ index f44cfb2..c9f8222 100644
  				trk = &algo->tracks[i];
  				break;
  			}
-@@ -1673,14 +2460,14 @@ void hx_track_contacts(struct hx_algo *algo,
+@@ -1670,17 +2475,18 @@ void hx_track_contacts(struct hx_algo *algo,
+ 		if (!trk)
+ 			continue;
+ 
++		born |= 1u << i;
  		trk->active   = true;
  		trk->age      = 1;
  		trk->missed   = 0;
@@ -1335,7 +1358,7 @@ index f44cfb2..c9f8222 100644
  		if (j < algo->contact_count)
  			trk->signal_sum = algo->contacts[j].signal_sum;
 diff --git a/drivers/input/touchscreen/hx-algo.h b/drivers/input/touchscreen/hx-algo.h
-index 4f5b9d7..804d3d5 100644
+index f5de68e..df4d205 100644
 --- a/drivers/input/touchscreen/hx-algo.h
 +++ b/drivers/input/touchscreen/hx-algo.h
 @@ -3,7 +3,7 @@

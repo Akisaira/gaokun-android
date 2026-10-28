@@ -44,11 +44,9 @@
     <string name="touch_mode_title">Touch feel</string>
     <string name="touch_mode_summary">Game mode (no palm rejection) or everyday mode (palm rejection)</string>
     <string name="touch_mode_switch_title">Game touch mode</string>
-    <string name="touch_mode_switch_summary_on">No palm rejection, so a thumb along the edge is never taken for a palm</string>
+    <string name="touch_mode_switch_summary_on">Game: no palm rejection, so taps next to a thumb lying along the edge are not dropped</string>
     <string name="touch_mode_switch_summary_off">Everyday: palm rejection, a resting hand is ignored</string>
-    <string name="touch_mode_note">Both modes follow your finger equally closely; they differ only in palm rejection. In game mode a palm or the base of the thumb resting on the screen may register as a touch. Everyday mode ignores a resting palm, which suits browsing, reading and handwriting, but a thumb lying flat along the edge of the screen is occasionally taken for a palm, and taps around it are ignored too.
-
-Changes apply right away, no restart needed, and survive restarts. A quick settings tile is also available: edit quick settings and add "Game touch".</string>
+    <string name="touch_mode_note">Both modes follow your finger equally closely; they differ only in palm rejection. In game mode a palm or the base of the thumb resting on the screen may register as a touch. Everyday mode ignores a resting palm, which suits browsing, reading and handwriting, but while a thumb lies flat along the edge of the screen, taps around it may be ignored too.\n\nChanges apply right away, no restart needed, and survive restarts. A quick settings tile is also available: edit quick settings and add \"Game touch\".</string>
     <string name="touch_mode_tile_label">Game touch</string>
     <string name="touch_mode_game">Game</string>
     <string name="touch_mode_daily">Everyday</string>

@@ -8,7 +8,7 @@
 #   contacts_log    最近 16 个触点出生时的 x/y/面积/信号/是否在边缘
 #   frame_raw.bin   面板【产出】的 40×60 网格（仅去基线）
 #   frame.bin       流水线【判定】的同一张网格
-#   knobs           27 个算法参数的当前值
+#   knobs           54 个算法参数的当前值
 #   params          模块参数（fuzz / disable_pressure）
 #   absinfo         框架看到的轴信息（fuzz / resolution 是否生效）
 #   interrupts      触摸 IRQ 计数（状态指纹：≈面板刷新率=正常，0=IC 停摆，乱=模式错乱）

@@ -20,8 +20,8 @@ p10为80%到89%）；移动的触摸终点差7到8个单位（中位数）。同
 ---
  drivers/input/touchscreen/himax-spi-core.c |  6 ++
  drivers/input/touchscreen/hx-algo.c        | 82 +++++++++++++++++++---
- drivers/input/touchscreen/hx-algo.h        | 17 ++++-
- 3 files changed, 96 insertions(+), 9 deletions(-)
+ drivers/input/touchscreen/hx-algo.h        | 21 +++++-
+ 3 files changed, 98 insertions(+), 11 deletions(-)
 
 diff --git a/drivers/input/touchscreen/himax-spi-core.c b/drivers/input/touchscreen/himax-spi-core.c
 index e764d4d..7599e68 100644
@@ -48,7 +48,7 @@ index e764d4d..7599e68 100644
  	&dev_attr_contacts_log.attr,
  	NULL,
 diff --git a/drivers/input/touchscreen/hx-algo.c b/drivers/input/touchscreen/hx-algo.c
-index 548448e..f44cfb2 100644
+index 81732f8..5946609 100644
 --- a/drivers/input/touchscreen/hx-algo.c
 +++ b/drivers/input/touchscreen/hx-algo.c
 @@ -79,6 +79,9 @@ void hx_algo_init_defaults(struct hx_algo *algo)
@@ -163,7 +163,7 @@ index 548448e..f44cfb2 100644
  			trk->signal_sum = algo->contacts[j].signal_sum;
  
 diff --git a/drivers/input/touchscreen/hx-algo.h b/drivers/input/touchscreen/hx-algo.h
-index 09aa801..4f5b9d7 100644
+index 09aa801..f5de68e 100644
 --- a/drivers/input/touchscreen/hx-algo.h
 +++ b/drivers/input/touchscreen/hx-algo.h
 @@ -102,6 +102,14 @@ struct hx_track {
@@ -191,7 +191,7 @@ index 09aa801..4f5b9d7 100644
  
  	/* ---- Diagnostics ---- */
  	struct hx_stats  stats;
-@@ -324,7 +335,8 @@ void hx_expand_and_resolve(struct hx_algo *algo,
+@@ -324,15 +335,16 @@ void hx_expand_and_resolve(struct hx_algo *algo,
  /* Phase 3A: greedy tracker update (with velocity prediction) */
  /*
   * The position to report for a track: its down position while the anchor
@@ -201,6 +201,16 @@ index 09aa801..4f5b9d7 100644
   *
   * A finger that taps without moving still drifts as it lifts: the contact
   * shrinks and weakens over the last one or two frames and its centroid
+  * moves 5-10 units on its own.  Unity starts a drag at 10 px, so a tap on a
+  * scrolling list arrives as a scroll.  Holding the down position until the
+  * touch has really moved keeps such taps still; a flick moves tens of units
+- * in its first frame and is released at once, and a released track reports
+- * every position as measured, so slides are not delayed or stepped.
++ * in its first frame and is released at once, while a slow slide is held
++ * until it is the radius away from where it landed.
+  */
+ static inline void hx_track_report_pos(const struct hx_algo *algo,
+ 				       const struct hx_track *trk,
 @@ -341,6 +353,9 @@ static inline void hx_track_report_pos(const struct hx_algo *algo,
  	if (algo->track_tap_radius > 0 && trk->anchored) {
  		*x = trk->anchor_x;

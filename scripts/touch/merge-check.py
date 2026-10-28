@@ -18,6 +18,9 @@ _spec = importlib.util.spec_from_file_location("evdev_strokes", os.path.join(_he
 es = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(es)
 
 JUMP_MM = 6.0
+# 冻结只可能持续 track_lost_frames（3）帧，再留 1 帧余量。patches/0119/0120 起，按住不动的手指
+# 一直报同一个点，长时间的"冻结"后接一次快速滑动不是并轨。
+MAX_FROZEN = 4
 
 
 def merges(pts):
@@ -36,7 +39,7 @@ def merges(pts):
         gap_frames = round((pts[k][0] - pts[k - 1][0]) / 0.00833) - 1
         f = frozen + max(0, gap_frames)
         d = math.hypot(dx, dy) * es.MM_PER_UNIT
-        if f >= 1 and d >= JUMP_MM:
+        if 1 <= f <= MAX_FROZEN and d >= JUMP_MM:
             out.append((f, d, (pts[k][0] - pts[k - 1 - frozen][0]) * 1000))
         frozen = 0
     return out

@@ -7,7 +7,8 @@ Subject: [PATCH] Input: himax-spi: 默认采用与EGoTouchRev-rebuild一致的�
   不用IIR、macro/peak门限280、边缘门限300、漂移尺度1000、峰合并半径2、zone_split、
   debounce_strong 3000、track_min_signal 1500。min_area和边缘处理保持原样：服务的
   3格下限和边缘处理会丢掉很窄的触点，沿长边慢滑会断成逐格的点击。
-- 点击锁定半径20，一欧滤波1000 mHz / 15 / 30000。
+- 点击锁定半径20，一欧滤波1000 mHz / 15 / 30000；track_smoothing默认关掉，一欧滤波
+  取代了它，两者叠加只会多出滞后。
 
 和Windows服务不同的几处，都是回放里照搬会出问题的地方：CMF放在门限之前（服务
 放在门限之后，接电脑时6分半多出56个假触点）；只有强触点第一帧上报（全部第一帧
@@ -17,14 +18,14 @@ Subject: [PATCH] Input: himax-spi: 默认采用与EGoTouchRev-rebuild一致的�
 macro门限从800降到280后，第3条掌压规则（面积≥20、平均信号<palm_density_low）
 开始生效，在写字的录制里只在手掌上触发；打歌的录制里四条规则都没有触发。
 
-track_smoothing、按下防抖和手掌识别仍由触摸模式脚本按模式设置；有了一欧滤波，
-脚本在两种模式下都关掉track_smoothing。
+按下防抖和手掌识别仍由触摸模式脚本按模式设置；脚本在两种模式下也都关掉
+track_smoothing。
 ---
- drivers/input/touchscreen/hx-algo.c | 31 +++++++++++++++--------------
- 1 file changed, 16 insertions(+), 15 deletions(-)
+ drivers/input/touchscreen/hx-algo.c | 33 +++++++++++++++--------------
+ 1 file changed, 17 insertions(+), 16 deletions(-)
 
 diff --git a/drivers/input/touchscreen/hx-algo.c b/drivers/input/touchscreen/hx-algo.c
-index c9f8222..af9ff4d 100644
+index ffdeff5..17fe45d 100644
 --- a/drivers/input/touchscreen/hx-algo.c
 +++ b/drivers/input/touchscreen/hx-algo.c
 @@ -41,24 +41,24 @@
@@ -72,9 +73,10 @@ index c9f8222..af9ff4d 100644
  	algo->ghost_row_filter  = false;
 -	algo->debounce_strong   = 0;
 -	algo->track_min_signal  = 0;
+-	algo->track_smoothing   = true;
 +	algo->debounce_strong   = 3000;
 +	algo->track_min_signal  = 1500;
- 	algo->track_smoothing   = true;
++	algo->track_smoothing   = false;  /* the position filter replaces it */
  	algo->track_active_guard   = true;
  	algo->track_start_debounce = 2;
  	algo->track_jump_dist2     = 0;  /* disabled by default */

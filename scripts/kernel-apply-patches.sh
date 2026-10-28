@@ -301,7 +301,8 @@ KPATCHES=(
     #    0113–0115留给扬声器那组。
     0116-Input-himax-spi-narrow-the-track-match-radius.patch
     # ★ 0118：边缘补偿的上限从网格外收回到网格内最后一个位置。原来最后一列/行被推到2560/1600，比轴最大值多1
-    #    （inverted-x后是-1），Android丢掉起点越界的整笔触摸：从这两条边滑入、返回手势、角落点击。0117在#52（音频HAL）。
+    #    （inverted-x后是-1），坐标回到范围内之前Android收不到这次触摸：贴边的角落点击整个丢失，从这两条边滑入（含返回手势）
+    #    晚开始。0117在#52（音频HAL）。
     0118-Input-himax-spi-keep-edge-compensated-positions-on-the-panel.patch
     # ★ 0119–0122：触摸驱动优化。0119点击锁定（track_tap_radius）：手指移动超过半径前停在按下的位置，
     #    点击不再因为抬起时中心漂移被当成拖动。0120一欧滤波（track_filter_*）：慢速滑动不抖，快速滑动不拖。

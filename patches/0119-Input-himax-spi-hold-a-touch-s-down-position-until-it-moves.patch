@@ -57,7 +57,7 @@ index 78ef039..e764d4d 100644
  			if (ts->algo->pressure_enabled) {
  				input_report_abs(ts->input_dev, ABS_MT_TOUCH_MAJOR,
 diff --git a/drivers/input/touchscreen/hx-algo.c b/drivers/input/touchscreen/hx-algo.c
-index 4878b1f..548448e 100644
+index d284481..81732f8 100644
 --- a/drivers/input/touchscreen/hx-algo.c
 +++ b/drivers/input/touchscreen/hx-algo.c
 @@ -78,6 +78,7 @@ void hx_algo_init_defaults(struct hx_algo *algo)

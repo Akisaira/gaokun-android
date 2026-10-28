@@ -44,11 +44,9 @@
     <string name="touch_mode_title">触摸手感</string>
     <string name="touch_mode_summary">游戏模式（不识别手掌）或日常模式（识别手掌）</string>
     <string name="touch_mode_switch_title">游戏触摸模式</string>
-    <string name="touch_mode_switch_summary_on">不做手掌识别，贴边的拇指不会被当成手掌</string>
+    <string name="touch_mode_switch_summary_on">游戏：不做手掌识别，拇指贴边平放时不会连带丢掉周围的点按</string>
     <string name="touch_mode_switch_summary_off">日常：识别手掌，忽略搭在屏幕上的手</string>
-    <string name="touch_mode_note">两种模式跟手程度相同，只差手掌识别。游戏模式不做手掌识别，手掌或拇指根部搭在屏幕上时可能被当成触摸。日常模式会忽略搭在屏幕上的手掌，适合浏览、阅读和手写；但贴着屏幕边缘平放的拇指偶尔会被当成手掌，它周围的点按也会被忽略。
-
-切换立刻生效，不需要重启，重启后仍然保留。控制中心里也有开关：编辑快捷设置，把「游戏触摸」拖上去。</string>
+    <string name="touch_mode_note">两种模式跟手程度相同，只差手掌识别。游戏模式不做手掌识别，手掌或拇指根部搭在屏幕上时可能被当成触摸。日常模式会忽略搭在屏幕上的手掌，适合浏览、阅读和手写；但拇指贴着屏幕边缘平放时，它周围的点按也可能被一起忽略。\n\n切换立刻生效，不需要重启，重启后仍然保留。控制中心里也有开关：编辑快捷设置，把「游戏触摸」拖上去。</string>
     <string name="touch_mode_tile_label">游戏触摸</string>
     <string name="touch_mode_game">游戏</string>
     <string name="touch_mode_daily">日常</string>
