@@ -8,6 +8,11 @@
 #   sudo bash pstore-ctl.sh clear       # 清 NVRAM（读完必须做）
 #   sudo bash pstore-ctl.sh status      # 当前状态
 #
+# ⚠️★★★ 2026-10-30 起发布构建默认关 efi_pstore（cmdline efi_pstore.pstore_disable=1 + 内核
+#   EFI_VARS_PSTORE_DEFAULT_DISABLE）：用户报告没人清的 dump-type* 撑满 NVRAM，固件建不了新启动项、
+#   U 盘启动不了（BoardConfig.mk 里那一项的注释）。`enable` 现在就是开发时临时打开的开关 ——
+#   开了就必须在用完后 `clear`，不要在长期使用的机器上一直开着。
+#
 # 为什么需要这个脚本 —— 本机 efi_pstore 有两个反直觉的地方：
 #
 # 1. 开机不会自动注册。efi-pstore 编进内核后在 device_initcall 阶段跑，

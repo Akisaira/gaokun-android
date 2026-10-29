@@ -61,7 +61,7 @@ adb shell su -c dmesg > dmesg.txt          # 内核日志，要 root
 
 | 问题 | 再收什么 |
 |---|---|
-| 意外重启、死机后重启 | **先于一切**抓崩溃时内核留下的记录：`adb exec-out "su -c 'tar -C /sys/fs -cf - pstore'" > pstore.tar`（空的也正常） |
+| 意外重启、死机后重启 | 抓崩溃时内核留下的记录：`adb exec-out "su -c 'tar -C /sys/fs -cf - pstore'" > pstore.tar`（2026-10-30 修复起 efi_pstore 默认关，一般是空的；旧版本抓完要按 FAQ 清掉 NVRAM 里的 `dump-type*`） |
 | 应用崩溃 / 闪退 | `adb logcat -b crash -d > crash.txt`；`adb shell su -c 'ls -t /data/tombstones/'`，取最新的那个：`adb exec-out "su -c 'cat /data/tombstones/<文件名>'" > tombstone.txt` |
 | 卡死、声音或蓝牙不动了 | 看门狗留的取证：`adb exec-out "su -c 'cd /data/vendor/gaokun3 && tar -cf - hangdump-*'" > hangdump.tar` |
 | USB-C（插电脑不识别、口坏了、充电方向反了） | 在仓库里跑 `bash scripts/usb/ucsi-snapshot.sh <adb 序列号> "<插的是什么>"`，每换一种插法跑一次 |

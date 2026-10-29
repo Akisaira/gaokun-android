@@ -32,6 +32,43 @@
   Windows 下的免 U 盘安装脚本也会先检查这一项。
 * 从 U 盘启动：插上安装器 U 盘，在固件的启动菜单里选它。
 
+### ⚠️ U 盘 / 恢复镜像不出现在固件启动菜单里（固件变量存储被崩溃记录占满）
+<!-- 出处：2026-10-30 用户报告（GK-W7X，BIOS 2.16，2026-08 的版本，两天 103 个 dump-type0-* / 约 98 KB，删掉后 U 盘立刻出现）；
+     本机 2026-10-30 只读实测：pstore 后端 = efi_pstore、record_size 1024、kmsg_bytes 10240 ⇒ 一次内核崩溃约 10 个变量。
+     起因是 patches/0001 让 efi_pstore 在本机自动注册，而 Android 不清这些变量。修复：BoardConfig.mk 的
+     efi_pstore.pstore_disable=1。Android / Linux 的删法同 scripts/pstore-ctl.sh clear（实测有效，rm /sys/fs/pstore 不删变量）；
+     Android 下挂 efivarfs 同 scripts/boot-oneshot.sh:29。Windows 的删法来自报告者，我们没在本机验证。 -->
+**2026-10-30 之前的所有版本都受影响。** 这些版本的内核每次崩溃都会把日志写进主板固件的变量存储（NVRAM），而且没人清理。
+崩溃多了存储就满了，固件再也建不了新的启动项：**U 盘、读卡器、华为官方恢复镜像都不会出现在启动菜单里**（键盘鼠标照常能用，
+很有迷惑性），固件升级、Windows 改启动项也可能失败。主板本身没有坏，**不需要换主板**，删掉这些记录就好。
+修复后的版本不再写入，但**已经写进去的不会自己消失，需要按下面清一次**。
+
+先看有没有（机器能进 Android，adb 已连上并给 Shell 授了 root）：
+
+```sh
+adb shell "su -c 'mkdir -p /data/local/tmp/efivars; mount -t efivarfs none /data/local/tmp/efivars 2>/dev/null; ls /data/local/tmp/efivars | grep -c ^dump-type'"
+```
+
+输出 `0` 就没事。不是 0 的话，想把日志留给我们就先存一份，再删：
+
+```sh
+adb exec-out "su -c 'cd /data/local/tmp/efivars && tar -cf - dump-type*'" > efi-dumps.tar
+adb shell "su -c 'cd /data/local/tmp/efivars && chattr -i dump-type* && rm -f dump-type*; ls | grep -c ^dump-type'"
+```
+
+最后一行输出 `0` 就清完了。装上修复版之前，**每次开机后**还要临时关闭写入（重启失效；输出 `Y` 就关闭了）：
+
+```sh
+adb shell "su -c 'echo 1 > /sys/module/efi_pstore/parameters/pstore_disable; cat /sys/module/efi_pstore/parameters/pstore_disable'"
+```
+
+公告与讨论：[#56](https://github.com/vahiru/gaokun-android/issues/56)。**删除时固件要整理存储，可能要等一会儿，期间不要强制关机。**
+
+* **救援系统 / 其他 Linux**：`sudo bash scripts/pstore-ctl.sh clear`（或直接删 `/sys/firmware/efi/efivars/dump-type*`，删前先 `chattr -i`）。
+  **只删 `/sys/fs/pstore/` 里的文件在这台机器上不会真的删掉变量。**
+* **Windows**（报告者提供，我们没在本机验证）：管理员权限调用 `SetFirmwareEnvironmentVariableEx`，
+  GUID `{CFC8FC79-BE2E-4DDC-97F0-9F98BFE298A0}`、名字为每个 `dump-type0-*`、数据长度 0、属性 **7**（属性 0 会报错 19）。
+
 ### 开机时那个菜单里的每一项是什么？
 <!-- 标题出处：scripts/live/installer-lib.sh:915（Android 两个槽）、:962（救援）；scripts/windows/gaokun3-setup.ps1:58（gaokun3 installer）；
      docs/hw-inventory.md §8quater（systemd-boot 自动列出 Windows Boot Manager）。timeout：installer-lib.sh:949。 -->
@@ -128,13 +165,13 @@ adb shell dmesg > dmesg.txt                # 内核日志；报"权限不够"时
 
 ```sh
 adb shell su -c dmesg > dmesg.txt
-# 上一次死机、重启时内核留下的记录（efi_pstore）；是空的也正常，很多故障不经过内核
+# 上一次死机时内核留下的记录（efi_pstore）。2026-10-30 的修复起默认关闭，一般是空的；旧版本见上面「U 盘不出现在启动菜单里」
 adb exec-out "su -c 'tar -C /sys/fs -cf - pstore'" > pstore.tar
 # 音频 / 蓝牙卡死时自动采的取证包
 adb exec-out "su -c 'cd /data/vendor/gaokun3 && tar -cf - hangdump-*'" > hangdump.tar
 ```
 
-**死机或自己重启之后，先别做别的，第一时间抓 `pstore`**。
+**2026-10-30 修复之前的版本：死机之后先抓 `pstore`，再按[开机与启动菜单](#开机与启动菜单)那一节把记录清掉**。
 
 ROM 版本：
 

@@ -35,6 +35,44 @@ What we can say for sure:
   to continue if it is on; the USB-free Windows setup script checks it first too.
 * To boot from USB: plug in the installer USB stick and pick it in the firmware's boot menu.
 
+### ⚠️ USB sticks / recovery media don't show up in the firmware boot menu (firmware variable store full of crash records)
+**Every version released before 2026-10-30 is affected.** Their kernel writes the log of every kernel crash into the
+firmware's variable storage (NVRAM), and nothing ever cleans it up. After enough crashes the storage is full and the
+firmware can no longer create boot entries: **USB sticks, card readers and even Huawei's official recovery image do not
+appear in the boot menu** (keyboard and mouse still work, which makes it confusing), and firmware updates or Windows
+changing boot entries may fail too. The mainboard is not broken and **does not need replacing**; deleting these records
+fixes it. Fixed versions no longer write them, but **records that are already there stay until you delete them once**.
+
+Check first (Android boots, adb is connected and Shell has been granted root):
+
+```sh
+adb shell "su -c 'mkdir -p /data/local/tmp/efivars; mount -t efivarfs none /data/local/tmp/efivars 2>/dev/null; ls /data/local/tmp/efivars | grep -c ^dump-type'"
+```
+
+`0` means you are fine. Otherwise, save a copy if you want to send us the logs, then delete them:
+
+```sh
+adb exec-out "su -c 'cd /data/local/tmp/efivars && tar -cf - dump-type*'" > efi-dumps.tar
+adb shell "su -c 'cd /data/local/tmp/efivars && chattr -i dump-type* && rm -f dump-type*; ls | grep -c ^dump-type'"
+```
+
+When the last command prints `0` you are done. Until you have a fixed version, also stop new writes after **every** boot
+(does not survive a reboot; `Y` means off):
+
+```sh
+adb shell "su -c 'echo 1 > /sys/module/efi_pstore/parameters/pstore_disable; cat /sys/module/efi_pstore/parameters/pstore_disable'"
+```
+
+Advisory and discussion: [#56](https://github.com/vahiru/gaokun-android/issues/56). **The firmware reorganises its storage while deleting, which can take a
+while. Do not force the machine off meanwhile.**
+
+* **Rescue system / other Linux**: `sudo bash scripts/pstore-ctl.sh clear` (or delete
+  `/sys/firmware/efi/efivars/dump-type*` directly, `chattr -i` first). **Deleting the files in `/sys/fs/pstore/` does
+  not actually delete the variables on this machine.**
+* **Windows** (from the reporter, not verified by us on this machine): as administrator, call
+  `SetFirmwareEnvironmentVariableEx` with GUID `{CFC8FC79-BE2E-4DDC-97F0-9F98BFE298A0}`, each `dump-type0-*` name, data
+  length 0 and attributes **7** (attributes 0 fails with error 19).
+
 ### What are the entries in the boot menu?
 Every boot stops at the systemd-boot menu for 15 seconds, then starts the default entry.
 
@@ -131,13 +169,13 @@ These need root (first grant it to **Shell** in the ReSukiSU manager):
 
 ```sh
 adb shell su -c dmesg > dmesg.txt
-# what the kernel saved during the last crash or spontaneous reboot (efi_pstore); empty is normal, many failures never go through the kernel
+# what the kernel saved during the last crash (efi_pstore). Off since the 2026-10-30 fix, so normally empty; on older versions see "USB sticks don't show up" above
 adb exec-out "su -c 'tar -C /sys/fs -cf - pstore'" > pstore.tar
 # evidence collected automatically when audio / Bluetooth deadlocks
 adb exec-out "su -c 'cd /data/vendor/gaokun3 && tar -cf - hangdump-*'" > hangdump.tar
 ```
 
-**After a crash or an unexpected reboot, grab `pstore` first, before doing anything else.**
+**On versions before the 2026-10-30 fix: after a crash, grab `pstore` first, then clear the records as described in [the boot menu section](#booting-and-the-boot-menu).**
 
 ROM version:
 

@@ -138,10 +138,18 @@ BOARD_KERNEL_CMDLINE := \
     fw_devlink.sync_state=timeout \
     console=tty0 \
     clk_ignore_unused pd_ignore_unused arm64.nopauth efi=noruntime \
+    efi_pstore.pstore_disable=1 \
     fbcon=rotate:1 usbhid.quirks=0x12d1:0x10b8:0x20000000 \
     usbcore.quirks=12d1:10b8:b \
     himax_hx83121a_spi.disable_pressure=0 \
     snd_usb_audio.index=-2,-2,-2,-2
+# ↑ ⚠️★★★ efi_pstore.pstore_disable=1（2026-10-30 安全修复）：用户报告 efi_pstore 把每次 oops 的 dmesg 写进 UEFI 变量
+#   （GUID cfc8fc79-…，dump-type0-*，record_size 1024、PSTORE_COMPRESS 关 ⇒ 一次约 10 个），没人清（Android 不碰
+#   efivarfs），两天 103 个 / 约 98 KB 撑满 NVRAM ⇒ 固件建不了新 Boot####，U 盘 / 官方恢复都不出现在启动菜单，
+#   被售后判成"换主板"。在本机注册 efi_pstore 的是我们自己的 patches/0001（上游在这台机器上根本注册不上）。
+#   efivars_pstore_init() 先查 pstore_disable（drivers/firmware/efi/efi-pstore.c:263），0001 的通知链回调也走它，
+#   内置参数在 initcall 前就已解析 ⇒ 不用重编内核就停写。efi=noruntime 挡不住：本机变量走 uefisecapp（QSEECOM）。
+#   开发时要抓崩溃：去掉这一项或运行时 echo 0 > /sys/module/efi_pstore/parameters/pstore_disable，用完 pstore-ctl clear。
 # ↑ fw_devlink.sync_state=timeout（PWR-10）：GCC、GPUCC 的 sync_state 要等所有消费者 probe 完，而 3d6a000.gmu
 #   没有驱动，永远等不到。开机时开着的 GDSC 在 sync_state 之前一直是 stay_on，没人用的那 6 个（2 个 UFS、
 #   4 个 MMNOC TBU）于是一直开着；deferred_probe_timeout 到期后 sync_state 照常执行，genpd 把它们关掉。

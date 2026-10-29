@@ -14,6 +14,16 @@ D1–D23 是 v1.0-plan §6 的决定，其余是 v1.0-plan 与本文件的条目
 
 ---
 
+## ⚠️★★★ SEC-1 efi_pstore 撑满 NVRAM（2026-10-30 用户报告，安全修复）
+
+所有已发布版本（`patches/0001` 自 08-15 首个提交起）每次内核 oops 往 UEFI 变量写约 10 个 `dump-type0-*`（record_size 1024、kmsg_bytes 10240、
+PSTORE_COMPRESS 关；10-30 实机只读核对），Android 不清 ⇒ 报告者两天 103 个 / 约 98 KB，固件建不了 Boot####、U 盘 / 官方恢复都不出现，售后判"换主板"。
+◐ 止血：`BoardConfig.mk` cmdline 加 `efi_pstore.pstore_disable=1`（现有内核即生效，经 OTA 同步进 ESP 条目 / gk3boot / 救援条目）；
+内核 config 加 `EFI_VARS_PSTORE_DEFAULT_DISABLE`（下次编内核）；live USB cmdline 同步；FAQ 中英加检查与清理步骤。
+⬜ 上机核 `/sys/module/pstore/parameters/backend` 为空、`pstore_disable=Y`（要重启）· ⬜ 已写入变量的自动清理放哪（要用户定：
+gk3boot 开机删 / Android 开机一次性服务删 / 只靠 FAQ）· ⬜ 报告里的 oops `sync_file_ioctl → drm_crtc_fence_get_timeline_name` 另立条目查 ·
+⬜ HyperOS 分支同样带 0001、cmdline 未改 · ⬜ 发版（要用户点头）。
+
 ## 总表：现在在做 / 待办（2026-10-18 更新；下面「设备现状」一段是 10-06 的，现状以 CLAUDE.md「现在」为准）
 
 **2026-10-18 用户定：rc.2 先不发，能做完的都做完再发。** 当天无人值守能做的已做完（V0 余项、V2、V5、GAME-1 源码排查、GAME-6、HAL 误报 Windows、
