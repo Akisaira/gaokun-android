@@ -318,6 +318,10 @@ KPATCHES=(
     0120-Input-himax-spi-filter-the-reported-position-by-speed.patch
     0121-Input-himax-spi-optional-EGoTouchRev-rebuild-style-detection.patch
     0122-Input-himax-spi-default-to-the-EGoTouchRev-rebuild-style-detection.patch
+    # ★ 0123、0124：面板驱动按主板的 ID 引脚（GPIO 102、91，UEFI 也读这两根）认出 BOE 屏，同一个镜像通吃两种屏。
+    #    读到 BOE 的值才换初始化序列并更新设备树的 compatible（gk3pend 读它选列间距），其余情况保持 DT 写的 CSOT。
+    0123-drm-panel-himax-hx83121a-read-the-panel-from-the-board-s-ID-pins.patch
+    0124-arm64-dts-gaokun3-add-the-panel-ID-pins.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，

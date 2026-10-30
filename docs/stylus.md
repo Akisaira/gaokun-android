@@ -58,7 +58,7 @@
   会被认作触控笔的电池。读取它的是 system_server 里的 InputManager，而核心策略只允许 health HAL 读 `sysfs_batteryinfo`，
   所以节点使用单独的类型 `sysfs_gaokun3_pen_battery`。
 - **列间距。** 传感器的列不是等距的：BOE 屏两端各 10 列的宽度为标称值的 33/32，中间 40 列为 63/64。`gk3pend` 读设备树中
-  面板的 compatible，只在 BOE 屏上按这个间距换算，CSOT 屏仍按等距计算。原厂的间距表来自 CSOT 屏，与 BOE 屏方向相反，
+  面板的 compatible（面板驱动按主板的 ID 引脚更新过，见 `hw-inventory.md` 的「面板」），只在 BOE 屏上按这个间距换算，CSOT 屏仍按等距计算。原厂的间距表来自 CSOT 屏，与 BOE 屏方向相反，
   尚未在 CSOT 屏上验证，所以没有采用。
 
 ## 已知限制

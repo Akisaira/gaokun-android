@@ -184,6 +184,22 @@ Plane 属性含 `zpos`(0-255)、`alpha`(0-65535)、`pixel blend mode`、`IN_FORM
 
 - 背光走 **DCS**（`refs/linux-gaokun/README.MD:123-125`）
 - 详见 `03-panel.txt`
+- **BOE / CSOT 两种屏靠主板的两根 ID 引脚区分，不靠面板寄存器**：UEFI `DisplayDxe` 的 `GetLcdId`（BIOS 2.16，VA `0x31da8`）
+  读 GPIO 102（`GPIO_LCD_ID0`）和 GPIO 91（`GPIO_LCD_ID1`）：
+
+  | ID0 | ID1 | 面板 ID | 面板 |
+  |---|---|---|---|
+  | 0 | 0 | `0x0D` | CSOT |
+  | 0 | 1 | `0x0F` | BOE |
+  | 1 | 任意 | `0x0B` | 都不是（通用 eDP 配置） |
+
+  ACPI 的 `\_SB.GPU0._ROM` 用同样的 ID 选面板配置。两根脚都是无上下拉的输入，设备树里没有别的用途。
+  BIOS 2.18、C233 上实测：BOE 一台 ID0 低、ID1 高，CSOT 一台两根都低。
+  查法（要 root）：`grep -E 'gpio(91|102) ' /sys/kernel/debug/gpio`。
+  面板驱动在 probe 时读这两根脚（`panel-id-gpios`，patches/0123、0124），只有读到 BOE 的值才换成 BOE 的初始化序列并更新
+  设备树里的 compatible，其余情况保持设备树写的 CSOT。
+- BIOS 2.17 的 `GetLcdId` 读的是 GPIO 178/179。那一版触摸的总线和 GPIO 也整套不同（见 0.1），是另一种硬件；
+  本机的 178/179 是两个功放的 `powerdown-gpios`。
 
 ---
 
