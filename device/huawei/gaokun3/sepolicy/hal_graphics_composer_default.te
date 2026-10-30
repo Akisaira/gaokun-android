@@ -25,12 +25,12 @@ allow hal_graphics_composer_default self:netlink_kobject_uevent_socket { create 
 # find mapper_service 来自 private/hal_graphics_allocator.te:6。与 dragonboard 同一行。
 hal_client_domain(hal_graphics_composer_default, hal_graphics_allocator)
 
-# ── A17 drm_hwcomposer 开机扫 /sys/class/backlight（2026-10-26）──────────────────
-# 证据：A17 首个候选版 1792975257，每次开机 1 条
-#   hal_graphics_composer_default sysfs_leds:dir read  name="backlight"
-# 来源：A17 新加的 utils/SysfsBacklightController.cpp:46-63（EnumerateBacklights，opendir kBasePath），
-#   hwc/HwcDisplay.cpp:729-739 找到就 associate，之后 SetBrightness 直接写 sysfs。
-# ★ 故意不放行：放行了 HWC 就会报告支持亮度、接管背光，整条亮度链路从灯光 HAL
-#   （hal_light_default，genfs_contexts 里 /class/backlight 那条）换到 HWC —— 迁移不顺带改这个。
-#   拒绝时 opendir 失败、HWC 没有背光控制器，与 A16 行为一致（实机 logcat 里没见到它那行 ALOGE，只有这条 avc）。
-dontaudit hal_graphics_composer_default sysfs_leds:dir r_dir_perms;
+# ── 背光归 HWC：HDR 提亮（2026-10-31）──────────────────────────────────────
+# drm_hwcomposer 开机扫 /sys/class/backlight（utils/SysfsBacklightController.cpp），找到就报告
+# DisplayCapability::BRIGHTNESS，框架随后把亮度从灯光 HAL 换到 HWC。提亮要这条路：SF 压暗 SDR 图层
+# 和抬高背光都由 DisplayCommand.brightness 带到同一帧。灯光 HAL 那条路框架不告诉 SF 尼特数，
+# hdrSdrRatio 恒为 NaN，也就没有提亮。
+# 迁移到 A17 时这里故意拦着（dontaudit），当时不想顺带改亮度链路；现在是有意的切换。
+# 写 brightness 靠 init.gaokun3.rc 的 chown，bl_power 是 root 的，HWC 写不了，只留一行警告。
+allow hal_graphics_composer_default sysfs_leds:dir r_dir_perms;
+allow hal_graphics_composer_default sysfs_leds:file rw_file_perms;

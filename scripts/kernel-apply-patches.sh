@@ -341,6 +341,8 @@ KPATCHES=(
     0135-drm-msm-dpu-dither-8-bpc-panels.patch
     # 0136：平面列表加 ABGR、XBGR2101010；不打的话 0131 判定不支持，帧缓冲保持 8 位。
     0136-drm-msm-dpu-expose-ABGR-and-XBGR-2101010-on-planes.patch
+    # 0138：背光寄存器和亮度成线性，报成 linear，否则 HWC 接管背光后会再叠一条 HLG 曲线。
+    0138-drm-panel-himax-hx83121a-report-a-linear-backlight-scale.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
