@@ -322,6 +322,12 @@ KPATCHES=(
     #    读到 BOE 的值才换初始化序列并更新设备树的 compatible（gk3pend 读它选列间距），其余情况保持 DT 写的 CSOT。
     0123-drm-panel-himax-hx83121a-read-the-panel-from-the-board-s-ID-pins.patch
     0124-arm64-dts-gaokun3-add-the-panel-ID-pins.patch
+    # ★ 0125：【本地】修 0066：第一次 CAPTURE streamon 之前 flush 过时输出口属性没发过，不能跳过，否则固件报 0x1009、硬解开播失败。
+    0125-media-iris-configure-output-after-flush-before-first-capture-streamon.patch
+    # 0126：gen1 收到固件看门狗中断后走系统错误恢复（gen2 本来就有）；不打就卡死到重启。
+    0126-media-iris-gen1-recover-from-firmware-watchdog.patch
+    # 0127：CAPTURE 的 S_FMT 不再把解码裁剪冲成缓冲尺寸；不打 1080p 就报成 1088。
+    0127-media-iris-keep-decoder-crop-across-capture-s_fmt.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，

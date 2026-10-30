@@ -1039,6 +1039,8 @@ endif
 #     而且不报任何错。
 #  3. poolmask 不能抄 README 的 0xf50000（那是 ION）—— 本机没有 ION
 #     （/dev/ion 不存在、CONFIG_ION 也不在），要用 BLOB 的 0xfc0000。
+#     再加 GRALLOC（第 17 位）成 0xfe0000：没有这一位，CCodec 给字节缓冲解码器的是
+#     基础块池，每次 fetch 都是新缓冲，VideoFramePool 的缓冲数用完就停住（patches/0128）。
 #  ★ 另外 libv4l2_codec2_vendor_allocator **不必装**：
 #     plugin_store/VendorAllocatorLoader.cpp:26 的 dlopen 失败只 ALOGI 返回 nullptr，
 #     是可选项（给安全播放用的，本机没有）。
@@ -1088,9 +1090,9 @@ PRODUCT_VENDOR_PROPERTIES += \
 #   ⚠️ iris 没有 VP8 编码；且 v4l2_codec2 首帧会设 FORCE_KEY_FRAME，v7.2-rc2 的 iris 不认这个控件
 #      （上游 v7.3 的 6f62dce 才加）—— 复测编码前先 backport 它，见 #128。
 
-# Codec2 的 pool mask：BLOB(19) 那一档。见上面第 3 条。
+# Codec2 的 pool mask：BLOB(19) 那一档加 GRALLOC(17)。见上面第 3 条。
 PRODUCT_VENDOR_PROPERTIES += \
-    debug.stagefright.c2-poolmask=0xfc0000
+    debug.stagefright.c2-poolmask=0xfe0000
 
 # ★ 扩展 seccomp 策略：不装它，服务一开始真干活就被 SIGSYS 打死
 #   （实测 `libminijail: blocked syscall: eventfd2`）。
