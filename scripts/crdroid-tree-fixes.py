@@ -1283,6 +1283,15 @@ def main():
     # 10-bit 视频：[29][30] 要和 patches/0129（iris）、0130（turnip）一起生效，见各函数说明。
     step(" [29] minigbm 给 P010 开显示用途: ", patch_minigbm_p010_scanout(tree))
     step(" [30] v4l2_codec2 声明 HEVC Main10、VP9 Profile 2: ", patch_v4l2_10bit_profiles(tree))
+    # 要和内核平面列表的 ABGR2101010 一起生效；旧内核上 HWC 会保持 8 位，见补丁说明。
+    step(" [31] drm_hwcomposer 给 10-bit 图层请求 10-bit 帧缓冲: ", apply_patch_file(
+        tree, "external/drm_hwcomposer",
+        "0131-drm-hwcomposer-10-bit-client-target.patch",
+        covered_by=("0132-drm-hwcomposer-switch-panels-between-srgb-and-display-p3.patch",)))
+    # 要和内核 0134 的 Colorspace 属性、device.mk 的两个属性一起生效；没有 Colorspace 属性时 HWC 保持原样。
+    step(" [32] drm_hwcomposer 让内置屏在 sRGB 和 Display P3 之间切换: ", apply_patch_file(
+        tree, "external/drm_hwcomposer",
+        "0132-drm-hwcomposer-switch-panels-between-srgb-and-display-p3.patch"))
     # 游戏环境如实修正：fingerprint 尾部 userdebug→user，与 ro.build.type=user 对齐
     # （Duck Detector system_properties 3 条 danger 的根；运行时改不掉 Build.FINGERPRINT 常量）
     step(" [23] BUILD_FINGERPRINT/THUMBPRINT/SYSTEM_FINGERPRINT 变体段改写成 user（与 ro.build.type 对齐）: ",

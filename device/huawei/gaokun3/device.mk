@@ -346,6 +346,16 @@ PRODUCT_SYSTEM_EXT_PROPERTIES += \
 PRODUCT_SYSTEM_EXT_PROPERTIES += \
     ro.surface_flinger.supports_background_blur=1
 
+# 广色域（docs/display-color.md）：面板原生接近 Display P3，有工厂校准时内核按连接器 Colorspace 切 sRGB、P3。
+#   · has_wide_color_display 让 SF 不再滤掉 P3 模式，应用才看得到广色域；落 system_ext，理由同上。
+#   · force_p3_support 让 HWC 报告 P3（patches/0132，tree-fix [32]）。连接器没有 Colorspace 属性时它不起作用，
+#     所以校准表读取失败的机器只是退回 sRGB。
+#   判据：`dumpsys SurfaceFlinger | grep "Device supports wide color"` = 1；空闲时 Current color mode 仍是 SRGB。
+PRODUCT_SYSTEM_EXT_PROPERTIES += \
+    ro.surface_flinger.has_wide_color_display=true
+PRODUCT_VENDOR_PROPERTIES += \
+    vendor.hwc.drm.force_p3_support=true
+
 # ★ A17：让 BPF 网络栈按真实内核版本走，不按 0085 伪装出来的 6.6.30。
 #   0085 改的是 init_uts_ns 的 release，uname() 报 6.6.30。A17 的 netd（Tethering APEX 里的 libnetd_updatable）
 #   对 6.1 ≤ kver < 6.18 多走一条 L4S 路径：挂 BPF_CGROUP_SOCK_OPS 程序、query 不到就 abort()，

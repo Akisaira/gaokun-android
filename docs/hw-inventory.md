@@ -184,6 +184,7 @@ Plane 属性含 `zpos`(0-255)、`alpha`(0-65535)、`pixel blend mode`、`IN_FORM
 
 - 背光走 **DCS**（`refs/linux-gaokun/README.MD:123-125`）
 - 详见 `03-panel.txt`
+- **工厂色彩校准在 ACPI 的 `DLUT` 表里**，内核据此校色并切换 sRGB、Display P3，见 [display-color.md](display-color.md)
 - **BOE / CSOT 两种屏靠主板的两根 ID 引脚区分，不靠面板寄存器**：UEFI `DisplayDxe` 的 `GetLcdId`（BIOS 2.16，VA `0x31da8`）
   读 GPIO 102（`GPIO_LCD_ID0`）和 GPIO 91（`GPIO_LCD_ID1`）：
 
