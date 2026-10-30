@@ -338,6 +338,14 @@ PRODUCT_VENDOR_PROPERTIES += \
 PRODUCT_SYSTEM_EXT_PROPERTIES += \
     debug.graphics.game_default_frame_rate.disabled=true
 
+# ★ A17：窗口模糊（锁屏、通知栏、控制中心、多任务的毛玻璃，保持 A16 上的实际行为）。
+#   crDroid 16.0 的 crdroid.mk 设了 ro.surface_flinger.supports_background_blur=1，17.0 那份没有了（见 lineage_gaokun3.mk
+#   的「A17 变化」）。没有它 SurfaceFlinger 判定不支持模糊，WindowManager 的跨窗口模糊整个关闭，SystemUI 的模糊开关开着也没效果。
+#   · 落 system_ext：与上面同理，这是 crDroid 原本设在平台侧的默认值；上下文 surfaceflinger_prop。
+#   判据：`dumpsys window | grep mBlurEnabled` = true。
+PRODUCT_SYSTEM_EXT_PROPERTIES += \
+    ro.surface_flinger.supports_background_blur=1
+
 # ★ A17：让 BPF 网络栈按真实内核版本走，不按 0085 伪装出来的 6.6.30。
 #   0085 改的是 init_uts_ns 的 release，uname() 报 6.6.30。A17 的 netd（Tethering APEX 里的 libnetd_updatable）
 #   对 6.1 ≤ kver < 6.18 多走一条 L4S 路径：挂 BPF_CGROUP_SOCK_OPS 程序、query 不到就 abort()，

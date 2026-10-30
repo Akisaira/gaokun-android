@@ -213,7 +213,7 @@ TARGET_DISABLE_FASTBOOTD := true
 # Lineage 侧用 LOCAL_OVERRIDES_PACKAGES 顶掉 AOSP 的同类应用，不会真的撞包。
 # ⓘ A17 变化（构建机 vendor/lineage `git diff crdroid/16.0 HEAD -- config/`，2026-10-25）：
 #   · freeform_window_management 特性从 tablet.mk 挪到 common_mobile.mk —— 仍然装，结果不变；
-#   · crdroid.mk 不再设 ro.surface_flinger.supports_background_blur=1 ⇒ 默认不开窗口模糊（A16 是开的）；
+#   · crdroid.mk 不再设 ro.surface_flinger.supports_background_blur=1 ⇒ 默认不开窗口模糊（A16 是开的）—— 由 device.mk 补回；
 #   · crdroid.mk 的人脸解锁从「没设成 false 就装」改成「设成 true 才装」（refs/a17/vendor/lineage/config/crdroid.mk:68-77：
 #     FaceUnlock + system_ext 的 android.hardware.biometrics.face.xml）。本树从没设 TARGET_FACE_UNLOCK_SUPPORTED ⇒
 #     A16 装了 ParanoidSense，A17 默认【不装】。这等于替 v1.0-plan D23 / HW-10（人脸解锁保留与否，测完再定）做了「去掉」
