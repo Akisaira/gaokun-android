@@ -17,6 +17,11 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/fstab.gaokun3:$(TARGET_COPY_OUT_RAMDISK)/fstab.gaokun3 \
     $(LOCAL_PATH)/fstab.gaokun3:$(TARGET_COPY_OUT_VENDOR)/etc/fstab.gaokun3
 
+# ------------------------------------------------------------- 显示配置：亮度映射和 HDR 提亮
+# 有它框架才知道亮度对应的尼特数，HDR 提亮才会启动，见 docs/display-color.md。
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/etc/displayconfig/display_port_0.xml:$(TARGET_COPY_OUT_VENDOR)/etc/displayconfig/display_port_0.xml
+
 # ------------------------------------------------------------- init 脚本
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/init.gaokun3.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/hw/init.gaokun3.rc \

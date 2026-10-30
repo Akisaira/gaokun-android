@@ -46,9 +46,36 @@ RGBA_1010102 只有 2 位 alpha，所以 client target 不在最底层时保持 
 面板只收 8 bit，所以 PINGPONG 的空间抖动把多出来的精度抖下去（patches/0135）。两路 PINGPONG 各管半屏。
 抖动也会处理 PCC 引入的取整。面板描述必须有 `.bpc = 8`，否则 `display_info.bpc` 是 0，抖动不会开。
 
+## HDR 提亮
+
+HDR 视频的高光要比界面白更亮，只能抬背光，所以界面要同时压暗，看上去亮度不变：
+
+```
+HDR 图层上屏 ─→ 框架算出提亮后的亮度 ─→ SF 压暗 SDR 图层 ─→ HWC 同一帧写背光
+```
+
+- 背光归 HWC（sepolicy/hal_graphics_composer_default.te）。灯光 HAL 还在，但框架不再用它调背光。
+- 面板背光寄存器和亮度成线性（patches/0138）。提亮倍数就是寄存器的比值。
+- DPU 平面不能逐图层调增益，压暗的图层都交给 GPU（patches/0137）。压暗期间帧缓冲也用 10-bit，
+  空间抖动把精度带到面板，暗部不会有色带。
+- 倍数表和上限在 `etc/displayconfig/display_port_0.xml`。320 尼特来自 Windows 的面板配置，没有实测；
+  提亮和压暗都只用比值，这个数不准只影响上报的尼特值。
+- 有这份配置后，框架内部的亮度 0..1 对应背光的最小值到最大值。亮度条的位置和 overlay 里的自动亮度曲线
+  都按背光换算，和背光的对应关系不变。
+- 面板没有分区背光，提亮时黑位跟着背光一起升高。背光比画面慢几百毫秒，所以进出 HDR 时能看到亮度过渡。
+- 框架只在 HDR 图层占屏幕 10% 以上时提亮，省电模式下不提亮。亮度条在最大时没有提亮空间。
+- 色调映射保持默认的 500 尼特目标。调低它中间调会变亮，但高光压缩得更早，天空这类大面积亮部会发白。
+- HWC 只把背光绑给内置屏。sysfs 没有说明背光属于哪个连接器，绑给外接显示器的话，它的亮度会写到内置屏上。
+- 显示器没有声明 HDR 类型，所以 YouTube 这类按显示能力选片源的应用不会选 HDR 片源。
+- Ultra HDR 照片还是按 SDR 显示。声明 HDR 类型后 Glimpse 没试，Edge 仍然不提亮：Chromium 只在系统
+  已经提亮时才按 HDR 渲染，单张图片不会触发。
+
 ## 排查
 
 ```sh
+dumpsys display | grep -E 'BacklightAdapter|mHdrBrightnessData|mMode='   # useSurfaceControl=true，播 HDR 时 mMode=HBM_HDR
+dumpsys SurfaceFlinger | grep displayBrightnessNits              # 提亮时 displayBrightnessNits 大于 sdrWhitePointNits
+cat /sys/class/backlight/*/scale                                 # linear
 dmesg | grep 'factory calibration'     # 两行，0 = sRGB，1 = P3，后面是 Q15 矩阵
 dumpsys SurfaceFlinger | grep -E 'Device supports wide color|Current color mode'
 grep -A8 DSI-1 /sys/kernel/debug/dri/1/state | grep colorspace   # BT709_YCC 或 DCI-P3_RGB_D65

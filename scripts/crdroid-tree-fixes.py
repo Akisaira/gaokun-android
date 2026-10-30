@@ -567,9 +567,9 @@ def apply_patch_file(tree: pathlib.Path, project: str, patch_name: str,
     if git("apply", "--check", "-R", str(patch)).returncode == 0:
         return "已打过（幂等，无需改动）"
     later = [repo / "patches" / n for n in covered_by]
-    if later and all(git("apply", "--check", "-R", str(l)).returncode == 0 for l in later):
-        if _applied_under(proj, patch, later):
-            return "已打过（上下文被 " + "、".join(covered_by) + " 改过，撤掉它们后反向检查通过）"
+    # 不能先逐个反向检查 later：later 之间也可能叠着改同一段（0132 之后的 0137），前面的单独撤不掉。
+    if later and _applied_under(proj, patch, later):
+        return "已打过（上下文被 " + "、".join(covered_by) + " 改过，撤掉它们后反向检查通过）"
     chk = git("apply", "--check", str(patch))
     if chk.returncode != 0:
         return "✗ 打不上（既不是已应用、也不干净）：" + chk.stderr.strip().splitlines()[0] if chk.stderr.strip() else "✗ 打不上"
@@ -1287,11 +1287,17 @@ def main():
     step(" [31] drm_hwcomposer 给 10-bit 图层请求 10-bit 帧缓冲: ", apply_patch_file(
         tree, "external/drm_hwcomposer",
         "0131-drm-hwcomposer-10-bit-client-target.patch",
-        covered_by=("0132-drm-hwcomposer-switch-panels-between-srgb-and-display-p3.patch",)))
+        covered_by=("0132-drm-hwcomposer-switch-panels-between-srgb-and-display-p3.patch",
+                    "0137-drm-hwcomposer-dim-layers-through-the-gpu.patch")))
     # 要和内核 0134 的 Colorspace 属性、device.mk 的两个属性一起生效；没有 Colorspace 属性时 HWC 保持原样。
     step(" [32] drm_hwcomposer 让内置屏在 sRGB 和 Display P3 之间切换: ", apply_patch_file(
         tree, "external/drm_hwcomposer",
-        "0132-drm-hwcomposer-switch-panels-between-srgb-and-display-p3.patch"))
+        "0132-drm-hwcomposer-switch-panels-between-srgb-and-display-p3.patch",
+        covered_by=("0137-drm-hwcomposer-dim-layers-through-the-gpu.patch",)))
+
+    step(" [33] drm_hwcomposer 让压暗的图层走 GPU（HDR 提亮）: ", apply_patch_file(
+        tree, "external/drm_hwcomposer",
+        "0137-drm-hwcomposer-dim-layers-through-the-gpu.patch"))
     # 游戏环境如实修正：fingerprint 尾部 userdebug→user，与 ro.build.type=user 对齐
     # （Duck Detector system_properties 3 条 danger 的根；运行时改不掉 Build.FINGERPRINT 常量）
     step(" [23] BUILD_FINGERPRINT/THUMBPRINT/SYSTEM_FINGERPRINT 变体段改写成 user（与 ro.build.type 对齐）: ",

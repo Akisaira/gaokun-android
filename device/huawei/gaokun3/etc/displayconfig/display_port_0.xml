@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Brightness and HDR headroom of the built-in panel. HWC owns the backlight
+     with this file in place, see docs/display-color.md.
+
+     The backlight register is linear in light, so two points describe it. The
+     320 nits come from the Windows panel configuration and are not a
+     measurement. Dimming and headroom only use ratios, so a wrong peak changes
+     the nits that are reported, not what is shown. -->
+<displayConfiguration>
+    <name>Built-in panel</name>
+    <screenBrightnessMap interpolation="linear">
+        <point>
+            <value>0.0</value>
+            <nits>0.5</nits>
+        </point>
+        <point>
+            <value>1.0</value>
+            <nits>320.0</nits>
+        </point>
+    </screenBrightnessMap>
+    <!-- Brightness 0..1 spans the backlight range from its minimum up, so this
+         is backlight 0.398, the framework default. -->
+    <screenBrightnessDefault>0.3755</screenBrightnessDefault>
+    <!-- Disabled, there is no sunlight mode. The section is still required:
+         the framework only reports an HDR/SDR ratio to apps when these ratios
+         are here. Reach full backlight down to 40 nits of SDR white, and limit
+         the boost below that so a dark room isn't lit up. -->
+    <highBrightnessMode enabled="false">
+        <transitionPoint>0.99</transitionPoint>
+        <minimumLux>100000</minimumLux>
+        <timing>
+            <timeWindowSecs>0</timeWindowSecs>
+            <timeMaxSecs>0</timeMaxSecs>
+            <timeMinSecs>0</timeMinSecs>
+        </timing>
+        <sdrHdrRatioMap>
+            <point>
+                <sdrNits>2.0</sdrNits>
+                <hdrRatio>8.0</hdrRatio>
+            </point>
+            <point>
+                <sdrNits>40.0</sdrNits>
+                <hdrRatio>8.0</hdrRatio>
+            </point>
+            <point>
+                <sdrNits>80.0</sdrNits>
+                <hdrRatio>4.0</hdrRatio>
+            </point>
+            <point>
+                <sdrNits>160.0</sdrNits>
+                <hdrRatio>2.0</hdrRatio>
+            </point>
+            <point>
+                <sdrNits>320.0</sdrNits>
+                <hdrRatio>1.0</hdrRatio>
+            </point>
+        </sdrHdrRatioMap>
+    </highBrightnessMode>
+    <hdrBrightnessConfig>
+        <brightnessMap>
+            <point>
+                <first>0</first>
+                <second>1.0</second>
+            </point>
+        </brightnessMap>
+        <brightnessIncreaseDebounceMillis>0</brightnessIncreaseDebounceMillis>
+        <brightnessDecreaseDebounceMillis>0</brightnessDecreaseDebounceMillis>
+        <screenBrightnessRampIncrease>0.4</screenBrightnessRampIncrease>
+        <screenBrightnessRampDecrease>0.4</screenBrightnessRampDecrease>
+        <minimumHdrPercentOfScreenForNbm>0.1</minimumHdrPercentOfScreenForNbm>
+        <minimumHdrPercentOfScreenForHbm>0.1</minimumHdrPercentOfScreenForHbm>
+        <allowInLowPowerMode>false</allowInLowPowerMode>
+    </hdrBrightnessConfig>
+</displayConfiguration>
