@@ -161,6 +161,68 @@ def patch_v4l2_input_size(tree: pathlib.Path) -> str:
     return "已改为传最小分辨率（原来传的是 ui::Size() = -1 x -1）"
 
 
+def patch_minigbm_p010_scanout(tree: pathlib.Path) -> str:
+    """—— 修补 29：minigbm 只给 SC7280 开了 P010 的显示用途 ——
+
+    症状：10-bit 视频放到 SurfaceView 时黑屏。minigbm 报 `Unsupported combination`
+    （P010 + HW_COMPOSER，usage 0x400900），v4l2_codec2 拿不到输出块，也不报错给播放器。
+
+    根因：msm.c 里 P010 的 BO_USE_SCANOUT 包在 `#ifdef SC_7280` 里，本机是 sc8280xp。
+
+    ⚠️★ 必须和 patches/0130（turnip 的 P010）一起生效。只放开这里、GPU 又采样不了 P010 时，
+    10-bit 视频一进 SurfaceFlinger，RenderEngine 就 abort
+    （`Failed to create a valid texture ... format:54`），整个界面重启。
+    这台机器竖屏面板横屏用，视频要 GPU 旋转，所以 P010 一定会走到这里。
+    """
+    p = tree / "external/minigbm/msm.c"
+    if not p.exists():
+        return f"✗ 找不到 {p}"
+    s = io.open(p, encoding="utf-8").read()
+    NL = chr(10)
+    body = (
+        "\tdrv_modify_combination(drv, DRM_FORMAT_P010, &LINEAR_METADATA," + NL
+        + "\t\t\t       BO_USE_SCANOUT | BO_USE_HW_VIDEO_ENCODER);" + NL
+    )
+    guarded = "#ifdef SC_7280" + NL + body + "#endif" + NL
+    if s.count(guarded) == 1:
+        io.open(p, "w", encoding="utf-8").write(s.replace(guarded, body))
+        return "已修补"
+    if body in s:
+        return "已打过（幂等，无需改动）"
+    return "⚠️ 锚点不唯一或找不到，上游可能改了 msm_init()"
+
+
+def patch_v4l2_10bit_profiles(tree: pathlib.Path) -> str:
+    """—— 修补 30：v4l2_codec2 没有声明 10-bit profile ——
+
+    症状：MediaCodecList 里硬解组件没有 HEVC Main10 和 VP9 Profile 2。ExoPlayer 记
+    NoSupport 但还会硬试，mpv（FFmpeg）按能力表选解码器，直接走软解。
+
+    根因：iris gen1 的解码器没有 profile 控件（iris_hfi_gen1.c 的 inst_fw_cap_sm8250_dec
+    只有 PIPE、STAGE），V4L2Device::getSupportedProfiles() 的 VIDIOC_QUERYCTRL 必然失败，
+    走这里的默认列表，而默认列表只有 8-bit。
+
+    ⚠️ 改 components/DecodeInterface.cpp 里那份同样的列表没有用：它只在 profiles
+    为空时才用，而这里的默认列表保证了 profiles 不为空。
+    """
+    p = tree / "external/v4l2_codec2/v4l2/V4L2Device.cpp"
+    if not p.exists():
+        return f"✗ 找不到 {p}"
+    s = io.open(p, encoding="utf-8").read()
+    if "C2Config::PROFILE_HEVC_MAIN_10,\n            };" in s:
+        return "已打过（幂等，无需改动）"
+    NL = chr(10)
+    vp9 = "            profiles = {C2Config::PROFILE_VP9_0};" + NL
+    hevc = "                    C2Config::PROFILE_HEVC_MAIN," + NL + "            };" + NL
+    if s.count(vp9) != 1 or s.count(hevc) != 1:
+        return "⚠️ 锚点不唯一或找不到，上游可能改了 getSupportedProfiles()"
+    s = s.replace(vp9, "            profiles = {C2Config::PROFILE_VP9_0, C2Config::PROFILE_VP9_2};" + NL)
+    s = s.replace(hevc, "                    C2Config::PROFILE_HEVC_MAIN," + NL
+                  + "                    C2Config::PROFILE_HEVC_MAIN_10," + NL + "            };" + NL)
+    io.open(p, "w", encoding="utf-8").write(s)
+    return "已修补"
+
+
 def patch_v4l2_device_scan_range(tree: pathlib.Path) -> str:
     """—— 修补 7：v4l2_codec2 只扫 /dev/video0..9，开了 camss 之后就找不到 Venus 了 ——
 
@@ -1218,6 +1280,9 @@ def main():
     step(" [28] v4l2_codec2 字节缓冲模式用 dmabuf ID: ", apply_patch_file(
         tree, "external/v4l2_codec2",
         "0128-v4l2-codec2-use-dmabuf-id-for-gralloc-blocks.patch"))
+    # 10-bit 视频：[29][30] 要和 patches/0129（iris）、0130（turnip）一起生效，见各函数说明。
+    step(" [29] minigbm 给 P010 开显示用途: ", patch_minigbm_p010_scanout(tree))
+    step(" [30] v4l2_codec2 声明 HEVC Main10、VP9 Profile 2: ", patch_v4l2_10bit_profiles(tree))
     # 游戏环境如实修正：fingerprint 尾部 userdebug→user，与 ro.build.type=user 对齐
     # （Duck Detector system_properties 3 条 danger 的根；运行时改不掉 Build.FINGERPRINT 常量）
     step(" [23] BUILD_FINGERPRINT/THUMBPRINT/SYSTEM_FINGERPRINT 变体段改写成 user（与 ro.build.type 对齐）: ",

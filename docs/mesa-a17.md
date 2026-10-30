@@ -46,7 +46,7 @@ m vulkan.freedreno
 | 1 | 前提：`VERSION` 是 26.1.*；python3 ≥ 3.11（生成器用 `tomllib`）。默认拒绝直接改 `~/crdroid/external/mesa3d` | `scripts/mesa-a17/regen.sh` |
 | 2 | 拉生成器到 `~/.cache/gaokun-mesa/mesonbuild-<SHA>`（按 SHA 浅取，分支会强推）。也可以 `--generator` 指定 | 同上 |
 | 3 | 核对根 `Android.bp` 末尾的 gfxstream 手写块与我们存的那份逐字一致。生成器会把我们这份原样贴回去，上游改过而我们没跟的话，改动会被悄悄回退 | `device/huawei/gaokun3/mesa/hermetic/android/gfxstream_workaround.txt`（= A17 `Android.bp:518-701`） |
-| 4 | 打源码补丁（幂等：能反向撤就算已打）：上游 9 个提交 + `patches/0004`。**不打 `patches/0005`**（已证伪，见 stage6-crdroid.md M3「顺带发现」） | `scripts/mesa-a17/backports/`、`patches/0004-*.patch` |
+| 4 | 打源码补丁（幂等：能反向撤就算已打）：上游 9 个提交 + `patches/0004` + `patches/0130`。**不打 `patches/0005`**（已证伪，见 stage6-crdroid.md M3「顺带发现」） | `scripts/mesa-a17/backports/`、`patches/0004-*.patch` |
 | 5 | 删掉所有带 "The Magma GPU Project" 文件头的旧生成文件，再 `meson convert --config … --platforms … --dependencies … --project-dir <mesa>` | 配置在 `device/huawei/gaokun3/mesa/hermetic/android/` |
 | 6 | 后处理只剩一处：`vulkan.freedreno` 补 `compile_multilib: "64"` | `scripts/mesa-a17/postprocess.py` |
 | 7 | `bpfmt -l` 做语法检查（prebuilts 里的，只解析不改文件）；`check-output.py` 做自检 | `scripts/mesa-a17/check-output.py` |
@@ -78,6 +78,10 @@ m vulkan.freedreno
 * 逻辑和 A16 归档树（26.0.3 + v3）**逐行相同**。归档里的 `tu_image.cc` / `tu_cmd_buffer.cc` 与上游 26.0.3 原文对比，得到 v2 + v3 的完整改动；26.1 的 `tu_image_bind()` 结构没变，锚点只是行号变了（`tu_image.cc:1011`、`tu_cmd_buffer.cc:3681-3684`）。
 * 去掉了 D10 的 B1 诊断探针（P1 / P2 / P3、`gaokun_dump_image()` / `gaokun_dump_callers()`），只保留实现本身和"无可绑定"分支的限流 `mesa_logw`。注释改成英文，方便提上游。
 * 补丁文件原来存的是 v1 的 diff，权威版本只在 `scripts/gmu-forensics/apply-0004v{2,3}.py` 里。这笔历史欠账一起还了：现在 `patches/0004` 就是可以直接 `git apply` 的 v3。
+
+### 3.4 `patches/0130`（turnip P010）
+
+上游 MR !45721 适配到 26.1 快照，补丁头写了和 MR 的差别。等 ROM 的 mesa 带上这个 MR 就删掉。它和 `crdroid-tree-fixes.py` 的 [29]（minigbm 给 P010 开显示用途）要一起进：只有 [29] 时，10-bit 视频一进 SurfaceFlinger，RenderEngine 就 abort。
 
 ## 4. 10-25 实跑结果（构建机副本 `~/a17-mesa-work/mesa3d`，`~/crdroid` 未动）
 
