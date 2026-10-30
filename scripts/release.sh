@@ -701,12 +701,19 @@ python3 "$UPLOAD" "$BUCKET" "$INSTALL_DOC" "relnotes/INSTALL.md" "$DOC_CT"
 ok "发版说明已就位：$HOST/relnotes/latest.md（= ${RN_LATEST#$REPO/}）"
 
 # 清单最后传，且 download 指向刚上传的那个 zip
-python3 - "$S/gaokun3.json" "$(basename "$ZIP")" "$HOST" <<'PY'
+# ★ GK3_OS_SDK_LEVEL（2026-10-30，SEC-1 让 A16 用户直接升 A17）：覆盖清单的 os_sdk_level。
+#   Updater 遇到 os_sdk_level > 本机 SDK_INT 且没设 crdroid.updater.allow_major_upgrades 就判 VERSION_UNSUPPORTED
+#   （packages/apps/Updater InstallUtils.kt:30-31）；写成 36 后 A16（36）照常能装。代价：SDK 37 的机器把它当成
+#   "更旧的 Android" 滤掉（UpdatesRepository.kt:131）—— 只有 A16 用户还要从这份清单升级时才设。
+python3 - "$S/gaokun3.json" "$(basename "$ZIP")" "$HOST" "${GK3_OS_SDK_LEVEL:-}" <<'PY'
 import json, sys
-path, zipname, host = sys.argv[1], sys.argv[2], sys.argv[3]
+path, zipname, host, sdk = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 d = json.load(open(path))
 r = d["response"][0]
 r["download"] = "%s/builds/%s" % (host, zipname)
+if sdk:
+    print("  os_sdk_level %s -> %s" % (r.get("os_sdk_level"), sdk))
+    r["os_sdk_level"] = int(sdk)
 json.dump(d, open(path, "w"), indent=2)
 print("  download -> %s" % r["download"])
 PY
