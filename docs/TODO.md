@@ -185,7 +185,7 @@ NET-10 开机探测打到 hicloud 与 miui 两个端点都 204；fcitx5 在输�
 A6 根因（dwc3 / QMP 的 resume 路径）与 B14 息屏 USB adb 原生化 · GPU SMMU 中断根治 B6 · 手掌碎块 T1 · 手写笔 · 相机 30 fps / 变焦 / EV / 画质（T3、A7 余项）·
 游戏音频基础延迟（B25 尾巴 / AV-7）· NET-4 按网络的随机 MAC（连同一次性迁移）· Power HAL 真实现与 RT uclamp · 120 Hz 无缝降频 ·
 quota / projid / casefold · FUSE passthrough · zram · Wi-Fi Direct · 海外 regdomain · B0 构建机的树换成本仓 checkout ·
-B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 的 39 位地址空间测试内核起不来（搁置）· iris 零碎（`venus_compat_gfmt=N` 复测、HAL 的 POLLPRI 空转、SYS_ERROR 后 `invalid uc_region`；10-bit 解码：gen1 还没有 P010 路径，`unsupported content` 是驱动拒绝的，固件能识别位深；seek 到更低分辨率后裁剪不更新：flush 之后固件不发序列事件；字节缓冲 + 遗留数组模式下分辨率变大时报 `tried 5 realloc and failed`：DecodeComponent 不上报尺寸变化）·
+B3 余项（退役 ESP 派生文件、AVB）· tinymix 的 vendor 变体 · #12 的 39 位地址空间测试内核起不来（搁置）· iris 零碎（`venus_compat_gfmt=N` 复测、HAL 的 POLLPRI 空转、SYS_ERROR 后 `invalid uc_region`；seek 到更低分辨率后裁剪不更新：flush 之后固件不发序列事件；字节缓冲 + 遗留数组模式下分辨率变大时报 `tried 5 realloc and failed`：DecodeComponent 不上报尺寸变化）·
 #16 尾巴（`ath11k_mhi_start` 失败不 unprepare，每次漏约 4 MB DMA，`mhi.c:446-450`）· recovery、原神渲染上限（见 E 节）。
 
 **ART 的 GC（10-19 发现，下一版再定）**：发版内核 `# CONFIG_USERFAULTFD is not set`（`1792312407` 上 `zcat /proc/config.gz` 实测；`scripts/kernel-config-android.sh` 里没提过它，

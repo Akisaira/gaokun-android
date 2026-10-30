@@ -328,6 +328,9 @@ KPATCHES=(
     0126-media-iris-gen1-recover-from-firmware-watchdog.patch
     # 0127：CAPTURE 的 S_FMT 不再把解码裁剪冲成缓冲尺寸；不打 1080p 就报成 1088。
     0127-media-iris-keep-decoder-crop-across-capture-s_fmt.patch
+    # 0129：gen1 解码器支持 10-bit（HEVC Main10、VP9 Profile 2），输出 P010。
+    #    要和 0130（Turnip）、crdroid-tree-fixes.py 的 [29][30] 一起生效，单独打没有实际用处。
+    0129-media-iris-gen1-decode-10-bit-to-p010.patch
 )
 
 # ⚠️ 诊断补丁【不进发版内核】：只在带 --with-diag 时打。顺序有依赖：0028/0029 依赖 0023，
