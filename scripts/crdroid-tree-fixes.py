@@ -1106,7 +1106,7 @@ def patch_codec2_blob_linear_map(tree: pathlib.Path) -> str:
     （vndk/C2Buffer.cpp）：没有 /dev/ion（C2HandleIon::IsUsed() = using_ion() = false，C2Store.cpp:116、:1446）
     时一律交给 C2DmaBufAllocator::Map，而它先 CheckHandle —— 句柄不是 C2HandleBuf 就直接 C2_BAD_VALUE
     （C2DmaBufAllocator.cpp:470-476）。A16 是直接调 allocation->map()，哪种分配都行。
-    本机没有 ION，device.mk 的 debug.stagefright.c2-poolmask=0xfc0000 让默认线性分配器是 BLOB
+    本机没有 ION，device.mk 的 debug.stagefright.c2-poolmask=0xfe0000 让默认线性分配器是 BLOB
     （C2Store.cpp:526 GetPreferredLinearAllocatorId）⇒ v4l2 解码 HAL 里 map 客户端送来的输入块报 err=22，
     patches/0019 的 HEVC CSD 合并退回"单独下发 CSD"，venus 死锁、HEVC 硬解一帧不出
     （2026-10-26 A17 首个候选版 1792975257 上 A21 iris 回归 11/15，挂的正是 4 项 HEVC）。
@@ -1214,6 +1214,10 @@ def main():
     step(" [27] audio AIDL HAL 播放方向的厂商钩子（扬声器低音处理，覆盖 FAST 轨）: ", apply_patch_file(
         tree, "hardware/interfaces",
         "0117-audio-aidl-primary-playback-hook.patch"))
+    # 字节缓冲模式的块 ID。要和 device.mk 的 poolmask（GRALLOC 位）一起生效，见补丁说明。
+    step(" [28] v4l2_codec2 字节缓冲模式用 dmabuf ID: ", apply_patch_file(
+        tree, "external/v4l2_codec2",
+        "0128-v4l2-codec2-use-dmabuf-id-for-gralloc-blocks.patch"))
     # 游戏环境如实修正：fingerprint 尾部 userdebug→user，与 ro.build.type=user 对齐
     # （Duck Detector system_properties 3 条 danger 的根；运行时改不掉 Build.FINGERPRINT 常量）
     step(" [23] BUILD_FINGERPRINT/THUMBPRINT/SYSTEM_FINGERPRINT 变体段改写成 user（与 ro.build.type 对齐）: ",
